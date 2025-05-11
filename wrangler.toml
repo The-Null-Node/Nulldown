@@ -1,0 +1,26 @@
+name = "nulldown"
+compatibility_date = "2023-09-01"
+
+# Configure environment variables
+[vars]
+# Public variables can be defined here
+# Sensitive variables should be set in the Cloudflare dashboard
+
+# Configure R2 bindings
+[[r2_buckets]]
+binding = "NULLDOWN_BUCKET"
+bucket_name = "nulldown"
+preview_bucket_name = "nulldown-preview"
+
+# Configure build settings
+[build]
+command = "npm run build && node build.js"
+output_directory = "out"
+
+# Configure routes
+[routes]
+pattern = "/api/*"
+script = "functions/api/[[path]].js"
+
+pattern = "/d/*"
+script = "index.html"

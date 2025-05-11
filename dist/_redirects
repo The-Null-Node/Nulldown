@@ -1,0 +1,3 @@
+
+# Handle client-side routing for drop pages
+/d/* /index.html 200
