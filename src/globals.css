@@ -156,6 +156,80 @@ body {
   /* Add other prose styles (lists, tables) as needed */
 }
 
+/* Enhanced Table Styles */
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5em 0;
+  overflow-x: auto;
+  display: block;
+}
+
+.prose table thead {
+  background-color: var(--card);
+  border-bottom: 2px solid var(--border);
+}
+
+.prose table th {
+  padding: 0.75em 1em;
+  text-align: left;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.prose table td {
+  padding: 0.75em 1em;
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+}
+
+.prose table tr:nth-child(even) {
+  background-color: var(--card);
+}
+
+/* Mermaid Diagram Styles */
+.mermaid {
+  background-color: var(--card);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  display: flex;
+  justify-content: center;
+  margin: 1.5rem 0;
+}
+
+/* Make Mermaid diagrams responsive */
+.mermaid svg {
+  max-width: 100%;
+  height: auto !important;
+}
+
+/* Improve contrast for Mermaid diagram text */
+.mermaid .label {
+  color: var(--foreground) !important;
+  font-family: var(--font-mono) !important;
+}
+
+/* Customize Mermaid node colors */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node polygon,
+.mermaid .node path {
+  fill: var(--card) !important;
+  stroke: var(--accent) !important;
+}
+
+/* Customize Mermaid edge colors */
+.mermaid .edgePath .path {
+  stroke: var(--accent) !important;
+}
+
+/* Customize Mermaid arrowheads */
+.mermaid .arrowheadPath {
+  fill: var(--accent) !important;
+  stroke: none !important;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   @apply w-2 h-2;

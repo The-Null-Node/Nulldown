@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import useEditorStore, { type EditorState } from "../stores/editorStore"; // Import Zustand store and EditorState type
+import EnhancedMarkdown from "../components/EnhancedMarkdown";
+import MarkdownHelpers from "../components/MarkdownHelpers";
 
 interface ShareApiResponse {
   id?: string;
@@ -107,6 +107,34 @@ const EditorPage: React.FC = () => {
     textareaRef.current?.focus();
   };
 
+  const insertText = (text: string) => {
+    if (textareaRef.current) {
+      const cursorPos = textareaRef.current.selectionStart;
+      const textBefore = markdown.substring(0, cursorPos);
+      const textAfter = markdown.substring(textareaRef.current.selectionEnd);
+      
+      // Add a newline before the inserted text if not at the beginning and the previous character is not a newline
+      const prefix = cursorPos > 0 && textBefore.charAt(textBefore.length - 1) !== '\n' ? '\n\n' : '';
+      // Add a newline after the inserted text if there's text after and it doesn't start with a newline
+      const suffix = textAfter.length > 0 && textAfter.charAt(0) !== '\n' ? '\n\n' : '';
+      
+      const newText = textBefore + prefix + text + suffix + textAfter;
+      setTextContent(newText);
+      
+      // Set focus back to textarea and move cursor after the inserted text
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          const newPosition = cursorPos + prefix.length + text.length + suffix.length;
+          textareaRef.current.setSelectionRange(newPosition, newPosition);
+        }
+      }, 0);
+    } else {
+      // If ref not available, just append
+      setTextContent(markdown + '\n\n' + text + '\n\n');
+    }
+  };
+
   if (successUrl) {
     return (
       <main className="flex-1 p-4 flex items-center justify-center">
@@ -162,6 +190,11 @@ const EditorPage: React.FC = () => {
             className="flex-1 w-full resize-none bg-card border border-border rounded-md p-4 text-foreground font-mono focus:border-accent focus:outline-none overflow-y-auto"
             autoFocus
           />
+          
+          {/* Markdown helper component - only show when not in preview mode or on desktop */}
+          <div className={`${showPreview && !window.matchMedia('(min-width: 768px)').matches ? 'hidden' : 'block'}`}>
+            <MarkdownHelpers onInsert={insertText} />
+          </div>
         </div>
 
         {showPreview && (
@@ -169,11 +202,9 @@ const EditorPage: React.FC = () => {
             id="preview-container" 
             className="flex-1 flex flex-col bg-card border border-border rounded-md p-4 overflow-y-auto min-h-0"
           >
-            <div id="preview-content" className="prose max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {markdown || "*Preview will appear here*"}
-              </ReactMarkdown>
-            </div>
+            <EnhancedMarkdown>
+              {markdown || "*Preview will appear here*"}
+            </EnhancedMarkdown>
           </div>
         )}
       </div>

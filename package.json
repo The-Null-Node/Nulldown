@@ -20,9 +20,11 @@
   "license": "MIT",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.797.0",
+    "mermaid": "^11.6.0",
     "nanoid": "^5.0.0",
     "react-markdown": "^8.0.7",
     "react-router-dom": "^6.0.0",
+    "react-syntax-highlighter": "^15.6.1",
     "remark-gfm": "^3.0.1",
     "zustand": "^4.0.0"
   },

@@ -18,41 +18,37 @@ function validateEnv(env: Env): void {
 }
 
 export const onRequestGet: PagesFunction<Env, 'id'> = async ({ request, env, params }) => {
+  const copyHeaders = (headers: Headers, object: R2Object) => {
+    Object.entries(object.httpMetadata || {}).forEach(([key, value]) => {
+      headers.set(key, value as string);
+    });
+  }
+
   try {
     validateEnv(env);
     const id = typeof params.id === 'string' ? params.id : params.id[0]; // Handle if params.id is string[]
 
-    if (!id) {
+    if (!id)
       return new Response("Drop ID is required.", { status: 400 });
-    }
+
 
     const object = await env.R2_BUCKET.get(id);
 
-    if (object === null) {
+    if (object === null) 
       return new Response("Drop not found.", { status: 404 });
-    }
 
-    // The R2Object typically has methods like .text(), .json(), .arrayBuffer()
-    // Assuming the content was stored as plain text
-    // const textContent = await object.text(); // This consumes the stream; object.body is the stream itself.
     const headers = new Headers({
       'Content-Type': object.httpMetadata?.contentType || 'text/plain',
       'ETag': object.httpEtag,
     });
-    
-    // Add other relevant headers from object.httpMetadata if needed
-    if (object.httpMetadata?.cacheControl) headers.set('Cache-Control', object.httpMetadata.cacheControl);
-    if (object.httpMetadata?.contentEncoding) headers.set('Content-Encoding', object.httpMetadata.contentEncoding);
-    if (object.httpMetadata?.contentLanguage) headers.set('Content-Language', object.httpMetadata.contentLanguage);
 
 
-    // Return the content directly with appropriate headers
-    // Cloudflare Pages Functions will stream the response body from R2ObjectBody
+    copyHeaders(headers, object);
+
     return new Response(object.body, {
       status: 200,
       headers: headers
     });
-
   } catch (error: unknown) {
     console.error("Error retrieving drop:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);

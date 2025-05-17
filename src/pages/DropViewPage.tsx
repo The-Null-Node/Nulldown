@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import EnhancedMarkdown from '../components/EnhancedMarkdown';
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
@@ -25,6 +24,7 @@ const DropViewPage: React.FC = () => {
     const fetchDrop = async () => {
       setIsLoading(true);
       setError(null);
+
       try {
         const response = await fetch(`/api/get/${id}`);
         if (response.status === 404) {
@@ -103,11 +103,7 @@ const DropViewPage: React.FC = () => {
         </div>
 
         <div className="bg-card border border-border rounded-md p-6">
-          <div className="prose max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {dropContent}
-            </ReactMarkdown>
-          </div>
+          <EnhancedMarkdown>{dropContent}</EnhancedMarkdown>
         </div>
 
         <div className="mt-6 text-center">

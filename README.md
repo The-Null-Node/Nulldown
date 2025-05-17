@@ -6,9 +6,51 @@ A minimalist web application for creating and sharing temporary text snippets, o
 
 - Create text drops with a simple interface.
 - Automatically generate unique, short URLs for sharing.
+- Support for rendering **Mermaid diagrams** and **Markdown tables**.
+- Enhanced Markdown formatting with syntax highlighting.
 - Drops are stored temporarily using Cloudflare R2.
 - Clean, responsive UI built with Tailwind CSS.
 - Copy-to-clipboard functionality for easy sharing.
+
+## Markdown Support
+
+Nulldown supports an enhanced version of Markdown with the following features:
+
+### Basic Markdown
+
+- Headings (# h1, ## h2, etc.)
+- Text formatting (**bold**, *italic*, ~~strikethrough~~)
+- Lists (ordered and unordered)
+- Links and images
+- Code blocks with syntax highlighting
+- Blockquotes
+
+### Advanced Features
+
+#### Mermaid Diagrams
+
+Create diagrams using Mermaid syntax. Example:
+
+```markdown
+```mermaid
+graph TD
+    A[Start] --> B{Is it working?}
+    B -->|Yes| C[Great!]
+    B -->|No| D[Debug]
+    D --> B
+```
+```
+
+#### Markdown Tables
+
+Create tables using standard Markdown syntax:
+
+```markdown
+| Header 1 | Header 2 | Header 3 |
+| -------- | -------- | -------- |
+| Cell 1   | Cell 2   | Cell 3   |
+| Cell 4   | Cell 5   | Cell 6   |
+```
 
 ## Getting Started
 
@@ -70,6 +112,9 @@ The application is designed for deployment on [Cloudflare Pages](https://pages.c
 - [Vite](https://vitejs.dev/)
 - [TypeScript](https://www.typescriptlang.org/)
 - [Tailwind CSS](https://tailwindcss.com/)
+- [React Markdown](https://github.com/remarkjs/react-markdown) (for Markdown rendering)
+- [Mermaid](https://mermaid.js.org/) (for diagram rendering)
+- [React Syntax Highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) (for code syntax highlighting)
 - [Cloudflare Pages Functions](https://developers.cloudflare.com/pages/functions/) (for API endpoints)
 - [Cloudflare R2](https://developers.cloudflare.com/r2/) (for data storage)
 - [@aws-sdk/client-s3](https://github.com/aws/aws-sdk-js-v3) (for interacting with R2)
