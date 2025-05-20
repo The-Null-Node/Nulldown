@@ -31,7 +31,6 @@ export const onRequestGet: PagesFunction<Env, 'id'> = async ({ request, env, par
     if (!id)
       return new Response("Drop ID is required.", { status: 400 });
 
-
     const object = await env.R2_BUCKET.get(id);
 
     if (object === null) 

@@ -19,6 +19,7 @@ const EditorPage: React.FC = () => {
 
   const [isClient, setIsClient] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [editorHidden, setEditorHidden] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successUrl, setSuccessUrl] = useState<string | null>(null);
@@ -103,6 +104,7 @@ const EditorPage: React.FC = () => {
     setSuccessUrl(null);
     setError(null);
     setShowPreview(false);
+    setEditorHidden(false);
     localStorage.removeItem('nulldown_draft');
     textareaRef.current?.focus();
   };
@@ -133,6 +135,16 @@ const EditorPage: React.FC = () => {
       // If ref not available, just append
       setTextContent(markdown + '\n\n' + text + '\n\n');
     }
+  };
+
+  // Toggle editor visibility
+  const toggleEditorVisibility = () => {
+    // If preview is hidden, we need to show it first
+    if (!showPreview) {
+      setShowPreview(true);
+    }
+    // Toggle editor visibility
+    setEditorHidden(!editorHidden);
   };
 
   if (successUrl) {
@@ -177,66 +189,92 @@ const EditorPage: React.FC = () => {
     );
   }
 
+  // Very simple fixed layout
   return (
-    <div className="flex-1 p-4 flex flex-col overflow-y-auto overflow-x-hidden">
-      <div className="relative flex flex-col md:flex-row gap-4 flex-1 min-h-0">
-        <div className={`flex-1 flex flex-col ${showPreview ? 'hidden md:flex' : 'flex'} min-h-0`}>
-          <textarea
-            ref={textareaRef}
-            id="markdown-input"
-            value={markdown}
-            onChange={(e) => setTextContent(e.target.value)}
-            placeholder="Write your markdown here..."
-            className="flex-1 w-full resize-none bg-card border border-border rounded-md p-4 text-foreground font-mono focus:border-accent focus:outline-none overflow-y-auto"
-            autoFocus
-          />
+    <div className="fixed inset-0 flex flex-col">
+      {/* Top controls */}
+      <div className="py-4 px-4 border-b border-border bg-background flex justify-between items-center">
+        <div className="text-sm">NULLDOWN</div>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setShowPreview(!showPreview)}
+            className="border border-accent text-accent hover:bg-accent/10 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+            disabled={editorHidden}
+          >
+            {showPreview ? "Hide Preview" : "Show Preview"}
+          </button>
           
-          {/* Markdown helper component - only show when not in preview mode or on desktop */}
-          <div className={`${showPreview && !window.matchMedia('(min-width: 768px)').matches ? 'hidden' : 'block'}`}>
-            <MarkdownHelpers onInsert={insertText} />
-          </div>
+          <button 
+            onClick={toggleEditorVisibility}
+            className={`border ${editorHidden ? 'border-error-light text-error-light hover:bg-error/10' : 'border-accent text-accent hover:bg-accent/10'} rounded-md px-4 py-2 text-sm font-medium transition-colors`}
+            disabled={!showPreview && editorHidden}
+          >
+            {editorHidden ? "Show Editor" : "Hide Editor"}
+          </button>
+          
+          <button 
+            onClick={handleShare}
+            disabled={sharing || !markdown.trim()}
+            className="bg-accent text-black hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {sharing && <span className="inline-block w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin mr-2"></span>}
+            {sharing ? "Sharing..." : "Share to the Void"}
+          </button>
         </div>
-
+      </div>
+      
+      {/* Main content with absolute positioning to prevent layout shifts */}
+      <div className="flex-1 flex flex-col md:flex-row relative" style={{ height: 'calc(100vh - 65px)' }}>
+        {/* Error message - fixed position */}
+        {error && (
+          <div className="absolute top-2 left-4 right-4 z-10 bg-error/20 border border-error text-error-light p-3 rounded-md text-sm">
+            {error}
+          </div>
+        )}
+        
+        {/* Editor */}
+        {(!editorHidden || !showPreview) && (
+          <div 
+            className={`${showPreview && !editorHidden ? 'hidden md:block' : ''} absolute inset-0 p-4 md:w-1/2`}
+            style={{ 
+              display: showPreview && editorHidden ? 'none' : '',
+              right: showPreview ? '50%' : '0'
+            }}
+          >
+            <textarea
+              ref={textareaRef}
+              value={markdown}
+              onChange={(e) => setTextContent(e.target.value)}
+              placeholder="Write your markdown here..."
+              className="w-full h-full resize-none bg-card border border-border rounded-md p-4 text-foreground font-mono focus:border-accent focus:outline-none"
+              autoFocus
+            />
+          </div>
+        )}
+        
+        {/* Preview */}
         {showPreview && (
           <div 
-            id="preview-container" 
-            className="flex-1 flex flex-col bg-card border border-border rounded-md p-4 overflow-y-auto min-h-0"
+            className="absolute inset-0 p-4 overflow-auto bg-card border border-border rounded-md" 
+            style={{ 
+              left: editorHidden ? '0' : '50%',
+              marginLeft: editorHidden ? '0' : '4px',
+              marginRight: editorHidden ? '0' : '',
+              right: '0'
+            }}
           >
             <EnhancedMarkdown>
               {markdown || "*Preview will appear here*"}
             </EnhancedMarkdown>
           </div>
         )}
-      </div>
-
-      {error && (
-        <div id="error-message" className="bg-error/20 border border-error text-error-light p-3 rounded-md mt-4 text-sm flex-shrink-0">
-          {error}
-        </div>
-      )}
-
-      <div className="border-t border-border p-4 mt-4 flex-shrink-0">
-        <div className="max-w-screen-xl mx-auto flex flex-wrap justify-between items-center gap-4">
-          <div className="text-xs md:text-sm">NULLDOWN</div>
-          <div className="flex gap-2">
-            <button 
-              id="toggle-preview-btn"
-              onClick={() => setShowPreview(!showPreview)}
-              className="border border-accent text-accent hover:bg-accent/10 rounded-md px-4 py-2 text-sm font-medium flex items-center transition-colors"
-            >
-              {showPreview ? "Hide Preview" : "Show Preview"}
-            </button>
-            <button 
-              id="share-btn"
-              onClick={handleShare}
-              disabled={sharing || !markdown.trim()}
-              className="bg-accent text-black hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium flex items-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {sharing && <span className="inline-block w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin mr-2"></span>}
-              {sharing ? "Sharing..." : "Share to the Void"}
-            </button>
+        
+        {/* Markdown helpers - positioned at the bottom when shown */}
+        {!editorHidden && !showPreview && (
+          <div className="absolute bottom-0 left-0 right-0 p-4 bg-background z-10">
+            <MarkdownHelpers onInsert={insertText} />
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

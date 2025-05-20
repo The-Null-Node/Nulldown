@@ -6,7 +6,7 @@ A minimalist web application for creating and sharing temporary text snippets, o
 
 - Create text drops with a simple interface.
 - Automatically generate unique, short URLs for sharing.
-- Support for rendering **Mermaid diagrams** and **Markdown tables**.
+- Support for rendering **Mermaid diagrams**, **Markdown tables**, and **LaTeX math expressions**.
 - Enhanced Markdown formatting with syntax highlighting.
 - Drops are stored temporarily using Cloudflare R2.
 - Clean, responsive UI built with Tailwind CSS.
@@ -51,6 +51,18 @@ Create tables using standard Markdown syntax:
 | Cell 1   | Cell 2   | Cell 3   |
 | Cell 4   | Cell 5   | Cell 6   |
 ```
+
+#### LaTeX Math Expressions
+
+Add mathematical expressions using LaTeX syntax:
+
+- Inline math: `$E = mc^2$`
+- Block math:
+  ```markdown
+  $$
+  \frac{d}{dx}\left( \int_{0}^{x} f(u)\,du\right)=f(x)
+  $$
+  ```
 
 ## Getting Started
 
@@ -114,6 +126,7 @@ The application is designed for deployment on [Cloudflare Pages](https://pages.c
 - [Tailwind CSS](https://tailwindcss.com/)
 - [React Markdown](https://github.com/remarkjs/react-markdown) (for Markdown rendering)
 - [Mermaid](https://mermaid.js.org/) (for diagram rendering)
+- [KaTeX](https://katex.org/) (for LaTeX math rendering)
 - [React Syntax Highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) (for code syntax highlighting)
 - [Cloudflare Pages Functions](https://developers.cloudflare.com/pages/functions/) (for API endpoints)
 - [Cloudflare R2](https://developers.cloudflare.com/r2/) (for data storage)

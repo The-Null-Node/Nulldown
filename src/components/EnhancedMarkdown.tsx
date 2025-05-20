@@ -1,9 +1,12 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import MermaidRenderer from './MermaidRenderer';
+import 'katex/dist/katex.min.css';
 
 interface EnhancedMarkdownProps {
   children: string;
@@ -13,7 +16,8 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = ({ children }) => {
   return (
     <ReactMarkdown
       className="prose max-w-none"
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath as any]}
+      rehypePlugins={[rehypeKatex as any]}
       components={{
         // Enhanced table rendering
         table: ({ node, ...props }) => (
@@ -46,7 +50,7 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = ({ children }) => {
           // Render regular code blocks
           return !inline && match ? (
             <SyntaxHighlighter
-              style={vscDarkPlus}
+              style={vscDarkPlus as any}
               language={language}
               PreTag="div"
               className="rounded-md my-4"

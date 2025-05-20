@@ -60,6 +60,43 @@ const TABLE_EXAMPLES = [
   },
 ];
 
+const LATEX_EXAMPLES = [
+  {
+    name: 'Inline Math',
+    code: `This is an inline math expression: $E = mc^2$`,
+  },
+  {
+    name: 'Block Math',
+    code: `Here's a block math expression:
+
+$$
+\\frac{d}{dx}\\left( \\int_{0}^{x} f(u)\\,du\\right)=f(x)
+$$`,
+  },
+  {
+    name: 'Matrix',
+    code: `Here's a matrix:
+
+$$
+\\begin{pmatrix}
+a & b \\\\
+c & d
+\\end{pmatrix}
+$$`,
+  },
+  {
+    name: 'Equation System',
+    code: `Here's a system of equations:
+
+$$
+\\begin{cases}
+x + y = 1 \\\\
+x - y = 2
+\\end{cases}
+$$`,
+  },
+];
+
 export const MarkdownHelpers: React.FC<MarkdownHelperProps> = ({ onInsert }) => {
   return (
     <div className="mt-4">
@@ -102,6 +139,35 @@ export const MarkdownHelpers: React.FC<MarkdownHelperProps> = ({ onInsert }) => 
           </p>
           <div className="grid grid-cols-1 gap-3">
             {TABLE_EXAMPLES.map((example) => (
+              <div key={example.name} className="border border-border rounded-md p-3">
+                <div className="flex justify-between items-center mb-2">
+                  <h4 className="text-accent font-medium">{example.name}</h4>
+                  <button
+                    onClick={() => onInsert(example.code)}
+                    className="text-xs bg-accent/10 hover:bg-accent/20 text-accent px-2 py-1 rounded"
+                  >
+                    Insert
+                  </button>
+                </div>
+                <pre className="text-xs overflow-x-auto p-2 bg-background rounded">
+                  {example.code}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
+
+      <details className="mb-4 text-sm">
+        <summary className="cursor-pointer text-accent hover:underline font-medium mb-2">
+          LaTeX Math Help
+        </summary>
+        <div className="px-4 py-3 bg-card rounded-md">
+          <p className="text-muted mb-3">
+            You can add mathematical expressions using LaTeX. Here are some examples:
+          </p>
+          <div className="grid grid-cols-1 gap-3">
+            {LATEX_EXAMPLES.map((example) => (
               <div key={example.name} className="border border-border rounded-md p-3">
                 <div className="flex justify-between items-center mb-2">
                   <h4 className="text-accent font-medium">{example.name}</h4>

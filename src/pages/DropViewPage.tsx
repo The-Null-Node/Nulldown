@@ -62,57 +62,57 @@ const DropViewPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <main className="flex-1 flex items-center justify-center p-4">
-        <p>Loading drop...</p>
-      </main>
+      <div className="fixed inset-0 flex items-center justify-center bg-background">
+        <div className="animate-pulse text-accent font-medium">Loading drop...</div>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <main className="flex-1 flex items-center justify-center p-4 text-center">
-        <div>
+      <div className="fixed inset-0 flex items-center justify-center bg-background">
+        <div className="text-center max-w-md">
           <p className="text-error-light mb-4">{error}</p>
           <Link to="/" className="text-accent hover:underline text-sm">
             Create a new Nulldown
           </Link>
         </div>
-      </main>
+      </div>
     );
   }
 
   if (!dropContent) { // Should be covered by error state, but as a fallback
     return (
-      <main className="flex-1 flex items-center justify-center p-4 text-center">
-        <div>
+      <div className="fixed inset-0 flex items-center justify-center bg-background">
+        <div className="text-center max-w-md">
           <p className="text-muted mb-4">Drop not found or content is empty.</p>
           <Link to="/" className="text-accent hover:underline text-sm">
             Create a new Nulldown
           </Link>
         </div>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="flex-1 flex items-center justify-center p-4">
-      <div className="max-w-3xl w-full mx-auto">
-        <div className="flex justify-between items-center mb-6">
-          <Link to="/" className="text-xs md:text-sm text-accent hover:underline">NULLDOWN</Link>
-          <div className="text-xs text-muted">Drop ID: {id}</div>
-        </div>
-
-        <div className="bg-card border border-border rounded-md p-6">
+    <div className="fixed inset-0 flex flex-col bg-background">
+      <div className="border-b border-border p-4 flex justify-between items-center">
+        <Link to="/" className="text-sm text-accent hover:underline">NULLDOWN</Link>
+        <div className="text-xs text-muted">Drop ID: {id}</div>
+      </div>
+      
+      <div className="flex-1 overflow-auto p-4">
+        <div className="max-w-3xl mx-auto bg-card border border-border rounded-md p-6">
           <EnhancedMarkdown>{dropContent}</EnhancedMarkdown>
         </div>
-
+        
         <div className="mt-6 text-center">
           <Link to="/" className="text-accent hover:underline text-sm inline-flex items-center transition-colors">
             Create another Nulldown
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 };
 
