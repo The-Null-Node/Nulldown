@@ -1,7 +1,16 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import useEditorStore, { type EditorState } from "../stores/editorStore"; // Import Zustand store and EditorState type
-import EnhancedMarkdown from "../components/EnhancedMarkdown";
-import MarkdownHelpers from "../components/MarkdownHelpers";
+
+// Lazy-load heavy components
+const EnhancedMarkdown = lazy(() => import("../components/EnhancedMarkdown"));
+const MarkdownHelpers = lazy(() => import("../components/MarkdownHelpers"));
+
+// Simple loading fallback
+const LoadingFallback = () => (
+  <div className="p-4 flex justify-center items-center h-full">
+    <div className="animate-pulse text-muted">Loading...</div>
+  </div>
+);
 
 interface ShareApiResponse {
   id?: string;
@@ -23,6 +32,7 @@ const EditorPage: React.FC = () => {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successUrl, setSuccessUrl] = useState<string | null>(null);
+  const [isTransitioning, setIsTransitioning] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Effect 1: Set isClient to true once after initial mount
@@ -53,7 +63,7 @@ const EditorPage: React.FC = () => {
     // This effect runs when markdown (from the store) changes, or when isClient becomes true.
   }, [markdown, isClient]);
 
-  const handleShare = async () => {
+  const handleShare = useCallback(async () => {
     if (!markdown.trim()) {
       setError("Cannot share empty content.");
       return;
@@ -90,26 +100,28 @@ const EditorPage: React.FC = () => {
     } finally {
       setSharing(false);
     }
-  };
+  }, [markdown, setTextContent]);
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = useCallback((text: string) => {
     navigator.clipboard.writeText(text).catch(err => {
       console.error('Failed to copy: ', err);
       setError("Failed to copy link.");
     });
-  };
+  }, []);
 
-  const newDrop = () => {
+  const newDrop = useCallback(() => {
     setTextContent(""); // Clear via Zustand
     setSuccessUrl(null);
     setError(null);
     setShowPreview(false);
     setEditorHidden(false);
     localStorage.removeItem('nulldown_draft');
-    textareaRef.current?.focus();
-  };
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 0);
+  }, [setTextContent]);
 
-  const insertText = (text: string) => {
+  const insertText = useCallback((text: string) => {
     if (textareaRef.current) {
       const cursorPos = textareaRef.current.selectionStart;
       const textBefore = markdown.substring(0, cursorPos);
@@ -135,17 +147,48 @@ const EditorPage: React.FC = () => {
       // If ref not available, just append
       setTextContent(markdown + '\n\n' + text + '\n\n');
     }
-  };
+  }, [markdown, setTextContent]);
 
-  // Toggle editor visibility
-  const toggleEditorVisibility = () => {
-    // If preview is hidden, we need to show it first
+  // Optimized toggle functions with debouncing
+  const toggleEditorVisibility = useCallback(() => {
+    if (isTransitioning) return;
+    
+    setIsTransitioning(true);
+    
     if (!showPreview) {
       setShowPreview(true);
+      // Add a small delay before hiding editor to avoid render batching issues
+      setTimeout(() => {
+        setEditorHidden(true);
+        setIsTransitioning(false);
+      }, 10);
+    } else {
+      setEditorHidden(prev => !prev);
+      setTimeout(() => {
+        setIsTransitioning(false);
+      }, 10);
     }
-    // Toggle editor visibility
-    setEditorHidden(!editorHidden);
-  };
+  }, [showPreview, isTransitioning]);
+
+  const togglePreviewVisibility = useCallback(() => {
+    if (isTransitioning) return;
+    
+    setIsTransitioning(true);
+    
+    if (editorHidden) {
+      setEditorHidden(false);
+      // Add a small delay before hiding preview to avoid render batching issues
+      setTimeout(() => {
+        setShowPreview(false);
+        setIsTransitioning(false);
+      }, 10);
+    } else {
+      setShowPreview(prev => !prev);
+      setTimeout(() => {
+        setIsTransitioning(false);
+      }, 10);
+    }
+  }, [editorHidden, isTransitioning]);
 
   if (successUrl) {
     return (
@@ -189,7 +232,7 @@ const EditorPage: React.FC = () => {
     );
   }
 
-  // Very simple fixed layout
+  // Simple rendering - avoid complex transitions and calculations
   return (
     <div className="fixed inset-0 flex flex-col">
       {/* Top controls */}
@@ -197,24 +240,24 @@ const EditorPage: React.FC = () => {
         <div className="text-sm">NULLDOWN</div>
         <div className="flex gap-2">
           <button 
-            onClick={() => setShowPreview(!showPreview)}
-            className="border border-accent text-accent hover:bg-accent/10 rounded-md px-4 py-2 text-sm font-medium transition-colors"
-            disabled={editorHidden}
+            onClick={togglePreviewVisibility}
+            disabled={isTransitioning || editorHidden}
+            className={`border border-accent text-accent hover:bg-accent/10 rounded-md px-4 py-2 text-sm font-medium ${isTransitioning ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             {showPreview ? "Hide Preview" : "Show Preview"}
           </button>
           
           <button 
             onClick={toggleEditorVisibility}
-            className={`border ${editorHidden ? 'border-error-light text-error-light hover:bg-error/10' : 'border-accent text-accent hover:bg-accent/10'} rounded-md px-4 py-2 text-sm font-medium transition-colors`}
-            disabled={!showPreview && editorHidden}
+            disabled={isTransitioning || (!showPreview && editorHidden)}
+            className={`border ${editorHidden ? 'border-error-light text-error-light hover:bg-error/10' : 'border-accent text-accent hover:bg-accent/10'} rounded-md px-4 py-2 text-sm font-medium ${isTransitioning ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             {editorHidden ? "Show Editor" : "Hide Editor"}
           </button>
           
           <button 
             onClick={handleShare}
-            disabled={sharing || !markdown.trim()}
+            disabled={sharing || !markdown.trim() || isTransitioning}
             className="bg-accent text-black hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {sharing && <span className="inline-block w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin mr-2"></span>}
@@ -223,8 +266,8 @@ const EditorPage: React.FC = () => {
         </div>
       </div>
       
-      {/* Main content with absolute positioning to prevent layout shifts */}
-      <div className="flex-1 flex flex-col md:flex-row relative" style={{ height: 'calc(100vh - 65px)' }}>
+      {/* Main content area - simplified layout */}
+      <div className="flex-1 relative" style={{ height: 'calc(100vh - 65px)' }}>
         {/* Error message - fixed position */}
         {error && (
           <div className="absolute top-2 left-4 right-4 z-10 bg-error/20 border border-error text-error-light p-3 rounded-md text-sm">
@@ -232,15 +275,10 @@ const EditorPage: React.FC = () => {
           </div>
         )}
         
+        {/* Simple conditional rendering instead of complex transitions */}
         {/* Editor */}
-        {(!editorHidden || !showPreview) && (
-          <div 
-            className={`${showPreview && !editorHidden ? 'hidden md:block' : ''} absolute inset-0 p-4 md:w-1/2`}
-            style={{ 
-              display: showPreview && editorHidden ? 'none' : '',
-              right: showPreview ? '50%' : '0'
-            }}
-          >
+        {!editorHidden && (
+          <div className={`absolute inset-0 p-4 ${showPreview ? 'md:w-1/2 md:right-1/2' : ''}`}>
             <textarea
               ref={textareaRef}
               value={markdown}
@@ -254,25 +292,21 @@ const EditorPage: React.FC = () => {
         
         {/* Preview */}
         {showPreview && (
-          <div 
-            className="absolute inset-0 p-4 overflow-auto bg-card border border-border rounded-md" 
-            style={{ 
-              left: editorHidden ? '0' : '50%',
-              marginLeft: editorHidden ? '0' : '4px',
-              marginRight: editorHidden ? '0' : '',
-              right: '0'
-            }}
-          >
-            <EnhancedMarkdown>
-              {markdown || "*Preview will appear here*"}
-            </EnhancedMarkdown>
+          <div className={`absolute inset-0 p-4 overflow-auto bg-card border border-border rounded-md ${!editorHidden ? 'md:left-1/2 md:ml-1' : ''}`}>
+            <Suspense fallback={<LoadingFallback />}>
+              <EnhancedMarkdown>
+                {markdown || "*Preview will appear here*"}
+              </EnhancedMarkdown>
+            </Suspense>
           </div>
         )}
         
-        {/* Markdown helpers - positioned at the bottom when shown */}
+        {/* Helpers */}
         {!editorHidden && !showPreview && (
           <div className="absolute bottom-0 left-0 right-0 p-4 bg-background z-10">
-            <MarkdownHelpers onInsert={insertText} />
+            <Suspense fallback={<LoadingFallback />}>
+              <MarkdownHelpers onInsert={insertText} />
+            </Suspense>
           </div>
         )}
       </div>

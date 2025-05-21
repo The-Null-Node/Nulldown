@@ -1,42 +1,54 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, memo } from 'react';
 import mermaid from 'mermaid';
 
 interface MermaidRendererProps {
   chart: string;
 }
 
-const MermaidRenderer: React.FC<MermaidRendererProps> = ({ chart }) => {
+// Mermaid initialization only needs to happen once
+const initializeMermaid = () => {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark', // Use 'default' for light theme or 'dark' for dark theme
+    securityLevel: 'loose', // This can be set to 'strict' for better security if needed
+    fontFamily: 'monospace',
+  });
+};
+
+// Initialize outside component
+initializeMermaid();
+
+const MermaidRenderer: React.FC<MermaidRendererProps> = memo(({ chart }) => {
   const [svg, setSvg] = useState<string>('');
   const [hasError, setHasError] = useState<boolean>(false);
   const mermaidRef = useRef<HTMLDivElement>(null);
-  const uniqueId = `mermaid-${Math.random().toString(36).substring(2, 11)}`;
+  const uniqueId = useRef(`mermaid-${Math.random().toString(36).substring(2, 11)}`).current;
 
   useEffect(() => {
-    // Initialize mermaid with preferred settings
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'dark', // Use 'default' for light theme or 'dark' for dark theme
-      securityLevel: 'loose', // This can be set to 'strict' for better security if needed
-      fontFamily: 'monospace',
-    });
-
+    // Skip if no chart
+    if (!chart) return;
+    
+    let isMounted = true;
+    
     const renderChart = async () => {
-      if (!chart) return;
-      
       try {
         // Reset error state
-        setHasError(false);
+        if (isMounted) setHasError(false);
         
         // Render the Mermaid diagram
         const { svg } = await mermaid.render(uniqueId, chart.trim());
-        setSvg(svg);
+        if (isMounted) setSvg(svg);
       } catch (error) {
         console.error('Error rendering Mermaid diagram:', error);
-        setHasError(true);
+        if (isMounted) setHasError(true);
       }
     };
 
     renderChart();
+    
+    return () => {
+      isMounted = false;
+    };
   }, [chart, uniqueId]);
 
   if (hasError) {
@@ -59,6 +71,8 @@ const MermaidRenderer: React.FC<MermaidRendererProps> = ({ chart }) => {
       <div className="animate-pulse text-muted">Rendering diagram...</div>
     </div>
   );
-};
+});
+
+MermaidRenderer.displayName = 'MermaidRenderer';
 
 export default MermaidRenderer; 
