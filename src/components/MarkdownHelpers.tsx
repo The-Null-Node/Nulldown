@@ -100,10 +100,10 @@ $$`,
 export const MarkdownHelpers: React.FC<MarkdownHelperProps> = ({ onInsert }) => {
   return (
     <div className="mt-4">
-      <details className="mb-4 text-sm">
-        <summary className="cursor-pointer text-accent hover:underline font-medium mb-2">
+      <div className="mb-4 text-sm">
+        <h3 className="text-accent font-medium mb-2">
           Mermaid Diagrams Help
-        </summary>
+        </h3>
         <div className="px-4 py-3 bg-card rounded-md">
           <p className="text-muted mb-3">
             You can add diagrams to your markdown using Mermaid. Here are some examples:
@@ -127,12 +127,12 @@ export const MarkdownHelpers: React.FC<MarkdownHelperProps> = ({ onInsert }) => 
             ))}
           </div>
         </div>
-      </details>
+      </div>
 
-      <details className="mb-4 text-sm">
-        <summary className="cursor-pointer text-accent hover:underline font-medium mb-2">
+      <div className="mb-4 text-sm">
+        <h3 className="text-accent font-medium mb-2">
           Markdown Tables Help
-        </summary>
+        </h3>
         <div className="px-4 py-3 bg-card rounded-md">
           <p className="text-muted mb-3">
             You can create tables in your markdown. Here are some examples:
@@ -156,7 +156,7 @@ export const MarkdownHelpers: React.FC<MarkdownHelperProps> = ({ onInsert }) => 
             ))}
           </div>
         </div>
-      </details>
+      </div>
 
       <details className="mb-4 text-sm">
         <summary className="cursor-pointer text-accent hover:underline font-medium mb-2">
@@ -185,7 +185,7 @@ export const MarkdownHelpers: React.FC<MarkdownHelperProps> = ({ onInsert }) => 
             ))}
           </div>
         </div>
-      </details>
+      </div>
     </div>
   );
 };

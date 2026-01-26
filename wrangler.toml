@@ -1,26 +1,14 @@
 name = "nulldown"
-compatibility_date = "2023-09-01"
 
-# Configure environment variables
-[vars]
-# Public variables can be defined here
-# Sensitive variables should be set in the Cloudflare dashboard
+compatibility_date = "2025-04-03"
 
-# Configure R2 bindings
+# Tell Pages where your built static assets are
+pages_build_output_dir = "dist"
+
+# R2 binding - must match env.R2_BUCKET in functions code
 [[r2_buckets]]
-binding = "NULLDOWN_BUCKET"
+binding = "R2_BUCKET"
 bucket_name = "nulldown"
 preview_bucket_name = "nulldown-preview"
 
-# Configure build settings
-[build]
-command = "npm run build && node build.js"
-output_directory = "out"
-
-# Configure routes
-[routes]
-pattern = "/api/*"
-script = "functions/api/[[path]].js"
-
-pattern = "/d/*"
-script = "index.html"
+# 272f4fd9d668c5b64f0fe15702351709

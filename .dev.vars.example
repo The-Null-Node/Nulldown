@@ -1,0 +1,12 @@
+# Cloudflare Pages Functions environment variables
+# Copy this file to .dev.vars and fill in your values
+# This file is read by `wrangler pages dev` for local development
+
+# The public URL where your app is hosted
+# Local: http://localhost:8788
+# Production: https://your-app.pages.dev (set in Cloudflare Dashboard)
+PUBLIC_BASE_URL=http://localhost:8788
+
+# R2 bucket binding is configured in wrangler.toml, not here
+# For secrets like API keys, add them below:
+# MY_SECRET_KEY=your-secret-here
