@@ -1,6 +1,5 @@
-import React, { useRef } from "react";
-import { useTheme } from "../../../theme/themeContext";
-import { themeOptions, type ThemeId } from "../../../theme/themes";
+import React from "react";
+import ThemePicker from "../../../components/ThemePicker";
 
 interface EditorToolbarProps {
   canShare: boolean;
@@ -23,55 +22,11 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onToggleEditor,
   onTogglePreview,
 }) => {
-  const { themeId, setThemeId } = useTheme();
-  const detailsRef = useRef<HTMLDetailsElement>(null);
-  const currentLabel =
-    themeOptions.find((option) => option.id === themeId)?.label ?? "System";
-
-  const handleThemeSelect = (id: ThemeId) => {
-    setThemeId(id);
-    detailsRef.current?.removeAttribute("open");
-  };
-
   return (
     <div className="py-4 px-4 border-b border-border bg-background flex justify-between items-center">
       <div className="text-sm">NULLDOWN</div>
       <div className="flex gap-2 items-center">
-        <details ref={detailsRef} className="relative theme-picker">
-          <summary className="list-none cursor-pointer border border-border bg-card text-foreground rounded-md px-2 py-2 text-xs font-medium hover:border-accent focus:outline-none focus:border-accent">
-            <span className="sr-only">Theme</span>
-            <span className="inline-flex items-center gap-2">
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                className="h-4 w-4 text-muted"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
-              </svg>
-              {themeId !== "system" && <span>{currentLabel}</span>}
-            </span>
-          </summary>
-          <div className="absolute right-0 mt-2 w-48 border border-border bg-card shadow-lg rounded-md p-1 z-20">
-            {themeOptions.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => handleThemeSelect(option.id)}
-                className={`w-full flex items-center justify-between rounded px-2 py-1.5 text-xs text-foreground hover:bg-accent/10 ${
-                  option.id === themeId ? "bg-accent/10 text-accent" : ""
-                }`}
-              >
-                <span>{option.label}</span>
-                {option.id === themeId && <span>•</span>}
-              </button>
-            ))}
-          </div>
-        </details>
+        <ThemePicker />
 
         <button
           onClick={onTogglePreview}

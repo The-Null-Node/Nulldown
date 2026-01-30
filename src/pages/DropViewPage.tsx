@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import EnhancedMarkdown from '../components/EnhancedMarkdown';
+import ThemePicker from '../components/ThemePicker';
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
@@ -98,7 +99,10 @@ const DropViewPage: React.FC = () => {
     <div className="fixed inset-0 flex flex-col bg-background">
       <div className="border-b border-border p-4 flex justify-between items-center">
         <Link to="/" className="text-sm text-accent hover:underline">NULLDOWN</Link>
-        <div className="text-xs text-muted">Drop ID: {id}</div>
+        <div className="flex items-center gap-3">
+          <ThemePicker />
+          <div className="text-xs text-muted">Drop ID: {id}</div>
+        </div>
       </div>
       
       <div className="flex-1 overflow-auto p-4">
