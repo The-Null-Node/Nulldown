@@ -21,7 +21,7 @@ export function useInsertText(
         const suffix =
           textAfter.length > 0 && textAfter.charAt(0) !== "\n" ? "\n\n" : "";
 
-        onst newText = textBefore + prefix + text + suffix + textAfter;
+        const newText = textBefore + prefix + text + suffix + textAfter;
 
         setTextContent(newText);
 
