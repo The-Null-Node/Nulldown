@@ -39,7 +39,7 @@ const ShareSuccessView: React.FC<ShareSuccessViewProps> = ({
           />
           <button
             onClick={handleCopy}
-            className="bg-accent text-black hover:bg-accent-hover rounded-r-md px-4 py-2 text-sm font-medium transition-colors"
+            className="bg-accent text-accent-foreground hover:bg-accent-hover rounded-r-md px-4 py-2 text-sm font-medium transition-colors"
           >
             Copy
           </button>
@@ -55,7 +55,7 @@ const ShareSuccessView: React.FC<ShareSuccessViewProps> = ({
             href={successUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="bg-accent text-black hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors inline-block"
+            className="bg-accent text-accent-foreground hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors inline-block"
           >
             Visit Drop
           </a>

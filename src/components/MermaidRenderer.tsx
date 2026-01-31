@@ -1,28 +1,26 @@
 import React, { useEffect, useRef, useState, memo } from 'react';
 import mermaid from 'mermaid';
+import { useTheme } from '../theme/themeContext';
 
 interface MermaidRendererProps {
   chart: string;
 }
 
-// Mermaid initialization only needs to happen once
-const initializeMermaid = () => {
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: 'dark', // Use 'default' for light theme or 'dark' for dark theme
-    securityLevel: 'loose', // This can be set to 'strict' for better security if needed
-    fontFamily: 'monospace',
-  });
-};
-
-// Initialize outside component
-initializeMermaid();
-
 const MermaidRenderer: React.FC<MermaidRendererProps> = memo(({ chart }) => {
+  const { theme } = useTheme();
   const [svg, setSvg] = useState<string>('');
   const [hasError, setHasError] = useState<boolean>(false);
   const mermaidRef = useRef<HTMLDivElement>(null);
   const uniqueId = useRef(`mermaid-${Math.random().toString(36).substring(2, 11)}`).current;
+
+  useEffect(() => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: theme.mode === 'dark' ? 'dark' : 'default',
+      securityLevel: 'loose',
+      fontFamily: 'monospace',
+    });
+  }, [theme.mode]);
 
   useEffect(() => {
     // Skip if no chart
@@ -49,7 +47,7 @@ const MermaidRenderer: React.FC<MermaidRendererProps> = memo(({ chart }) => {
     return () => {
       isMounted = false;
     };
-  }, [chart, uniqueId]);
+  }, [chart, uniqueId, theme.mode]);
 
   if (hasError) {
     return (

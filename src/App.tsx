@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 import EditorPage from "./pages/EditorPage";
 import DropViewPage from "./pages/DropViewPage";
+import { ThemeProvider } from "./theme/themeContext";
 
 // A simple 404 component
 const NotFoundPage: React.FC = () => {
@@ -20,15 +21,17 @@ const NotFoundPage: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <Router>
-      <div style={{ position: "fixed", inset: 0 }}>
-        <Routes>
-          <Route path="/" element={<EditorPage />} />
-          <Route path="/d/:id" element={<DropViewPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </div>
-    </Router>
+    <ThemeProvider>
+      <Router>
+        <div style={{ position: "fixed", inset: 0 }}>
+          <Routes>
+            <Route path="/" element={<EditorPage />} />
+            <Route path="/d/:id" element={<DropViewPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </div>
+      </Router>
+    </ThemeProvider>
   );
 };
 
