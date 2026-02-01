@@ -6,13 +6,11 @@ const EnhancedMarkdown = lazy(
 );
 
 interface PreviewPaneProps {
-  editorHidden: boolean;
   markdown: string;
   showPreview: boolean;
 }
 
 const PreviewPane: React.FC<PreviewPaneProps> = ({
-  editorHidden,
   markdown,
   showPreview,
 }) => {
@@ -22,7 +20,7 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
     <div className="absolute inset-0 p-4 overflow-auto bg-card border border-border rounded-md">
       <Suspense fallback={<LoadingFallback />}>
         <EnhancedMarkdown>
-          {markdown || "*Preview will appear here*"}
+          {markdown || "*Click to edit*"}
         </EnhancedMarkdown>
       </Suspense>
     </div>

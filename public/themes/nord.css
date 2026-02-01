@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "nord";
+  --nss-name: "Nord";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Cool arctic tones with calm accents.";
+  --nss-syntax: "nord";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #2E3440;
+  --foreground: #ECEFF4;
+  --card: #3B4252;
+  --border: #4C566A;
+  --muted: #8FBCBB;
+  --accent: #88C0D0;
+  --accent-hover: #7AB7C8;
+  --accent-foreground: #0F111A;
+  --error: #BF616A;
+  --error-light: #D06F79;
+}

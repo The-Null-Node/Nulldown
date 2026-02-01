@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "github-light";
+  --nss-name: "GitHub Light";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "GitHub light palette for clean UI.";
+  --nss-syntax: "ghcolors";
+  --nss-mode: "light";
+  color-scheme: light;
+  --background: #FFFFFF;
+  --foreground: #24292F;
+  --card: #F6F8FA;
+  --border: #D0D7DE;
+  --muted: #57606A;
+  --accent: #0969DA;
+  --accent-hover: #055BC2;
+  --accent-foreground: #FFFFFF;
+  --error: #CF222E;
+  --error-light: #E5534B;
+}

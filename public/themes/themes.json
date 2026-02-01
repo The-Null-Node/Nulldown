@@ -1,0 +1,132 @@
+[
+  {
+    "id": "monokai",
+    "name": "Monokai",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Classic Monokai palette for Nulldown.",
+    "version": "1.0.0",
+    "syntax": "xonokai",
+    "mode": "dark"
+  },
+  {
+    "id": "dracula",
+    "name": "Dracula",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Deep contrast with neon accents.",
+    "version": "1.0.0",
+    "syntax": "dracula",
+    "mode": "dark"
+  },
+  {
+    "id": "nord",
+    "name": "Nord",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Cool arctic tones with calm accents.",
+    "version": "1.0.0",
+    "syntax": "nord",
+    "mode": "dark"
+  },
+  {
+    "id": "tokyo-night",
+    "name": "Tokyo Night",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Neon city glow on deep night blues.",
+    "version": "1.0.0",
+    "syntax": "nightOwl",
+    "mode": "dark"
+  },
+  {
+    "id": "one-dark",
+    "name": "One Dark",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Balanced dark theme inspired by One Dark.",
+    "version": "1.0.0",
+    "syntax": "oneDark",
+    "mode": "dark"
+  },
+  {
+    "id": "one-light",
+    "name": "One Light",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Clean light theme with subtle contrast.",
+    "version": "1.0.0",
+    "syntax": "oneLight",
+    "mode": "light"
+  },
+  {
+    "id": "gruvbox-dark",
+    "name": "Gruvbox Dark",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Warm retro palette with earthy accents.",
+    "version": "1.0.0",
+    "syntax": "gruvboxDark",
+    "mode": "dark"
+  },
+  {
+    "id": "gruvbox-light",
+    "name": "Gruvbox Light",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Warm parchment palette for bright rooms.",
+    "version": "1.0.0",
+    "syntax": "gruvboxLight",
+    "mode": "light"
+  },
+  {
+    "id": "solarized-dark",
+    "name": "Solarized Dark",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Low-contrast dark palette for long sessions.",
+    "version": "1.0.0",
+    "syntax": "solarizedDarkAtom",
+    "mode": "dark"
+  },
+  {
+    "id": "solarized-light",
+    "name": "Solarized Light",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Low-contrast light palette with soft tones.",
+    "version": "1.0.0",
+    "syntax": "solarizedlight",
+    "mode": "light"
+  },
+  {
+    "id": "github-dark",
+    "name": "GitHub Dark",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "GitHub dark palette for crisp contrast.",
+    "version": "1.0.0",
+    "syntax": "vscDarkPlus",
+    "mode": "dark"
+  },
+  {
+    "id": "github-light",
+    "name": "GitHub Light",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "GitHub light palette for clean UI.",
+    "version": "1.0.0",
+    "syntax": "ghcolors",
+    "mode": "light"
+  },
+  {
+    "id": "catppuccin-mocha",
+    "name": "Catppuccin Mocha",
+    "author": "Nulldown",
+    "lastModified": "2026-01-31",
+    "description": "Soft mocha tones with vivid accents.",
+    "version": "1.0.0",
+    "syntax": "materialOceanic",
+    "mode": "dark"
+  }
+]

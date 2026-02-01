@@ -1,0 +1,15 @@
+export const staticThemeIds = [
+  "monokai",
+  "dracula",
+  "nord",
+  "tokyo-night",
+  "one-dark",
+  "one-light",
+  "gruvbox-dark",
+  "gruvbox-light",
+  "solarized-dark",
+  "solarized-light",
+  "github-dark",
+  "github-light",
+  "catppuccin-mocha",
+];

@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "one-light";
+  --nss-name: "One Light";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Clean light theme with subtle contrast.";
+  --nss-syntax: "oneLight";
+  --nss-mode: "light";
+  color-scheme: light;
+  --background: #FAFAFA;
+  --foreground: #383A42;
+  --card: #F2F3F5;
+  --border: #E1E4E8;
+  --muted: #696C77;
+  --accent: #4078F2;
+  --accent-hover: #2F6DEB;
+  --accent-foreground: #FFFFFF;
+  --error: #E45649;
+  --error-light: #F08076;
+}

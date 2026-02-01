@@ -25,18 +25,6 @@ export function usePreviewToggle() {
     setEditorMode(EditorMode.Edit);
   }, [setEditorMode]);
 
-  const toggleEditorVisibility = useCallback(() => {
-    if (editorMode !== EditorMode.Edit) {
-      setEditorMode(EditorMode.Edit);
-    }
-  }, [editorMode, setEditorMode]);
-
-  const togglePreviewVisibility = useCallback(() => {
-    setEditorMode(
-      editorMode === EditorMode.Preview ? EditorMode.Edit : EditorMode.Preview,
-    );
-  }, [editorMode, setEditorMode]);
-
   return useMemo(
     () => ({
       editorHidden,
@@ -45,8 +33,6 @@ export function usePreviewToggle() {
       setEditMode,
       setPreviewMode,
       showPreview,
-      toggleEditorVisibility,
-      togglePreviewVisibility,
     }),
     [
       editorHidden,
@@ -55,8 +41,6 @@ export function usePreviewToggle() {
       setEditMode,
       setPreviewMode,
       showPreview,
-      toggleEditorVisibility,
-      togglePreviewVisibility,
     ],
   );
 }

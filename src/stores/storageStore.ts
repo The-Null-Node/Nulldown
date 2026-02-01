@@ -1,22 +1,21 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
 /**
  * Storage operations that can be performed atomically
  */
 export enum StorageOperation {
-  SET = 'SET',
-  REMOVE = 'REMOVE',
-  CLEAR = 'CLEAR',
+  SET = "SET",
+  REMOVE = "REMOVE",
+  CLEAR = "CLEAR",
 }
 
-
 export interface IStoragePayload<T> {
-  data?: string | undefined
-  parse(): T
+  data?: string | undefined;
+  parse(): T;
 }
 
 export interface JsonStoragePayload extends IStoragePayload<string> {
-  parse(): string
+  parse(): string;
 }
 
 export const createJsonStoragePayload = <T>(data: T): JsonStoragePayload => {
@@ -26,15 +25,17 @@ export const createJsonStoragePayload = <T>(data: T): JsonStoragePayload => {
     const jsonString = JSON.stringify(data);
     payload = jsonString;
   } catch (error) {
-    console.error('Failed to encode JSON:', error);
-    throw new Error(`Failed to encode JSON: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error("Failed to encode JSON:", error);
+    throw new Error(
+      `Failed to encode JSON: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
   }
 
   return {
     data: payload,
-    parse: () => JSON.parse(payload)
+    parse: () => JSON.parse(payload),
   } as JsonStoragePayload;
-}
+};
 
 /**
  * Result of a storage operation
@@ -43,7 +44,6 @@ export interface StorageOperationResult {
   success: boolean;
   error?: string;
 }
-
 
 /**
  * Storage store state and actions
@@ -78,7 +78,9 @@ const useStorageStore = create<StorageState>((set, get) => ({
 
   initialize: () => {
     // Check if we're in a browser environment
-    const isClient = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+    const isClient =
+      typeof window !== "undefined" &&
+      typeof window.localStorage !== "undefined";
     set({ isClient });
   },
 
@@ -86,7 +88,7 @@ const useStorageStore = create<StorageState>((set, get) => ({
     const state = get();
 
     if (!state.isClient) {
-      return { success: false, error: 'Not in client environment' };
+      return { success: false, error: "Not in client environment" };
     }
 
     try {
@@ -96,7 +98,8 @@ const useStorageStore = create<StorageState>((set, get) => ({
       return { success: true };
     } catch (error) {
       set({ pendingOperations: state.pendingOperations });
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       console.error(`Failed to set localStorage item "${key}":`, errorMessage);
       return { success: false, error: errorMessage };
     }
@@ -112,7 +115,8 @@ const useStorageStore = create<StorageState>((set, get) => ({
     try {
       return localStorage.getItem(key);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       console.error(`Failed to get localStorage item "${key}":`, errorMessage);
       return null;
     }
@@ -122,7 +126,7 @@ const useStorageStore = create<StorageState>((set, get) => ({
     const state = get();
 
     if (!state.isClient) {
-      return { success: false, error: 'Not in client environment' };
+      return { success: false, error: "Not in client environment" };
     }
 
     try {
@@ -132,8 +136,12 @@ const useStorageStore = create<StorageState>((set, get) => ({
       return { success: true };
     } catch (error) {
       set({ pendingOperations: state.pendingOperations });
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`Failed to remove localStorage item "${key}":`, errorMessage);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error(
+        `Failed to remove localStorage item "${key}":`,
+        errorMessage,
+      );
       return { success: false, error: errorMessage };
     }
   },
@@ -142,7 +150,7 @@ const useStorageStore = create<StorageState>((set, get) => ({
     const state = get();
 
     if (!state.isClient) {
-      return { success: false, error: 'Not in client environment' };
+      return { success: false, error: "Not in client environment" };
     }
 
     try {
@@ -152,8 +160,9 @@ const useStorageStore = create<StorageState>((set, get) => ({
       return { success: true };
     } catch (error) {
       set({ pendingOperations: state.pendingOperations });
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Failed to clear localStorage:', errorMessage);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error("Failed to clear localStorage:", errorMessage);
       return { success: false, error: errorMessage };
     }
   },
@@ -162,7 +171,7 @@ const useStorageStore = create<StorageState>((set, get) => ({
     const state = get();
 
     if (!state.isClient) {
-      return { success: false, error: 'Not in client environment' };
+      return { success: false, error: "Not in client environment" };
     }
 
     try {
@@ -178,8 +187,9 @@ const useStorageStore = create<StorageState>((set, get) => ({
       return { success: true };
     } catch (error) {
       set({ pendingOperations: state.pendingOperations });
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Failed to batch set localStorage items:', errorMessage);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error("Failed to batch set localStorage items:", errorMessage);
       return { success: false, error: errorMessage };
     }
   },
@@ -188,7 +198,7 @@ const useStorageStore = create<StorageState>((set, get) => ({
     const state = get();
 
     if (!state.isClient) {
-      return { success: false, error: 'Not in client environment' };
+      return { success: false, error: "Not in client environment" };
     }
 
     try {
@@ -203,8 +213,9 @@ const useStorageStore = create<StorageState>((set, get) => ({
       return { success: true };
     } catch (error) {
       set({ pendingOperations: state.pendingOperations });
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Failed to batch remove localStorage items:', errorMessage);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error("Failed to batch remove localStorage items:", errorMessage);
       return { success: false, error: errorMessage };
     }
   },

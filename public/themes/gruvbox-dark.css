@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "gruvbox-dark";
+  --nss-name: "Gruvbox Dark";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Warm retro palette with earthy accents.";
+  --nss-syntax: "gruvboxDark";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #282828;
+  --foreground: #EBDBB2;
+  --card: #32302F;
+  --border: #3C3836;
+  --muted: #A89984;
+  --accent: #B8BB26;
+  --accent-hover: #A9B024;
+  --accent-foreground: #111111;
+  --error: #FB4934;
+  --error-light: #FE8019;
+}

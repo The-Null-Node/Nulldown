@@ -1,49 +1,33 @@
 import React from "react";
-import ThemePicker from "../../../components/ThemePicker";
+import { Settings } from "lucide-react";
 
 interface EditorToolbarProps {
   canShare: boolean;
-  editorHidden: boolean;
   isTransitioning: boolean;
   sharing: boolean;
-  showPreview: boolean;
+  onOpenSettings: () => void;
   onShare: () => void;
-  onToggleEditor: () => void;
-  onTogglePreview: () => void;
 }
 
 const EditorToolbar: React.FC<EditorToolbarProps> = ({
   canShare,
-  editorHidden,
   isTransitioning,
   sharing,
-  showPreview,
+  onOpenSettings,
   onShare,
-  onToggleEditor,
-  onTogglePreview,
 }) => {
   return (
     <div className="py-4 px-4 border-b border-border bg-background flex justify-between items-center">
       <div className="text-sm">NULLDOWN</div>
       <div className="flex gap-2 items-center">
-        <ThemePicker />
-
         <button
-          onClick={onTogglePreview}
-          disabled={isTransitioning || editorHidden}
-          className={`border border-accent text-accent hover:bg-accent/10 rounded-md px-4 py-2 text-sm font-medium ${isTransitioning ? "opacity-50 cursor-not-allowed" : ""}`}
+          type="button"
+          onClick={onOpenSettings}
+          className="h-10 w-10 inline-flex items-center justify-center rounded-md border border-border text-muted hover:text-foreground hover:bg-card/70 focus:outline-none focus:ring-2 focus:ring-accent/40"
+          aria-label="Open settings"
         >
-          {showPreview ? "Hide Preview" : "Show Preview"}
+          <Settings className="h-5 w-5" aria-hidden="true" />
         </button>
-
-        <button
-          onClick={onToggleEditor}
-          disabled={isTransitioning || (!showPreview && editorHidden)}
-          className={`border ${editorHidden ? "border-error-light text-error-light hover:bg-error/10" : "border-accent text-accent hover:bg-accent/10"} rounded-md px-4 py-2 text-sm font-medium ${isTransitioning ? "opacity-50 cursor-not-allowed" : ""}`}
-        >
-          {editorHidden ? "Show Editor" : "Hide Editor"}
-        </button>
-
         <button
           onClick={onShare}
           disabled={sharing || !canShare || isTransitioning}

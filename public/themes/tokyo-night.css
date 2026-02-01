@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "tokyo-night";
+  --nss-name: "Tokyo Night";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Neon city glow on deep night blues.";
+  --nss-syntax: "nightOwl";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #1A1B26;
+  --foreground: #C0CAF5;
+  --card: #202335;
+  --border: #2A2E3F;
+  --muted: #9AA5CE;
+  --accent: #7AA2F7;
+  --accent-hover: #6A94EE;
+  --accent-foreground: #0F111A;
+  --error: #F7768E;
+  --error-light: #FF9BB0;
+}

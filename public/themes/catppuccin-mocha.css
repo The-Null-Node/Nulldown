@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "catppuccin-mocha";
+  --nss-name: "Catppuccin Mocha";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Soft mocha tones with vivid accents.";
+  --nss-syntax: "materialOceanic";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #1E1E2E;
+  --foreground: #CDD6F4;
+  --card: #181825;
+  --border: #313244;
+  --muted: #A6ADC8;
+  --accent: #89B4FA;
+  --accent-hover: #74A6F3;
+  --accent-foreground: #11111B;
+  --error: #F38BA8;
+  --error-light: #F5A0B8;
+}

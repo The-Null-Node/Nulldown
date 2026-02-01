@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "solarized-dark";
+  --nss-name: "Solarized Dark";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Low-contrast dark palette for long sessions.";
+  --nss-syntax: "solarizedDarkAtom";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #002B36;
+  --foreground: #EEE8D5;
+  --card: #073642;
+  --border: #0F3D46;
+  --muted: #93A1A1;
+  --accent: #B58900;
+  --accent-hover: #C49A00;
+  --accent-foreground: #111111;
+  --error: #DC322F;
+  --error-light: #E35B5A;
+}

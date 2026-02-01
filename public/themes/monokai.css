@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "monokai";
+  --nss-name: "Monokai";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Classic Monokai palette for Nulldown.";
+  --nss-syntax: "xonokai";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #272822;
+  --foreground: #F8F8F2;
+  --card: #2D2E27;
+  --border: #3E3D32;
+  --muted: #A6A28C;
+  --accent: #A6E22E;
+  --accent-hover: #8FD32A;
+  --accent-foreground: #111111;
+  --error: #F92672;
+  --error-light: #FF6FA8;
+}

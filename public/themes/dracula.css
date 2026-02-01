@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "dracula";
+  --nss-name: "Dracula";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Deep contrast with neon accents.";
+  --nss-syntax: "dracula";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #282A36;
+  --foreground: #F8F8F2;
+  --card: #2F3142;
+  --border: #44475A;
+  --muted: #6272A4;
+  --accent: #50FA7B;
+  --accent-hover: #3AEF6F;
+  --accent-foreground: #111111;
+  --error: #FF5555;
+  --error-light: #FF7B7B;
+}

@@ -7,6 +7,15 @@ interface Env {
   PUBLIC_BASE_URL: string;
 }
 
+interface DropMetadata {
+  themeId?: string;
+}
+
+interface DropPayload {
+  content: string;
+  metadata?: DropMetadata;
+}
+
 // Basic validation for required environment variables
 function validateEnv(env: Env): void {
   if (!env.R2_BUCKET)
@@ -25,7 +34,22 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   try {
     validateEnv(env);
 
-    const textContent = await request.text();
+    const contentType = request.headers.get("Content-Type") || "";
+    const isJson = contentType.includes("application/json");
+    let bodyText = "";
+    let payload: DropPayload | null = null;
+
+    if (isJson) {
+      try {
+        payload = (await request.json()) as DropPayload;
+      } catch (error) {
+        return new Response("Invalid JSON payload.", { status: 400 });
+      }
+    } else {
+      bodyText = await request.text();
+    }
+
+    const textContent = payload?.content ?? bodyText;
     if (!textContent) {
       return new Response("Request body cannot be empty.", { status: 400 });
     }
@@ -33,8 +57,16 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     const id = nanoid(6); // Generate a 6-character unique ID
 
     // Use the R2Bucket binding provided by Cloudflare Pages
-    await env.R2_BUCKET.put(id, textContent, {
-      httpMetadata: { contentType: "text/plain" },
+    const storedPayload = payload
+      ? JSON.stringify({
+          content: textContent,
+          metadata: payload.metadata || {},
+        })
+      : textContent;
+    const storedContentType = payload ? "application/json" : "text/plain";
+
+    await env.R2_BUCKET.put(id, storedPayload, {
+      httpMetadata: { contentType: storedContentType },
     });
 
     // Construct the URL for the created drop

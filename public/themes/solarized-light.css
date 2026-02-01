@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "solarized-light";
+  --nss-name: "Solarized Light";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Low-contrast light palette with soft tones.";
+  --nss-syntax: "solarizedlight";
+  --nss-mode: "light";
+  color-scheme: light;
+  --background: #FDF6E3;
+  --foreground: #586E75;
+  --card: #EEE8D5;
+  --border: #D5CDB5;
+  --muted: #93A1A1;
+  --accent: #268BD2;
+  --accent-hover: #1E7BBE;
+  --accent-foreground: #FFFFFF;
+  --error: #DC322F;
+  --error-light: #E35B5A;
+}

@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "one-dark";
+  --nss-name: "One Dark";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Balanced dark theme inspired by One Dark.";
+  --nss-syntax: "oneDark";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #282C34;
+  --foreground: #ABB2BF;
+  --card: #2F343E;
+  --border: #3E4451;
+  --muted: #5C6370;
+  --accent: #61AFEF;
+  --accent-hover: #4FA3E6;
+  --accent-foreground: #0B1116;
+  --error: #E06C75;
+  --error-light: #F08C94;
+}

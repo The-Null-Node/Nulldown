@@ -1,7 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, type LinkProps } from 'react-router-dom';
 import EnhancedMarkdown from '../components/EnhancedMarkdown';
-import ThemePicker from '../components/ThemePicker';
+import { useTheme } from '../theme/themeContext';
+import type { ThemeId } from '../theme/themeEngine';
+
+interface DropMetadata {
+  themeId?: ThemeId;
+}
+
+interface DropPayload {
+  content: string;
+  metadata?: DropMetadata;
+}
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
@@ -14,6 +24,8 @@ const DropViewPage: React.FC = () => {
   const [dropContent, setDropContent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { setThemeId } = useTheme();
+  const LinkComponent = Link as unknown as React.FC<LinkProps>;
 
   useEffect(() => {
     if (!id) {
@@ -37,8 +49,16 @@ const DropViewPage: React.FC = () => {
           const errorText = await response.text();
           throw new Error(errorText || `Failed to fetch drop: ${response.statusText}`);
         }
-        const content = await response.text(); // Assuming plain text content
-        setDropContent(content);
+        const responseType = response.headers.get('Content-Type') || '';
+        if (responseType.includes('application/json')) {
+          const payload = (await response.json()) as DropPayload;
+          setDropContent(payload.content);
+          setThemeId(payload.metadata?.themeId ?? 'system');
+        } else {
+          const content = await response.text(); // Assuming plain text content
+          setDropContent(content);
+          setThemeId('system');
+        }
       } catch (err: any) {
         console.error("Failed to fetch drop:", err);
         setError(err.message || "An error occurred while fetching the drop.");
@@ -49,7 +69,7 @@ const DropViewPage: React.FC = () => {
     };
 
     fetchDrop();
-  }, [id]);
+  }, [id, setThemeId]);
 
   // Set document title based on drop content (basic version)
   const pageTitle = isLoading 
@@ -74,9 +94,9 @@ const DropViewPage: React.FC = () => {
       <div className="fixed inset-0 flex items-center justify-center bg-background">
         <div className="text-center max-w-md">
           <p className="text-error-light mb-4">{error}</p>
-          <Link to="/" className="text-accent hover:underline text-sm">
+          <LinkComponent to="/" className="text-accent hover:underline text-sm">
             Create a new Nulldown
-          </Link>
+          </LinkComponent>
         </div>
       </div>
     );
@@ -87,9 +107,9 @@ const DropViewPage: React.FC = () => {
       <div className="fixed inset-0 flex items-center justify-center bg-background">
         <div className="text-center max-w-md">
           <p className="text-muted mb-4">Drop not found or content is empty.</p>
-          <Link to="/" className="text-accent hover:underline text-sm">
+          <LinkComponent to="/" className="text-accent hover:underline text-sm">
             Create a new Nulldown
-          </Link>
+          </LinkComponent>
         </div>
       </div>
     );
@@ -98,9 +118,8 @@ const DropViewPage: React.FC = () => {
   return (
     <div className="fixed inset-0 flex flex-col bg-background">
       <div className="border-b border-border p-4 flex justify-between items-center">
-        <Link to="/" className="text-sm text-accent hover:underline">NULLDOWN</Link>
+        <LinkComponent to="/" className="text-sm text-accent hover:underline">NULLDOWN</LinkComponent>
         <div className="flex items-center gap-3">
-          <ThemePicker />
           <div className="text-xs text-muted">Drop ID: {id}</div>
         </div>
       </div>
@@ -111,9 +130,9 @@ const DropViewPage: React.FC = () => {
         </div>
         
         <div className="mt-6 text-center">
-          <Link to="/" className="text-accent hover:underline text-sm inline-flex items-center transition-colors">
+          <LinkComponent to="/" className="text-accent hover:underline text-sm inline-flex items-center transition-colors">
             Create another Nulldown
-          </Link>
+          </LinkComponent>
         </div>
       </div>
     </div>

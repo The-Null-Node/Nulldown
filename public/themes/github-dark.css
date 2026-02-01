@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "github-dark";
+  --nss-name: "GitHub Dark";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "GitHub dark palette for crisp contrast.";
+  --nss-syntax: "vscDarkPlus";
+  --nss-mode: "dark";
+  color-scheme: dark;
+  --background: #0D1117;
+  --foreground: #C9D1D9;
+  --card: #161B22;
+  --border: #30363D;
+  --muted: #8B949E;
+  --accent: #58A6FF;
+  --accent-hover: #409CFF;
+  --accent-foreground: #0D1117;
+  --error: #F85149;
+  --error-light: #FF7B72;
+}

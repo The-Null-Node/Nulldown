@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import { useTheme } from "../../../theme/themeContext";
+import type { ThemeId } from "../../../theme/themeEngine";
 
 interface ShareApiResponse {
   id?: string;
@@ -6,10 +8,20 @@ interface ShareApiResponse {
   error?: string;
 }
 
+interface DropMetadata {
+  themeId?: ThemeId;
+}
+
+interface DropPayload {
+  content: string;
+  metadata?: DropMetadata;
+}
+
 export function useShareDrop(markdown: string, clearDraft: () => void) {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successUrl, setSuccessUrl] = useState<string | null>(null);
+  const { themeId } = useTheme();
 
   const resetShare = useCallback(() => {
     setSuccessUrl(null);
@@ -27,12 +39,16 @@ export function useShareDrop(markdown: string, clearDraft: () => void) {
     setSuccessUrl(null);
 
     try {
+      const payload: DropPayload = {
+        content: markdown,
+        metadata: { themeId },
+      };
       const response = await fetch("/api/store", {
         method: "POST",
         headers: {
-          "Content-Type": "text/plain",
+          "Content-Type": "application/json",
         },
-        body: markdown,
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -57,7 +73,7 @@ export function useShareDrop(markdown: string, clearDraft: () => void) {
     } finally {
       setSharing(false);
     }
-  }, [clearDraft, markdown]);
+  }, [clearDraft, markdown, themeId]);
 
   return {
     error,

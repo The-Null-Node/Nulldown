@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import useEditorStore, { type EditorState } from "../stores/editorStore";
 import useStorageStore from "../stores/storageStore";
 import { useDraftStorage } from "../hooks/useLocalStorage";
@@ -8,6 +8,7 @@ import EditorPane from "./editor/components/EditorPane";
 import PreviewPane from "./editor/components/PreviewPane";
 import HelpersDock from "./editor/components/HelpersDock";
 import ShareSuccessView from "./editor/components/ShareSuccessView";
+import SettingsModal from "./editor/components/SettingsModal";
 import { useShareDrop } from "./editor/hooks/useShareDrop";
 import { usePreviewToggle } from "./editor/hooks/usePreviewToggle";
 import { useInsertText } from "./editor/hooks/useInsertText";
@@ -44,18 +45,29 @@ const EditorPage: React.FC = () => {
     setEditMode,
     setPreviewMode,
     showPreview,
-    toggleEditorVisibility,
-    togglePreviewVisibility,
   } = usePreviewToggle();
 
   const { error, resetShare, setError, shareDrop, sharing, successUrl } =
     useShareDrop(markdown, clearDraft);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         setPreviewMode();
+      }
+
+      if (
+        showPreview &&
+        e.key.toLowerCase() === "i" &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        setEditMode();
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -68,7 +80,7 @@ const EditorPage: React.FC = () => {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setPreviewMode, shareDrop, markdown, sharing]);
+  }, [markdown, setEditMode, setPreviewMode, shareDrop, sharing, showPreview]);
 
   const newDrop = useCallback(() => {
     clearDraft();
@@ -94,13 +106,15 @@ const EditorPage: React.FC = () => {
     <div className="fixed inset-0 flex flex-col">
       <EditorToolbar
         canShare={Boolean(markdown.trim())}
-        editorHidden={editorHidden}
         isTransitioning={isTransitioning}
         sharing={sharing}
-        showPreview={showPreview}
+        onOpenSettings={() => setSettingsOpen(true)}
         onShare={shareDrop}
-        onToggleEditor={toggleEditorVisibility}
-        onTogglePreview={togglePreviewVisibility}
+      />
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
       />
 
       <div
@@ -115,15 +129,15 @@ const EditorPage: React.FC = () => {
         {error && <ErrorBanner message={error} />}
 
         <EditorPane
-          editorState={{ editorHidden, toggleEditorVisibility }}
+          editorState={{ editorHidden }}
           markdown={markdown}
           showPreview={showPreview}
           textareaRef={textareaRef}
           onChange={setTextContent}
+          onExitEdit={setPreviewMode}
         />
 
         <PreviewPane
-          editorHidden={editorHidden}
           markdown={markdown}
           showPreview={showPreview}
         />

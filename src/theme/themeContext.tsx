@@ -1,39 +1,215 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { themeOptionIds, themeOptions, themePresetById, type ThemeId, type ThemeMode } from "./themes";
-import type { SyntaxThemeKey } from "./syntaxThemes";
+import React, { useEffect, useState } from "react";
+import { create } from "zustand";
+import {
+  ThemeStreamer,
+  getThemeProvider,
+  listThemeProviders,
+  registerThemeProvider,
+  type NssMetadata,
+  type NssTheme,
+  type ThemeId,
+  type ThemeMode,
+} from "./themeEngine";
+import { createStaticThemeProvider } from "./staticThemeProvider";
+import { syntaxThemeStyles, type SyntaxThemeKey } from "./syntaxThemes";
 
 const STORAGE_KEY = "nulldown_theme";
+const STYLE_TAG_ID = "nss-theme";
+const DEFAULT_PROVIDER_ID = "static";
 
 interface ResolvedTheme {
   id: ThemeId;
-  label: string;
   mode: ThemeMode;
   syntax: SyntaxThemeKey;
+  metadata: NssMetadata;
+  variables: Record<string, string>;
 }
 
-interface ThemeContextValue {
+interface ThemeState {
   themeId: ThemeId;
-  setThemeId: (id: ThemeId) => void;
-  theme: ResolvedTheme;
-  options: typeof themeOptions;
+  systemMode: ThemeMode;
+  providerId: string;
+  activeTheme: NssTheme | null;
+  resolvedTheme: ResolvedTheme;
+  status: "idle" | "loading" | "ready" | "error";
+  error: string | null;
+  loadToken: number;
+  hydrated: boolean;
+  setThemeId: (id: ThemeId) => Promise<void>;
+  setSystemMode: (mode: ThemeMode) => void;
+  setProviderId: (id: string) => void;
+  hydrateTheme: () => void;
 }
-
-const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 const getSystemMode = () => {
   if (typeof window === "undefined") return "dark" as ThemeMode;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 };
 
 const getStoredTheme = () => {
   if (typeof window === "undefined") return "system" as ThemeId;
-  const stored = window.localStorage.getItem(STORAGE_KEY) as ThemeId | null;
-  return stored && themeOptionIds.has(stored) ? stored : ("system" as ThemeId);
+  const stored = window.localStorage.getItem(STORAGE_KEY);
+  return stored || "system";
 };
 
-export const ThemeProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
-  const [themeId, setThemeId] = useState<ThemeId>(() => getStoredTheme());
-  const [systemMode, setSystemMode] = useState<ThemeMode>(() => getSystemMode());
+const isSyntaxThemeKey = (value?: string): value is SyntaxThemeKey =>
+  Boolean(value && value in syntaxThemeStyles);
+
+const createSystemMetadata = (mode: ThemeMode): NssMetadata => ({
+  id: "system",
+  name: "System",
+  author: "System",
+  lastModified: "",
+  description: `System ${mode} mode`,
+  version: "",
+  mode,
+  syntax: mode === "dark" ? "vscDarkPlus" : "vs",
+});
+
+const resolveTheme = (theme: NssTheme | null, systemMode: ThemeMode) => {
+  if (!theme) {
+    const metadata = createSystemMetadata(systemMode);
+    return {
+      id: "system",
+      mode: systemMode,
+      syntax: metadata.syntax ?? "vscDarkPlus",
+      metadata,
+      variables: {},
+    } satisfies ResolvedTheme;
+  }
+
+  const metadata = theme.metadata;
+  const mode = metadata.mode ?? systemMode;
+  const syntax = isSyntaxThemeKey(metadata.syntax)
+    ? metadata.syntax
+    : mode === "dark"
+      ? "vscDarkPlus"
+      : "vs";
+
+  return {
+    id: metadata.id,
+    mode,
+    syntax,
+    metadata,
+    variables: theme.variables,
+  } satisfies ResolvedTheme;
+};
+
+const staticProvider = createStaticThemeProvider();
+registerThemeProvider(staticProvider);
+const themeStreamer = new ThemeStreamer(staticProvider);
+
+export const useThemeStore = create<ThemeState>((set, get) => {
+  const themeId = getStoredTheme();
+  const systemMode = getSystemMode();
+
+  const setThemeId = async (id: ThemeId) => {
+    const nextId = id || "system";
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEY, nextId);
+    }
+
+    const token = get().loadToken + 1;
+    set({ themeId: nextId, status: "loading", error: null, loadToken: token });
+
+    if (nextId === "system") {
+      set({
+        activeTheme: null,
+        resolvedTheme: resolveTheme(null, get().systemMode),
+        status: "ready",
+      });
+      return;
+    }
+
+    try {
+      const loaded = await themeStreamer.load(nextId);
+      if (get().loadToken !== token) return;
+      set({
+        activeTheme: loaded,
+        resolvedTheme: resolveTheme(loaded, get().systemMode),
+        status: "ready",
+      });
+    } catch (error) {
+      if (get().loadToken !== token) return;
+      const message =
+        error instanceof Error ? error.message : "Failed to load theme.";
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_KEY, "system");
+      }
+      set({
+        themeId: "system",
+        activeTheme: null,
+        resolvedTheme: resolveTheme(null, get().systemMode),
+        status: "error",
+        error: message,
+      });
+    }
+  };
+
+  return {
+    themeId,
+    systemMode,
+    providerId: DEFAULT_PROVIDER_ID,
+    activeTheme: null,
+    resolvedTheme: resolveTheme(null, systemMode),
+    status: "idle",
+    error: null,
+    loadToken: 0,
+    hydrated: false,
+    setThemeId,
+    setSystemMode: (mode: ThemeMode) =>
+      set((state) => ({
+        systemMode: mode,
+        resolvedTheme: resolveTheme(state.activeTheme, mode),
+      })),
+    setProviderId: (id: string) => {
+      const provider = getThemeProvider(id);
+      if (!provider) return;
+      themeStreamer.setProvider(provider);
+      set({ providerId: id });
+    },
+    hydrateTheme: () => {
+      if (get().hydrated) return;
+      set({ hydrated: true });
+      void setThemeId(get().themeId);
+    },
+  };
+});
+
+const applyThemeCss = (theme: NssTheme | null) => {
+  if (typeof document === "undefined") return;
+  const existing = document.getElementById(STYLE_TAG_ID) as
+    | HTMLStyleElement
+    | null;
+
+  if (!theme) {
+    if (existing) existing.remove();
+    return;
+  }
+
+  const styleTag = existing ?? document.createElement("style");
+  styleTag.id = STYLE_TAG_ID;
+  styleTag.textContent = theme.cssText;
+  if (!existing) {
+    document.head.appendChild(styleTag);
+  }
+};
+
+export const ThemeProvider: React.FC<React.PropsWithChildren> = ({
+  children,
+}) => {
+  const themeId = useThemeStore((state) => state.themeId);
+  const systemMode = useThemeStore((state) => state.systemMode);
+  const activeTheme = useThemeStore((state) => state.activeTheme);
+  const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
+  const setSystemMode = useThemeStore((state) => state.setSystemMode);
+  const hydrateTheme = useThemeStore((state) => state.hydrateTheme);
+
+  useEffect(() => {
+    hydrateTheme();
+  }, [hydrateTheme]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -41,6 +217,8 @@ export const ThemeProvider: React.FC<React.PropsWithChildren> = ({ children }) =
     const handleChange = () => {
       setSystemMode(media.matches ? "dark" : "light");
     };
+
+    handleChange();
 
     if (media.addEventListener) {
       media.addEventListener("change", handleChange);
@@ -55,61 +233,60 @@ export const ThemeProvider: React.FC<React.PropsWithChildren> = ({ children }) =
         media.removeListener(handleChange);
       }
     };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, themeId);
-  }, [themeId]);
-
-  const resolvedTheme = useMemo<ResolvedTheme>(() => {
-    if (themeId === "system") {
-      return {
-        id: "system",
-        label: "System",
-        mode: systemMode,
-        syntax: systemMode === "dark" ? "vscDarkPlus" : "vs",
-      };
-    }
-
-    return themePresetById[themeId];
-  }, [themeId, systemMode]);
+  }, [setSystemMode]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
     const root = document.documentElement;
+    root.removeAttribute("data-theme");
 
     if (themeId === "system") {
-      root.removeAttribute("data-theme");
+      applyThemeCss(null);
       root.style.colorScheme = systemMode;
       return;
     }
 
-    root.setAttribute("data-theme", themeId);
+    applyThemeCss(activeTheme);
     root.style.colorScheme = resolvedTheme.mode;
-  }, [resolvedTheme.mode, systemMode, themeId]);
+  }, [activeTheme, resolvedTheme.mode, systemMode, themeId]);
 
-  const handleThemeChange = useCallback((id: ThemeId) => {
-    setThemeId(id);
-  }, []);
-
-  const value = useMemo(
-    () => ({
-      themeId,
-      setThemeId: handleThemeChange,
-      theme: resolvedTheme,
-      options: themeOptions,
-    }),
-    [handleThemeChange, resolvedTheme, themeId],
-  );
-
-  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+  return <>{children}</>;
 };
 
-export const useTheme = () => {
-  const context = useContext(ThemeContext);
-  if (!context) {
-    throw new Error("useTheme must be used within ThemeProvider");
-  }
-  return context;
+export const useTheme = () =>
+  useThemeStore((state) => ({
+    themeId: state.themeId,
+    setThemeId: state.setThemeId,
+    theme: state.resolvedTheme,
+    status: state.status,
+    error: state.error,
+  }));
+
+export const useThemeCatalog = () => {
+  const providerId = useThemeStore((state) => state.providerId);
+  const provider = listThemeProviders()[providerId];
+  const [themes, setThemes] = useState<NssMetadata[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    if (!provider?.list) {
+      setThemes([]);
+      return () => {
+        active = false;
+      };
+    }
+    provider
+      .list()
+      .then((result) => {
+        if (active) setThemes(result);
+      })
+      .catch(() => {
+        if (active) setThemes([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [provider]);
+
+  return themes;
 };

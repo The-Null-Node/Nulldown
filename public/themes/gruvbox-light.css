@@ -1,0 +1,21 @@
+:root {
+  --nss-id: "gruvbox-light";
+  --nss-name: "Gruvbox Light";
+  --nss-author: "Nulldown";
+  --nss-updated: "2026-01-31";
+  --nss-version: "1.0.0";
+  --nss-description: "Warm parchment palette for bright rooms.";
+  --nss-syntax: "gruvboxLight";
+  --nss-mode: "light";
+  color-scheme: light;
+  --background: #FBF1C7;
+  --foreground: #3C3836;
+  --card: #F2E5BC;
+  --border: #D5C4A1;
+  --muted: #7C6F64;
+  --accent: #458588;
+  --accent-hover: #3E7A7D;
+  --accent-foreground: #FFFFFF;
+  --error: #CC241D;
+  --error-light: #D65D0E;
+}
