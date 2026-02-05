@@ -7,6 +7,14 @@ import React, {
   useState,
 } from "react";
 import { getCaretPosition } from "../utils/getCaretPosition";
+import {
+  createAnchorState,
+  getAnchorKeysFromEventKey,
+  onFollow,
+  updateAnchorState,
+  type AnchorState,
+  type ShortcutDefinition,
+} from "../utils/shortcutEngine";
 
 interface EditorPaneProps {
   editorState: {
@@ -35,6 +43,8 @@ const EditorPane: React.FC<EditorPaneProps> = ({
   const [menuVariant, setMenuVariant] = useState<"base" | "alt">("base");
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const [isMac, setIsMac] = useState(true);
+  const anchorStateRef = useRef<AnchorState>(createAnchorState());
+  const menuSuppressedRef = useRef(false);
 
   useEffect(() => {
     if (typeof navigator !== "undefined") {
@@ -232,6 +242,94 @@ const EditorPane: React.FC<EditorPaneProps> = ({
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
 
+  const shortcuts = useMemo<ShortcutDefinition[]>(
+    () => [
+      {
+        id: "menu-base",
+        anchors: ["cmd"],
+        onTrigger: (_input, state) => {
+          if (menuSuppressedRef.current) return;
+          openMenu(state.shift ? "alt" : "base");
+        },
+      },
+      {
+        id: "menu-alt",
+        anchors: ["cmd", "shift"],
+        onTrigger: () => {
+          if (menuSuppressedRef.current) return;
+          if (menuOpen) {
+            setMenuVariant("alt");
+            updateMenuPosition();
+          } else {
+            openMenu("alt");
+          }
+        },
+      },
+      {
+        id: "italic",
+        anchors: ["cmd"],
+        key: "i",
+        onTrigger: () => {
+          onEncapsulate("italic", encapsulateHandlers);
+          closeMenu();
+        },
+      },
+      {
+        id: "bold",
+        anchors: ["cmd"],
+        key: "b",
+        onTrigger: () => {
+          onEncapsulate("bold", encapsulateHandlers);
+          closeMenu();
+        },
+      },
+      {
+        id: "underline",
+        anchors: ["cmd"],
+        key: "u",
+        onTrigger: () => {
+          onEncapsulate("underline", encapsulateHandlers);
+          closeMenu();
+        },
+      },
+      {
+        id: "heading",
+        anchors: ["cmd", "shift"],
+        key: "h",
+        onTrigger: () => {
+          onEncapsulate("heading", encapsulateHandlers);
+          closeMenu();
+        },
+      },
+      {
+        id: "image",
+        anchors: ["cmd", "shift"],
+        key: "i",
+        onTrigger: () => {
+          onEncapsulate("image", encapsulateHandlers);
+          closeMenu();
+        },
+      },
+      {
+        id: "embed",
+        anchors: ["cmd", "shift"],
+        key: "e",
+        onTrigger: () => {
+          onEncapsulate("embed", encapsulateHandlers);
+          closeMenu();
+        },
+      },
+    ],
+    [
+      closeMenu,
+      encapsulateHandlers,
+      menuOpen,
+      onEncapsulate,
+      openMenu,
+      updateMenuPosition,
+    ],
+  );
+
   useLayoutEffect(() => {
     if (!menuOpen || !menuRef.current || !containerRef.current) return;
 
@@ -256,8 +354,21 @@ const EditorPane: React.FC<EditorPaneProps> = ({
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (editorState.editorHidden || showPreview) return;
 
-      const isCommand = event.metaKey || event.ctrlKey;
-      if (!isCommand) return;
+      const nextState = updateAnchorState(anchorStateRef.current, event);
+      anchorStateRef.current = nextState;
+
+      const anchorKeys = getAnchorKeysFromEventKey(event.key);
+      if (anchorKeys.length) {
+        if (anchorKeys.includes("cmd")) {
+          menuSuppressedRef.current = false;
+        }
+        anchorKeys.forEach((anchor) => {
+          onFollow(shortcuts, anchor, nextState);
+        });
+        return;
+      }
+
+      if (!nextState.cmd) return;
 
       if (
         [
@@ -272,78 +383,46 @@ const EditorPane: React.FC<EditorPaneProps> = ({
         ].includes(event.key)
       ) {
         closeMenu();
+        menuSuppressedRef.current = true;
         return;
       }
 
-      if (event.key === "Meta" || event.key === "Control") {
+      if (event.key === "Alt") {
         return;
       }
 
-      if (event.key === "Shift") {
-        return;
+      const handled = onFollow(shortcuts, event.key, nextState);
+      if (handled) {
+        event.preventDefault();
       }
 
-      const key = event.key.toLowerCase();
-      if (event.shiftKey) {
-        if (key === "h") {
-          event.preventDefault();
-          onEncapsulate("heading", encapsulateHandlers);
-          closeMenu();
-          return;
-        }
-        if (key === "i") {
-          event.preventDefault();
-          onEncapsulate("image", encapsulateHandlers);
-          closeMenu();
-          return;
-        }
-        if (key === "e") {
-          event.preventDefault();
-          onEncapsulate("embed", encapsulateHandlers);
-          closeMenu();
-          return;
-        }
-      } else {
-        if (key === "i") {
-          event.preventDefault();
-          onEncapsulate("italic", encapsulateHandlers);
-          closeMenu();
-          return;
-        }
-        if (key === "b") {
-          event.preventDefault();
-          onEncapsulate("bold", encapsulateHandlers);
-          closeMenu();
-          return;
-        }
-        if (key === "u") {
-          event.preventDefault();
-          onEncapsulate("underline", encapsulateHandlers);
-          closeMenu();
-          return;
-        }
-      }
-
-      openMenu(event.shiftKey ? "alt" : "base");
+      closeMenu();
+      menuSuppressedRef.current = true;
     },
     [
       closeMenu,
       editorState.editorHidden,
-      encapsulateHandlers,
-      onEncapsulate,
-      openMenu,
+      shortcuts,
       showPreview,
     ],
   );
 
   const handleKeyUp = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      const nextState = updateAnchorState(anchorStateRef.current, event);
+      anchorStateRef.current = nextState;
+
       if (event.key === "Meta" || event.key === "Control") {
+        menuSuppressedRef.current = false;
         closeMenu();
         return;
       }
 
-      if (event.key === "Shift" && (event.metaKey || event.ctrlKey)) {
+      if (
+        event.key === "Shift" &&
+        nextState.cmd &&
+        !menuSuppressedRef.current
+      ) {
         setMenuVariant("base");
         updateMenuPosition();
         return;
