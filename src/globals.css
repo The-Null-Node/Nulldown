@@ -55,6 +55,8 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 /* Hide the default disclosure marker for the theme picker only */
@@ -81,6 +83,9 @@ body {
 .prose {
   color: var(--foreground);
   max-width: none;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  letter-spacing: -0.01em;
 
   strong,
   thead th {
@@ -90,43 +95,48 @@ body {
 
   h1, h2, h3, h4, h5, h6 {
     color: var(--foreground);
-    margin-top: 1.5em;
-    margin-bottom: 0.5em;
-    line-height: 1.2;
+    margin-top: 1.75em;
+    margin-bottom: 0.6em;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
   }
 
   h1 {
-    font-size: 2.25em;
+    font-size: 2.1em;
     font-weight: 700;
     border-bottom: 1px solid var(--border);
-    padding-bottom: 0.3em;
+    padding-bottom: 0.35em;
   }
 
   h2 {
-    font-size: 1.75em;
+    font-size: 1.6em;
     font-weight: 700;
-    margin-top: 2em; 
+    margin-top: 2.1em;
   }
 
   h3 {
-    font-size: 1.35em;
+    font-size: 1.28em;
     font-weight: 600;
   }
 
   h4 {
-    font-size: 1.1em;
+    font-size: 1.08em;
     font-weight: 600;
   }
   
   h5 {
-    font-size: 1em;   
+    font-size: 1em;
     font-weight: 600; 
   }
   
   h6 {
-    font-size: 0.9em;   
+    font-size: 0.92em;
     font-weight: 600;
     color: var(--muted);
+  }
+
+  p {
+    margin: 0.95em 0;
   }
 
   a {
@@ -139,6 +149,8 @@ body {
     color: var(--muted);
     padding-left: 1em;
     margin-left: 0;
+    margin-top: 1em;
+    margin-bottom: 1em;
   }
 
   code {
@@ -147,21 +159,32 @@ body {
     border-radius: 0.25rem;
     padding: 0.2em 0.4em;
     font-family: var(--font-mono);
-    font-size: 0.9em;
+    font-size: 0.92em;
   }
 
   pre {
     background-color: var(--card);
     color: var(--foreground);
     border-radius: 0.25rem;
-    padding: 1em;
+    padding: 1.05em 1.15em;
     overflow-x: auto;
-    margin: 1.5em 0;
+    margin: 1.6em 0;
+    line-height: 1.6;
   }
 
   pre code {
     background-color: transparent;
     padding: 0;
+  }
+
+  ul,
+  ol {
+    padding-left: 1.35em;
+    margin: 0.9em 0;
+  }
+
+  li {
+    margin: 0.35em 0;
   }
 
   hr,
@@ -176,7 +199,7 @@ body {
 .prose table {
   width: 100%;
   border-collapse: collapse;
-  margin: 1.5em 0;
+  margin: 1.6em 0;
   overflow-x: auto;
   display: block;
 }
@@ -187,14 +210,14 @@ body {
 }
 
 .prose table th {
-  padding: 0.75em 1em;
+  padding: 0.7em 0.95em;
   text-align: left;
   font-weight: 600;
   color: var(--foreground);
 }
 
 .prose table td {
-  padding: 0.75em 1em;
+  padding: 0.7em 0.95em;
   border-top: 1px solid var(--border);
   color: var(--foreground);
 }

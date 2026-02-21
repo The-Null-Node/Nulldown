@@ -24,8 +24,10 @@ interface EditorPaneProps {
   markdown: string;
   showPreview: boolean;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  selectionLocked: boolean;
 
   onChange: (value: string) => void;
+  onSelectionChange: (start: number, end: number) => void;
   onExitEdit: () => void;
 }
 
@@ -33,7 +35,9 @@ const EditorPane: React.FC<EditorPaneProps> = ({
   markdown,
   showPreview,
   textareaRef,
+  selectionLocked,
   onChange,
+  onSelectionChange,
   onExitEdit,
   editorState,
 }: EditorPaneProps) => {
@@ -78,10 +82,13 @@ const EditorPane: React.FC<EditorPaneProps> = ({
         if (textarea) {
           textarea.focus();
           textarea.setSelectionRange(selectionStart, selectionEnd);
+          if (!selectionLocked) {
+            onSelectionChange(selectionStart, selectionEnd);
+          }
         }
       });
     },
-    [onChange, textareaRef],
+    [onChange, onSelectionChange, selectionLocked, textareaRef],
   );
 
   type EncapsulateType =
@@ -104,9 +111,10 @@ const EditorPane: React.FC<EditorPaneProps> = ({
     selectionEnd: number;
   };
 
-  type EncapsulateHandlers = Record<EncapsulateType, (
-    context: EncapsulateContext,
-  ) => EncapsulateResult>;
+  type EncapsulateHandlers = Record<
+    EncapsulateType,
+    (context: EncapsulateContext) => EncapsulateResult
+  >;
 
   const onEncapsulate = useCallback(
     (type: EncapsulateType, handlers: EncapsulateHandlers) => {
@@ -131,9 +139,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
       italic: ({ start, end, selection }) => {
         const content = selection || "text";
         const value =
-          markdown.slice(0, start) +
-          `*${content}*` +
-          markdown.slice(end);
+          markdown.slice(0, start) + `*${content}*` + markdown.slice(end);
         const selectionStart = start + 1;
         const selectionEnd = selectionStart + content.length;
         return { value, selectionStart, selectionEnd };
@@ -141,9 +147,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
       bold: ({ start, end, selection }) => {
         const content = selection || "text";
         const value =
-          markdown.slice(0, start) +
-          `**${content}**` +
-          markdown.slice(end);
+          markdown.slice(0, start) + `**${content}**` + markdown.slice(end);
         const selectionStart = start + 2;
         const selectionEnd = selectionStart + content.length;
         return { value, selectionStart, selectionEnd };
@@ -151,9 +155,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
       underline: ({ start, end, selection }) => {
         const content = selection || "text";
         const value =
-          markdown.slice(0, start) +
-          `<u>${content}</u>` +
-          markdown.slice(end);
+          markdown.slice(0, start) + `<u>${content}</u>` + markdown.slice(end);
         const selectionStart = start + 3;
         const selectionEnd = selectionStart + content.length;
         return { value, selectionStart, selectionEnd };
@@ -161,25 +163,20 @@ const EditorPane: React.FC<EditorPaneProps> = ({
       heading: ({ start, end, selection }) => {
         if (selection) {
           const value =
-            markdown.slice(0, start) +
-            `## ${selection}` +
-            markdown.slice(end);
+            markdown.slice(0, start) + `## ${selection}` + markdown.slice(end);
           const selectionStart = start + 3;
           const selectionEnd = selectionStart + selection.length;
           return { value, selectionStart, selectionEnd };
         }
 
-        const value =
-          markdown.slice(0, start) + "## " + markdown.slice(end);
+        const value = markdown.slice(0, start) + "## " + markdown.slice(end);
         const selectionStart = start + 3;
         return { value, selectionStart, selectionEnd: selectionStart };
       },
       image: ({ start, end, selection }) => {
         const url = selection || "url";
         const value =
-          markdown.slice(0, start) +
-          `![alt](${url})` +
-          markdown.slice(end);
+          markdown.slice(0, start) + `![alt](${url})` + markdown.slice(end);
         const selectionStart = start + 2;
         const selectionEnd = selectionStart + 3;
         return { value, selectionStart, selectionEnd };
@@ -188,17 +185,14 @@ const EditorPane: React.FC<EditorPaneProps> = ({
         if (selection) {
           const template = `<iframe src="${selection}"></iframe>`;
           const value =
-            markdown.slice(0, start) +
-            template +
-            markdown.slice(end);
+            markdown.slice(0, start) + template + markdown.slice(end);
           const selectionStart = start + template.length;
           return { value, selectionStart, selectionEnd: selectionStart };
         }
 
-        const template = "<iframe src=\"\"></iframe>";
-        const value =
-          markdown.slice(0, start) + template + markdown.slice(end);
-        const selectionStart = start + template.indexOf("src=\"\"") + 5;
+        const template = '<iframe src=""></iframe>';
+        const value = markdown.slice(0, start) + template + markdown.slice(end);
+        const selectionStart = start + template.indexOf('src=""') + 5;
         return { value, selectionStart, selectionEnd: selectionStart };
       },
     }),
@@ -215,17 +209,9 @@ const EditorPane: React.FC<EditorPaneProps> = ({
     const textareaRect = textarea.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
 
-    const x =
-      textareaRect.left -
-      containerRect.left +
-      caret.left +
-      12;
+    const x = textareaRect.left - containerRect.left + caret.left + 12;
     const y =
-      textareaRect.top -
-      containerRect.top +
-      caret.top +
-      caret.lineHeight +
-      8;
+      textareaRect.top - containerRect.top + caret.top + caret.lineHeight + 8;
 
     setMenuPosition({ x, y });
   }, [textareaRef]);
@@ -399,12 +385,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
       closeMenu();
       menuSuppressedRef.current = true;
     },
-    [
-      closeMenu,
-      editorState.editorHidden,
-      shortcuts,
-      showPreview,
-    ],
+    [closeMenu, editorState.editorHidden, shortcuts, showPreview],
   );
 
   const handleKeyUp = useCallback(
@@ -431,8 +412,17 @@ const EditorPane: React.FC<EditorPaneProps> = ({
       if (menuOpen && (event.metaKey || event.ctrlKey)) {
         updateMenuPosition();
       }
+
+      if (!selectionLocked) {
+        const textarea = textareaRef.current;
+        if (textarea) {
+          const start = textarea.selectionStart ?? 0;
+          const end = textarea.selectionEnd ?? start;
+          onSelectionChange(start, end);
+        }
+      }
     },
-    [closeMenu, menuOpen, updateMenuPosition],
+    [closeMenu, menuOpen, onSelectionChange, selectionLocked, textareaRef, updateMenuPosition],
   );
 
   const handleBlur = useCallback(() => {
@@ -444,13 +434,29 @@ const EditorPane: React.FC<EditorPaneProps> = ({
 
   const handleMouseUp = useCallback(
     (event: React.MouseEvent<HTMLTextAreaElement>) => {
-      if (!menuOpen) return;
-      if (event.metaKey || event.ctrlKey) {
+      if (menuOpen && (event.metaKey || event.ctrlKey)) {
         updateMenuPosition();
       }
+      if (!selectionLocked) {
+        const textarea = textareaRef.current;
+        if (textarea) {
+          const start = textarea.selectionStart ?? 0;
+          const end = textarea.selectionEnd ?? start;
+          onSelectionChange(start, end);
+        }
+      }
     },
-    [menuOpen, updateMenuPosition],
+    [menuOpen, onSelectionChange, selectionLocked, textareaRef, updateMenuPosition],
   );
+
+  const handleSelect = useCallback(() => {
+    if (selectionLocked) return;
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? start;
+    onSelectionChange(start, end);
+  }, [onSelectionChange, selectionLocked, textareaRef]);
 
   return (
     <div ref={containerRef} className="absolute inset-0 p-4">
@@ -462,6 +468,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
         onKeyUp={handleKeyUp}
         onBlur={handleBlur}
         onMouseUp={handleMouseUp}
+        onSelect={handleSelect}
         readOnly={editorState.editorHidden}
         placeholder="Ready to take your text."
         className="w-full h-full resize-none bg-card border border-border rounded-md p-4 text-foreground font-mono focus:border-accent focus:outline-none"
