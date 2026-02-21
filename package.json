@@ -9,8 +9,8 @@
     "preview": "bunx --bun vite preview",
     "lint": "bunx --bun eslint .",
     "pages:build": "bunx --bun vite build",
-    "pages:dev": "npm run build && wrangler pages dev dist --live-reload",
-    "pages:dev:remote": "npm run build && wrangler pages dev dist --live-reload --remote",
+    "pages:dev": "bun run build && wrangler pages dev dist --live-reload",
+    "pages:dev:remote": "bun run build && wrangler pages dev dist --live-reload --remote",
     "deploy": "bun run pages:build && wrangler pages deploy dist"
   },
   "keywords": [
@@ -41,7 +41,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260103.0",
     "@eslint/eslintrc": "^3",
-    "@tailwindcss/postcss": "^4.1.5",
+    "@tailwindcss/vite": "^4.2.0",
     "@types/katex": "^0.16.7",
     "@types/node": "^20",
     "@types/react-katex": "^3.0.4",

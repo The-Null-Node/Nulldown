@@ -1,37 +1,6 @@
 import { create, StateCreator } from "zustand";
 
 /**
- * The operation to be performed on the text content of the editor.
- * The operation can be INSERT, DELETE, or RETAIN.
- * The INSERT operation inserts the data at the range.
- * The DELETE operation deletes the data at the range.
- * The RETAIN operation retains the data at the range.
- **/
-export enum DiffOp {
-  INSERT = 0,
-  DELETE = 1,
-  RETAIN = 2,
-}
-
-/**
- * The diff is the change to the text content of the editor.
- * It contains the operation to be performed, the data to be performed, the attributes of the operation, and the range of the operation.
- * The operation is the operation to be performed on the text content of the editor.
- * The data is the data to be performed on the text content of the editor.
- * The attributes are the attributes of the operation.
- * The range is the range of the operation.
- **/
-export interface Diff {
-  op: DiffOp;
-  data: ArrayBuffer;
-  attributes?: Record<string, any>;
-  range?: {
-    start: number;
-    end: number;
-  };
-}
-
-/**
  * Editor modes to switch the UI state between editing and previewing.
  */
 export enum EditorMode {
@@ -50,6 +19,12 @@ export interface EditorState {
   textContent: string;
   setTextContent: (newContent: string) => void;
   clearTextContent: () => void;
+  renderedMarkdown: string;
+  setRenderedMarkdown: (markdown: string) => void;
+  currentSnapshotId: number | null;
+  setCurrentSnapshotId: (snapshotId: number | null) => void;
+  baseDropId: string | null;
+  setBaseDropId: (dropId: string | null) => void;
   editorMode: EditorMode;
   setEditorMode: (mode: EditorMode) => void;
 }
@@ -64,6 +39,20 @@ const editorStoreCreator: StateCreator<EditorState> = (set) => ({
   textContent: "", // Initial state for the editor content
   setTextContent: (newContent: string) => set({ textContent: newContent }), // Action to update the content
   clearTextContent: () => set({ textContent: "" }), // Action to clear the content
+  renderedMarkdown: "",
+
+  setRenderedMarkdown: (markdown: string) =>
+    set({ renderedMarkdown: markdown }),
+
+  currentSnapshotId: null,
+
+  setCurrentSnapshotId: (snapshotId: number | null) =>
+    set({ currentSnapshotId: snapshotId }),
+
+  baseDropId: null,
+
+  setBaseDropId: (dropId: string | null) => set({ baseDropId: dropId }),
+
   editorMode: EditorMode.Edit, // Initial mode set to Edit
   setEditorMode: (mode: EditorMode) => set({ editorMode: mode }),
 });

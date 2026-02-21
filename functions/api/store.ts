@@ -9,6 +9,8 @@ interface Env {
 
 interface DropMetadata {
   themeId?: string;
+  baseDropId?: string;
+  snapshotId?: number;
 }
 
 interface DropPayload {

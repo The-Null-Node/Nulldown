@@ -10,6 +10,8 @@ interface ShareApiResponse {
 
 interface DropMetadata {
   themeId?: ThemeId;
+  baseDropId?: string;
+  snapshotId?: number;
 }
 
 interface DropPayload {
@@ -17,7 +19,11 @@ interface DropPayload {
   metadata?: DropMetadata;
 }
 
-export function useShareDrop(markdown: string, clearDraft: () => void) {
+export function useShareDrop(
+  markdown: string,
+  clearDraft: () => void,
+  snapshotMeta?: { baseDropId?: string | null; snapshotId?: number | null },
+) {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successUrl, setSuccessUrl] = useState<string | null>(null);
@@ -41,7 +47,11 @@ export function useShareDrop(markdown: string, clearDraft: () => void) {
     try {
       const payload: DropPayload = {
         content: markdown,
-        metadata: { themeId },
+        metadata: {
+          themeId,
+          baseDropId: snapshotMeta?.baseDropId ?? undefined,
+          snapshotId: snapshotMeta?.snapshotId ?? undefined,
+        },
       };
       const response = await fetch("/api/store", {
         method: "POST",
@@ -73,7 +83,7 @@ export function useShareDrop(markdown: string, clearDraft: () => void) {
     } finally {
       setSharing(false);
     }
-  }, [clearDraft, markdown, themeId]);
+  }, [clearDraft, markdown, snapshotMeta?.baseDropId, snapshotMeta?.snapshotId, themeId]);
 
   return {
     error,
