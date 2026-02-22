@@ -27,8 +27,33 @@ const DropViewPage: React.FC = () => {
   const [dropContent, setDropContent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
+    "idle",
+  );
   const { setThemeId } = useTheme();
   const LinkComponent = Link as unknown as React.FC<LinkProps>;
+
+  const handleCopyContent = async () => {
+    if (!dropContent) {
+      return;
+    }
+
+    if (!navigator?.clipboard?.writeText) {
+      setCopyState("error");
+      window.setTimeout(() => setCopyState("idle"), 2000);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(dropContent);
+      setCopyState("copied");
+    } catch (err) {
+      console.error("Failed to copy drop content:", err);
+      setCopyState("error");
+    }
+
+    window.setTimeout(() => setCopyState("idle"), 2000);
+  };
 
   useEffect(() => {
     if (!id) {
@@ -150,13 +175,22 @@ const DropViewPage: React.FC = () => {
         <LinkComponent to="/" className="text-sm text-accent hover:underline">
           NULLDOWN
         </LinkComponent>
-        <div className="flex items-center gap-3">
-          <div className="text-xs text-muted">Drop ID: {id}</div>
-        </div>
+        <div className="text-xs text-muted">Drop ID: {id}</div>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
-        <div className="max-w-3xl mx-auto bg-card border border-border rounded-md p-6">
+        <div className="group relative max-w-3xl mx-auto bg-card border border-border rounded-md p-6">
+          <button
+            type="button"
+            onClick={handleCopyContent}
+            className="absolute right-3 top-3 rounded-md border border-border bg-background/90 px-2.5 py-1 text-xs text-foreground opacity-0 transition-opacity hover:bg-background focus:opacity-100 focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            {copyState === "copied"
+              ? "Copied"
+              : copyState === "error"
+                ? "Copy failed"
+                : "Copy"}
+          </button>
           <EnhancedMarkdown>{dropContent}</EnhancedMarkdown>
         </div>
 
