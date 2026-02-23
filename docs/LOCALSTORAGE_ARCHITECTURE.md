@@ -16,6 +16,7 @@ A Zustand store that provides atomic localStorage operations:
 - **Error Handling**: Comprehensive error reporting without throwing
 
 **Key Methods:**
+
 - `initialize()` - Check if running in browser environment
 - `setItem(key, value)` - Atomically set a localStorage item
 - `getItem(key)` - Safely retrieve a localStorage item
@@ -29,23 +30,30 @@ A Zustand store that provides atomic localStorage operations:
 React hooks that provide convenient interfaces to the storage store:
 
 #### `useLocalStorageSync(key, value, options)`
+
 Auto-syncs a value to localStorage when it changes.
 
 **Options:**
+
 - `autoSave` - Automatically save on value changes (default: true)
 - `skipEmpty` - Skip saving empty values (default: false)
 
 #### `useLocalStorageLoad(key, onLoad, options)`
+
 Loads a value from localStorage on component mount.
 
 **Options:**
+
 - `parser` - Custom parser for loaded values
 
 #### `useLocalStorage(key, value, onLoad, options)`
+
 Combined hook for both loading and syncing.
 
 #### `useDraftStorage(draftKey, content, setContent)`
+
 Specialized hook for draft content management with convenient methods:
+
 - `clearDraft()` - Clears content and removes from localStorage atomically
 - `saveDraft()` - Manually saves draft to localStorage
 - `remove()` - Removes draft from localStorage
@@ -57,11 +65,15 @@ The EditorPage now uses the draft storage system:
 
 ```typescript
 // Initialize storage
-const initializeStorage = useStorageStore(state => state.initialize);
-const isClient = useStorageStore(state => state.isClient);
+const initializeStorage = useStorageStore((state) => state.initialize);
+const isClient = useStorageStore((state) => state.isClient);
 
 // Use draft storage hook
-const { clearDraft } = useDraftStorage('nulldown_draft', markdown, setTextContent);
+const { clearDraft } = useDraftStorage(
+  "nulldown_draft",
+  markdown,
+  setTextContent,
+);
 
 // Initialize storage on mount
 useEffect(() => {
@@ -70,6 +82,7 @@ useEffect(() => {
 ```
 
 **Key Benefits:**
+
 1. **Atomic Operations**: All localStorage operations are guaranteed to complete or fail together
 2. **Automatic Sync**: Draft is automatically saved when markdown changes
 3. **Automatic Load**: Draft is automatically loaded on mount
@@ -80,11 +93,12 @@ useEffect(() => {
 ## Usage Examples
 
 ### Basic Draft Management
+
 ```typescript
 const { clearDraft, saveDraft } = useDraftStorage(
-  'my_draft',
+  "my_draft",
   content,
-  setContent
+  setContent,
 );
 
 // Clear draft and content atomically
@@ -95,22 +109,24 @@ saveDraft();
 ```
 
 ### Custom Storage Operations
+
 ```typescript
-const setItem = useStorageStore(state => state.setItem);
-const result = setItem('my_key', 'my_value');
+const setItem = useStorageStore((state) => state.setItem);
+const result = setItem("my_key", "my_value");
 
 if (!result.success) {
-  console.error('Failed to save:', result.error);
+  console.error("Failed to save:", result.error);
 }
 ```
 
 ### Batch Operations
+
 ```typescript
-const batchSet = useStorageStore(state => state.batchSet);
+const batchSet = useStorageStore((state) => state.batchSet);
 const result = batchSet({
-  'key1': 'value1',
-  'key2': 'value2',
-  'key3': 'value3'
+  key1: "value1",
+  key2: "value2",
+  key3: "value3",
 });
 ```
 
@@ -123,5 +139,3 @@ const result = batchSet({
 5. **Performance**: Optimized with Zustand's selector-based re-rendering
 6. **Reliability**: Atomic operations ensure data consistency
 7. **Developer Experience**: Clean, intuitive API with automatic synchronization
-
-

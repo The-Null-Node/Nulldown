@@ -6,18 +6,28 @@ type SnapshotUpdate = Partial<
 >;
 
 export default class Snapshotter {
-  private snapshots = new Map<SnapshotId, Snapshot>();
+  private readonly snapshots = new Map<SnapshotId, Snapshot>();
   private queue: MaxPriorityQueue<Snapshot>;
   private nextId = 1;
-  private maxDepth = 3;
-  private registered = new Set<SnapshotId>();
+  private _maxDepth = 3;
+  private readonly registered = new Set<SnapshotId>();
+
+  private readonly compareSnapshots = (a: Snapshot, b: Snapshot) => a.id - b.id;
 
   constructor(maxDepth = 3) {
-    this.maxDepth = Math.max(1, maxDepth);
-    this.queue = new MaxPriorityQueue<Snapshot>(
-      (a, b) => a.id - b.id,
-      this.maxDepth,
-    );
+    this._maxDepth = Math.max(1, maxDepth);
+    this.queue = this.createQueue(this._maxDepth);
+  }
+
+  private createQueue(maxDepth: number): MaxPriorityQueue<Snapshot> {
+    return new MaxPriorityQueue<Snapshot>(this.compareSnapshots, maxDepth);
+  }
+
+  private removeSnapshots(snapshots: Snapshot[]): void {
+    snapshots.forEach((snapshot) => {
+      this.snapshots.delete(snapshot.id);
+      this.registered.delete(snapshot.id);
+    });
   }
 
   requestSnapshotId(baseSnapshotId?: SnapshotId): SnapshotId {
@@ -83,25 +93,23 @@ export default class Snapshotter {
     return this.snapshots.get(id) ?? null;
   }
 
-  getMaxDepth(): number {
-    return this.maxDepth;
+  get maxDepth(): number {
+    return this._maxDepth;
   }
 
-  setMaxDepth(maxDepth: number): void {
-    this.maxDepth = Math.max(1, maxDepth);
-    const removed = this.queue.setMaxSize(this.maxDepth);
-    removed.forEach((snapshot) => {
-      this.snapshots.delete(snapshot.id);
-      this.registered.delete(snapshot.id);
-    });
+  set maxDepth(value: number) {
+    const nextMaxDepth = Math.max(1, value);
+    if (nextMaxDepth === this._maxDepth) {
+      return;
+    }
+    this._maxDepth = nextMaxDepth;
+    const removed = this.queue.setMaxSize(nextMaxDepth);
+    this.removeSnapshots(removed);
   }
 
   reset(): void {
     this.snapshots.clear();
-    this.queue = new MaxPriorityQueue<Snapshot>(
-      (a, b) => a.id - b.id,
-      this.maxDepth,
-    );
+    this.queue = this.createQueue(this.maxDepth);
     this.nextId = 1;
     this.registered.clear();
   }

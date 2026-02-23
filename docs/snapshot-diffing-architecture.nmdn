@@ -1,0 +1,185 @@
+```metadata
+title: Nulldown Snapshot + Diffing Architecture
+format: nmdn
+version: 1
+```
+
+# Nulldown Snapshot + Diffing Architecture
+
+## Why this exists
+
+Nulldown treats editing as a stream of text diffs, then groups those diffs into snapshots. This gives the app a clear state timeline while still keeping the live editor state simple (`textContent` + `renderedMarkdown` in Zustand).
+
+At a high level:
+
+1. User edits text.
+2. Nulldown computes a minimal diff between previous and next text.
+3. Diff(s) are appended to the active snapshot.
+4. A render pass is queued and recorded as a render diff.
+5. Snapshot metadata (`currentSnapshotId`, `baseDropId`) is attached when sharing.
+
+## Core pieces
+
+### 1) Diff model (`src/lib/nulledit/types.ts`)
+
+- `DiffOp`: `INSERT`, `DELETE`, `RETAIN` (retain is defined but not currently produced by the text diff algorithm).
+- `Diff`: operation + byte data (`ArrayBuffer`) + optional range.
+- `SnapshotDiff`: logical event in a snapshot with `kind` (`edit` or `render`), lengths before/after, timestamp, and list of ops.
+- `Snapshot`: immutable identity (`id`), mutable content/rendered state, and ordered diff history.
+
+### 2) Text diff engine (`src/lib/nulledit/textDiff.ts`)
+
+- `computeDiffOps(previous, next)` finds the longest common prefix and suffix.
+- It emits up to two operations:
+  - one `DELETE` for removed middle range,
+  - one `INSERT` for added middle range.
+- `applyDiff(previous, diff)` applies one operation to produce new text.
+
+Important detail: this is intentionally lightweight and optimized for interactive typing, not full semantic diffing.
+
+### 3) Snapshot manager (`src/lib/nulledit/snapshotter.ts`)
+
+`Snapshotter` owns snapshot lifecycle and retention:
+
+- `requestSnapshotId(baseSnapshotId?)`: allocates a new pending snapshot.
+- `appendDiff(id, diff)`: appends edit/render events.
+- `upsertRenderDiff(id, diff)`: keeps one latest render diff for the snapshot.
+- `registerSnapshot(id)`: marks snapshot as retained in a bounded queue.
+- `setMaxDepth(depth)`: changes retention window.
+- `reset()`: clears all snapshot state.
+
+Retention behavior:
+
+- Backed by `MaxPriorityQueue` (`src/lib/nulledit/priorityQueue.ts`).
+- Default depth is `3` snapshots.
+- When depth is exceeded, lowest-priority (oldest id) snapshots are evicted from both queue and snapshot map.
+
+### 4) Editor orchestrator (`src/lib/nulledit/editor.ts`)
+
+`createEditor()` is the runtime coordinator between user edits, snapshotter, and Zustand state.
+
+Key fields inside the editor runtime:
+
+- `currentSnapshotId`: active snapshot receiving diffs.
+- `lastRenderedSnapshotId`: last snapshot that completed render.
+- `renderToken`: cancels stale async renders.
+- `renderScheduled`: coalesces repeated render requests into one microtask.
+
+Key methods:
+
+- `addDiffs(diffs)`:
+  - ensures an active snapshot,
+  - applies diffs to `textContent`,
+  - records an `edit` snapshot diff,
+  - schedules render.
+- `render()`:
+  - computes render diff from last rendered content to current content,
+  - guards against stale async completion with token + snapshot checks,
+  - updates snapshot status/content/renderedMarkdown,
+  - registers snapshot for retention,
+  - writes `renderedMarkdown` to Zustand.
+- `seedSnapshot(content)`:
+  - creates a rendered baseline snapshot,
+  - useful for loading draft/clone content without replaying historical ops.
+- `reset()`:
+  - clears snapshotter + editor-local runtime pointers + Zustand editor fields.
+
+## App-level state flow
+
+### Editor state store (`src/stores/editorStore.ts`)
+
+The user-visible state is intentionally minimal:
+
+- `textContent`
+- `renderedMarkdown`
+- `currentSnapshotId`
+- `baseDropId`
+
+`baseDropId` tracks cloning ancestry for share metadata; it is separate from snapshot ids.
+
+### Editor page integration (`src/pages/EditorPage.tsx`)
+
+`EditorPage` wires UI interactions into diff/snapshot updates:
+
+- Typing/paste path: `handleBufferChange()` computes `computeDiffOps(prev, next)` then calls `editor.addDiffs(...)`.
+- Local draft load path: `setDraftContent()` either seeds first snapshot or adds diffs from current buffer.
+- Clone path (`?clone=<id>`): fetches source drop, `editor.reset()`, `editor.seedSnapshot(content)`, and sets `baseDropId`.
+- Share path: passes `{ baseDropId, snapshotId: currentSnapshotId }` into `useShareDrop(...)`.
+
+## Share + retrieval contract
+
+### Share hook (`src/pages/editor/hooks/useShareDrop.ts`)
+
+Shared payload uses:
+
+```json
+{
+  "content": "...",
+  "metadata": {
+    "themeId": "...",
+    "baseDropId": "optional",
+    "snapshotId": 123
+  }
+}
+```
+
+### API storage (`functions/api/store.ts`)
+
+- Accepts JSON or plain text.
+- For JSON payloads, stores `{ content, metadata }` in R2 as `application/json`.
+- Returns created drop URL.
+
+### API retrieval (`functions/api/get/[id].ts`)
+
+- Returns raw stored body + content type metadata.
+- Consumer can parse JSON and recover both content and metadata.
+
+### Drop view (`src/pages/DropViewPage.tsx`)
+
+- Handles both legacy plain text and JSON payloads.
+- Uses metadata theme if present.
+- Snapshot metadata is currently transported and persisted but not reconstructed into client-side snapshot history on the view page.
+
+## Practical lifecycle examples
+
+### Example A: fresh typing session
+
+1. First keystroke creates snapshot `id=1`.
+2. Edit diff appended (`kind: edit`).
+3. Render queued and executed, render diff appended/upserted (`kind: render`).
+4. More keystrokes continue writing into active snapshot until a new snapshot id is requested by editor logic.
+
+### Example B: clone and branch
+
+1. Open `/?clone=<dropId>`.
+2. App fetches drop content and seeds a rendered baseline snapshot.
+3. `baseDropId` is set to original drop id.
+4. New edits generate local snapshot diffs.
+5. Sharing includes ancestry metadata (`baseDropId`) + current local snapshot id.
+
+## Current design tradeoffs
+
+- Snapshot depth is intentionally small (default 3) to cap in-memory overhead.
+- Diff algorithm is fast and predictable, but not multi-hunk optimal.
+- Snapshot ids are runtime-local; they are useful as metadata pointers, not global durable history identifiers.
+- Render pipeline currently resolves markdown as `Promise.resolve(content)` in editor runtime, so the render diff is effectively text-to-text state tracking.
+
+## If you want to extend this system
+
+1. **Increase history depth** via `snapshotter.setMaxDepth(...)` or constructor value.
+2. **Persist snapshot chains** by storing snapshot diffs server-side instead of only final content + metadata.
+3. **Add undo/redo** by replaying or reversing `SnapshotDiff.ops`.
+4. **Adopt richer diffing** (multi-hunk or token-level) if editing patterns demand higher fidelity.
+
+## Quick file map
+
+- `src/lib/nulledit/types.ts` - diff + snapshot types
+- `src/lib/nulledit/textDiff.ts` - compute/apply diffs
+- `src/lib/nulledit/snapshotter.ts` - snapshot lifecycle + retention
+- `src/lib/nulledit/priorityQueue.ts` - bounded queue mechanics
+- `src/lib/nulledit/editor.ts` - runtime orchestration
+- `src/stores/editorStore.ts` - app-facing editor state
+- `src/pages/EditorPage.tsx` - UI integration and clone/share wiring
+- `src/pages/editor/hooks/useShareDrop.ts` - outbound metadata contract
+- `functions/api/store.ts` - persisted payload format
+- `functions/api/get/[id].ts` - retrieval behavior

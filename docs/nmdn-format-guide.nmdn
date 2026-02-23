@@ -1,0 +1,66 @@
+```metadata
+title: NMDN Format Guide
+format: nmdn
+version: 1
+```
+
+# How NMDN Files Work
+
+NMDN is a Nulldown-flavored markdown file format that stores document metadata at the top of the file, followed by regular markdown content.
+
+## File structure
+
+Every `.nmdn` file should follow this shape:
+
+```text
+```metadata
+title: Your Document Title
+format: nmdn
+version: 1
+```
+
+# Your markdown starts here
+
+Normal markdown content...
+```
+
+## Rules
+
+- The first block in the file must be a fenced code block labeled `metadata`.
+- Metadata appears only in that top block.
+- Everything after that block is normal markdown content.
+- The file extension must be `.nmdn`.
+
+## Current metadata fields
+
+- `title`: Human-readable document name.
+- `format`: Always `nmdn` for this format.
+- `version`: Metadata schema version (currently `1`).
+
+## Why this format exists
+
+- Keeps content portable and self-describing.
+- Allows a future loader to read metadata separately from markdown body.
+- Makes it possible to reconstruct editor snapshots from content while preserving packaging metadata on export.
+
+## Intended loader behavior (future)
+
+When loader support is added, expected flow is:
+
+1. Read metadata block.
+2. Parse and store metadata.
+3. Extract remaining markdown body.
+4. Feed markdown body into editor snapshot/content pipeline.
+5. On export, reattach metadata block and package content back into `.nmdn`.
+
+## Example
+
+```metadata
+title: Diffing Machine
+format: nmdn
+version: 1
+```
+
+# Diffing Machine
+
+This is the document body and can contain standard markdown, including Mermaid blocks.

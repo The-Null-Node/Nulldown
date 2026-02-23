@@ -1,0 +1,52 @@
+```metadata
+title: Nulldown Diffing Machine
+format: nmdn
+version: 1
+```
+
+# Nulldown Diffing Machine
+
+This diagram describes how Nulldown turns editor changes into snapshot-aware state updates and rendered output.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Idle
+
+  Idle --> Seeded : seedSnapshot(content)\n(clone/draft bootstrap)
+  Seeded --> Idle
+
+  Idle --> EnsureSnapshot : on edit input
+  EnsureSnapshot --> ComputeDiff : computeDiffOps(prev,next)
+
+  ComputeDiff --> Idle : no diff
+  ComputeDiff --> ApplyDiffs : diffs found
+
+  ApplyDiffs --> UpdateText : applyDiff(...)
+  UpdateText --> AppendEditDiff : snapshot.append(kind=edit)
+  AppendEditDiff --> QueueRender : queueMicrotask(render)
+
+  QueueRender --> RenderStart : render()
+  RenderStart --> BuildRenderDiff : diff(baseRendered, currentText)
+  BuildRenderDiff --> AsyncRender : resolve rendered markdown
+
+  AsyncRender --> StaleCheck : token + snapshotId check
+  StaleCheck --> Idle : stale result discarded
+  StaleCheck --> CommitRender : valid result
+
+  CommitRender --> UpsertRenderDiff : snapshot.upsert(kind=render)
+  UpsertRenderDiff --> MarkRendered : status=rendered
+  MarkRendered --> RegisterSnapshot : bounded retention queue
+  RegisterSnapshot --> PublishState : set renderedMarkdown + ids
+  PublishState --> Idle
+
+  Idle --> Reset : reset()
+  Seeded --> Reset : reset()
+  Reset --> Idle
+```
+
+## Notes
+
+- `edit` diffs capture text mutations from user input.
+- `render` diffs capture transition from last rendered content to current content.
+- Snapshot retention is bounded (default depth: 3), and older snapshots are evicted.
+- `currentSnapshotId` is runtime-local and shared as metadata when publishing.
