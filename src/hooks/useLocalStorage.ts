@@ -1,8 +1,8 @@
-import { useEffect, useCallback } from 'react';
-import useStorageStore from '../stores/storageStore';
+import { useEffect, useCallback, useRef } from "react";
+import useStorageStore from "../stores/storageStore";
 
 /**
- * Hook to sync a value with localStorage
+ * Hook to sync a value with browser storage
  * 
  * @param key - The localStorage key
  * @param value - The current value to sync
@@ -13,17 +13,19 @@ export function useLocalStorageSync(
   key: string,
   value: string,
   options: {
-    // Whether to automatically save to localStorage when value changes
+    // Whether to automatically save when value changes
     autoSave?: boolean;
     // Whether to skip saving empty values
     skipEmpty?: boolean;
+    // Debounce duration for auto-save writes
+    debounceMs?: number;
   } = {}
 ) {
-  const { autoSave = true, skipEmpty = false } = options;
+  const { autoSave = true, skipEmpty = false, debounceMs = 200 } = options;
 
-  const setItem = useStorageStore(state => state.setItem);
-  const removeItem = useStorageStore(state => state.removeItem);
-  const isClient = useStorageStore(state => state.isClient);
+  const setItem = useStorageStore((state) => state.setItem);
+  const removeItem = useStorageStore((state) => state.removeItem);
+  const isClient = useStorageStore((state) => state.isClient);
 
   // Auto-save effect
   useEffect(() => {
@@ -32,8 +34,14 @@ export function useLocalStorageSync(
     // Skip saving empty values if configured
     if (skipEmpty && !value) return;
 
-    setItem(key, value);
-  }, [value, key, autoSave, skipEmpty, isClient, setItem]);
+    const timer = window.setTimeout(() => {
+      void setItem(key, value);
+    }, Math.max(0, debounceMs));
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [value, key, autoSave, skipEmpty, debounceMs, isClient, setItem]);
 
   // Manual save function
   const save = useCallback(() => {
@@ -52,7 +60,7 @@ export function useLocalStorageSync(
 }
 
 /**
- * Hook to load a value from localStorage on mount
+ * Hook to load a value from browser storage on mount
  * 
  * @param key - The localStorage key
  * @param onLoad - Callback to handle the loaded value
@@ -66,31 +74,59 @@ export function useLocalStorageLoad<T = string>(
     parser?: (value: string) => T;
   } = {}
 ) {
-  const getItem = useStorageStore(state => state.getItem);
-  const isClient = useStorageStore(state => state.isClient);
+  const getItem = useStorageStore((state) => state.getItem);
+  const isClient = useStorageStore((state) => state.isClient);
+  const parserRef = useRef(options.parser);
+  const onLoadRef = useRef(onLoad);
+  const loadedKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    onLoadRef.current = onLoad;
+  }, [onLoad]);
+
+  useEffect(() => {
+    parserRef.current = options.parser;
+  }, [options.parser]);
 
   // Load on mount
   useEffect(() => {
     if (!isClient) return;
+    if (loadedKeyRef.current === key) return;
 
-    const value = getItem(key);
+    loadedKeyRef.current = key;
+    let cancelled = false;
 
-    if (value !== null) {
-      if (options.parser) {
-        try {
-          const parsed = options.parser(value);
-          onLoad(value);
-        } catch (error) {
-          console.error(`Failed to parse localStorage value for key "${key}":`, error);
+    const loadValue = async () => {
+      const value = await getItem(key);
+
+      if (cancelled) return;
+
+      if (value !== null) {
+        if (parserRef.current) {
+          try {
+            parserRef.current(value);
+            onLoadRef.current(value);
+          } catch (error) {
+            console.error(
+              `Failed to parse stored value for key "${key}":`,
+              error,
+            );
+          }
+        } else {
+          onLoadRef.current(value);
         }
-      } else {
-        onLoad(value);
       }
-    }
-  }, [key, isClient, getItem, onLoad, options.parser]);
+    };
+
+    void loadValue();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [key, isClient, getItem]);
 
   // Manual load function
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
     if (!isClient) return null;
     return getItem(key);
   }, [key, isClient, getItem]);
@@ -101,7 +137,7 @@ export function useLocalStorageLoad<T = string>(
 }
 
 /**
- * Combined hook for both loading and syncing with localStorage
+ * Combined hook for both loading and syncing with browser storage
  * 
  * @param key - The localStorage key
  * @param value - The current value to sync
@@ -116,6 +152,7 @@ export function useLocalStorage(
   options: {
     autoSave?: boolean;
     skipEmpty?: boolean;
+    debounceMs?: number;
   } = {}
 ) {
   const { save, remove } = useLocalStorageSync(key, value, options);
@@ -129,7 +166,7 @@ export function useLocalStorage(
 }
 
 /**
- * Hook for draft-specific localStorage operations
+ * Hook for draft-specific browser storage operations
  * Provides specialized functions for managing draft content
  * 
  * @param draftKey - The localStorage key for the draft
@@ -153,11 +190,12 @@ export function useDraftStorage(
     {
       autoSave: true,
       skipEmpty: false,
+      debounceMs: 250,
     }
   );
 
   const clearDraft = useCallback(() => {
-    setContent('');
+    setContent("");
     return storage.remove();
   }, [setContent, storage]);
 
@@ -171,5 +209,3 @@ export function useDraftStorage(
     ...storage,
   };
 }
-
-

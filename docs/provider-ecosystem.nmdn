@@ -1,0 +1,307 @@
+```metadata
+title: Nulldown Drop Provider Usage and Scaling Guide
+format: nmdn
+version: 1
+```
+
+# Nulldown Drop Provider Usage and Scaling Guide
+
+This is a usage-first guide for the drop provider system in Nulldown. It explains how to call the provider APIs, how requests flow through local and remote paths, and how the architecture scales as usage and product surface grow.
+
+If you are looking for "how do I create/get/clone drops" and "what happens at scale", this is the source of truth.
+
+## What the provider layer is
+
+The drop provider layer gives the app one stable interface for drop operations while allowing different backends:
+
+- local provider: encrypted storage in IndexedDB
+- remote provider: encrypted storage through `/api/store` and `/api/get/:id`
+
+Both providers expose the same API and are selected by:
+
+- write mode (`offlineMode` in the store)
+- drop id prefix (`offline_` routes to local provider)
+
+## Provider API (actual runtime contract)
+
+Defined in `src/lib/drop/provider.ts`:
+
+```ts
+type DropProviderScope = "local" | "remote";
+
+interface DropProvider {
+  scope: DropProviderScope;
+  create(payload: DropPayload): Promise<{ id: string; url: string; scope: DropProviderScope }>;
+  get(id: string): Promise<DropPayload | null>;
+  resolveGraph(id: string): Promise<DropGraph>;
+}
+
+interface DropProviderRegistry {
+  local: DropProvider;
+  remote: DropProvider;
+  forDropId(id: string): DropProvider;
+}
+```
+
+### What each call guarantees
+
+- `create(payload)` always encrypts first, then persists, then returns a provider-scoped result.
+- `get(id)` returns normalized `DropPayload` for both legacy and sealed formats.
+- `resolveGraph(id)` returns lineage based on `metadata.baseDropId`, with IndexedDB caching.
+
+## Recommended usage path (application code)
+
+Most app code should use `dropStore`, not providers directly.
+
+From `src/stores/dropStore.ts`:
+
+- `createDrop(payload)` chooses local/remote by `offlineMode`
+- `getDrop(id)` routes by id prefix
+- `resolveDropGraph(id)` routes by id prefix
+
+### Example: share from UI (recommended)
+
+```ts
+const createDrop = useDropStore((state) => state.createDrop);
+const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
+
+await hydrateOfflineMode();
+
+const result = await createDrop({
+  content: markdown,
+  metadata: {
+    themeId,
+    baseDropId,
+    snapshotId,
+  },
+});
+
+// result => { id, url, scope: "local" | "remote" }
+```
+
+## Direct provider usage (advanced)
+
+Use this when building tests, custom workflows, or tooling.
+
+### Create providers directly
+
+```ts
+import {
+  createLocalDropProvider,
+  createRemoteDropProvider,
+} from "src/lib/drop/provider";
+
+const local = createLocalDropProvider();
+const remote = createRemoteDropProvider();
+
+const localResult = await local.create({ content: "local note" });
+const remoteResult = await remote.create({ content: "remote note" });
+```
+
+### Create a registry with shared crypto dependency
+
+```ts
+import { createDropProviderRegistry } from "src/lib/drop/provider";
+import { createBrowserDropCrypto } from "src/lib/drop/browserDropCrypto";
+
+const crypto = createBrowserDropCrypto();
+const registry = createDropProviderRegistry({ crypto });
+
+const provider = registry.forDropId(dropId);
+const payload = await provider.get(dropId);
+```
+
+This mirrors production behavior where local and remote providers share one crypto port.
+
+## End-to-end flow diagrams
+
+### Architecture map
+
+```mermaid
+flowchart LR
+  UI[Editor and DropView]
+  Store[dropStore]
+  Registry[DropProviderRegistry]
+
+  Local[Local Provider]
+  Remote[Remote Provider]
+  Crypto[BrowserDropCrypto]
+  LocalStorage[LocalDropStorage]
+  GraphLocal[LineageGraphPort local cache]
+  GraphRemote[LineageGraphPort remote cache]
+
+  IDB[(IndexedDB drops + kv)]
+  StoreApi[/POST /api/store/]
+  GetApi[/GET /api/get/:id/]
+  R2[(Cloudflare R2)]
+
+  UI --> Store
+  Store --> Registry
+
+  Registry --> Local
+  Registry --> Remote
+
+  Local --> Crypto
+  Remote --> Crypto
+
+  Local --> LocalStorage --> IDB
+  Remote --> StoreApi --> R2
+  Remote --> GetApi --> R2
+
+  Local --> GraphLocal --> IDB
+  Remote --> GraphRemote --> IDB
+```
+
+### Online share (remote provider)
+
+```mermaid
+sequenceDiagram
+  participant UI
+  participant Store as dropStore
+  participant Remote as RemoteProvider
+  participant Crypto as BrowserDropCrypto
+  participant API as /api/store
+  participant R2
+
+  UI->>Store: createDrop(payload), offlineMode=false
+  Store->>Remote: create(payload)
+  Remote->>Crypto: seal(payload)
+  Crypto-->>Remote: DropEnvelopeV1
+  Remote->>API: POST encrypted envelope
+  API->>API: optional provider signature
+  API->>R2: put(id, envelope)
+  API-->>Remote: {id, url}
+  Remote-->>Store: {id, url, scope:"remote"}
+  Store-->>UI: share link
+```
+
+### Offline share (local provider)
+
+```mermaid
+sequenceDiagram
+  participant UI
+  participant Store as dropStore
+  participant Local as LocalProvider
+  participant Crypto as BrowserDropCrypto
+  participant IDB as IndexedDB
+
+  UI->>Store: createDrop(payload), offlineMode=true
+  Store->>Local: create(payload)
+  Local->>Crypto: seal(payload)
+  Crypto-->>Local: DropEnvelopeV1
+  Local->>IDB: putOfflineDrop(record)
+  Local-->>Store: {id:"offline_*", url, scope:"local"}
+  Store-->>UI: local-only share link
+```
+
+### Graph resolution with cache
+
+```mermaid
+flowchart TD
+  Start[resolveGraph headId] --> Cache{cached graph exists?}
+  Cache -- yes --> ReturnCached[return cached DropGraph]
+  Cache -- no --> Walk[walk baseDropId chain via get]
+  Walk --> Build[build headId rootId lineage nodes]
+  Build --> Persist[cache in IndexedDB kv]
+  Persist --> ReturnFresh[return computed DropGraph]
+```
+
+## How the provider scales
+
+Scaling happens across four dimensions: traffic, compute, lineage, and codebase evolution.
+
+### 1) Traffic scaling
+
+- Offline traffic is absorbed by browser storage, so it does not hit server APIs.
+- Remote traffic is stateless at the function layer and object-backed in R2.
+- Reads and writes split naturally by id prefix and mode without branching in UI code.
+
+### 2) Compute scaling
+
+- Encryption/decryption happens in the browser (`BrowserDropCrypto`), which offloads server CPU.
+- Server-side remote provider path mainly validates, optionally signs, and stores bytes.
+- This keeps remote functions lightweight even as share volume grows.
+
+### 3) Lineage scaling
+
+- First `resolveGraph(id)` call is proportional to lineage depth (walks ancestors).
+- Subsequent calls for same head id are cache-backed from IndexedDB.
+- Local and remote graph caches use separate prefixes to avoid namespace collision.
+
+### 4) Product/code scaling
+
+- Provider internals are composed from ports (`storage`, `crypto`, `graph`).
+- New backends can be added by implementing ports and extending registry routing.
+- UI and store call sites stay stable because the `DropProvider` interface does not change.
+
+### Provider growth pattern
+
+```mermaid
+flowchart LR
+  UI[Editor and dropStore call sites]
+  Registry[DropProviderRegistry]
+  Local[local]
+  Remote[remote]
+  NewScope[new scope]
+
+  UI --> Registry
+  Registry --> Local
+  Registry --> Remote
+  Registry -. add route .-> NewScope
+
+  NewScope --> StoragePort[custom storage port]
+  NewScope --> CryptoPort[crypto port]
+  NewScope --> GraphPort[graph port]
+```
+
+### Scaling topology diagram
+
+```mermaid
+flowchart TB
+  Traffic[Create/Get/Clone requests] --> Split{routing}
+  Split -->|offline mode or offline_ id| LocalPath[Local provider path]
+  Split -->|remote id| RemotePath[Remote provider path]
+
+  LocalPath --> LocalCrypto[client-side crypto]
+  LocalPath --> LocalStorage[IndexedDB persistence]
+
+  RemotePath --> RemoteCrypto[client-side crypto]
+  RemotePath --> EdgeFn[stateless Functions]
+  EdgeFn --> ObjectStore[R2 object storage]
+
+  LocalPath --> GraphCacheLocal[local graph cache]
+  RemotePath --> GraphCacheRemote[remote graph cache]
+```
+
+## Operational boundaries and limits
+
+- Offline links are local to the browser profile/device that created them.
+- Remote sealed envelopes can only be opened by the matching account vault.
+- Provider signature verification requires configured client verify key (`VITE_PROVIDER_SIGNING_PUBLIC_JWK`).
+- Graph cache currently has no TTL/version invalidation policy.
+
+## Failure modes to expect
+
+- Local create fails if IndexedDB is unavailable.
+- Remote create/get fails on network/API errors.
+- Open fails when vault account does not match envelope account id.
+- Open fails if device signature or provider signature verification fails.
+
+## Extension recipe: add another provider scope
+
+1. Implement storage semantics equivalent to `DropStoragePort`.
+2. Reuse `BrowserDropCrypto` or add another `DropCryptoPort` implementation.
+3. Reuse `LineageDropGraphPort` or provide a custom graph strategy.
+4. Add provider instance to registry and define routing rule.
+5. Keep `dropStore` public methods unchanged so UI remains provider-agnostic.
+
+## Key file map
+
+- `src/lib/drop/provider.ts` - provider contracts, implementations, registry
+- `src/lib/drop/browserDropCrypto.ts` - envelope seal/open and signature verification
+- `src/lib/drop/passkeyVault.ts` - vault keys, passkey gating, unlock cache
+- `src/stores/dropStore.ts` - app-facing provider routing
+- `src/pages/editor/hooks/useShareDrop.ts` - share payload composition
+- `functions/api/store.ts` - remote store write path and optional provider signing
+- `functions/api/get/[id].ts` - remote read path
+- `shared/drop/types.ts` - payload/envelope schema and canonical serialization
