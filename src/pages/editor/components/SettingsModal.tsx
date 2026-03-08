@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo } from "react";
 import { useTheme, useThemeCatalog } from "../../../theme/themeContext";
+import useDropStore from "../../../stores/dropStore";
 
 interface SettingsModalProps {
   open: boolean;
@@ -9,6 +10,9 @@ interface SettingsModalProps {
 const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
   const { themeId, setThemeId } = useTheme();
   const catalog = useThemeCatalog();
+  const offlineMode = useDropStore((state) => state.offlineMode);
+  const setOfflineMode = useDropStore((state) => state.setOfflineMode);
+  const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
   const options = useMemo(
     () => [
       { id: "system", name: "System" },
@@ -30,6 +34,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
       document.removeEventListener("keydown", handleEscape);
     };
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    void hydrateOfflineMode();
+  }, [open, hydrateOfflineMode]);
 
   if (!open) return null;
 
@@ -82,7 +91,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
               <select
                 id="theme-select"
                 value={themeId}
-                onChange={(event) => setThemeId(event.target.value)}
+                onChange={(event) => {
+                  void setThemeId(event.target.value);
+                }}
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/40"
               >
                 {options.map((option) => (
@@ -117,6 +128,48 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
             <p className="text-sm text-foreground">
               Drafts are saved locally in your browser while you type.
             </p>
+            <div className="rounded-md border border-border bg-background px-3 py-3 space-y-2">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm text-foreground">Offline mode</div>
+                  <div className="text-xs text-muted">
+                    {offlineMode
+                      ? "Drops are encrypted and saved locally to IndexedDB on this browser profile."
+                      : "Drops are end-to-end encrypted, uploaded online, and unlocked with your passkey vault."}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={offlineMode}
+                  onClick={() => void setOfflineMode(!offlineMode)}
+                  className={`relative inline-flex h-7 w-12 items-center rounded-full border border-border transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 ${
+                    offlineMode ? "bg-accent/80" : "bg-muted/60"
+                  }`}
+                >
+                  <span
+                    className={`absolute left-1 inline-block h-5 w-5 transform rounded-full bg-background shadow-sm transition-transform ${
+                      offlineMode ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                  <span className="sr-only">Toggle offline mode</span>
+                </button>
+              </div>
+
+              <div className="text-xs text-muted">
+                Current mode: {offlineMode ? "Offline" : "Online"}
+              </div>
+
+              {offlineMode ? (
+                <div className="text-xs text-muted">
+                  Offline links are local-only and work in this browser profile.
+                </div>
+              ) : (
+                <div className="text-xs text-muted">
+                  Online links require your account vault unlock to decrypt.
+                </div>
+              )}
+            </div>
           </section>
         </div>
       </div>

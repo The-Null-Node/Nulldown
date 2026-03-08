@@ -1,141 +1,156 @@
-# LocalStorage Store Architecture
+# Browser Storage Architecture
 
 ## Overview
 
-This architecture provides atomic, type-safe localStorage operations through a Zustand store and React hooks.
+Nulldown now uses a **composed drop provider** model where each provider combines:
 
-## Components
+- storage
+- crypto
+- graph resolution/cache
 
-### 1. Storage Store (`src/stores/storageStore.ts`)
+The UI calls one provider interface for create/read/clone, while provider selection happens by mode (offline/online) or drop id.
 
-A Zustand store that provides atomic localStorage operations:
+## Storage Layers
 
-- **State Management**: Tracks client environment and pending operations
-- **Atomic Operations**: All operations are wrapped with try-catch and operation tracking
-- **Batch Operations**: Support for multiple keys in a single atomic transaction
-- **Error Handling**: Comprehensive error reporting without throwing
+### 1. Key-Value Storage (`src/stores/storageStore.ts`)
 
-**Key Methods:**
+The storage store now resolves a backend at runtime:
 
-- `initialize()` - Check if running in browser environment
-- `setItem(key, value)` - Atomically set a localStorage item
-- `getItem(key)` - Safely retrieve a localStorage item
-- `removeItem(key)` - Atomically remove a localStorage item
-- `clear()` - Clear all localStorage
-- `batchSet(items)` - Set multiple items atomically
-- `batchRemove(keys)` - Remove multiple items atomically
+- `indexeddb` (preferred)
+- `localstorage` (fallback)
+- `unavailable` (SSR / restricted environment)
 
-### 2. Storage Hooks (`src/hooks/useLocalStorage.ts`)
+It exposes async operations:
 
-React hooks that provide convenient interfaces to the storage store:
+- `initialize()`
+- `setItem(key, value)`
+- `getItem(key)`
+- `removeItem(key)`
+- `clear()`
+- `batchSet(items)`
+- `batchRemove(keys)`
 
-#### `useLocalStorageSync(key, value, options)`
+Migration keys are copied from localStorage to IndexedDB on initialization:
 
-Auto-syncs a value to localStorage when it changes.
+- `nulldown_draft`
+- `nulldown_offline_mode`
 
-**Options:**
+### 2. IndexedDB Utilities (`src/lib/indexedDb.ts`)
 
-- `autoSave` - Automatically save on value changes (default: true)
-- `skipEmpty` - Skip saving empty values (default: false)
+Database: `nulldown`
 
-#### `useLocalStorageLoad(key, onLoad, options)`
+Object stores:
 
-Loads a value from localStorage on component mount.
+- `kv` - generic key-value data (draft + settings)
+- `drops` - offline shared drops (legacy plaintext payloads and sealed envelopes)
 
-**Options:**
+`kv` also stores:
 
-- `parser` - Custom parser for loaded values
+- drop graph cache entries
+- account vault state
 
-#### `useLocalStorage(key, value, onLoad, options)`
+### 3. Draft Hooks (`src/hooks/useLocalStorage.ts`)
 
-Combined hook for both loading and syncing.
+Draft hooks are now async-safe and debounced:
 
-#### `useDraftStorage(draftKey, content, setContent)`
+- `useLocalStorageSync(...)` debounces autosaves
+- `useLocalStorageLoad(...)` loads asynchronously on mount
+- `useDraftStorage(...)` keeps draft behavior intact with async storage APIs
 
-Specialized hook for draft content management with convenient methods:
+## Composed Drop Providers
 
-- `clearDraft()` - Clears content and removes from localStorage atomically
-- `saveDraft()` - Manually saves draft to localStorage
-- `remove()` - Removes draft from localStorage
-- `load()` - Manually loads draft from localStorage
+### Provider Interface (`src/lib/drop/provider.ts`)
 
-### 3. EditorPage Integration
+The provider composes three ports:
 
-The EditorPage now uses the draft storage system:
+- `DropStoragePort`
+- `DropCryptoPort`
+- `DropGraphPort`
 
-```typescript
-// Initialize storage
-const initializeStorage = useStorageStore((state) => state.initialize);
-const isClient = useStorageStore((state) => state.isClient);
+Runtime providers:
 
-// Use draft storage hook
-const { clearDraft } = useDraftStorage(
-  "nulldown_draft",
-  markdown,
-  setTextContent,
-);
+- Local provider: IndexedDB-backed storage + browser crypto + local graph cache
+- Remote provider: API-backed storage + browser crypto + provider-managed graph semantics
 
-// Initialize storage on mount
-useEffect(() => {
-  initializeStorage();
-}, [initializeStorage]);
-```
+### Shared Contract (`shared/drop/types.ts`)
 
-**Key Benefits:**
+Both frontend and functions use one canonical schema:
 
-1. **Atomic Operations**: All localStorage operations are guaranteed to complete or fail together
-2. **Automatic Sync**: Draft is automatically saved when markdown changes
-3. **Automatic Load**: Draft is automatically loaded on mount
-4. **Clean API**: Single `clearDraft()` call replaces multiple operations
-5. **Error Handling**: All operations return success/error status
-6. **SSR Safe**: Checks for client environment before any localStorage access
+- `DropPayload` for legacy/plain payloads
+- `DropEnvelopeV1` (`nmdn.drop.v1`) for encrypted/signed drops
+- canonical JSON serialization helpers for signature payloads
 
-## Usage Examples
+## Crypto + Vault Model
 
-### Basic Draft Management
+### Browser Vault (`src/lib/drop/passkeyVault.ts`)
 
-```typescript
-const { clearDraft, saveDraft } = useDraftStorage(
-  "my_draft",
-  content,
-  setContent,
-);
+- Creates a local account vault with:
+  - RSA-OAEP keypair for per-drop key wrapping
+  - ECDSA keypair for device signatures
+- Gated by WebAuthn passkey checks before crypto operations
+- Keys are stored locally (IndexedDB-first, localStorage fallback)
 
-// Clear draft and content atomically
-clearDraft();
+### Sealed Envelope (`src/lib/drop/browserDropCrypto.ts`)
 
-// Manually save (auto-save is on by default)
-saveDraft();
-```
+Each created drop is sealed as:
 
-### Custom Storage Operations
+- AES-GCM encrypted content
+- wrapped content key (account vault public key)
+- device signature
+- optional provider signature (if configured server-side)
 
-```typescript
-const setItem = useStorageStore((state) => state.setItem);
-const result = setItem("my_key", "my_value");
+No graph object is embedded in drop metadata.
 
-if (!result.success) {
-  console.error("Failed to save:", result.error);
+## Offline / Online Modes
+
+### Drop Store (`src/stores/dropStore.ts`)
+
+The drop store now routes through providers:
+
+- `offlineMode` (default: `false` / online)
+- `hydrateOfflineMode()`
+- `setOfflineMode(enabled)`
+- `createDrop(payload)`
+- `getDrop(id)`
+- `resolveDropGraph(id)`
+
+Offline ids are prefixed with `offline_`.
+
+### Settings UI (`src/pages/editor/components/SettingsModal.tsx`)
+
+Settings now includes an **Offline mode** toggle:
+
+- Online mode: encrypt + upload sealed drop via `/api/store`
+- Offline mode: encrypt + save sealed drop in IndexedDB and return `/d/offline_<id>` URL
+
+### Share Flow (`src/pages/editor/hooks/useShareDrop.ts`)
+
+Share now calls `createDrop(...)` and receives provider-scoped output:
+
+```json
+{
+  "id": "...",
+  "url": "...",
+  "scope": "local | remote"
 }
 ```
 
-### Batch Operations
+## Read + Clone Behavior
 
-```typescript
-const batchSet = useStorageStore((state) => state.batchSet);
-const result = batchSet({
-  key1: "value1",
-  key2: "value2",
-  key3: "value3",
-});
-```
+### Drop view (`src/pages/DropViewPage.tsx`)
 
-## Architecture Benefits
+- Uses `getDrop(id)` from the drop store
+- Provider selection happens internally by id
 
-1. **Separation of Concerns**: Storage logic is separated from UI components
-2. **Testability**: Storage operations can be mocked and tested independently
-3. **Reusability**: Hooks can be used across any component needing localStorage
-4. **Type Safety**: Full TypeScript support with proper types and interfaces
-5. **Performance**: Optimized with Zustand's selector-based re-rendering
-6. **Reliability**: Atomic operations ensure data consistency
-7. **Developer Experience**: Clean, intuitive API with automatic synchronization
+### Editor clone (`src/pages/EditorPage.tsx`)
+
+- Uses `getDrop(cloneId)` regardless of mode
+- Encrypted envelopes are decrypted through the vault path
+
+## Notes
+
+- Offline links are local-only and work in the same browser profile/device.
+- Online drops are provider-blind (encrypted before upload).
+- Provider signatures are added when `PROVIDER_SIGNING_PRIVATE_JWK` is configured in Functions.
+- Theme preference storage remains in localStorage (`src/theme/themeContext.tsx`).
+- Draft persistence is now async and no longer blocks typing with synchronous writes.

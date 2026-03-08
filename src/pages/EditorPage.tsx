@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import useEditorStore, { type EditorState } from "../stores/editorStore";
 import useStorageStore from "../stores/storageStore";
+import useDropStore, { isOfflineDropId } from "../stores/dropStore";
 import { useDraftStorage } from "../hooks/useLocalStorage";
 import EditorToolbar from "./editor/components/EditorToolbar";
 import ErrorBanner from "./editor/components/ErrorBanner";
@@ -48,6 +49,8 @@ const EditorPage: React.FC = () => {
   }, [markdown]);
 
   const initializeStorage = useStorageStore((state) => state.initialize);
+  const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
+  const getDrop = useDropStore((state) => state.getDrop);
 
   const setDraftContent = useCallback(
     (value: string) => {
@@ -98,8 +101,9 @@ const EditorPage: React.FC = () => {
   );
 
   useEffect(() => {
-    initializeStorage();
-  }, [initializeStorage]);
+    void initializeStorage();
+    void hydrateOfflineMode();
+  }, [hydrateOfflineMode, initializeStorage]);
 
   useEffect(() => {
     if (!cloneId) {
@@ -108,26 +112,19 @@ const EditorPage: React.FC = () => {
     }
 
     ignoreDraftLoadRef.current = true;
-    const controller = new AbortController();
 
     const fetchClone = async () => {
       try {
-        const response = await fetch(`/api/get/${cloneId}`, {
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`Failed to clone drop: ${response.statusText}`);
+        const payload = await getDrop(cloneId);
+        if (!payload) {
+          throw new Error(
+            isOfflineDropId(cloneId)
+              ? "Offline drop not found on this browser profile."
+              : "Drop not found.",
+          );
         }
 
-        const responseType = response.headers.get("Content-Type") || "";
-        let content = "";
-
-        if (responseType.includes("application/json")) {
-          const payload = (await response.json()) as { content?: string };
-          content = payload.content ?? "";
-        } else {
-          content = await response.text();
-        }
+        const content = payload.content;
 
         editor.reset();
         editor.seedSnapshot(content);
@@ -141,9 +138,7 @@ const EditorPage: React.FC = () => {
     };
 
     fetchClone();
-
-    return () => controller.abort();
-  }, [cloneId, editor, setBaseDropId]);
+  }, [cloneId, editor, getDrop, setBaseDropId]);
 
   const insertText = useInsertText(textareaRef, markdown, handleBufferChange);
 
@@ -160,11 +155,18 @@ const EditorPage: React.FC = () => {
   const [selectionLocked, setSelectionLocked] = useState(false);
   const prevShowPreviewRef = useRef(showPreview);
 
-  const { error, resetShare, setError, shareDrop, sharing, successUrl } =
-    useShareDrop(renderedMarkdown, clearDraft, {
-      baseDropId,
-      snapshotId: currentSnapshotId,
-    });
+  const {
+    error,
+    resetShare,
+    setError,
+    shareDrop,
+    sharing,
+    successOffline,
+    successUrl,
+  } = useShareDrop(renderedMarkdown, clearDraft, {
+    baseDropId,
+    snapshotId: currentSnapshotId,
+  });
 
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -183,6 +185,7 @@ const EditorPage: React.FC = () => {
 
   useEffect(() => {
     const wasPreview = prevShowPreviewRef.current;
+
     if (wasPreview && !showPreview) {
       const { start, end } = cursorSelection;
       requestAnimationFrame(() => {
@@ -226,7 +229,14 @@ const EditorPage: React.FC = () => {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [renderedMarkdown, setEditMode, setPreviewMode, shareDrop, sharing, showPreview]);
+  }, [
+    renderedMarkdown,
+    setEditMode,
+    setPreviewMode,
+    shareDrop,
+    sharing,
+    showPreview,
+  ]);
 
   const newDrop = useCallback(() => {
     clearDraft();
@@ -259,6 +269,7 @@ const EditorPage: React.FC = () => {
         successUrl={successUrl}
         onCopyError={setError}
         onNewDrop={newDrop}
+        offline={successOffline}
       />
     );
   }
@@ -278,10 +289,7 @@ const EditorPage: React.FC = () => {
         onClose={() => setSettingsOpen(false)}
       />
 
-      <div
-        className="flex-1 relative"
-        style={{ height: "calc(100vh - 65px)" }}
-      >
+      <div className="flex-1 relative" style={{ height: "calc(100vh - 65px)" }}>
         {error && <ErrorBanner message={error} />}
 
         <EditorPane

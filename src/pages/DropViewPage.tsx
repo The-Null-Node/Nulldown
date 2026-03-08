@@ -2,19 +2,10 @@ import React, { useState, useEffect } from "react";
 import { useParams, Link, type LinkProps } from "react-router-dom";
 import EnhancedMarkdown from "../components/EnhancedMarkdown";
 import { useTheme } from "../theme/themeContext";
-import type { ThemeId } from "../theme/themeEngine";
+import useDropStore, {
+  isOfflineDropId,
+} from "../stores/dropStore";
 import { getMarkdownTitle } from "../lib/markdownText";
-
-interface DropMetadata {
-  themeId?: ThemeId;
-  baseDropId?: string;
-  snapshotId?: number;
-}
-
-interface DropPayload {
-  content: string;
-  metadata?: DropMetadata;
-}
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
@@ -31,6 +22,7 @@ const DropViewPage: React.FC = () => {
     "idle",
   );
   const { setThemeId } = useTheme();
+  const getDrop = useDropStore((state) => state.getDrop);
   const LinkComponent = Link as unknown as React.FC<LinkProps>;
 
   const handleCopyContent = async () => {
@@ -67,28 +59,19 @@ const DropViewPage: React.FC = () => {
       setError(null);
 
       try {
-        const response = await fetch(`/api/get/${id}`);
-        if (response.status === 404) {
-          setError("Drop not found.");
+        const payload = await getDrop(id);
+        if (!payload) {
+          setError(
+            isOfflineDropId(id)
+              ? "Offline drop not found on this browser profile."
+              : "Drop not found.",
+          );
           setDropContent(null);
           return;
         }
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(
-            errorText || `Failed to fetch drop: ${response.statusText}`,
-          );
-        }
-        const responseType = response.headers.get("Content-Type") || "";
-        if (responseType.includes("application/json")) {
-          const payload = (await response.json()) as DropPayload;
-          setDropContent(payload.content);
-          setThemeId(payload.metadata?.themeId ?? "system");
-        } else {
-          const content = await response.text(); // Assuming plain text content
-          setDropContent(content);
-          setThemeId("system");
-        }
+
+        setDropContent(payload.content);
+        void setThemeId(payload.metadata?.themeId ?? "system");
       } catch (err: any) {
         console.error("Failed to fetch drop:", err);
         setError(err.message || "An error occurred while fetching the drop.");
@@ -99,7 +82,7 @@ const DropViewPage: React.FC = () => {
     };
 
     fetchDrop();
-  }, [id, setThemeId]);
+  }, [getDrop, id, setThemeId]);
 
   // Set document title based on drop content (basic version)
   const dropTitle = dropContent ? getMarkdownTitle(dropContent) : "";

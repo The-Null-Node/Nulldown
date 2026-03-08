@@ -1,36 +1,25 @@
 import { useCallback, useState } from "react";
 import { useTheme } from "../../../theme/themeContext";
-import type { ThemeId } from "../../../theme/themeEngine";
-
-interface ShareApiResponse {
-  id?: string;
-  url?: string;
-  error?: string;
-}
-
-interface DropMetadata {
-  themeId?: ThemeId;
-  baseDropId?: string;
-  snapshotId?: number;
-}
-
-interface DropPayload {
-  content: string;
-  metadata?: DropMetadata;
-}
+import useDropStore, {
+  type DropPayload,
+} from "../../../stores/dropStore";
 
 export function useShareDrop(
   markdown: string,
-  clearDraft: () => void,
+  clearDraft: () => void | Promise<unknown>,
   snapshotMeta?: { baseDropId?: string | null; snapshotId?: number | null },
 ) {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successUrl, setSuccessUrl] = useState<string | null>(null);
+  const [successOffline, setSuccessOffline] = useState(false);
   const { themeId } = useTheme();
+  const createDrop = useDropStore((state) => state.createDrop);
+  const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
 
   const resetShare = useCallback(() => {
     setSuccessUrl(null);
+    setSuccessOffline(false);
     setError(null);
   }, []);
 
@@ -43,8 +32,11 @@ export function useShareDrop(
     setSharing(true);
     setError(null);
     setSuccessUrl(null);
+    setSuccessOffline(false);
 
     try {
+      await hydrateOfflineMode();
+
       const payload: DropPayload = {
         content: markdown,
         metadata: {
@@ -53,37 +45,26 @@ export function useShareDrop(
           snapshotId: snapshotMeta?.snapshotId ?? undefined,
         },
       };
-      const response = await fetch("/api/store", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
 
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(
-          errorData || `Failed to create drop: ${response.statusText}`,
-        );
-      }
-
-      const result: ShareApiResponse = await response.json();
-      if (result.id && result.url) {
-        setSuccessUrl(result.url);
-        clearDraft();
-      } else {
-        setError(
-          result.error || "Failed to create drop. Unknown error from API.",
-        );
-      }
+      const result = await createDrop(payload);
+      setSuccessUrl(result.url);
+      setSuccessOffline(result.scope === "local");
+      await Promise.resolve(clearDraft());
     } catch (err: any) {
       console.error("Share error:", err);
       setError(err.message || "An unexpected error occurred while sharing.");
     } finally {
       setSharing(false);
     }
-  }, [clearDraft, markdown, snapshotMeta?.baseDropId, snapshotMeta?.snapshotId, themeId]);
+  }, [
+    clearDraft,
+    createDrop,
+    hydrateOfflineMode,
+    markdown,
+    snapshotMeta?.baseDropId,
+    snapshotMeta?.snapshotId,
+    themeId,
+  ]);
 
   return {
     error,
@@ -92,5 +73,6 @@ export function useShareDrop(
     shareDrop,
     sharing,
     successUrl,
+    successOffline,
   };
 }

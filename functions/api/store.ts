@@ -1,22 +1,86 @@
 import { nanoid } from "nanoid";
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import {
+  isDropEnvelopeV1,
+  isDropPayload,
+  serializeDropEnvelopeForProviderSignature,
+  type DropEnvelopeV1,
+} from "../../shared/drop/types";
 
 // Define the expected shape of the environment variables
 interface Env {
   R2_BUCKET: R2Bucket;
   PUBLIC_BASE_URL: string;
+  PROVIDER_SIGNING_PRIVATE_JWK?: string;
 }
 
-interface DropMetadata {
-  themeId?: string;
-  baseDropId?: string;
-  snapshotId?: number;
-}
+const textEncoder = new TextEncoder();
 
-interface DropPayload {
-  content: string;
-  metadata?: DropMetadata;
-}
+const toBase64 = (value: ArrayBuffer): string => {
+  const bytes = new Uint8Array(value);
+  let binary = "";
+
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  return btoa(binary);
+};
+
+const signProviderEnvelope = async (
+  envelope: DropEnvelopeV1,
+  env: Env,
+): Promise<DropEnvelopeV1> => {
+  const rawProviderKey = env.PROVIDER_SIGNING_PRIVATE_JWK;
+  if (!rawProviderKey) {
+    return envelope;
+  }
+
+  let jwk: JsonWebKey;
+
+  try {
+    jwk = JSON.parse(rawProviderKey) as JsonWebKey;
+  } catch (error) {
+    console.error("Invalid PROVIDER_SIGNING_PRIVATE_JWK:", error);
+    return envelope;
+  }
+
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    {
+      name: "ECDSA",
+      namedCurve: "P-256",
+    },
+    false,
+    ["sign"],
+  );
+
+  const signedPayload = serializeDropEnvelopeForProviderSignature(envelope);
+  const signature = await crypto.subtle.sign(
+    {
+      name: "ECDSA",
+      hash: "SHA-256",
+    },
+    key,
+    textEncoder.encode(signedPayload),
+  );
+
+  const keyIdSource = jwk as unknown as Record<string, unknown>;
+  const keyId = typeof keyIdSource.kid === "string" ? keyIdSource.kid : "provider";
+
+  return {
+    ...envelope,
+    signatures: {
+      ...envelope.signatures,
+      provider: {
+        kid: keyId,
+        alg: "ECDSA_P256_SHA256",
+        sig: toBase64(signature),
+      },
+    },
+  };
+};
 
 // Basic validation for required environment variables
 function validateEnv(env: Env): void {
@@ -38,34 +102,42 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
 
     const contentType = request.headers.get("Content-Type") || "";
     const isJson = contentType.includes("application/json");
-    let bodyText = "";
-    let payload: DropPayload | null = null;
+    const rawBody = await request.text();
+    let storedPayload = rawBody;
+    let storedContentType = isJson ? "application/json" : "text/plain";
 
     if (isJson) {
+      let parsed: unknown;
+
       try {
-        payload = (await request.json()) as DropPayload;
+        parsed = JSON.parse(rawBody);
       } catch (error) {
         return new Response("Invalid JSON payload.", { status: 400 });
       }
-    } else {
-      bodyText = await request.text();
-    }
 
-    const textContent = payload?.content ?? bodyText;
-    if (!textContent) {
+      if (isDropEnvelopeV1(parsed)) {
+        const signedEnvelope = await signProviderEnvelope(parsed, env);
+        storedPayload = JSON.stringify(signedEnvelope);
+      } else if (isDropPayload(parsed)) {
+        if (!parsed.content.trim()) {
+          return new Response("Request body cannot be empty.", { status: 400 });
+        }
+
+        storedPayload = JSON.stringify({
+          content: parsed.content,
+          metadata: parsed.metadata || {},
+        });
+      } else {
+        return new Response(
+          "Unsupported JSON payload. Expected a drop payload or encrypted drop envelope.",
+          { status: 400 },
+        );
+      }
+    } else if (!rawBody.trim()) {
       return new Response("Request body cannot be empty.", { status: 400 });
     }
 
     const id = nanoid(6); // Generate a 6-character unique ID
-
-    // Use the R2Bucket binding provided by Cloudflare Pages
-    const storedPayload = payload
-      ? JSON.stringify({
-          content: textContent,
-          metadata: payload.metadata || {},
-        })
-      : textContent;
-    const storedContentType = payload ? "application/json" : "text/plain";
 
     await env.R2_BUCKET.put(id, storedPayload, {
       httpMetadata: { contentType: storedContentType },

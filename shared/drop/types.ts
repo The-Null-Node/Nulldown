@@ -1,0 +1,186 @@
+export const DROP_ENVELOPE_SCHEMA_V1 = "nmdn.drop.v1" as const;
+export const DROP_ENVELOPE_VERSION_V1 = 1 as const;
+
+export type DropSignatureAlgorithm = "ECDSA_P256_SHA256";
+
+export interface DropMetadata {
+  themeId?: string;
+  baseDropId?: string;
+  snapshotId?: number;
+  [key: string]: unknown;
+}
+
+export interface DropPayload {
+  content: string;
+  metadata?: DropMetadata;
+}
+
+export interface DropCipherRecord {
+  alg: "A256GCM";
+  iv: string;
+  ciphertext: string;
+}
+
+export interface DropKeyEnvelope {
+  mode: "account-vault-rsa-oaep";
+  kid: string;
+  wrappedKey: string;
+}
+
+export interface DropDetachedSignature {
+  kid: string;
+  alg: DropSignatureAlgorithm;
+  sig: string;
+}
+
+export interface DropEnvelopeSignableV1 {
+  schema: typeof DROP_ENVELOPE_SCHEMA_V1;
+  version: typeof DROP_ENVELOPE_VERSION_V1;
+  createdAt: number;
+  accountId: string;
+  metadata?: DropMetadata;
+  cipher: DropCipherRecord;
+  keyEnvelope: DropKeyEnvelope;
+}
+
+export interface DropEnvelopeV1 extends DropEnvelopeSignableV1 {
+  signatures: {
+    device: DropDetachedSignature;
+    provider?: DropDetachedSignature;
+  };
+}
+
+export interface DropGraphNode {
+  id: string;
+  baseDropId: string | null;
+}
+
+export interface DropGraph {
+  headId: string;
+  rootId: string;
+  lineage: string[];
+  nodes: DropGraphNode[];
+  builtAt: number;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+const isNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+export const isDropPayload = (value: unknown): value is DropPayload => {
+  if (!isRecord(value)) return false;
+  if (!isString(value.content)) return false;
+
+  if (value.metadata === undefined) {
+    return true;
+  }
+
+  return isRecord(value.metadata);
+};
+
+const isDropCipherRecord = (value: unknown): value is DropCipherRecord => {
+  if (!isRecord(value)) return false;
+  return (
+    value.alg === "A256GCM" &&
+    isString(value.iv) &&
+    isString(value.ciphertext)
+  );
+};
+
+const isDropKeyEnvelope = (value: unknown): value is DropKeyEnvelope => {
+  if (!isRecord(value)) return false;
+  return (
+    value.mode === "account-vault-rsa-oaep" &&
+    isString(value.kid) &&
+    isString(value.wrappedKey)
+  );
+};
+
+const isDropDetachedSignature = (
+  value: unknown,
+): value is DropDetachedSignature => {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.kid) &&
+    value.alg === "ECDSA_P256_SHA256" &&
+    isString(value.sig)
+  );
+};
+
+export const isDropEnvelopeV1 = (value: unknown): value is DropEnvelopeV1 => {
+  if (!isRecord(value)) return false;
+
+  if (value.schema !== DROP_ENVELOPE_SCHEMA_V1) return false;
+  if (value.version !== DROP_ENVELOPE_VERSION_V1) return false;
+  if (!isNumber(value.createdAt)) return false;
+  if (!isString(value.accountId)) return false;
+  if (!isDropCipherRecord(value.cipher)) return false;
+  if (!isDropKeyEnvelope(value.keyEnvelope)) return false;
+
+  if (value.metadata !== undefined && !isRecord(value.metadata)) {
+    return false;
+  }
+
+  if (!isRecord(value.signatures)) return false;
+  if (!isDropDetachedSignature(value.signatures.device)) return false;
+  if (
+    value.signatures.provider !== undefined &&
+    !isDropDetachedSignature(value.signatures.provider)
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const normalizeForCanonicalJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeForCanonicalJson(entry));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const keys = Object.keys(value).sort();
+  const normalized: Record<string, unknown> = {};
+
+  keys.forEach((key) => {
+    normalized[key] = normalizeForCanonicalJson(value[key]);
+  });
+
+  return normalized;
+};
+
+export const serializeCanonicalJson = (value: unknown): string =>
+  JSON.stringify(normalizeForCanonicalJson(value));
+
+export const toDropEnvelopeSignable = (
+  envelope: DropEnvelopeV1,
+): DropEnvelopeSignableV1 => ({
+  schema: envelope.schema,
+  version: envelope.version,
+  createdAt: envelope.createdAt,
+  accountId: envelope.accountId,
+  metadata: envelope.metadata,
+  cipher: envelope.cipher,
+  keyEnvelope: envelope.keyEnvelope,
+});
+
+export const serializeDropEnvelopeForDeviceSignature = (
+  envelope: DropEnvelopeSignableV1,
+): string => serializeCanonicalJson(envelope);
+
+export const serializeDropEnvelopeForProviderSignature = (
+  envelope: DropEnvelopeV1,
+): string =>
+  serializeCanonicalJson({
+    ...toDropEnvelopeSignable(envelope),
+    signatures: {
+      device: envelope.signatures.device,
+    },
+  });
