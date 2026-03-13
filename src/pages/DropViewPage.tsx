@@ -2,9 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useParams, Link, type LinkProps } from "react-router-dom";
 import EnhancedMarkdown from "../components/EnhancedMarkdown";
 import { useTheme } from "../theme/themeContext";
-import useDropStore, {
-  isOfflineDropId,
-} from "../stores/dropStore";
+import useDropStore from "../stores/dropStore";
 import { getMarkdownTitle } from "../lib/markdownText";
 
 function useDocumentTitle(title: string) {
@@ -23,6 +21,10 @@ const DropViewPage: React.FC = () => {
   );
   const { setThemeId } = useTheme();
   const getDrop = useDropStore((state) => state.getDrop);
+  const allowedUrls = useDropStore((state) => state.allowedUrls);
+  const hydrateSharePreferences = useDropStore(
+    (state) => state.hydrateSharePreferences,
+  );
   const LinkComponent = Link as unknown as React.FC<LinkProps>;
 
   const handleCopyContent = async () => {
@@ -59,13 +61,10 @@ const DropViewPage: React.FC = () => {
       setError(null);
 
       try {
+        await hydrateSharePreferences();
         const payload = await getDrop(id);
         if (!payload) {
-          setError(
-            isOfflineDropId(id)
-              ? "Offline drop not found on this browser profile."
-              : "Drop not found.",
-          );
+          setError("Drop not found in local cache or provider.");
           setDropContent(null);
           return;
         }
@@ -82,7 +81,7 @@ const DropViewPage: React.FC = () => {
     };
 
     fetchDrop();
-  }, [getDrop, id, setThemeId]);
+  }, [getDrop, hydrateSharePreferences, id, setThemeId]);
 
   // Set document title based on drop content (basic version)
   const dropTitle = dropContent ? getMarkdownTitle(dropContent) : "";
@@ -116,7 +115,7 @@ const DropViewPage: React.FC = () => {
                 to={`/?clone=${id}`}
                 className="text-accent hover:underline"
               >
-                Clone Nulldown
+                Edit Nulldown
               </LinkComponent>
             )}
             <LinkComponent to="/" className="text-accent hover:underline">
@@ -140,7 +139,7 @@ const DropViewPage: React.FC = () => {
                 to={`/?clone=${id}`}
                 className="text-accent hover:underline"
               >
-                Clone Nulldown
+                Edit Nulldown
               </LinkComponent>
             )}
             <LinkComponent to="/" className="text-accent hover:underline">
@@ -174,7 +173,9 @@ const DropViewPage: React.FC = () => {
                 ? "Copy failed"
                 : "Copy"}
           </button>
-          <EnhancedMarkdown>{dropContent}</EnhancedMarkdown>
+          <EnhancedMarkdown allowedUrls={allowedUrls}>
+            {dropContent}
+          </EnhancedMarkdown>
         </div>
 
         <div className="mt-6 text-center">
@@ -184,7 +185,7 @@ const DropViewPage: React.FC = () => {
                 to={`/?clone=${id}`}
                 className="text-accent hover:underline transition-colors"
               >
-                Clone Nulldown
+                Edit Nulldown
               </LinkComponent>
             )}
             <LinkComponent

@@ -1,4 +1,5 @@
 import { R2Bucket } from "@cloudflare/workers-types";
+import { resolveRemoteDropId } from "../_lib/dropId";
 
 // Define the expected shape of the environment variables
 interface Env {
@@ -14,7 +15,6 @@ function validateEnv(env: Env): void {
 }
 
 export const onRequestGet: PagesFunction<Env, "id"> = async ({
-  request,
   env,
   params,
 }) => {
@@ -26,7 +26,10 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
 
   try {
     validateEnv(env);
-    const id = typeof params.id === "string" ? params.id : params.id[0]; // Handle if params.id is string[]
+    const requestedId =
+      typeof params.id === "string" ? params.id : params.id?.[0] ?? "";
+
+    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId);
 
     if (!id) return new Response("Drop ID is required.", { status: 400 });
 
@@ -38,6 +41,7 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
     const headers = new Headers({
       "Content-Type": object.httpMetadata?.contentType || "text/plain",
       ETag: object.httpEtag,
+      "X-Drop-Canonical-Id": id,
     });
 
     copyHeaders(headers, object);

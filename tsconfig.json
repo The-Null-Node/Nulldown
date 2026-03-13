@@ -21,7 +21,7 @@
     "jsx": "react-jsx",
     "incremental": false,
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.mts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "shared/**/*.ts"],
   "exclude": ["node_modules", "dist", "functions"],
   "references": [{ "path": "./tsconfig.node.json" }],
 }

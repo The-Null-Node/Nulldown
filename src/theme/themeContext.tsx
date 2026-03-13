@@ -12,6 +12,14 @@ import {
 } from "./themeEngine";
 import { createStaticThemeProvider } from "./staticThemeProvider";
 import { syntaxThemeStyles, type SyntaxThemeKey } from "./syntaxThemes";
+import {
+  DEFAULT_TYPEFACE_ID,
+  TYPEFACE_STORAGE_KEY,
+  getTypefaceById,
+  isTypefaceId,
+  type TypefaceId,
+  typefaceCatalog,
+} from "./typefaceCatalog";
 
 const STORAGE_KEY = "nulldown_theme";
 const STYLE_TAG_ID = "nss-theme";
@@ -27,6 +35,7 @@ interface ResolvedTheme {
 
 interface ThemeState {
   themeId: ThemeId;
+  typefaceId: TypefaceId;
   systemMode: ThemeMode;
   providerId: string;
   activeTheme: NssTheme | null;
@@ -36,6 +45,7 @@ interface ThemeState {
   loadToken: number;
   hydrated: boolean;
   setThemeId: (id: ThemeId) => Promise<void>;
+  setTypefaceId: (id: TypefaceId) => void;
   setSystemMode: (mode: ThemeMode) => void;
   setProviderId: (id: string) => void;
   hydrateTheme: () => void;
@@ -52,6 +62,15 @@ const getStoredTheme = () => {
   if (typeof window === "undefined") return "system" as ThemeId;
   const stored = window.localStorage.getItem(STORAGE_KEY);
   return stored || "system";
+};
+
+const getStoredTypeface = (): TypefaceId => {
+  if (typeof window === "undefined") return DEFAULT_TYPEFACE_ID;
+  const stored = window.localStorage.getItem(TYPEFACE_STORAGE_KEY);
+  if (stored && isTypefaceId(stored)) {
+    return stored;
+  }
+  return DEFAULT_TYPEFACE_ID;
 };
 
 const isSyntaxThemeKey = (value?: string): value is SyntaxThemeKey =>
@@ -103,6 +122,7 @@ const themeStreamer = new ThemeStreamer(staticProvider);
 
 export const useThemeStore = create<ThemeState>((set, get) => {
   const themeId = getStoredTheme();
+  const typefaceId = getStoredTypeface();
   const systemMode = getSystemMode();
 
   const setThemeId = async (id: ThemeId) => {
@@ -150,6 +170,7 @@ export const useThemeStore = create<ThemeState>((set, get) => {
 
   return {
     themeId,
+    typefaceId,
     systemMode,
     providerId: DEFAULT_PROVIDER_ID,
     activeTheme: null,
@@ -159,6 +180,12 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     loadToken: 0,
     hydrated: false,
     setThemeId,
+    setTypefaceId: (id: TypefaceId) => {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(TYPEFACE_STORAGE_KEY, id);
+      }
+      set({ typefaceId: id });
+    },
     setSystemMode: (mode: ThemeMode) =>
       set((state) => ({
         systemMode: mode,
@@ -201,6 +228,7 @@ export const ThemeProvider: React.FC<React.PropsWithChildren> = ({
   children,
 }) => {
   const themeId = useThemeStore((state) => state.themeId);
+  const typefaceId = useThemeStore((state) => state.typefaceId);
   const systemMode = useThemeStore((state) => state.systemMode);
   const activeTheme = useThemeStore((state) => state.activeTheme);
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
@@ -250,17 +278,31 @@ export const ThemeProvider: React.FC<React.PropsWithChildren> = ({
     root.style.colorScheme = resolvedTheme.mode;
   }, [activeTheme, resolvedTheme.mode, systemMode, themeId]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    const typeface = getTypefaceById(typefaceId);
+
+    root.style.setProperty("--font-ui-stack", typeface.uiStack);
+    root.style.setProperty("--font-prose-stack", typeface.proseStack);
+    root.style.setProperty("--font-mono-stack", typeface.monoStack);
+  }, [typefaceId]);
+
   return <>{children}</>;
 };
 
 export const useTheme = () =>
   useThemeStore((state) => ({
     themeId: state.themeId,
+    typefaceId: state.typefaceId,
     setThemeId: state.setThemeId,
+    setTypefaceId: state.setTypefaceId,
     theme: state.resolvedTheme,
     status: state.status,
     error: state.error,
   }));
+
+export const useTypefaceCatalog = () => typefaceCatalog;
 
 export const useThemeCatalog = () => {
   const providerId = useThemeStore((state) => state.providerId);

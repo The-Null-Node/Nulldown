@@ -47,7 +47,347 @@ interface DropProviderRegistry {
 
 - `create(payload)` always encrypts first, then persists, then returns a provider-scoped result.
 - `get(id)` returns normalized `DropPayload` for both legacy and sealed formats.
-- `resolveGraph(id)` returns lineage based on `metadata.baseDropId`, with IndexedDB caching.
+- `resolveGraph(id)` returns lineage based on `meThe official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
+
+It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
+
+### Key Points for Password Hashes (Email/Password Users)
+Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
+
+To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
+
+In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
+
+```ts
+import bcrypt from "bcryptjs"; // or bcrypt
+
+// ...
+
+emailAndPassword: {
+  enabled: true,
+  password: {
+    hash: async (password: string) => {
+      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
+      const salt = await bcrypt.genSalt(10);
+      return bcrypt.hash(password, salt);
+    },
+    verify: async ({ hash, password }: { hash: string; password: string }) => {
+      // Better Auth often auto-detects bcrypt, but to be safe:
+      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
+        return bcrypt.compare(password, hash);
+      }
+      // Fallback for scrypt (new users after migration)
+      // Use Better Auth's built-in scrypt verify here if needed
+      return false; // or implement scrypt verify
+    },
+  },
+},
+```
+
+Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
+
+### Exporting Data from Clerk
+1. Go to your Clerk dashboard → Export users (CSV download available for admins).
+   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
+2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
+
+### Typical Migration Flow (from the Official Guide)
+1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
+2. Export users from Clerk (CSV/JSON).
+3. Run a migration script (examples in the guide) to:
+   - Insert users into Better Auth's `user` table.
+   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
+   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
+   - Handle 2FA (TOTP secrets), phone verification, etc.
+4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
+5. Update your app code:
+   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
+   - Remove Clerk SDK / middleware.
+6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
+7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
+8. Go live, monitor for issues.
+
+### For Third-Party / Social Sign-Ins Only
+If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
+- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
+- No hash worries.
+- The guide covers this explicitly.
+
+Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
+
+If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
+
+It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
+
+### Key Points for Password Hashes (Email/Password Users)
+Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
+
+To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
+
+In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
+
+```ts
+import bcrypt from "bcryptjs"; // or bcrypt
+
+// ...
+
+emailAndPassword: {
+  enabled: true,
+  password: {
+    hash: async (password: string) => {
+      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
+      const salt = await bcrypt.genSalt(10);
+      return bcrypt.hash(password, salt);
+    },
+    verify: async ({ hash, password }: { hash: string; password: string }) => {
+      // Better Auth often auto-detects bcrypt, but to be safe:
+      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
+        return bcrypt.compare(password, hash);
+      }
+      // Fallback for scrypt (new users after migration)
+      // Use Better Auth's built-in scrypt verify here if needed
+      return false; // or implement scrypt verify
+    },
+  },
+},
+```
+
+Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
+
+### Exporting Data from Clerk
+1. Go to your Clerk dashboard → Export users (CSV download available for admins).
+   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
+2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
+
+### Typical Migration Flow (from the Official Guide)
+1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
+2. Export users from Clerk (CSV/JSON).
+3. Run a migration script (examples in the guide) to:
+   - Insert users into Better Auth's `user` table.
+   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
+   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
+   - Handle 2FA (TOTP secrets), phone verification, etc.
+4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
+5. Update your app code:
+   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
+   - Remove Clerk SDK / middleware.
+6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
+7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
+8. Go live, monitor for issues.
+
+### For Third-Party / Social Sign-Ins Only
+If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
+- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
+- No hash worries.
+- The guide covers this explicitly.
+
+Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
+
+If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
+
+It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
+
+### Key Points for Password Hashes (Email/Password Users)
+Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
+
+To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
+
+In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
+
+```ts
+import bcrypt from "bcryptjs"; // or bcrypt
+
+// ...
+
+emailAndPassword: {
+  enabled: true,
+  password: {
+    hash: async (password: string) => {
+      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
+      const salt = await bcrypt.genSalt(10);
+      return bcrypt.hash(password, salt);
+    },
+    verify: async ({ hash, password }: { hash: string; password: string }) => {
+      // Better Auth often auto-detects bcrypt, but to be safe:
+      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
+        return bcrypt.compare(password, hash);
+      }
+      // Fallback for scrypt (new users after migration)
+      // Use Better Auth's built-in scrypt verify here if needed
+      return false; // or implement scrypt verify
+    },
+  },
+},
+```
+
+Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
+
+### Exporting Data from Clerk
+1. Go to your Clerk dashboard → Export users (CSV download available for admins).
+   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
+2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
+
+### Typical Migration Flow (from the Official Guide)
+1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
+2. Export users from Clerk (CSV/JSON).
+3. Run a migration script (examples in the guide) to:
+   - Insert users into Better Auth's `user` table.
+   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
+   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
+   - Handle 2FA (TOTP secrets), phone verification, etc.
+4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
+5. Update your app code:
+   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
+   - Remove Clerk SDK / middleware.
+6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
+7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
+8. Go live, monitor for issues.
+
+### For Third-Party / Social Sign-Ins Only
+If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
+- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
+- No hash worries.
+- The guide covers this explicitly.
+
+Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
+
+If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
+
+It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
+
+### Key Points for Password Hashes (Email/Password Users)
+Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
+
+To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
+
+In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
+
+```ts
+import bcrypt from "bcryptjs"; // or bcrypt
+
+// ...
+
+emailAndPassword: {
+  enabled: true,
+  password: {
+    hash: async (password: string) => {
+      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
+      const salt = await bcrypt.genSalt(10);
+      return bcrypt.hash(password, salt);
+    },
+    verify: async ({ hash, password }: { hash: string; password: string }) => {
+      // Better Auth often auto-detects bcrypt, but to be safe:
+      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
+        return bcrypt.compare(password, hash);
+      }
+      // Fallback for scrypt (new users after migration)
+      // Use Better Auth's built-in scrypt verify here if needed
+      return false; // or implement scrypt verify
+    },
+  },
+},
+```
+
+Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
+
+### Exporting Data from Clerk
+1. Go to your Clerk dashboard → Export users (CSV download available for admins).
+   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
+2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
+
+### Typical Migration Flow (from the Official Guide)
+1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
+2. Export users from Clerk (CSV/JSON).
+3. Run a migration script (examples in the guide) to:
+   - Insert users into Better Auth's `user` table.
+   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
+   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
+   - Handle 2FA (TOTP secrets), phone verification, etc.
+4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
+5. Update your app code:
+   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
+   - Remove Clerk SDK / middleware.
+6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
+7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
+8. Go live, monitor for issues.
+
+### For Third-Party / Social Sign-Ins Only
+If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
+- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
+- No hash worries.
+- The guide covers this explicitly.
+
+Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
+
+If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
+
+It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
+
+### Key Points for Password Hashes (Email/Password Users)
+Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
+
+To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
+
+In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
+
+```ts
+import bcrypt from "bcryptjs"; // or bcrypt
+
+// ...
+
+emailAndPassword: {
+  enabled: true,
+  password: {
+    hash: async (password: string) => {
+      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
+      const salt = await bcrypt.genSalt(10);
+      return bcrypt.hash(password, salt);
+    },
+    verify: async ({ hash, password }: { hash: string; password: string }) => {
+      // Better Auth often auto-detects bcrypt, but to be safe:
+      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
+        return bcrypt.compare(password, hash);
+      }
+      // Fallback for scrypt (new users after migration)
+      // Use Better Auth's built-in scrypt verify here if needed
+      return false; // or implement scrypt verify
+    },
+  },
+},
+```
+
+Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
+
+### Exporting Data from Clerk
+1. Go to your Clerk dashboard → Export users (CSV download available for admins).
+   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
+2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
+
+### Typical Migration Flow (from the Official Guide)
+1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
+2. Export users from Clerk (CSV/JSON).
+3. Run a migration script (examples in the guide) to:
+   - Insert users into Better Auth's `user` table.
+   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
+   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
+   - Handle 2FA (TOTP secrets), phone verification, etc.
+4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
+5. Update your app code:
+   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
+   - Remove Clerk SDK / middleware.
+6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
+7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
+8. Go live, monitor for issues.
+
+### For Third-Party / Social Sign-Ins Only
+If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
+- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
+- No hash worries.
+- The guide covers this explicitly.
+
+Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
+
+If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!tadata.baseDropId`, with IndexedDB caching.
 
 ## Recommended usage path (application code)
 

@@ -1,6 +1,7 @@
 import {
   DROP_ENVELOPE_SCHEMA_V1,
   DROP_ENVELOPE_VERSION_V1,
+  isDropDraftPackV1,
   isDropEnvelopeV1,
   isDropPayload,
   serializeCanonicalJson,
@@ -14,8 +15,74 @@ describe("drop types", () => {
     expect(isDropPayload({ content: "hello", metadata: { themeId: "system" } })).toBe(
       true,
     );
+    expect(
+      isDropPayload({
+        content: "hello",
+        draftPack: {
+          version: 1,
+          policy: "always",
+          source: "new-drop",
+          createdAt: Date.now(),
+          snapshots: [
+            {
+              snapshotId: 7,
+              createdAt: Date.now(),
+              fromLength: 0,
+              toLength: 5,
+              ops: [
+                {
+                  type: "insert",
+                  start: 0,
+                  end: 0,
+                  text: "hello",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toBe(true);
     expect(isDropPayload({ metadata: {} })).toBe(false);
     expect(isDropPayload({ content: 42 })).toBe(false);
+  });
+
+  it("validates draft packs", () => {
+    expect(
+      isDropDraftPackV1({
+        version: 1,
+        policy: "edited-only",
+        source: "edited-drop",
+        createdAt: 123,
+        currentSnapshotId: 9,
+        truncated: false,
+        snapshots: [
+          {
+            snapshotId: 9,
+            createdAt: 123,
+            fromLength: 12,
+            toLength: 14,
+            ops: [
+              {
+                type: "insert",
+                start: 12,
+                end: 12,
+                text: "!!",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isDropDraftPackV1({
+        version: 1,
+        policy: "sometimes",
+        source: "new-drop",
+        createdAt: 123,
+        snapshots: [],
+      }),
+    ).toBe(false);
   });
 
   it("validates v1 encrypted drop envelope", () => {

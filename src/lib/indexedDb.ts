@@ -203,3 +203,23 @@ export const getOfflineDrop = async (
   await waitForTransaction(transaction);
   return result ?? null;
 };
+
+export const listOfflineDrops = async (): Promise<IndexedDbDropRecord[]> => {
+  const db = await openNulldownDatabase();
+  const transaction = db.transaction(DROPS_STORE, "readonly");
+  const store = transaction.objectStore(DROPS_STORE);
+  const result = await requestToPromise<IndexedDbDropRecord[]>(
+    store.getAll(),
+    "Failed to list offline drops",
+  );
+  await waitForTransaction(transaction);
+  return result ?? [];
+};
+
+export const removeOfflineDrop = async (id: string): Promise<void> => {
+  const db = await openNulldownDatabase();
+  const transaction = db.transaction(DROPS_STORE, "readwrite");
+  const store = transaction.objectStore(DROPS_STORE);
+  store.delete(id);
+  await waitForTransaction(transaction);
+};

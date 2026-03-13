@@ -1,20 +1,35 @@
-import { nanoid } from "nanoid";
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import {
+  DROP_ID_LENGTH,
+  generateDropId,
+  isDropIdToken,
+  toShortDropId,
+} from "../../shared/drop/id";
 import {
   isDropEnvelopeV1,
   isDropPayload,
   serializeDropEnvelopeForProviderSignature,
   type DropEnvelopeV1,
 } from "../../shared/drop/types";
+import {
+  removeRemoteAliasIfMatch,
+  reserveRemoteAlias,
+} from "./_lib/dropId";
 
-// Define the expected shape of the environment variables
 interface Env {
   R2_BUCKET: R2Bucket;
   PUBLIC_BASE_URL: string;
   PROVIDER_SIGNING_PRIVATE_JWK?: string;
 }
 
+interface StoreRequestBody {
+  id?: string;
+  upsert?: boolean;
+  envelope?: unknown;
+}
+
 const textEncoder = new TextEncoder();
+const MAX_ID_ALLOCATION_ATTEMPTS = 64;
 
 const toBase64 = (value: ArrayBuffer): string => {
   const bytes = new Uint8Array(value);
@@ -25,6 +40,45 @@ const toBase64 = (value: ArrayBuffer): string => {
   });
 
   return btoa(binary);
+};
+
+const sanitizeDropId = (value: string | undefined): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!isDropIdToken(trimmed)) {
+    return null;
+  }
+
+  if (trimmed.length < DROP_ID_LENGTH || trimmed.length > 120) {
+    return null;
+  }
+
+  return trimmed;
+};
+
+const putDropObject = async (
+  bucket: R2Bucket,
+  id: string,
+  payload: string,
+  contentType: string,
+  upsert: boolean,
+): Promise<boolean> => {
+  if (upsert) {
+    await bucket.put(id, payload, {
+      httpMetadata: { contentType },
+    });
+    return true;
+  }
+
+  const created = await bucket.put(id, payload, {
+    onlyIf: {
+      etagDoesNotMatch: "*",
+    },
+    httpMetadata: { contentType },
+  });
+
+  return Boolean(created);
 };
 
 const signProviderEnvelope = async (
@@ -82,7 +136,6 @@ const signProviderEnvelope = async (
   };
 };
 
-// Basic validation for required environment variables
 function validateEnv(env: Env): void {
   if (!env.R2_BUCKET)
     throw new Error(
@@ -94,8 +147,27 @@ function validateEnv(env: Env): void {
     );
 }
 
-// Define the onRequestPost function signature using Cloudflare Pages types
-// EventContext includes request, env, params, waitUntil, next, data
+const parseStoreRequest = (parsed: unknown) => {
+  if (typeof parsed !== "object" || parsed === null) {
+    return { id: null as string | null, upsert: false, payload: parsed };
+  }
+
+  const body = parsed as StoreRequestBody;
+  if (body.envelope !== undefined) {
+    return {
+      id: sanitizeDropId(body.id),
+      upsert: Boolean(body.upsert),
+      payload: body.envelope,
+    };
+  }
+
+  return {
+    id: sanitizeDropId(body.id),
+    upsert: Boolean(body.upsert),
+    payload: parsed,
+  };
+};
+
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   try {
     validateEnv(env);
@@ -105,29 +177,36 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     const rawBody = await request.text();
     let storedPayload = rawBody;
     let storedContentType = isJson ? "application/json" : "text/plain";
+    let requestedId: string | null = null;
+    let upsert = false;
 
     if (isJson) {
       let parsed: unknown;
 
       try {
         parsed = JSON.parse(rawBody);
-      } catch (error) {
+      } catch {
         return new Response("Invalid JSON payload.", { status: 400 });
       }
 
-      if (isDropEnvelopeV1(parsed)) {
-        const signedEnvelope = await signProviderEnvelope(parsed, env);
-        storedPayload = JSON.stringify(signedEnvelope);
-      } else if (isDropPayload(parsed)) {
-        if (!parsed.content.trim()) {
-          return new Response("Request body cannot be empty.", { status: 400 });
-        }
+      const parsedRequest = parseStoreRequest(parsed);
+      requestedId = parsedRequest.id;
+      upsert = parsedRequest.upsert;
 
-        storedPayload = JSON.stringify({
-          content: parsed.content,
-          metadata: parsed.metadata || {},
-        });
-      } else {
+      if (isDropEnvelopeV1(parsedRequest.payload)) {
+        const signedEnvelope = await signProviderEnvelope(parsedRequest.payload, env);
+        storedPayload = JSON.stringify(signedEnvelope);
+        } else if (isDropPayload(parsedRequest.payload)) {
+          if (!parsedRequest.payload.content.trim()) {
+            return new Response("Request body cannot be empty.", { status: 400 });
+          }
+
+          storedPayload = JSON.stringify({
+            content: parsedRequest.payload.content,
+            metadata: parsedRequest.payload.metadata || {},
+            draftPack: parsedRequest.payload.draftPack,
+          });
+        } else {
         return new Response(
           "Unsupported JSON payload. Expected a drop payload or encrypted drop envelope.",
           { status: 400 },
@@ -137,19 +216,82 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       return new Response("Request body cannot be empty.", { status: 400 });
     }
 
-    const id = nanoid(6); // Generate a 6-character unique ID
+    let id: string | null = null;
 
-    await env.R2_BUCKET.put(id, storedPayload, {
-      httpMetadata: { contentType: storedContentType },
-    });
+    if (requestedId) {
+      const aliasState = await reserveRemoteAlias(env.R2_BUCKET, requestedId);
+      if (aliasState === "conflict") {
+        return new Response("Drop short link is already in use.", { status: 409 });
+      }
 
-    // Construct the URL for the created drop
+      let stored = false;
+
+      try {
+        stored = await putDropObject(
+          env.R2_BUCKET,
+          requestedId,
+          storedPayload,
+          storedContentType,
+          upsert,
+        );
+      } catch (error) {
+        if (aliasState === "reserved") {
+          await removeRemoteAliasIfMatch(env.R2_BUCKET, requestedId);
+        }
+
+        throw error;
+      }
+
+      if (!stored) {
+        return new Response("Drop ID already exists.", { status: 409 });
+      }
+
+      id = requestedId;
+    } else {
+      for (let attempt = 0; attempt < MAX_ID_ALLOCATION_ATTEMPTS; attempt += 1) {
+        const candidateId = generateDropId(DROP_ID_LENGTH);
+        const aliasState = await reserveRemoteAlias(env.R2_BUCKET, candidateId);
+        if (aliasState === "conflict") {
+          continue;
+        }
+
+        let stored = false;
+
+        try {
+          stored = await putDropObject(
+            env.R2_BUCKET,
+            candidateId,
+            storedPayload,
+            storedContentType,
+            false,
+          );
+        } catch (error) {
+          if (aliasState === "reserved") {
+            await removeRemoteAliasIfMatch(env.R2_BUCKET, candidateId);
+          }
+
+          throw error;
+        }
+
+        if (stored) {
+          id = candidateId;
+          break;
+        }
+
+        if (aliasState === "reserved") {
+          await removeRemoteAliasIfMatch(env.R2_BUCKET, candidateId);
+        }
+      }
+    }
+
+    if (!id) {
+      return new Response("Failed to allocate a unique drop ID.", { status: 500 });
+    }
+
     const baseUrl = env.PUBLIC_BASE_URL.replace(/\/$/, "");
-    const dropUrl = `${baseUrl}/d/${id}`; // Assuming the path /d/:id is used for viewing drops
+    const dropUrl = `${baseUrl}/d/${toShortDropId(id)}`;
 
-    console.log(`Stored drop with ID: ${id}`);
-
-    return new Response(JSON.stringify({ id: id, url: dropUrl }), {
+    return new Response(JSON.stringify({ id, url: dropUrl }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -162,11 +304,10 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   }
 };
 
-// Handle other methods (optional, returns 405 Method Not Allowed)
 export const onRequest: PagesFunction<Env> = async ({ request }) => {
   if (request.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
-  // Fallback or further routing if needed, otherwise this won't be hit due to onRequestPost
+
   return new Response("Endpoint requires POST method", { status: 405 });
 };

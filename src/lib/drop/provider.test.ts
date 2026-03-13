@@ -78,16 +78,23 @@ describe("drop providers", () => {
     });
 
     const created = await provider.create(payload);
+    const shortId = created.id.slice(0, 6);
 
     expect(created.scope).toBe("local");
-    expect(created.id.startsWith("offline_")).toBe(true);
-    expect(created.url).toBe(`https://nulldown.test/d/${created.id}`);
+    expect(created.id).toHaveLength(12);
+    expect(created.url).toBe(`https://nulldown.test/d/${shortId}`);
 
     const opened = await provider.get(created.id);
+    const openedFromShortId = await provider.get(shortId);
 
     expect(opened).toEqual(payload);
-    expect(cryptoPort.seal).toHaveBeenCalledWith(payload);
-    expect(cryptoPort.open).toHaveBeenCalledWith(envelope);
+    expect(openedFromShortId).toEqual(payload);
+    expect(cryptoPort.seal).toHaveBeenCalledWith(payload, {
+      visibility: undefined,
+      unlockPolicy: undefined,
+    });
+    expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: created.id });
+    expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: shortId });
   });
 
   it("creates and reads remote drops with createRemoteDropProvider", async () => {
@@ -102,18 +109,21 @@ describe("drop providers", () => {
     });
 
     (globalThis.fetch as jest.Mock).mockResolvedValueOnce(
-      new Response(JSON.stringify({ id: "abc123", url: "https://app/d/abc123" }), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
+      new Response(
+        JSON.stringify({ id: "abc123def456", url: "https://app/d/abc123" }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
         },
-      }),
+      ),
     );
 
     const created = await provider.create(payload);
 
     expect(created).toEqual({
-      id: "abc123",
+      id: "abc123def456",
       url: "https://app/d/abc123",
       scope: "remote",
     });
@@ -123,6 +133,7 @@ describe("drop providers", () => {
         status: 200,
         headers: {
           "Content-Type": "application/json",
+          "X-Drop-Canonical-Id": "abc123def456",
         },
       }),
     );
@@ -130,7 +141,7 @@ describe("drop providers", () => {
     const opened = await provider.get("abc123");
 
     expect(opened).toEqual(payload);
-    expect(cryptoPort.open).toHaveBeenCalledWith(envelope);
+    expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: "abc123" });
   });
 
   it("resolves graph lineage and uses cache on subsequent reads", async () => {

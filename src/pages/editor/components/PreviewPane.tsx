@@ -9,6 +9,7 @@ const EnhancedMarkdown = lazy(
 interface PreviewPaneProps {
   markdown: string;
   showPreview: boolean;
+  allowedUrls?: readonly string[];
   onRequestEdit?: (selection: { start: number; end: number } | null) => void;
 }
 
@@ -55,6 +56,7 @@ const getPlainTextOffsetFromPoint = (
 const PreviewPane: React.FC<PreviewPaneProps> = ({
   markdown,
   showPreview,
+  allowedUrls,
   onRequestEdit,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -96,7 +98,7 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
       className="absolute inset-0 p-4 overflow-auto bg-card border border-border rounded-md"
     >
       <Suspense fallback={<LoadingFallback />}>
-        <EnhancedMarkdown>
+        <EnhancedMarkdown allowedUrls={allowedUrls}>
           {markdown || "*Click to edit*"}
         </EnhancedMarkdown>
       </Suspense>

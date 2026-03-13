@@ -2,7 +2,8 @@ import { getKvValue, isIndexedDbSupported, setKvValue } from "../indexedDb";
 import { fromBase64, toBase64 } from "./base64";
 
 const DEFAULT_VAULT_RECORD_KEY = "nulldown_account_vault_v1";
-const DEFAULT_UNLOCK_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_UNLOCK_TTL_MS = 8 * 60 * 60 * 1000;
+const UNLOCK_LEASE_SUFFIX = "_unlock_lease_v1";
 
 interface VaultRecordV1 {
   version: 1;
@@ -18,10 +19,18 @@ interface VaultRecordV1 {
   updatedAt: number;
 }
 
+interface UnlockLeaseV1 {
+  version: 1;
+  accountId: string;
+  expiresAt: number;
+}
+
 export interface UnlockedVault {
   accountId: string;
   encryptionKid: string;
   signingKid: string;
+  encryptionPublicJwk: JsonWebKey;
+  signingPublicJwk: JsonWebKey;
   encryptionPublicKey: CryptoKey;
   encryptionPrivateKey: CryptoKey;
   signingPublicKey: CryptoKey;
@@ -37,11 +46,13 @@ const textEncoder = new TextEncoder();
 
 export class PasskeyVault {
   private readonly storageKey: string;
+  private readonly unlockLeaseKey: string;
   private readonly unlockTtlMs: number;
   private unlockState: { accountId: string; expiresAt: number } | null = null;
 
   constructor(options: PasskeyVaultOptions = {}) {
     this.storageKey = options.storageKey ?? DEFAULT_VAULT_RECORD_KEY;
+    this.unlockLeaseKey = `${this.storageKey}${UNLOCK_LEASE_SUFFIX}`;
     this.unlockTtlMs = options.unlockTtlMs ?? DEFAULT_UNLOCK_TTL_MS;
   }
 
@@ -65,6 +76,8 @@ export class PasskeyVault {
       accountId: record.accountId,
       encryptionKid: record.encryptionKid,
       signingKid: record.signingKid,
+      encryptionPublicJwk: record.encryptionPublicJwk,
+      signingPublicJwk: record.signingPublicJwk,
       encryptionPublicKey,
       encryptionPrivateKey,
       signingPublicKey,
@@ -222,6 +235,61 @@ export class PasskeyVault {
     }
   }
 
+  private isValidUnlockLease(value: unknown): value is UnlockLeaseV1 {
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+
+    const lease = value as Record<string, unknown>;
+    return (
+      lease.version === 1 &&
+      typeof lease.accountId === "string" &&
+      lease.accountId.length > 0 &&
+      typeof lease.expiresAt === "number" &&
+      Number.isFinite(lease.expiresAt)
+    );
+  }
+
+  private loadUnlockLease(): UnlockLeaseV1 | null {
+    if (typeof window === "undefined") return null;
+
+    try {
+      const raw = window.localStorage.getItem(this.unlockLeaseKey);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw) as unknown;
+      if (!this.isValidUnlockLease(parsed)) {
+        this.clearUnlockLease();
+        return null;
+      }
+
+      return parsed;
+    } catch {
+      this.clearUnlockLease();
+      return null;
+    }
+  }
+
+  private saveUnlockLease(lease: UnlockLeaseV1) {
+    if (typeof window === "undefined") return;
+
+    try {
+      window.localStorage.setItem(this.unlockLeaseKey, JSON.stringify(lease));
+    } catch {
+      // ignore fallback failures
+    }
+  }
+
+  private clearUnlockLease() {
+    if (typeof window === "undefined") return;
+
+    try {
+      window.localStorage.removeItem(this.unlockLeaseKey);
+    } catch {
+      // ignore fallback failures
+    }
+  }
+
   private saveRecordToLocalStorage(record: VaultRecordV1) {
     if (typeof window === "undefined") return;
 
@@ -277,11 +345,34 @@ export class PasskeyVault {
       return;
     }
 
+    const persistedLease = this.loadUnlockLease();
+    if (persistedLease) {
+      if (
+        persistedLease.accountId === record.accountId &&
+        persistedLease.expiresAt > now
+      ) {
+        this.unlockState = {
+          accountId: persistedLease.accountId,
+          expiresAt: persistedLease.expiresAt,
+        };
+        return;
+      }
+
+      this.clearUnlockLease();
+    }
+
     await this.assertPasskey(record.passkeyCredentialId);
+
+    const expiresAt = Date.now() + this.unlockTtlMs;
     this.unlockState = {
       accountId: record.accountId,
-      expiresAt: now + this.unlockTtlMs,
+      expiresAt,
     };
+    this.saveUnlockLease({
+      version: 1,
+      accountId: record.accountId,
+      expiresAt,
+    });
   }
 
   private importRsaPublicKey(jwk: JsonWebKey) {
