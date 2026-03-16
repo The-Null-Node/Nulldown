@@ -4,6 +4,10 @@ import EnhancedMarkdown from "../components/EnhancedMarkdown";
 import { useTheme } from "../theme/themeContext";
 import useDropStore from "../stores/dropStore";
 import { getMarkdownTitle } from "../lib/markdownText";
+import {
+  RenderCancelledError,
+  renderMarkdownWithNullplug,
+} from "../lib/nullplug";
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
@@ -14,6 +18,7 @@ function useDocumentTitle(title: string) {
 const DropViewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [dropContent, setDropContent] = useState<string | null>(null);
+  const [renderedContent, setRenderedContent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
@@ -70,6 +75,7 @@ const DropViewPage: React.FC = () => {
         }
 
         setDropContent(payload.content);
+        setRenderedContent(payload.content);
         void setThemeId(payload.metadata?.themeId ?? "system");
       } catch (err: any) {
         console.error("Failed to fetch drop:", err);
@@ -82,6 +88,48 @@ const DropViewPage: React.FC = () => {
 
     fetchDrop();
   }, [getDrop, hydrateSharePreferences, id, setThemeId]);
+
+  useEffect(() => {
+    if (!dropContent) {
+      setRenderedContent(null);
+      return;
+    }
+
+    let active = true;
+
+    const renderContent = async () => {
+      try {
+        const rendered = await renderMarkdownWithNullplug(dropContent, {
+          allowedUrls,
+          onFlush: (buffered) => {
+            if (active) {
+              setRenderedContent(buffered);
+            }
+          },
+          shouldCancel: () => !active,
+        });
+
+        if (active) {
+          setRenderedContent(rendered);
+        }
+      } catch (renderError) {
+        if (renderError instanceof RenderCancelledError) {
+          return;
+        }
+
+        if (active) {
+          console.error("Failed to render drop content:", renderError);
+          setRenderedContent(dropContent);
+        }
+      }
+    };
+
+    void renderContent();
+
+    return () => {
+      active = false;
+    };
+  }, [allowedUrls, dropContent]);
 
   // Set document title based on drop content (basic version)
   const dropTitle = dropContent ? getMarkdownTitle(dropContent) : "";
@@ -174,7 +222,7 @@ const DropViewPage: React.FC = () => {
                 : "Copy"}
           </button>
           <EnhancedMarkdown allowedUrls={allowedUrls}>
-            {dropContent}
+            {renderedContent ?? dropContent}
           </EnhancedMarkdown>
         </div>
 

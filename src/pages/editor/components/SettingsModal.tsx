@@ -8,7 +8,9 @@ import type {
   TypefaceDefinition,
   TypefaceId,
 } from "../../../theme/typefaceCatalog";
-import useDropStore from "../../../stores/dropStore";
+import useDropStore, {
+  type EditorSyntaxMode,
+} from "../../../stores/dropStore";
 import {
   Dialog,
   DialogContent,
@@ -150,6 +152,44 @@ const TypographySection: React.FC<TypographySectionProps> = ({
         </SelectContent>
       </Select>
       <p className="text-xs text-muted">{activeTypeface.description}</p>
+    </div>
+  </SettingsSection>
+);
+
+interface EditorSectionProps {
+  syntaxMode: EditorSyntaxMode;
+  onSyntaxModeChange: (mode: EditorSyntaxMode) => void;
+}
+
+const EditorSection: React.FC<EditorSectionProps> = ({
+  syntaxMode,
+  onSyntaxModeChange,
+}) => (
+  <SettingsSection title="Editor">
+    <div className="space-y-2">
+      <Label htmlFor="syntax-mode-select" className={FIELD_LABEL_CLASS}>
+        Syntax mode
+      </Label>
+      <Select
+        value={syntaxMode}
+        onValueChange={(value) => {
+          if (value === "rendered" || value === "source") {
+            onSyntaxModeChange(value);
+          }
+        }}
+      >
+        <SelectTrigger id="syntax-mode-select" className="w-full justify-between">
+          <SelectValue placeholder="Select syntax mode" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="rendered">Rendered-first (default)</SelectItem>
+          <SelectItem value="source">Source markdown</SelectItem>
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted">
+        Rendered-first mode shows formatted output in edit mode, then drops into
+        source markdown when you start editing.
+      </p>
     </div>
   </SettingsSection>
 );
@@ -379,7 +419,7 @@ const ShortcutsSection: React.FC = () => (
   <SettingsSection title="Shortcuts" compact>
     <div className="space-y-1 text-sm text-foreground">
       <div className="flex items-center justify-between">
-        <span>Open library</span>
+        <span>Open search</span>
         <span className="text-xs text-muted">Cmd/Ctrl + K</span>
       </div>
       <div className="flex items-center justify-between">
@@ -454,6 +494,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
   const shareVisibility = useDropStore((state) => state.shareVisibility);
   const unlockPolicy = useDropStore((state) => state.unlockPolicy);
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
+  const syntaxMode = useDropStore((state) => state.syntaxMode);
   const allowedUrls = useDropStore((state) => state.allowedUrls);
   const setOfflineMode = useDropStore((state) => state.setOfflineMode);
   const setSyncTargetProvider = useDropStore(
@@ -462,6 +503,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
   const setShareVisibility = useDropStore((state) => state.setShareVisibility);
   const setUnlockPolicy = useDropStore((state) => state.setUnlockPolicy);
   const setDraftDiffPolicy = useDropStore((state) => state.setDraftDiffPolicy);
+  const setSyntaxMode = useDropStore((state) => state.setSyntaxMode);
   const setAllowedUrls = useDropStore((state) => state.setAllowedUrls);
   const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
   const hydrateSharePreferences = useDropStore(
@@ -520,6 +562,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
               activeTypeface={activeTypeface}
               onTypefaceChange={(id) => {
                 setTypefaceId(id);
+              }}
+            />
+
+            <Separator className="bg-border" />
+
+            <EditorSection
+              syntaxMode={syntaxMode}
+              onSyntaxModeChange={(mode) => {
+                void setSyntaxMode(mode);
               }}
             />
 

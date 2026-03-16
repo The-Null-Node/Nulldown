@@ -64,10 +64,10 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           variant="outline"
           size="sm"
           className="border-border text-muted hover:text-foreground"
-          aria-label="Open drop library"
+          aria-label="Open search"
         >
           <Search className="h-4 w-4" aria-hidden="true" />
-          Library
+          Search
         </Button>
         <Button
           type="button"

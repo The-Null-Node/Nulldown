@@ -21,6 +21,10 @@ export interface EditorState {
   clearTextContent: () => void;
   renderedMarkdown: string;
   setRenderedMarkdown: (markdown: string) => void;
+  renderStatus: "idle" | "rendering";
+  setRenderStatus: (status: "idle" | "rendering") => void;
+  renderProgress: number;
+  setRenderProgress: (progress: number) => void;
   currentSnapshotId: number | null;
   setCurrentSnapshotId: (snapshotId: number | null) => void;
   baseDropId: string | null;
@@ -43,6 +47,14 @@ const editorStoreCreator: StateCreator<EditorState> = (set) => ({
 
   setRenderedMarkdown: (markdown: string) =>
     set({ renderedMarkdown: markdown }),
+
+  renderStatus: "idle",
+  setRenderStatus: (status: "idle" | "rendering") =>
+    set({ renderStatus: status }),
+
+  renderProgress: 1,
+  setRenderProgress: (progress: number) =>
+    set({ renderProgress: Math.max(0, Math.min(progress, 1)) }),
 
   currentSnapshotId: null,
 

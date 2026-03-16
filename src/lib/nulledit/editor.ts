@@ -1,4 +1,9 @@
 import useEditorStore, { type EditorState } from "../../stores/editorStore";
+import useDropStore from "../../stores/dropStore";
+import {
+  RenderCancelledError,
+  renderMarkdownWithNullplug,
+} from "../nullplug";
 import Snapshotter from "./snapshotter";
 import { applyDiff, computeDiffOps } from "./textDiff";
 import type { Diff, SnapshotDiff, SnapshotId } from "./types";
@@ -51,7 +56,10 @@ export default function createEditor(): IEditor {
     if (!diffs.length) return;
     const snapshotId = ensureSnapshotId();
     const prevText = useEditorStore.getState().textContent;
-    const nextText = diffs.reduce((text, diff) => applyDiff(text, diff), prevText);
+    const nextText = diffs.reduce(
+      (text, diff) => applyDiff(text, diff),
+      prevText,
+    );
     useEditorStore.getState().setTextContent(nextText);
     snapshotter.updateSnapshot(snapshotId, { content: nextText });
 
@@ -80,6 +88,8 @@ export default function createEditor(): IEditor {
       if (!prevText) {
         useEditorStore.getState().setTextContent("");
         useEditorStore.getState().setRenderedMarkdown("");
+        useEditorStore.getState().setRenderProgress(1);
+        useEditorStore.getState().setRenderStatus("idle");
         return;
       }
       const diffs = computeDiffOps(prevText, "");
@@ -105,7 +115,41 @@ export default function createEditor(): IEditor {
       };
 
       const token = (renderToken += 1);
-      const renderedMarkdown = await Promise.resolve(content);
+      const initialState = useEditorStore.getState();
+      initialState.setRenderStatus("rendering");
+      initialState.setRenderProgress(0);
+
+      let renderedMarkdown = content;
+
+      try {
+        const allowedUrls = useDropStore.getState().allowedUrls;
+        renderedMarkdown = await renderMarkdownWithNullplug(content, {
+          allowedUrls,
+          onFlush: (buffered, status) => {
+            if (token !== renderToken || snapshotId !== currentSnapshotId) {
+              return;
+            }
+
+            const state = useEditorStore.getState();
+            state.setRenderedMarkdown(buffered);
+            state.setRenderProgress(status.progress);
+          },
+          shouldCancel: () =>
+            token !== renderToken || snapshotId !== currentSnapshotId,
+        });
+      } catch (error) {
+        if (error instanceof RenderCancelledError) {
+          return useEditorStore.getState().renderedMarkdown;
+        }
+
+        if (token === renderToken && snapshotId === currentSnapshotId) {
+          const state = useEditorStore.getState();
+          state.setRenderStatus("idle");
+          state.setRenderProgress(1);
+        }
+
+        throw error;
+      }
 
       if (token !== renderToken || snapshotId !== currentSnapshotId) {
         return renderedMarkdown;
@@ -119,7 +163,10 @@ export default function createEditor(): IEditor {
       });
       snapshotter.registerSnapshot(snapshotId);
       lastRenderedSnapshotId = snapshotId;
-      useEditorStore.getState().setRenderedMarkdown(renderedMarkdown);
+      const state = useEditorStore.getState();
+      state.setRenderedMarkdown(renderedMarkdown);
+      state.setRenderProgress(1);
+      state.setRenderStatus("idle");
       return renderedMarkdown;
     },
 
@@ -135,6 +182,8 @@ export default function createEditor(): IEditor {
       setCurrentSnapshotId(snapshotId);
       useEditorStore.getState().setTextContent(content);
       useEditorStore.getState().setRenderedMarkdown(content);
+      useEditorStore.getState().setRenderStatus("idle");
+      useEditorStore.getState().setRenderProgress(1);
       return snapshotId;
     },
 
@@ -146,6 +195,8 @@ export default function createEditor(): IEditor {
       renderScheduled = false;
       useEditorStore.getState().setTextContent("");
       useEditorStore.getState().setRenderedMarkdown("");
+      useEditorStore.getState().setRenderStatus("idle");
+      useEditorStore.getState().setRenderProgress(1);
       useEditorStore.getState().setCurrentSnapshotId(null);
     },
 

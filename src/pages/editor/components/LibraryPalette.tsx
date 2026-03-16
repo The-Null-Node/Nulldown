@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link2, PencilLine, RefreshCw, Search } from "lucide-react";
-import { toShortDropId } from "../../../../shared/drop/id";
+import { RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,81 +8,68 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type { DraftLibraryEntry } from "../../../lib/draft/library";
-import type { OwnedDropRecord } from "../../../stores/dropStore";
+import {
+  matchesSearchable,
+  type Searchable,
+  type SearchableGroup,
+} from "../../../lib/search/searchable";
 
-interface LibraryPaletteProps {
+interface LibraryPaletteProps<T = unknown> {
   open: boolean;
   loading: boolean;
-  drops: OwnedDropRecord[];
-  drafts: DraftLibraryEntry[];
+  groups: readonly SearchableGroup<T>[];
   onOpenChange: (open: boolean) => void;
-  onOpenDrop: (id: string) => void;
-  onEditDrop: (id: string) => void;
-  onOpenDraft: (entry: DraftLibraryEntry) => void;
-  onNewDrop: () => void;
+  onSelectEntity: (entity: Searchable<T>) => void;
   onRefresh: () => void;
 }
 
-const formatTimestamp = (timestamp: number) => {
-  try {
-    return new Date(timestamp).toLocaleString();
-  } catch {
-    return "Unknown";
-  }
-};
-
-const normalizeForSearch = (value: string) => value.toLowerCase();
-
-const LibraryPalette: React.FC<LibraryPaletteProps> = ({
+const LibraryPalette = <T,>({
   open,
   loading,
-  drops,
-  drafts,
+  groups,
   onOpenChange,
-  onOpenDrop,
-  onEditDrop,
-  onOpenDraft,
-  onNewDrop,
+  onSelectEntity,
   onRefresh,
-}) => {
+}: LibraryPaletteProps<T>) => {
   const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
     if (!open) {
       setQuery("");
+      setActiveIndex(0);
     }
   }, [open]);
 
-  const normalizedQuery = normalizeForSearch(query.trim());
+  const filteredGroups = useMemo(() => {
+    return groups
+      .map((group) => ({
+        ...group,
+        entities: group.entities.filter((entity) => matchesSearchable(entity, query)),
+      }))
+      .filter((group) => group.entities.length > 0);
+  }, [groups, query]);
 
-  const filteredDrafts = useMemo(() => {
-    if (!normalizedQuery) {
-      return drafts;
+  const flattened = useMemo(
+    () => filteredGroups.flatMap((group) => group.entities),
+    [filteredGroups],
+  );
+
+  useEffect(() => {
+    if (!flattened.length) {
+      setActiveIndex(0);
+      return;
     }
 
-    return drafts.filter((entry) => {
-      const searchable = normalizeForSearch(
-        `${entry.title} ${entry.preview} ${entry.dropId ?? ""} ${entry.draftId}`,
-      );
-      return searchable.includes(normalizedQuery);
-    });
-  }, [drafts, normalizedQuery]);
+    setActiveIndex((current) => Math.max(0, Math.min(current, flattened.length - 1)));
+  }, [flattened]);
 
-  const filteredDrops = useMemo(() => {
-    if (!normalizedQuery) {
-      return drops;
-    }
+  const isEmpty = flattened.length === 0;
 
-    return drops.filter((entry) => {
-      const searchable = normalizeForSearch(
-        `${entry.id} ${toShortDropId(entry.id)} ${entry.visibility}`,
-      );
-      return searchable.includes(normalizedQuery);
-    });
-  }, [drops, normalizedQuery]);
-
-  const isEmpty = !filteredDrafts.length && !filteredDrops.length;
+  const onSelect = (entity: Searchable<T>) => {
+    onSelectEntity(entity);
+    onOpenChange(false);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -93,7 +79,7 @@ const LibraryPalette: React.FC<LibraryPaletteProps> = ({
       >
         <DialogHeader className="border-b border-border px-4 pt-4 pb-3">
           <div className="flex items-center justify-between gap-2">
-            <DialogTitle className="text-base">Library</DialogTitle>
+            <DialogTitle className="text-base">Search</DialogTitle>
             <div className="flex items-center gap-2">
               <Button
                 type="button"
@@ -105,9 +91,6 @@ const LibraryPalette: React.FC<LibraryPaletteProps> = ({
                 <RefreshCw className="h-3.5 w-3.5" />
                 Refresh
               </Button>
-              <Button type="button" size="sm" onClick={onNewDrop}>
-                New Nulldown
-              </Button>
             </div>
           </div>
           <div className="relative mt-3">
@@ -115,8 +98,36 @@ const LibraryPalette: React.FC<LibraryPaletteProps> = ({
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (!flattened.length) {
+                  return;
+                }
+
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setActiveIndex((current) =>
+                    Math.min(current + 1, flattened.length - 1),
+                  );
+                  return;
+                }
+
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setActiveIndex((current) => Math.max(current - 1, 0));
+                  return;
+                }
+
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  const active = flattened[activeIndex];
+                  if (active) {
+                    onSelect(active);
+                  }
+                }
+              }}
               className="pl-8"
-              placeholder="Search drops and drafts"
+              placeholder="Search drafts, drops, blocks, commands"
+              autoFocus
             />
           </div>
         </DialogHeader>
@@ -124,7 +135,7 @@ const LibraryPalette: React.FC<LibraryPaletteProps> = ({
         <div className="max-h-[min(62vh,38rem)] overflow-y-auto px-4 pb-4">
           {loading ? (
             <div className="rounded-md border border-border bg-background px-3 py-6 text-center text-sm text-muted">
-              Loading library...
+              Loading search index...
             </div>
           ) : isEmpty ? (
             <div className="rounded-md border border-border bg-background px-3 py-6 text-center text-sm text-muted">
@@ -132,93 +143,53 @@ const LibraryPalette: React.FC<LibraryPaletteProps> = ({
             </div>
           ) : (
             <div className="space-y-5">
-              {filteredDrafts.length > 0 ? (
-                <section className="space-y-2">
+              {filteredGroups.map((group) => (
+                <section key={group.id} className="space-y-2">
                   <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
-                    Drafts ({filteredDrafts.length})
+                    {group.label} ({group.entities.length})
                   </h3>
                   <div className="space-y-2">
-                    {filteredDrafts.map((entry) => (
-                      <div
-                        key={entry.draftKey}
-                        className="rounded-md border border-border bg-background px-3 py-2"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-foreground">
-                              {entry.title}
-                            </div>
-                            <div className="mt-0.5 truncate text-xs text-muted">
-                              {entry.preview}
-                            </div>
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={() => onOpenDraft(entry)}
-                          >
-                            <PencilLine className="h-3.5 w-3.5" />
-                            Resume
-                          </Button>
-                        </div>
-                        <div className="mt-1 text-[11px] text-muted">
-                          {entry.dropId
-                            ? `From drop ${toShortDropId(entry.dropId)} • `
-                            : "Scratch draft • "}
-                          Updated {formatTimestamp(entry.updatedAt)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
+                    {group.entities.map((entity) => {
+                      const index = flattened.findIndex((entry) => entry.id === entity.id);
+                      const isActive = index === activeIndex;
 
-              {filteredDrops.length > 0 ? (
-                <section className="space-y-2">
-                  <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
-                    Drops ({filteredDrops.length})
-                  </h3>
-                  <div className="space-y-2">
-                    {filteredDrops.map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="rounded-md border border-border bg-background px-3 py-2"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-foreground">
-                              {toShortDropId(entry.id)}
-                              <span className="ml-2 text-xs text-muted">{entry.visibility}</span>
+                      return (
+                        <button
+                          key={entity.id}
+                          type="button"
+                          onMouseEnter={() => {
+                            if (index >= 0) {
+                              setActiveIndex(index);
+                            }
+                          }}
+                          onClick={() => onSelect(entity)}
+                          className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
+                            isActive
+                              ? "border-accent bg-accent/10"
+                              : "border-border bg-background hover:bg-background/70"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-foreground">
+                                {entity.title}
+                              </div>
+                              {entity.description ? (
+                                <div className="mt-0.5 truncate text-xs text-muted">
+                                  {entity.description}
+                                </div>
+                              ) : null}
                             </div>
-                            <div className="truncate text-xs text-muted">
-                              Updated {formatTimestamp(entry.updatedAt)}
-                            </div>
+                            <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted uppercase">
+                              {entity.type}
+                            </span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => onOpenDrop(entry.id)}
-                            >
-                              <Link2 className="h-3.5 w-3.5" />
-                              Open
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              onClick={() => onEditDrop(entry.id)}
-                            >
-                              <PencilLine className="h-3.5 w-3.5" />
-                              Edit
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
-              ) : null}
+              ))}
             </div>
           )}
         </div>

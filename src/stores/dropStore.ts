@@ -33,6 +33,7 @@ const UNLOCK_POLICY_KEY = "nulldown_unlock_policy";
 const SYNC_TARGET_PROVIDER_KEY = "nulldown_sync_target_provider";
 const DRAFT_DIFF_POLICY_KEY = "nulldown_draft_diff_policy";
 const ALLOWED_URLS_KEY = "nulldown_allowed_urls";
+const SYNTAX_MODE_KEY = "nulldown_syntax_mode";
 const LEGACY_IFRAME_ALLOWLIST_KEY = "nulldown_iframe_allowlist";
 
 const dropProviderRegistry = getDefaultDropProviderRegistry();
@@ -43,6 +44,7 @@ interface DropStoreState {
   shareVisibility: DropVisibility;
   unlockPolicy: DropUnlockPolicy;
   draftDiffPolicy: DropDraftDiffPolicy;
+  syntaxMode: EditorSyntaxMode;
   allowedUrls: string[];
   hydrated: boolean;
   hydrateOfflineMode: () => Promise<void>;
@@ -52,6 +54,7 @@ interface DropStoreState {
   setShareVisibility: (visibility: DropVisibility) => Promise<void>;
   setUnlockPolicy: (policy: DropUnlockPolicy) => Promise<void>;
   setDraftDiffPolicy: (policy: DropDraftDiffPolicy) => Promise<void>;
+  setSyntaxMode: (mode: EditorSyntaxMode) => Promise<void>;
   setAllowedUrls: (urls: readonly string[]) => Promise<void>;
   createDrop: (
     payload: DropPayload,
@@ -77,6 +80,8 @@ export interface OwnedDropRecord {
   updatedAt: number;
 }
 
+export type EditorSyntaxMode = "rendered" | "source";
+
 const serializeBoolean = (enabled: boolean) => (enabled ? "1" : "0");
 
 const parseOfflineMode = (value: string | null) =>
@@ -90,6 +95,9 @@ const parseUnlockPolicy = (value: string | null): DropUnlockPolicy =>
 
 const parseDraftDiffPolicy = (value: string | null): DropDraftDiffPolicy =>
   value === "always" ? "always" : "edited-only";
+
+const parseSyntaxMode = (value: string | null): EditorSyntaxMode =>
+  value === "source" ? "source" : "rendered";
 
 const parseAllowedUrls = (value: string | null): string[] => {
   if (!value) {
@@ -174,6 +182,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
   shareVisibility: "unlisted",
   unlockPolicy: "vault-only",
   draftDiffPolicy: "edited-only",
+  syntaxMode: "rendered",
   allowedUrls: [...DEFAULT_IFRAME_ALLOWLIST],
   hydrated: false,
 
@@ -193,12 +202,14 @@ const useDropStore = create<DropStoreState>((set, get) => ({
       storedUnlockPolicy,
       storedSyncTarget,
       storedDraftDiffPolicy,
+      storedSyntaxMode,
       storedAllowedUrls,
     ] = await Promise.all([
       readPersistedItem(SHARE_VISIBILITY_KEY),
       readPersistedItem(UNLOCK_POLICY_KEY),
       readPersistedItem(SYNC_TARGET_PROVIDER_KEY),
       readPersistedItem(DRAFT_DIFF_POLICY_KEY),
+      readPersistedItem(SYNTAX_MODE_KEY),
       readPersistedItem(ALLOWED_URLS_KEY),
     ]);
 
@@ -206,6 +217,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
     const unlockPolicy = parseUnlockPolicy(storedUnlockPolicy);
     const syncTargetProvider = parseSyncTargetProvider(storedSyncTarget);
     const draftDiffPolicy = parseDraftDiffPolicy(storedDraftDiffPolicy);
+    const syntaxMode = parseSyntaxMode(storedSyntaxMode);
     const allowedUrls = parseAllowedUrls(
       storedAllowedUrls ?? (await readPersistedItem(LEGACY_IFRAME_ALLOWLIST_KEY)),
     );
@@ -215,6 +227,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
       writePersistedItem(UNLOCK_POLICY_KEY, unlockPolicy),
       writePersistedItem(SYNC_TARGET_PROVIDER_KEY, syncTargetProvider),
       writePersistedItem(DRAFT_DIFF_POLICY_KEY, draftDiffPolicy),
+      writePersistedItem(SYNTAX_MODE_KEY, syntaxMode),
       writePersistedItem(ALLOWED_URLS_KEY, serializeAllowedUrls(allowedUrls)),
     ]);
 
@@ -223,6 +236,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
       unlockPolicy,
       syncTargetProvider,
       draftDiffPolicy,
+      syntaxMode,
       allowedUrls,
     });
   },
@@ -250,6 +264,11 @@ const useDropStore = create<DropStoreState>((set, get) => ({
   setDraftDiffPolicy: async (policy: DropDraftDiffPolicy) => {
     set({ draftDiffPolicy: policy });
     await writePersistedItem(DRAFT_DIFF_POLICY_KEY, policy);
+  },
+
+  setSyntaxMode: async (mode: EditorSyntaxMode) => {
+    set({ syntaxMode: mode });
+    await writePersistedItem(SYNTAX_MODE_KEY, mode);
   },
 
   setAllowedUrls: async (urls: readonly string[]) => {

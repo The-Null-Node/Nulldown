@@ -8,7 +8,8 @@ const EnhancedMarkdown = lazy(
 
 interface PreviewPaneProps {
   markdown: string;
-  showPreview: boolean;
+  visible: boolean;
+  canRequestEdit?: boolean;
   allowedUrls?: readonly string[];
   onRequestEdit?: (selection: { start: number; end: number } | null) => void;
 }
@@ -55,7 +56,8 @@ const getPlainTextOffsetFromPoint = (
 
 const PreviewPane: React.FC<PreviewPaneProps> = ({
   markdown,
-  showPreview,
+  visible,
+  canRequestEdit = false,
   allowedUrls,
   onRequestEdit,
 }) => {
@@ -63,7 +65,7 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
 
   const handleMouseDown = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || !onRequestEdit) return;
+      if (event.button !== 0 || !onRequestEdit || !canRequestEdit) return;
       const container = containerRef.current;
       if (!container) {
         onRequestEdit(null);
@@ -86,16 +88,18 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
       event.preventDefault();
       event.stopPropagation();
     },
-    [markdown, onRequestEdit],
+    [canRequestEdit, markdown, onRequestEdit],
   );
 
-  if (!showPreview) return null;
+  if (!visible) return null;
 
   return (
     <div
       ref={containerRef}
       onMouseDown={handleMouseDown}
-      className="absolute inset-0 p-4 overflow-auto bg-card border border-border rounded-md"
+      className={`absolute inset-0 p-4 overflow-auto bg-card border border-border rounded-md ${
+        canRequestEdit ? "cursor-text" : ""
+      }`}
     >
       <Suspense fallback={<LoadingFallback />}>
         <EnhancedMarkdown allowedUrls={allowedUrls}>

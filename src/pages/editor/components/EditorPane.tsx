@@ -17,13 +17,14 @@ import {
 } from "../utils/shortcutEngine";
 
 interface EditorPaneProps {
+  visible?: boolean;
   editorState: {
     editorHidden: boolean;
   };
 
   markdown: string;
   showPreview: boolean;
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  textareaRef: React.RefObject<HTMLTextAreaElement>;
   selectionLocked: boolean;
 
   onChange: (value: string) => void;
@@ -32,6 +33,7 @@ interface EditorPaneProps {
 }
 
 const EditorPane: React.FC<EditorPaneProps> = ({
+  visible = true,
   markdown,
   showPreview,
   textareaRef,
@@ -69,7 +71,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
     () => [
       { key: "H", label: "Heading", hint: "##" },
       { key: "I", label: "Image", hint: "![alt]" },
-      { key: "E", label: "Embed", hint: "<iframe>" },
+      { key: "E", label: "Embed", hint: "plugin(embed)" },
     ],
     [],
   );
@@ -182,18 +184,23 @@ const EditorPane: React.FC<EditorPaneProps> = ({
         return { value, selectionStart, selectionEnd };
       },
       embed: ({ start, end, selection }) => {
+        const normalizedSelection = selection.trim();
+        const defaultUrl = "https://www.youtube.com/embed/";
+        const selectedUrl = normalizedSelection || defaultUrl;
+        const template = `\`\`\`plugin("embed")\n${selectedUrl}\n\`\`\``;
+
         if (selection) {
-          const template = `<iframe src="${selection}"></iframe>`;
           const value =
             markdown.slice(0, start) + template + markdown.slice(end);
-          const selectionStart = start + template.length;
-          return { value, selectionStart, selectionEnd: selectionStart };
+          const selectionStart = start + template.indexOf(selectedUrl);
+          const selectionEnd = selectionStart + selectedUrl.length;
+          return { value, selectionStart, selectionEnd };
         }
 
-        const template = '<iframe src=""></iframe>';
         const value = markdown.slice(0, start) + template + markdown.slice(end);
-        const selectionStart = start + template.indexOf('src=""') + 5;
-        return { value, selectionStart, selectionEnd: selectionStart };
+        const selectionStart = start + template.indexOf(selectedUrl);
+        const selectionEnd = selectionStart + selectedUrl.length;
+        return { value, selectionStart, selectionEnd };
       },
     }),
     [markdown],
@@ -457,6 +464,10 @@ const EditorPane: React.FC<EditorPaneProps> = ({
     const end = textarea.selectionEnd ?? start;
     onSelectionChange(start, end);
   }, [onSelectionChange, selectionLocked, textareaRef]);
+
+  if (!visible) {
+    return null;
+  }
 
   return (
     <div ref={containerRef} className="absolute inset-0 p-4">
