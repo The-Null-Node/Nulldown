@@ -139,6 +139,15 @@ interface ListApiResponse {
 
 const createDropId = () => generateDropId();
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    const prefix = error.name && error.name !== "Error" ? `${error.name}: ` : "";
+    return `${prefix}${error.message}`.trim();
+  }
+
+  return String(error);
+};
+
 const createOfflineAliasKey = (shortId: string) =>
   `${OFFLINE_DROP_ALIAS_PREFIX}${shortId}`;
 
@@ -650,7 +659,20 @@ class ComposedDropProvider implements DropProvider {
       return stored.payload;
     }
 
-    return this.cryptoPort.open(stored.envelope, { dropId: id });
+    try {
+      return await this.cryptoPort.open(stored.envelope, { dropId: stored.id });
+    } catch (error) {
+      const requestedSuffix = stored.id === id ? "" : ` (requested as "${id}")`;
+      console.error(
+        `[drop-provider] Failed to open ${this.scope} drop "${stored.id}"${requestedSuffix}:`,
+        error,
+      );
+      throw new Error(
+        `Failed to decrypt ${this.scope} drop "${stored.id}"${requestedSuffix}: ${getErrorMessage(
+          error,
+        )}`,
+      );
+    }
   }
 
   async resolveGraph(id: string): Promise<DropGraph> {

@@ -44,9 +44,7 @@ type ThemeOption = {
   name: string;
 };
 
-type ShareVisibility = "unlisted" | "public";
-type UnlockPolicy = "vault-only" | "provider-escrow";
-type SyncTargetProvider = "local" | "remote";
+type ShareVisibility = "private" | "unlisted" | "public";
 type DraftDiffPolicy = "edited-only" | "always";
 
 const SECTION_TITLE_CLASS =
@@ -197,144 +195,104 @@ const EditorSection: React.FC<EditorSectionProps> = ({
 interface AccessSectionProps {
   offlineMode: boolean;
   shareVisibility: ShareVisibility;
-  syncTargetProvider: SyncTargetProvider;
-  unlockPolicy: UnlockPolicy;
   draftDiffPolicy: DraftDiffPolicy;
+  passkeyProtectionEnabled: boolean;
   onShareVisibilityChange: (visibility: ShareVisibility) => void;
-  onSyncTargetProviderChange: (provider: SyncTargetProvider) => void;
-  onUnlockPolicyChange: (policy: UnlockPolicy) => void;
   onDraftDiffPolicyChange: (policy: DraftDiffPolicy) => void;
+  onPasskeyProtectionChange: (enabled: boolean) => void;
 }
 
 const AccessSection: React.FC<AccessSectionProps> = ({
   offlineMode,
   shareVisibility,
-  syncTargetProvider,
-  unlockPolicy,
   draftDiffPolicy,
+  passkeyProtectionEnabled,
   onShareVisibilityChange,
-  onSyncTargetProviderChange,
-  onUnlockPolicyChange,
   onDraftDiffPolicyChange,
+  onPasskeyProtectionChange,
 }) => (
   <SettingsSection title="Access">
+    <div className="space-y-2">
+      <Label htmlFor="link-visibility-select" className={FIELD_LABEL_CLASS}>
+        Link privacy (online mode)
+      </Label>
+      <Select
+        value={shareVisibility}
+        onValueChange={(value) => {
+          if (value === "private" || value === "unlisted" || value === "public") {
+            onShareVisibilityChange(value);
+          }
+        }}
+      >
+        <SelectTrigger id="link-visibility-select" className="w-full justify-between">
+          <SelectValue placeholder="Select link privacy" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="private">Private (account-only)</SelectItem>
+          <SelectItem value="unlisted">Unlisted (link-only)</SelectItem>
+          <SelectItem value="public">Public</SelectItem>
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted">
+        {shareVisibility === "private"
+          ? "Private links stay account-locked even online."
+          : "Unlisted and public links are shareable online with recovery unlock support."}
+      </p>
+      {offlineMode ? (
+        <p className="text-xs text-muted">
+          You are currently offline. This setting applies the next time you publish online.
+        </p>
+      ) : null}
+    </div>
+
     <div className="rounded-md border border-border bg-background px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <div className="text-sm font-medium text-foreground">Link visibility</div>
+          <div className="text-sm font-medium text-foreground">Passkey protection</div>
           <div className="text-xs text-muted">
-            {offlineMode
-              ? "Link visibility is online-only and unavailable while offline mode is enabled."
-              : shareVisibility === "public"
-                ? "Public links can be indexed and discovered."
-                : "Unlisted links are only accessible to people with the URL."}
+            {passkeyProtectionEnabled
+              ? "Require passkey verification before unwrapping local vault keys."
+              : "Skip passkey prompts and unlock with local vault keys directly on this device."}
           </div>
         </div>
 
         <Switch
-          checked={shareVisibility === "public"}
-          disabled={offlineMode}
-          onCheckedChange={(checked) => {
-            if (offlineMode) {
-              return;
-            }
-
-            onShareVisibilityChange(checked ? "public" : "unlisted");
-          }}
-          aria-label="Toggle link visibility"
+          checked={passkeyProtectionEnabled}
+          onCheckedChange={onPasskeyProtectionChange}
+          aria-label="Toggle passkey protection"
         />
       </div>
     </div>
 
-    {!offlineMode ? (
-      <>
-        <div className="space-y-2">
-          <Label htmlFor="sync-target-select" className={FIELD_LABEL_CLASS}>
-            Sync target provider
-          </Label>
-          <Select
-            value={syncTargetProvider}
-            onValueChange={(value) => {
-              if (value === "local" || value === "remote") {
-                onSyncTargetProviderChange(value);
-              }
-            }}
-          >
-            <SelectTrigger id="sync-target-select" className="w-full justify-between">
-              <SelectValue placeholder="Select sync target" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="remote">Remote provider (R2)</SelectItem>
-              <SelectItem value="local">Local-only provider</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="unlock-policy-select" className={FIELD_LABEL_CLASS}>
-            Unlock policy
-          </Label>
-          <Select
-            value={unlockPolicy}
-            onValueChange={(value) => {
-              if (value === "vault-only" || value === "provider-escrow") {
-                onUnlockPolicyChange(value);
-              }
-            }}
-          >
-            <SelectTrigger id="unlock-policy-select" className="w-full justify-between">
-              <SelectValue placeholder="Select unlock policy" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="vault-only">Vault only (single-account)</SelectItem>
-              <SelectItem value="provider-escrow">
-                Provider escrow (multi-key unlock)
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted">
-            {unlockPolicy === "provider-escrow"
-              ? "Provider stores escrowed key material while content remains encrypted."
-              : "Only your local account vault key can unwrap this drop."}
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="draft-diff-policy-select" className={FIELD_LABEL_CLASS}>
-            Snapshot diff storage
-          </Label>
-          <Select
-            value={draftDiffPolicy}
-            onValueChange={(value) => {
-              if (value === "edited-only" || value === "always") {
-                onDraftDiffPolicyChange(value);
-              }
-            }}
-          >
-            <SelectTrigger
-              id="draft-diff-policy-select"
-              className="w-full justify-between"
-            >
-              <SelectValue placeholder="Select diff policy" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="edited-only">Edited drops only</SelectItem>
-              <SelectItem value="always">Always store snapshot diffs</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted">
-            {draftDiffPolicy === "always"
-              ? "Include encrypted snapshot diff data in every shared drop."
-              : "Include encrypted snapshot diff data only when editing an existing drop."}
-          </p>
-        </div>
-      </>
-    ) : (
+    <div className="space-y-2">
+      <Label htmlFor="draft-diff-policy-select" className={FIELD_LABEL_CLASS}>
+        Snapshot diff storage
+      </Label>
+      <Select
+        value={draftDiffPolicy}
+        onValueChange={(value) => {
+          if (value === "edited-only" || value === "always") {
+            onDraftDiffPolicyChange(value);
+          }
+        }}
+      >
+        <SelectTrigger
+          id="draft-diff-policy-select"
+          className="w-full justify-between"
+        >
+          <SelectValue placeholder="Select diff policy" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="edited-only">Edited drops only</SelectItem>
+          <SelectItem value="always">Always store snapshot diffs</SelectItem>
+        </SelectContent>
+      </Select>
       <p className="text-xs text-muted">
-        Remote provider and unlock settings are hidden while offline mode is
-        enabled.
+        {draftDiffPolicy === "always"
+          ? "Include encrypted snapshot diff data in every shared drop."
+          : "Include encrypted snapshot diff data only when editing an existing drop."}
       </p>
-    )}
+    </div>
   </SettingsSection>
 );
 
@@ -440,13 +398,9 @@ const ShortcutsSection: React.FC = () => (
 
 interface StorageSectionProps {
   offlineMode: boolean;
-  onOfflineModeChange: (enabled: boolean) => void;
 }
 
-const StorageSection: React.FC<StorageSectionProps> = ({
-  offlineMode,
-  onOfflineModeChange,
-}) => (
+const StorageSection: React.FC<StorageSectionProps> = ({ offlineMode }) => (
   <SettingsSection title="Storage">
     <p className="text-sm text-foreground">
       Drafts are saved locally in your browser while you type.
@@ -459,17 +413,13 @@ const StorageSection: React.FC<StorageSectionProps> = ({
           <div className="text-xs text-muted">
             {offlineMode
               ? "Drops are encrypted and saved locally to IndexedDB on this browser profile."
-              : "Drops are end-to-end encrypted, uploaded online, and unlocked with your passkey vault."}
+              : "Drops are encrypted and published online. Private links stay account-only; shared links can be recovered online."}
           </div>
         </div>
 
-        <Switch
-          checked={offlineMode}
-          onCheckedChange={(checked) => {
-            onOfflineModeChange(Boolean(checked));
-          }}
-          aria-label="Toggle offline mode"
-        />
+        <div className="rounded-md border border-border px-2 py-1 text-xs text-muted">
+          Switch from the top bar
+        </div>
       </div>
 
       <div className="mt-3 text-xs text-muted">
@@ -479,7 +429,7 @@ const StorageSection: React.FC<StorageSectionProps> = ({
       <div className="mt-1 text-xs text-muted">
         {offlineMode
           ? "Offline links are local-only and work in this browser profile."
-          : "Online links require your account vault unlock to decrypt."}
+          : "Online links work across devices when shared, and private links remain account-locked."}
       </div>
     </div>
   </SettingsSection>
@@ -490,19 +440,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
   const catalog = useThemeCatalog();
   const typefaces = useTypefaceCatalog();
   const offlineMode = useDropStore((state) => state.offlineMode);
-  const syncTargetProvider = useDropStore((state) => state.syncTargetProvider);
   const shareVisibility = useDropStore((state) => state.shareVisibility);
-  const unlockPolicy = useDropStore((state) => state.unlockPolicy);
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
+  const passkeyProtectionEnabled = useDropStore(
+    (state) => state.passkeyProtectionEnabled,
+  );
   const syntaxMode = useDropStore((state) => state.syntaxMode);
   const allowedUrls = useDropStore((state) => state.allowedUrls);
-  const setOfflineMode = useDropStore((state) => state.setOfflineMode);
-  const setSyncTargetProvider = useDropStore(
-    (state) => state.setSyncTargetProvider,
-  );
   const setShareVisibility = useDropStore((state) => state.setShareVisibility);
-  const setUnlockPolicy = useDropStore((state) => state.setUnlockPolicy);
   const setDraftDiffPolicy = useDropStore((state) => state.setDraftDiffPolicy);
+  const setPasskeyProtectionEnabled = useDropStore(
+    (state) => state.setPasskeyProtectionEnabled,
+  );
   const setSyntaxMode = useDropStore((state) => state.setSyntaxMode);
   const setAllowedUrls = useDropStore((state) => state.setAllowedUrls);
   const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
@@ -579,20 +528,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
             <AccessSection
               offlineMode={offlineMode}
               shareVisibility={shareVisibility}
-              syncTargetProvider={syncTargetProvider}
-              unlockPolicy={unlockPolicy}
               draftDiffPolicy={draftDiffPolicy}
+              passkeyProtectionEnabled={passkeyProtectionEnabled}
               onShareVisibilityChange={(visibility) => {
                 void setShareVisibility(visibility);
               }}
-              onSyncTargetProviderChange={(provider) => {
-                void setSyncTargetProvider(provider);
-              }}
-              onUnlockPolicyChange={(policy) => {
-                void setUnlockPolicy(policy);
-              }}
               onDraftDiffPolicyChange={(policy) => {
                 void setDraftDiffPolicy(policy);
+              }}
+              onPasskeyProtectionChange={(enabled) => {
+                void setPasskeyProtectionEnabled(enabled);
               }}
             />
 
@@ -613,9 +558,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
 
             <StorageSection
               offlineMode={offlineMode}
-              onOfflineModeChange={(enabled) => {
-                void setOfflineMode(enabled);
-              }}
             />
           </div>
         </div>

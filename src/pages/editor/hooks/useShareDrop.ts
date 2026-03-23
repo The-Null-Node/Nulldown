@@ -4,6 +4,7 @@ import { useTheme } from "../../../theme/themeContext";
 import useDropStore, {
   type DropPayload,
 } from "../../../stores/dropStore";
+import { toUserFacingDropError } from "../../../lib/drop/userErrors";
 
 export function useShareDrop(
   markdown: string,
@@ -24,8 +25,6 @@ export function useShareDrop(
   const hydrateSharePreferences = useDropStore(
     (state) => state.hydrateSharePreferences,
   );
-  const shareVisibility = useDropStore((state) => state.shareVisibility);
-  const unlockPolicy = useDropStore((state) => state.unlockPolicy);
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
 
   const resetShare = useCallback(() => {
@@ -68,16 +67,18 @@ export function useShareDrop(
         payload.draftPack = draftPack;
       }
 
-      const result = await createDrop(payload, {
-        visibility: shareVisibility,
-        unlockPolicy,
-      });
+      const result = await createDrop(payload);
       setSuccessUrl(result.url);
       setSuccessOffline(result.scope === "local");
       await Promise.resolve(clearDraft());
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Share error:", err);
-      setError(err.message || "An unexpected error occurred while sharing.");
+      setError(
+        toUserFacingDropError(
+          err,
+          "An unexpected error occurred while sharing.",
+        ),
+      );
     } finally {
       setSharing(false);
     }
@@ -88,12 +89,10 @@ export function useShareDrop(
     hydrateOfflineMode,
     hydrateSharePreferences,
     markdown,
-    shareVisibility,
     snapshotMeta?.baseDropId,
     snapshotMeta?.buildDraftPack,
     snapshotMeta?.snapshotId,
     themeId,
-    unlockPolicy,
   ]);
 
   return {

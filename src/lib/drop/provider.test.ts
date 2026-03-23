@@ -94,7 +94,7 @@ describe("drop providers", () => {
       unlockPolicy: undefined,
     });
     expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: created.id });
-    expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: shortId });
+    expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: created.id });
   });
 
   it("creates and reads remote drops with createRemoteDropProvider", async () => {
@@ -141,7 +141,9 @@ describe("drop providers", () => {
     const opened = await provider.get("abc123");
 
     expect(opened).toEqual(payload);
-    expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: "abc123" });
+    expect(cryptoPort.open).toHaveBeenCalledWith(envelope, {
+      dropId: "abc123def456",
+    });
   });
 
   it("resolves graph lineage and uses cache on subsequent reads", async () => {

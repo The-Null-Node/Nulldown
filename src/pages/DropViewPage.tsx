@@ -8,12 +8,20 @@ import {
   RenderCancelledError,
   renderMarkdownWithNullplug,
 } from "../lib/nullplug";
+import { toUserFacingDropError } from "../lib/drop/userErrors";
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
     document.title = title;
   }, [title]);
 }
+
+const formatDropLoadError = (error: unknown): string => {
+  return toUserFacingDropError(
+    error,
+    "An error occurred while fetching the drop.",
+  );
+};
 
 const DropViewPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -69,7 +77,7 @@ const DropViewPage: React.FC = () => {
         await hydrateSharePreferences();
         const payload = await getDrop(id);
         if (!payload) {
-          setError("Drop not found in local cache or provider.");
+          setError("We couldn't find that drop.");
           setDropContent(null);
           return;
         }
@@ -77,9 +85,9 @@ const DropViewPage: React.FC = () => {
         setDropContent(payload.content);
         setRenderedContent(payload.content);
         void setThemeId(payload.metadata?.themeId ?? "system");
-      } catch (err: any) {
-        console.error("Failed to fetch drop:", err);
-        setError(err.message || "An error occurred while fetching the drop.");
+      } catch (err: unknown) {
+        console.error(`Failed to fetch drop "${id}":`, err);
+        setError(formatDropLoadError(err));
         setDropContent(null);
       } finally {
         setIsLoading(false);

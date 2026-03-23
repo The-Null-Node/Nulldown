@@ -1,5 +1,6 @@
 import { jest } from "@jest/globals";
 import {
+  PASSKEY_PROTECTION_STORAGE_KEY,
   PasskeyVault,
   createPasskeyVault,
   getUnlockedVault,
@@ -44,12 +45,12 @@ const unlockLeaseKeyForStorage = (storageKey: string) =>
 
 const ensureVaultUnlocked = async (
   vault: PasskeyVault,
-  record: { accountId: string; passkeyCredentialId: string },
+  record: { accountId: string; passkeyCredentialId?: string },
 ) => {
   await (vault as unknown as {
     ensureVaultUnlocked: (value: {
       accountId: string;
-      passkeyCredentialId: string;
+      passkeyCredentialId?: string;
     }) => Promise<void>;
   }).ensureVaultUnlocked(record);
 };
@@ -97,6 +98,26 @@ describe("passkey vault", () => {
     expect(spy).toHaveBeenCalledTimes(1);
 
     spy.mockRestore();
+  });
+
+  it("skips passkey assertion when passkey protection is disabled", async () => {
+    const storageKey = "vault-test-passkey-disabled";
+    const localStorage = createLocalStorageMock();
+    installWindow(localStorage);
+    localStorage.setItem(PASSKEY_PROTECTION_STORAGE_KEY, "0");
+
+    const record = {
+      accountId: "account-1",
+      passkeyCredentialId: "credential-1",
+    };
+
+    const vault = createPasskeyVault({ storageKey });
+    const assertSpy = jest
+      .spyOn(vault as unknown as { assertPasskey: () => Promise<void> }, "assertPasskey")
+      .mockResolvedValue(undefined);
+
+    await ensureVaultUnlocked(vault, record);
+    expect(assertSpy).not.toHaveBeenCalled();
   });
 
   it("reuses persisted unlock lease across instances within TTL", async () => {

@@ -91,6 +91,7 @@ describe("drop types", () => {
       version: DROP_ENVELOPE_VERSION_V1,
       createdAt: Date.now(),
       accountId: "account-1",
+      visibility: "private",
       metadata: { themeId: "system" },
       cipher: {
         alg: "A256GCM",

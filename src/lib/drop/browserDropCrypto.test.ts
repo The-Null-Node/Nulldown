@@ -6,13 +6,13 @@ import {
 import type { DropEnvelopeV1 } from "../../../shared/drop/types";
 
 interface MockSubtle {
-  generateKey: jest.Mock;
-  encrypt: jest.Mock;
-  exportKey: jest.Mock;
-  sign: jest.Mock;
-  verify: jest.Mock;
-  decrypt: jest.Mock;
-  importKey: jest.Mock;
+  generateKey: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
+  encrypt: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
+  exportKey: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
+  sign: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
+  verify: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
+  decrypt: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
+  importKey: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
 }
 
 const ensureBase64Globals = () => {
@@ -33,13 +33,13 @@ const ensureBase64Globals = () => {
 
 const installMockCrypto = (): MockSubtle => {
   const subtle: MockSubtle = {
-    generateKey: jest.fn(),
-    encrypt: jest.fn(),
-    exportKey: jest.fn(),
-    sign: jest.fn(),
-    verify: jest.fn(),
-    decrypt: jest.fn(),
-    importKey: jest.fn(),
+    generateKey: jest.fn() as MockSubtle["generateKey"],
+    encrypt: jest.fn() as MockSubtle["encrypt"],
+    exportKey: jest.fn() as MockSubtle["exportKey"],
+    sign: jest.fn() as MockSubtle["sign"],
+    verify: jest.fn() as MockSubtle["verify"],
+    decrypt: jest.fn() as MockSubtle["decrypt"],
+    importKey: jest.fn() as MockSubtle["importKey"],
   };
 
   Object.defineProperty(globalThis, "crypto", {
@@ -69,6 +69,16 @@ const createUnlockedVault = () => ({
   signingPrivateKey: {} as CryptoKey,
 });
 
+const createVaultMock = () => {
+  const getUnlockedVault = jest.fn() as jest.MockedFunction<
+    () => Promise<ReturnType<typeof createUnlockedVault>>
+  >;
+  getUnlockedVault.mockResolvedValue(createUnlockedVault());
+  return {
+    getUnlockedVault,
+  };
+};
+
 describe("browser drop crypto", () => {
   beforeEach(() => {
     ensureBase64Globals();
@@ -88,9 +98,7 @@ describe("browser drop crypto", () => {
     subtle.exportKey.mockResolvedValue(Uint8Array.from([31, 32, 33]).buffer);
     subtle.sign.mockResolvedValue(Uint8Array.from([41, 42, 43]).buffer);
 
-    const vault = {
-      getUnlockedVault: jest.fn().mockResolvedValue(createUnlockedVault()),
-    };
+    const vault = createVaultMock();
 
     const cryptoPort = new BrowserDropCrypto({
       vault: vault as any,
@@ -117,9 +125,7 @@ describe("browser drop crypto", () => {
       .mockResolvedValueOnce(new TextEncoder().encode("opened content").buffer);
     subtle.importKey.mockResolvedValue({} as CryptoKey);
 
-    const vault = {
-      getUnlockedVault: jest.fn().mockResolvedValue(createUnlockedVault()),
-    };
+    const vault = createVaultMock();
 
     const cryptoPort = new BrowserDropCrypto({
       vault: vault as any,
@@ -194,9 +200,7 @@ describe("browser drop crypto", () => {
       );
     subtle.importKey.mockResolvedValue({} as CryptoKey);
 
-    const vault = {
-      getUnlockedVault: jest.fn().mockResolvedValue(createUnlockedVault()),
-    };
+    const vault = createVaultMock();
 
     const cryptoPort = new BrowserDropCrypto({
       vault: vault as any,
@@ -240,13 +244,61 @@ describe("browser drop crypto", () => {
     expect(subtle.decrypt).toHaveBeenCalledTimes(3);
   });
 
+  it("wraps raw decrypt operation errors with context", async () => {
+    const subtle = installMockCrypto();
+    subtle.verify.mockResolvedValue(true);
+
+    const operationError = new Error("The operation failed");
+    operationError.name = "OperationError";
+    subtle.decrypt.mockRejectedValue(operationError);
+
+    const vault = createVaultMock();
+
+    const cryptoPort = new BrowserDropCrypto({
+      vault: vault as any,
+    });
+
+    const envelope: DropEnvelopeV1 = {
+      schema: "nmdn.drop.v1",
+      version: 1,
+      createdAt: Date.now(),
+      accountId: "account-1",
+      metadata: { themeId: "system" },
+      cipher: {
+        alg: "A256GCM",
+        iv: "AQIDBA==",
+        ciphertext: "BQYHCA==",
+      },
+      keyEnvelope: {
+        mode: "account-vault-rsa-oaep",
+        kid: "enc-kid-1",
+        wrappedKey: "CQoLDA==",
+      },
+      signatures: {
+        device: {
+          kid: "sig-kid-1",
+          alg: "ECDSA_P256_SHA256",
+          sig: "DQ4P",
+        },
+      },
+    };
+
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      cryptoPort.open(envelope, {
+        dropId: "abc123",
+      }),
+    ).rejects.toThrow('Unable to decrypt drop "abc123" with the current vault');
+
+    errorSpy.mockRestore();
+  });
+
   it("rejects provider-signed envelopes without configured provider key", async () => {
     const subtle = installMockCrypto();
     subtle.verify.mockResolvedValue(true);
 
-    const vault = {
-      getUnlockedVault: jest.fn().mockResolvedValue(createUnlockedVault()),
-    };
+    const vault = createVaultMock();
 
     const cryptoPort = new BrowserDropCrypto({
       vault: vault as any,

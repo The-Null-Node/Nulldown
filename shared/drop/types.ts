@@ -2,7 +2,7 @@ export const DROP_ENVELOPE_SCHEMA_V1 = "nmdn.drop.v1" as const;
 export const DROP_ENVELOPE_VERSION_V1 = 1 as const;
 
 export type DropSignatureAlgorithm = "ECDSA_P256_SHA256";
-export type DropVisibility = "unlisted" | "public";
+export type DropVisibility = "private" | "unlisted" | "public";
 export type DropUnlockPolicy = "vault-only" | "provider-escrow";
 export type DropDraftDiffPolicy = "edited-only" | "always";
 
@@ -241,6 +241,7 @@ export const isDropEnvelopeV1 = (value: unknown): value is DropEnvelopeV1 => {
   if (!isString(value.accountId)) return false;
   if (
     value.visibility !== undefined &&
+    value.visibility !== "private" &&
     value.visibility !== "unlisted" &&
     value.visibility !== "public"
   ) {

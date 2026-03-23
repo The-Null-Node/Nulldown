@@ -1,16 +1,22 @@
-import { getKvValue, isIndexedDbSupported, setKvValue } from "../indexedDb";
+import {
+  getKvItem,
+  getKvValue,
+  isIndexedDbSupported,
+  setKvValue,
+} from "../indexedDb";
 import { fromBase64, toBase64 } from "./base64";
 
 const DEFAULT_VAULT_RECORD_KEY = "nulldown_account_vault_v1";
 const DEFAULT_UNLOCK_TTL_MS = 8 * 60 * 60 * 1000;
 const UNLOCK_LEASE_SUFFIX = "_unlock_lease_v1";
+export const PASSKEY_PROTECTION_STORAGE_KEY = "nulldown_passkey_protection";
 
 interface VaultRecordV1 {
   version: 1;
   accountId: string;
   encryptionKid: string;
   signingKid: string;
-  passkeyCredentialId: string;
+  passkeyCredentialId?: string;
   encryptionPublicJwk: JsonWebKey;
   encryptionPrivateJwk: JsonWebKey;
   signingPublicJwk: JsonWebKey;
@@ -48,7 +54,9 @@ export class PasskeyVault {
   private readonly storageKey: string;
   private readonly unlockLeaseKey: string;
   private readonly unlockTtlMs: number;
-  private unlockState: { accountId: string; expiresAt: number } | null = null;
+  private unlockState:
+    | { accountId: string; expiresAt: number; passkeyProtected: boolean }
+    | null = null;
 
   constructor(options: PasskeyVaultOptions = {}) {
     this.storageKey = options.storageKey ?? DEFAULT_VAULT_RECORD_KEY;
@@ -58,7 +66,7 @@ export class PasskeyVault {
 
   async getUnlockedVault(): Promise<UnlockedVault> {
     const record = await this.ensureVaultRecord();
-    await this.ensureVaultUnlocked(record);
+    const unlockedRecord = await this.ensureVaultUnlocked(record);
 
     const [
       encryptionPublicKey,
@@ -66,18 +74,18 @@ export class PasskeyVault {
       signingPublicKey,
       signingPrivateKey,
     ] = await Promise.all([
-      this.importRsaPublicKey(record.encryptionPublicJwk),
-      this.importRsaPrivateKey(record.encryptionPrivateJwk),
-      this.importSigningPublicKey(record.signingPublicJwk),
-      this.importSigningPrivateKey(record.signingPrivateJwk),
+      this.importRsaPublicKey(unlockedRecord.encryptionPublicJwk),
+      this.importRsaPrivateKey(unlockedRecord.encryptionPrivateJwk),
+      this.importSigningPublicKey(unlockedRecord.signingPublicJwk),
+      this.importSigningPrivateKey(unlockedRecord.signingPrivateJwk),
     ]);
 
     return {
-      accountId: record.accountId,
-      encryptionKid: record.encryptionKid,
-      signingKid: record.signingKid,
-      encryptionPublicJwk: record.encryptionPublicJwk,
-      signingPublicJwk: record.signingPublicJwk,
+      accountId: unlockedRecord.accountId,
+      encryptionKid: unlockedRecord.encryptionKid,
+      signingKid: unlockedRecord.signingKid,
+      encryptionPublicJwk: unlockedRecord.encryptionPublicJwk,
+      signingPublicJwk: unlockedRecord.signingPublicJwk,
       encryptionPublicKey,
       encryptionPrivateKey,
       signingPublicKey,
@@ -205,7 +213,10 @@ export class PasskeyVault {
       crypto.subtle.exportKey("jwk", signingPair.privateKey),
     ]);
 
-    const passkeyCredentialId = await this.createPasskeyCredential(accountId);
+    const passkeyProtectionEnabled = await this.isPasskeyProtectionEnabled();
+    const passkeyCredentialId = passkeyProtectionEnabled
+      ? await this.createPasskeyCredential(accountId)
+      : undefined;
     const now = Date.now();
 
     return {
@@ -300,6 +311,70 @@ export class PasskeyVault {
     }
   }
 
+  private parsePasskeyProtection(value: string | null): boolean {
+    return value === null ? true : value === "1" || value === "true";
+  }
+
+  private readPasskeyProtectionFromLocalStorage(): boolean | null {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    try {
+      const persisted = window.localStorage.getItem(
+        PASSKEY_PROTECTION_STORAGE_KEY,
+      );
+      if (persisted === null) {
+        return null;
+      }
+
+      return this.parsePasskeyProtection(persisted);
+    } catch {
+      return null;
+    }
+  }
+
+  private async isPasskeyProtectionEnabled(): Promise<boolean> {
+    if (isIndexedDbSupported()) {
+      try {
+        const persisted = await getKvItem(PASSKEY_PROTECTION_STORAGE_KEY);
+        if (persisted !== null) {
+          return this.parsePasskeyProtection(persisted);
+        }
+      } catch (error) {
+        console.error(
+          "Failed to read passkey protection preference from IndexedDB:",
+          error,
+        );
+      }
+    }
+
+    const localValue = this.readPasskeyProtectionFromLocalStorage();
+    if (localValue !== null) {
+      return localValue;
+    }
+
+    return true;
+  }
+
+  private async ensurePasskeyCredential(
+    record: VaultRecordV1,
+  ): Promise<VaultRecordV1> {
+    if (record.passkeyCredentialId) {
+      return record;
+    }
+
+    const passkeyCredentialId = await this.createPasskeyCredential(record.accountId);
+    const upgraded: VaultRecordV1 = {
+      ...record,
+      passkeyCredentialId,
+      updatedAt: Date.now(),
+    };
+
+    await this.saveVaultRecord(upgraded);
+    return upgraded;
+  }
+
   private async loadVaultRecord(): Promise<VaultRecordV1 | null> {
     if (isIndexedDbSupported()) {
       try {
@@ -335,44 +410,62 @@ export class PasskeyVault {
     return created;
   }
 
-  private async ensureVaultUnlocked(record: VaultRecordV1): Promise<void> {
+  private async ensureVaultUnlocked(record: VaultRecordV1): Promise<VaultRecordV1> {
+    const passkeyProtectionEnabled = await this.isPasskeyProtectionEnabled();
+    if (!passkeyProtectionEnabled) {
+      this.unlockState = null;
+      this.clearUnlockLease();
+      return record;
+    }
+
+    const guardedRecord = await this.ensurePasskeyCredential(record);
     const now = Date.now();
     if (
       this.unlockState &&
-      this.unlockState.accountId === record.accountId &&
+      this.unlockState.passkeyProtected &&
+      this.unlockState.accountId === guardedRecord.accountId &&
       this.unlockState.expiresAt > now
     ) {
-      return;
+      return guardedRecord;
     }
 
     const persistedLease = this.loadUnlockLease();
     if (persistedLease) {
       if (
-        persistedLease.accountId === record.accountId &&
+        persistedLease.accountId === guardedRecord.accountId &&
         persistedLease.expiresAt > now
       ) {
         this.unlockState = {
           accountId: persistedLease.accountId,
           expiresAt: persistedLease.expiresAt,
+          passkeyProtected: true,
         };
-        return;
+        return guardedRecord;
       }
 
       this.clearUnlockLease();
     }
 
-    await this.assertPasskey(record.passkeyCredentialId);
+    const credentialId = guardedRecord.passkeyCredentialId;
+    if (!credentialId) {
+      throw new Error("Passkey credential is unavailable for this vault.");
+    }
+
+    await this.assertPasskey(credentialId);
 
     const expiresAt = Date.now() + this.unlockTtlMs;
     this.unlockState = {
-      accountId: record.accountId,
+      accountId: guardedRecord.accountId,
       expiresAt,
+      passkeyProtected: true,
     };
     this.saveUnlockLease({
       version: 1,
-      accountId: record.accountId,
+      accountId: guardedRecord.accountId,
       expiresAt,
     });
+
+    return guardedRecord;
   }
 
   private importRsaPublicKey(jwk: JsonWebKey) {

@@ -12,6 +12,9 @@
     "pages:build": "bunx --bun vite build",
     "pages:dev": "bun run build && wrangler pages dev dist --live-reload",
     "pages:dev:remote": "bun run build && wrangler pages dev dist --live-reload --remote",
+    "logs": "wrangler pages deployment tail",
+    "logs:prod": "wrangler pages deployment tail --environment production",
+    "logs:preview": "wrangler pages deployment tail --environment preview",
     "deploy": "bun run pages:build && wrangler pages deploy dist"
   },
   "keywords": [

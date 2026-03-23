@@ -52,6 +52,18 @@ interface UnlockApiResponse {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    const prefix = error.name && error.name !== "Error" ? `${error.name}: ` : "";
+    return `${prefix}${error.message}`.trim();
+  }
+
+  return String(error);
+};
+
+const getDropLabel = (dropId: string | undefined): string =>
+  dropId ? `drop "${dropId}"` : "drop";
+
 const cloneMetadata = (
   metadata?: Record<string, unknown>,
 ): Record<string, unknown> | undefined => {
@@ -236,6 +248,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
     envelope: DropEnvelopeV1,
     options: DropOpenOptions = {},
   ): Promise<DropPayload> {
+    const dropLabel = getDropLabel(options.dropId);
     const vault = await this.vault.getUnlockedVault();
     await this.verifyDeviceSignature(envelope, vault);
     await this.verifyProviderSignature(envelope);
@@ -256,12 +269,29 @@ export class BrowserDropCrypto implements DropCryptoPort {
         envelope.providerEscrow &&
         options.dropId
       ) {
-        rawContentKey = await this.requestEscrowUnlockedKey(
-          options.dropId,
-          vault,
-        );
+        try {
+          rawContentKey = await this.requestEscrowUnlockedKey(options.dropId, vault);
+        } catch (escrowError) {
+          console.error(
+            `[drop-crypto] Provider escrow unlock failed for ${dropLabel}:`,
+            escrowError,
+          );
+          throw new Error(
+            `Failed provider escrow unlock for ${dropLabel}: ${getErrorMessage(
+              escrowError,
+            )}`,
+          );
+        }
       } else {
-        throw error;
+        console.error(
+          `[drop-crypto] Failed to unwrap content key for ${dropLabel}:`,
+          error,
+        );
+        throw new Error(
+          `Unable to decrypt ${dropLabel} with the current vault. ` +
+            `This drop may belong to a different account vault or require provider escrow. ` +
+            `Reason: ${getErrorMessage(error)}`,
+        );
       }
     }
 
@@ -270,14 +300,25 @@ export class BrowserDropCrypto implements DropCryptoPort {
     }
 
     const contentKey = await this.importContentKey(rawContentKey, ["decrypt"]);
-    const plaintext = await crypto.subtle.decrypt(
-      {
-        name: "AES-GCM",
-        iv: fromBase64(envelope.cipher.iv),
-      },
-      contentKey,
-      fromBase64(envelope.cipher.ciphertext),
-    );
+    let plaintext: ArrayBuffer;
+
+    try {
+      plaintext = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: fromBase64(envelope.cipher.iv),
+        },
+        contentKey,
+        fromBase64(envelope.cipher.ciphertext),
+      );
+    } catch (error) {
+      console.error(`[drop-crypto] Failed to decrypt payload for ${dropLabel}:`, error);
+      throw new Error(
+        `Unable to decrypt payload for ${dropLabel}. ` +
+          `The encrypted content may be corrupted or key material is invalid. ` +
+          `Reason: ${getErrorMessage(error)}`,
+      );
+    }
 
     const draftPack = await this.openDraftPack(envelope, contentKey);
 
