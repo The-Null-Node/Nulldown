@@ -2,6 +2,7 @@ import {
   DEFAULT_IFRAME_ALLOWLIST,
   normalizeIframeAllowlist,
   parseIframeAllowlistInput,
+  resolveIframeAllowlist,
 } from "./iframeAllowlist";
 
 describe("iframe allowlist", () => {
@@ -44,5 +45,19 @@ describe("iframe allowlist", () => {
 
   it("keeps a non-empty built-in default allowlist", () => {
     expect(DEFAULT_IFRAME_ALLOWLIST.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to built-in defaults when no source allowlist exists", () => {
+    expect(resolveIframeAllowlist(undefined)).toEqual([...DEFAULT_IFRAME_ALLOWLIST]);
+  });
+
+  it("uses normalized source allowlists when present", () => {
+    expect(
+      resolveIframeAllowlist([
+        "HTTPS://WWW.YouTube.com/embed/demo",
+        "player.vimeo.com",
+        "not a host",
+      ]),
+    ).toEqual(["www.youtube.com", "player.vimeo.com"]);
   });
 });

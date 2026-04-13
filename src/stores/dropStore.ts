@@ -13,7 +13,10 @@ import {
   type DropProviderScope,
   type DropSyncProgress,
 } from "../lib/drop/provider";
-import { PASSKEY_PROTECTION_STORAGE_KEY } from "../lib/drop/passkeyVault";
+import {
+  getUnlockedVault,
+  PASSKEY_PROTECTION_STORAGE_KEY,
+} from "../lib/drop/passkeyVault";
 import type {
   DropDraftDiffPolicy,
   DropGraph,
@@ -130,6 +133,9 @@ interface DropStoreState {
     onProgress?: (progress: DropSyncProgress) => void,
   ) => Promise<void>;
   getDrop: (id: string) => Promise<DropPayload | null>;
+  resolveDropOwnership: (
+    id: string,
+  ) => Promise<{ id: string; ownedByCurrentAccount: boolean } | null>;
   resolveDropGraph: (id: string) => Promise<DropGraph>;
   listOwnedDrops: () => Promise<OwnedDropRecord[]>;
   createOfflineDrop: (
@@ -379,7 +385,7 @@ const getErrorMessage = (error: unknown): string => {
 };
 
 const buildResolutionError = (
-  target: "drop" | "drop graph",
+  target: "drop" | "drop graph" | "drop ownership",
   id: string,
   localError: unknown,
   remoteError: unknown,
@@ -393,7 +399,7 @@ const buildResolutionError = (
 };
 
 const logProviderFailure = (
-  operation: "getDrop" | "resolveDropGraph",
+  operation: "getDrop" | "resolveDropGraph" | "resolveDropOwnership",
   provider: DropProviderScope,
   id: string,
   error: unknown,
@@ -555,6 +561,56 @@ const publishLocalDropToRemote = async (
     id: created.id,
     url: created.url,
   };
+};
+
+const resolveDropOwnershipRecord = async (
+  id: string,
+): Promise<{ id: string; ownedByCurrentAccount: boolean } | null> => {
+  const { accountId } = await getUnlockedVault();
+  let localError: unknown = null;
+
+  try {
+    const localRecord = await dropProviderRegistry.local.crud.drops.get(id);
+    if (localRecord) {
+      return {
+        id: localRecord.id,
+        ownedByCurrentAccount: localRecord.envelope.accountId === accountId,
+      };
+    }
+  } catch (error) {
+    localError = error;
+    logProviderFailure("resolveDropOwnership", "local", id, error);
+  }
+
+  let remoteError: unknown = null;
+
+  try {
+    const remoteRecord = await dropProviderRegistry.remote.crud.drops.get(id);
+    if (remoteRecord) {
+      return {
+        id: remoteRecord.id,
+        ownedByCurrentAccount: remoteRecord.envelope.accountId === accountId,
+      };
+    }
+  } catch (error) {
+    remoteError = error;
+    logProviderFailure("resolveDropOwnership", "remote", id, error);
+  }
+
+  if (localError || remoteError) {
+    const resolutionError = buildResolutionError(
+      "drop ownership",
+      id,
+      localError,
+      remoteError,
+    );
+    console.error("[dropStore] " + resolutionError.message);
+    throw resolutionError;
+  }
+
+  console.warn('[dropStore] resolveDropOwnership could not resolve "' + id + '" in local or remote providers.');
+
+  return null;
 };
 
 const DEFAULT_SETTINGS_SNAPSHOT: DropSettingsSnapshot = {
@@ -790,6 +846,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
       visibility,
       unlockPolicy,
       id: options.id,
+      upsert: options.upsert,
     });
 
     if (mode === "offline") {
@@ -863,6 +920,10 @@ const useDropStore = create<DropStoreState>((set, get) => ({
     );
 
     return null;
+  },
+
+  resolveDropOwnership: async (id: string) => {
+    return resolveDropOwnershipRecord(id);
   },
 
   resolveDropGraph: async (id: string) => {

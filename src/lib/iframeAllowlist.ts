@@ -64,6 +64,19 @@ export const normalizeIframeAllowlist = (
   return normalized;
 };
 
+export const resolveIframeAllowlist = (
+  value: unknown,
+  fallback: readonly string[] = DEFAULT_IFRAME_ALLOWLIST,
+): string[] => {
+  if (!Array.isArray(value)) {
+    return normalizeIframeAllowlist(fallback);
+  }
+
+  return normalizeIframeAllowlist(
+    value.filter((entry): entry is string => typeof entry === "string"),
+  );
+};
+
 export const parseIframeAllowlistInput = (input: string): string[] => {
   const entries = input
     .split(/[\n,]/)

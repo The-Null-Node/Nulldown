@@ -107,6 +107,7 @@ const EditorPage: React.FC = () => {
 
   const bufferRef = useRef(markdown);
   const ignoreDraftLoadRef = useRef(false);
+  const [existingDropId, setExistingDropId] = useState<string | null>(null);
 
   useEffect(() => {
     bufferRef.current = markdown;
@@ -126,6 +127,9 @@ const EditorPage: React.FC = () => {
   const setMode = useDropStore((state) => state.setMode);
   const setShareVisibility = useDropStore((state) => state.setShareVisibility);
   const getDrop = useDropStore((state) => state.getDrop);
+  const resolveDropOwnership = useDropStore(
+    (state) => state.resolveDropOwnership,
+  );
   const listOwnedDrops = useDropStore((state) => state.listOwnedDrops);
   const [modeSwitching, setModeSwitching] = useState(false);
 
@@ -152,6 +156,7 @@ const EditorPage: React.FC = () => {
 
   const clearDraft = useCallback(() => {
     ignoreDraftLoadRef.current = false;
+    setExistingDropId(null);
     setBaseDropId(null);
     editor.reset();
     bufferRef.current = "";
@@ -191,7 +196,7 @@ const EditorPage: React.FC = () => {
     }
 
     const timer = window.setTimeout(() => {
-      const targetDropId = baseDropId ?? cloneId ?? null;
+      const targetDropId = existingDropId ?? baseDropId ?? cloneId ?? null;
       upsertDraftLibraryEntry(draftStorageKey, markdown, {
         dropId: targetDropId,
         updatedAt: Date.now(),
@@ -205,11 +210,12 @@ const EditorPage: React.FC = () => {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [baseDropId, cloneId, draftStorageKey, markdown]);
+  }, [baseDropId, cloneId, draftStorageKey, existingDropId, markdown]);
 
   useEffect(() => {
     if (!cloneId) {
       ignoreDraftLoadRef.current = false;
+      setExistingDropId(null);
       return;
     }
 
@@ -222,11 +228,31 @@ const EditorPage: React.FC = () => {
           throw new Error("Drop not found in local or remote providers.");
         }
 
+        let resolvedDropId = cloneId;
+        let ownedByCurrentAccount = false;
+
+        try {
+          const ownership = await resolveDropOwnership(cloneId);
+          if (ownership) {
+            resolvedDropId = ownership.id;
+            ownedByCurrentAccount = ownership.ownedByCurrentAccount;
+          }
+        } catch (ownershipError) {
+          console.error("Failed to resolve drop ownership:", ownershipError);
+        }
+
         const content = payload.content;
 
         editor.reset();
         editor.seedSnapshot(content);
-        setBaseDropId(cloneId);
+        setExistingDropId(ownedByCurrentAccount ? resolvedDropId : null);
+        setBaseDropId(
+          ownedByCurrentAccount
+            ? typeof payload.metadata?.baseDropId === "string"
+              ? payload.metadata.baseDropId
+              : null
+            : resolvedDropId,
+        );
         bufferRef.current = content;
 
         const storedDraft = await loadDraftStorage();
@@ -248,6 +274,7 @@ const EditorPage: React.FC = () => {
     editor,
     getDrop,
     loadDraftStorage,
+    resolveDropOwnership,
     setBaseDropId,
     setDraftContent,
   ]);
@@ -311,9 +338,9 @@ const EditorPage: React.FC = () => {
       snapshotter: editor.getSnapshotter(),
       snapshotId: editor.getCurrentSnapshotId(),
       policy: draftDiffPolicy,
-      source: baseDropId ? "edited-drop" : "new-drop",
+      source: existingDropId || baseDropId ? "edited-drop" : "new-drop",
     });
-  }, [baseDropId, draftDiffPolicy, editor]);
+  }, [baseDropId, draftDiffPolicy, editor, existingDropId]);
 
   const {
     error,
@@ -325,6 +352,7 @@ const EditorPage: React.FC = () => {
     successUrl,
   } = useShareDrop(markdown, clearDraft, {
     baseDropId,
+    existingDropId,
     snapshotId: currentSnapshotId,
     buildDraftPack,
   });
@@ -337,7 +365,7 @@ const EditorPage: React.FC = () => {
     }
 
     const nextMode = mode === "offline" ? "online" : "offline";
-    const activeDropId = baseDropId ?? cloneId ?? undefined;
+    const activeDropId = existingDropId ?? baseDropId ?? cloneId ?? undefined;
 
     setModeSwitching(true);
 
@@ -362,6 +390,7 @@ const EditorPage: React.FC = () => {
       }
     })();
   }, [
+    existingDropId,
     baseDropId,
     cloneId,
     mode,

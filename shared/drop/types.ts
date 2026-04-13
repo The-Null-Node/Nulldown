@@ -37,6 +37,7 @@ export interface DropMetadata {
   themeId?: string;
   baseDropId?: string;
   snapshotId?: number;
+  allowedUrls?: string[];
   [key: string]: unknown;
 }
 

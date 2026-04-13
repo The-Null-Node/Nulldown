@@ -11,6 +11,7 @@ export function useShareDrop(
   clearDraft: () => void | Promise<unknown>,
   snapshotMeta?: {
     baseDropId?: string | null;
+    existingDropId?: string | null;
     snapshotId?: number | null;
     buildDraftPack?: () => DropDraftPackV1 | undefined;
   },
@@ -25,6 +26,7 @@ export function useShareDrop(
   const hydrateSharePreferences = useDropStore(
     (state) => state.hydrateSharePreferences,
   );
+  const allowedUrls = useDropStore((state) => state.allowedUrls);
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
 
   const resetShare = useCallback(() => {
@@ -54,11 +56,13 @@ export function useShareDrop(
           themeId,
           baseDropId: snapshotMeta?.baseDropId ?? undefined,
           snapshotId: snapshotMeta?.snapshotId ?? undefined,
+          allowedUrls,
         },
       };
 
       const shouldPersistDraftPack =
-        draftDiffPolicy === "always" || Boolean(snapshotMeta?.baseDropId);
+        draftDiffPolicy === "always" ||
+        Boolean(snapshotMeta?.existingDropId ?? snapshotMeta?.baseDropId);
       const draftPack = shouldPersistDraftPack
         ? snapshotMeta?.buildDraftPack?.()
         : undefined;
@@ -67,7 +71,15 @@ export function useShareDrop(
         payload.draftPack = draftPack;
       }
 
-      const result = await createDrop(payload);
+      const result = await createDrop(
+        payload,
+        snapshotMeta?.existingDropId
+          ? {
+              id: snapshotMeta.existingDropId,
+              upsert: true,
+            }
+          : undefined,
+      );
       setSuccessUrl(result.url);
       setSuccessOffline(result.scope === "local");
       await Promise.resolve(clearDraft());
@@ -85,9 +97,11 @@ export function useShareDrop(
   }, [
     clearDraft,
     createDrop,
+    allowedUrls,
     draftDiffPolicy,
     hydrateOfflineMode,
     hydrateSharePreferences,
+    snapshotMeta?.existingDropId,
     markdown,
     snapshotMeta?.baseDropId,
     snapshotMeta?.buildDraftPack,

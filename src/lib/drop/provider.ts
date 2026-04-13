@@ -36,6 +36,7 @@ export type DropProviderScope = "local" | "remote";
 
 export interface DropCreateOptions {
   id?: string;
+  upsert?: boolean;
   visibility?: DropVisibility;
   unlockPolicy?: DropUnlockPolicy;
 }
@@ -640,7 +641,7 @@ class ComposedDropProvider implements DropProvider {
     const envelope = await this.cryptoPort.seal(payload, sealOptions);
     const created = await this.storage.create(envelope, {
       id: options.id,
-      upsert: false,
+      upsert: options.upsert,
     });
 
     return {

@@ -7,6 +7,17 @@ import type {
 
 interface LoadedDropStore {
   useDropStore: typeof import("./dropStore").default;
+  localCreate: jest.MockedFunction<
+    (
+      payload: DropPayload,
+      options?: {
+        id?: string;
+        upsert?: boolean;
+        visibility?: "private" | "unlisted" | "public";
+        unlockPolicy?: "vault-only" | "provider-escrow";
+      },
+    ) => Promise<{ id: string; url: string; scope: "local" }>
+  >;
   localGet: jest.MockedFunction<(id: string) => Promise<DropPayload | null>>;
   remoteGet: jest.MockedFunction<(id: string) => Promise<DropPayload | null>>;
   remoteCreate: jest.MockedFunction<
@@ -14,6 +25,7 @@ interface LoadedDropStore {
       payload: DropPayload,
       options?: {
         id?: string;
+        upsert?: boolean;
         visibility?: "private" | "unlisted" | "public";
         unlockPolicy?: "vault-only" | "provider-escrow";
       },
@@ -51,11 +63,11 @@ const createGraph = (id: string): DropGraph => ({
   builtAt: Date.now(),
 });
 
-const createEnvelope = (): DropEnvelopeV1 => ({
+const createEnvelope = (accountId = "account-1"): DropEnvelopeV1 => ({
   schema: "nmdn.drop.v1",
   version: 1,
   createdAt: Date.now(),
-  accountId: "account-1",
+  accountId,
   visibility: "unlisted",
   unlockPolicy: "provider-escrow",
   metadata: {},
@@ -83,11 +95,24 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
 
   const localGet = jest.fn() as LoadedDropStore["localGet"];
   const remoteGet = jest.fn() as LoadedDropStore["remoteGet"];
+  const localCreate = jest.fn() as LoadedDropStore["localCreate"];
+  const localSync = jest.fn(async () => ({
+    total: 1,
+    synced: 1,
+    skipped: 0,
+    targetScope: "remote" as const,
+  }));
   const remoteCreate = jest.fn() as LoadedDropStore["remoteCreate"];
   const localCrudGet = jest.fn() as LoadedDropStore["localCrudGet"];
   const remoteCrudGet = jest.fn() as LoadedDropStore["remoteCrudGet"];
   const localResolveGraph = jest.fn() as LoadedDropStore["localResolveGraph"];
   const remoteResolveGraph = jest.fn() as LoadedDropStore["remoteResolveGraph"];
+
+  localCreate.mockResolvedValue({
+    id: "local_id_1234",
+    url: "https://example.com/d/local",
+    scope: "local",
+  });
 
   localGet.mockResolvedValue(null);
   remoteGet.mockResolvedValue(null);
@@ -103,8 +128,8 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     scope: "local",
     get: localGet,
     resolveGraph: localResolveGraph,
-    create: jest.fn(),
-    sync: jest.fn(),
+    create: localCreate,
+    sync: localSync,
     crud: {
       drops: {
         create: jest.fn(),
@@ -141,6 +166,9 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
 
   jest.unstable_mockModule("../lib/drop/passkeyVault", () => ({
     PASSKEY_PROTECTION_STORAGE_KEY: "nulldown_passkey_protection",
+    getUnlockedVault: jest.fn(async () => ({
+      accountId: "account-1",
+    })),
   }));
 
   jest.unstable_mockModule("../lib/drop/provider", () => ({
@@ -158,6 +186,7 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
 
   return {
     useDropStore: module.default,
+    localCreate,
     localGet,
     remoteGet,
     remoteCreate,
@@ -299,6 +328,48 @@ describe("dropStore resolution", () => {
     expect(useDropStore.getState().offlineMode).toBe(true);
     expect(useDropStore.getState().syncTargetProvider).toBe("local");
     expect(useDropStore.getState().unlockPolicy).toBe("vault-only");
+  });
+
+  it("detects when the current account owns a drop", async () => {
+    const { useDropStore, localCrudGet, remoteCrudGet } = await loadDropStore();
+
+    localCrudGet.mockResolvedValue({
+      id: "owned_drop_123456",
+      envelope: createEnvelope("account-1"),
+      createdAt: 1,
+      updatedAt: 2,
+    });
+
+    const result = await useDropStore
+      .getState()
+      .resolveDropOwnership("owned_drop_123456");
+
+    expect(result).toEqual({
+      id: "owned_drop_123456",
+      ownedByCurrentAccount: true,
+    });
+    expect(remoteCrudGet).not.toHaveBeenCalled();
+  });
+
+  it("passes upsert options when overwriting an existing drop", async () => {
+    const { useDropStore, localCreate } = await loadDropStore();
+    const payload: DropPayload = {
+      content: "updated draft",
+      metadata: { themeId: "system" },
+    };
+
+    await useDropStore.getState().setMode("offline");
+    await useDropStore.getState().createDrop(payload, {
+      id: "owned_drop_123456",
+      upsert: true,
+    });
+
+    expect(localCreate).toHaveBeenCalledWith(payload, {
+      id: "owned_drop_123456",
+      upsert: true,
+      visibility: "private",
+      unlockPolicy: "vault-only",
+    });
   });
 
   it("publishes local drop when switching offline to online", async () => {

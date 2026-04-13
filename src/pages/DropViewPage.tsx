@@ -9,6 +9,10 @@ import {
   renderMarkdownWithNullplug,
 } from "../lib/nullplug";
 import { toUserFacingDropError } from "../lib/drop/userErrors";
+import {
+  DEFAULT_IFRAME_ALLOWLIST,
+  resolveIframeAllowlist,
+} from "../lib/iframeAllowlist";
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
@@ -29,15 +33,14 @@ const DropViewPage: React.FC = () => {
   const [renderedContent, setRenderedContent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sourceAllowedUrls, setSourceAllowedUrls] = useState<string[]>([
+    ...DEFAULT_IFRAME_ALLOWLIST,
+  ]);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
   );
   const { setThemeId } = useTheme();
   const getDrop = useDropStore((state) => state.getDrop);
-  const allowedUrls = useDropStore((state) => state.allowedUrls);
-  const hydrateSharePreferences = useDropStore(
-    (state) => state.hydrateSharePreferences,
-  );
   const LinkComponent = Link as unknown as React.FC<LinkProps>;
 
   const handleCopyContent = async () => {
@@ -74,28 +77,30 @@ const DropViewPage: React.FC = () => {
       setError(null);
 
       try {
-        await hydrateSharePreferences();
         const payload = await getDrop(id);
         if (!payload) {
           setError("We couldn't find that drop.");
           setDropContent(null);
+          setSourceAllowedUrls([...DEFAULT_IFRAME_ALLOWLIST]);
           return;
         }
 
         setDropContent(payload.content);
         setRenderedContent(payload.content);
+        setSourceAllowedUrls(resolveIframeAllowlist(payload.metadata?.allowedUrls));
         void setThemeId(payload.metadata?.themeId ?? "system");
       } catch (err: unknown) {
         console.error(`Failed to fetch drop "${id}":`, err);
         setError(formatDropLoadError(err));
         setDropContent(null);
+        setSourceAllowedUrls([...DEFAULT_IFRAME_ALLOWLIST]);
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchDrop();
-  }, [getDrop, hydrateSharePreferences, id, setThemeId]);
+  }, [getDrop, id, setThemeId]);
 
   useEffect(() => {
     if (!dropContent) {
@@ -108,7 +113,7 @@ const DropViewPage: React.FC = () => {
     const renderContent = async () => {
       try {
         const rendered = await renderMarkdownWithNullplug(dropContent, {
-          allowedUrls,
+          allowedUrls: sourceAllowedUrls,
           onFlush: (buffered) => {
             if (active) {
               setRenderedContent(buffered);
@@ -137,7 +142,7 @@ const DropViewPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [allowedUrls, dropContent]);
+  }, [dropContent, sourceAllowedUrls]);
 
   // Set document title based on drop content (basic version)
   const dropTitle = dropContent ? getMarkdownTitle(dropContent) : "";
@@ -229,7 +234,7 @@ const DropViewPage: React.FC = () => {
                 ? "Copy failed"
                 : "Copy"}
           </button>
-          <EnhancedMarkdown allowedUrls={allowedUrls}>
+          <EnhancedMarkdown allowedUrls={sourceAllowedUrls}>
             {renderedContent ?? dropContent}
           </EnhancedMarkdown>
         </div>
