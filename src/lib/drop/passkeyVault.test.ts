@@ -125,6 +125,7 @@ describe("passkey vault", () => {
     const ttlMs = 8_000;
     const localStorage = createLocalStorageMock();
     installWindow(localStorage);
+    localStorage.setItem(PASSKEY_PROTECTION_STORAGE_KEY, "1");
 
     const nowSpy = jest
       .spyOn(Date, "now")
@@ -164,6 +165,7 @@ describe("passkey vault", () => {
     const ttlMs = 8_000;
     const localStorage = createLocalStorageMock();
     installWindow(localStorage);
+    localStorage.setItem(PASSKEY_PROTECTION_STORAGE_KEY, "1");
 
     const nowSpy = jest.spyOn(Date, "now");
     nowSpy.mockReturnValue(10_000);
@@ -199,6 +201,7 @@ describe("passkey vault", () => {
     const ttlMs = 8_000;
     const localStorage = createLocalStorageMock();
     installWindow(localStorage);
+    localStorage.setItem(PASSKEY_PROTECTION_STORAGE_KEY, "1");
 
     const nowSpy = jest
       .spyOn(Date, "now")

@@ -17,8 +17,14 @@ import {
 } from "../lib/iframeAllowlist";
 
 export interface MarkdownRenderCallbacks {
-  onLinkClick?: (href: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
-  onImageClick?: (src: string, event: React.MouseEvent<HTMLImageElement>) => void;
+  onLinkClick?: (
+    href: string,
+    event: React.MouseEvent<HTMLAnchorElement>,
+  ) => void;
+  onImageClick?: (
+    src: string,
+    event: React.MouseEvent<HTMLImageElement>,
+  ) => void;
   onCodeRender?: (context: {
     language: string;
     inline: boolean;
@@ -41,9 +47,13 @@ interface EnhancedMarkdownProps {
   allowedUrls?: readonly string[];
 }
 
-const asList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []);
+const asList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 
-const unique = (values: readonly string[]): string[] => Array.from(new Set(values));
+const unique = (values: readonly string[]): string[] =>
+  Array.from(new Set(values));
 
 const sanitizeSchema = {
   ...defaultSchema,
@@ -84,7 +94,12 @@ const sanitizeSchema = {
   },
   protocols: {
     ...(defaultSchema.protocols ?? {}),
-    href: unique([...(defaultSchema.protocols?.href ?? []), "http", "https", "mailto"]),
+    href: unique([
+      ...(defaultSchema.protocols?.href ?? []),
+      "http",
+      "https",
+      "mailto",
+    ]),
     src: unique([...(defaultSchema.protocols?.src ?? []), "https"]),
   },
 } as const;
@@ -168,14 +183,18 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
             <table className="min-w-full divide-y divide-border" {...props} />
           </div>
         ),
-        thead: ({ node, ...props }) => <thead className="bg-card/60" {...props} />,
+        thead: ({ node, ...props }) => (
+          <thead className="bg-card/60" {...props} />
+        ),
         th: ({ node, ...props }) => (
           <th
             className="px-4 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider"
             {...props}
           />
         ),
-        td: ({ node, ...props }) => <td className="px-4 py-3 text-sm" {...props} />,
+        td: ({ node, ...props }) => (
+          <td className="px-4 py-3 text-sm" {...props} />
+        ),
         tr: ({ node, isHeader, ...props }) => (
           <tr className={isHeader ? "" : "border-t border-border"} {...props} />
         ),
@@ -241,7 +260,11 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
                 title={typeof title === "string" ? title : "Embedded content"}
                 width={typeof width === "string" ? width : "100%"}
                 height={typeof height === "string" ? height : "360"}
-                allow={typeof allow === "string" ? allow : "fullscreen; encrypted-media"}
+                allow={
+                  typeof allow === "string"
+                    ? allow
+                    : "fullscreen; encrypted-media"
+                }
                 allowFullScreen
                 loading={typeof loading === "string" ? loading : "lazy"}
                 referrerPolicy={

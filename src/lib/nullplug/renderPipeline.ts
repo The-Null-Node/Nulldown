@@ -6,6 +6,7 @@ import { parseNullplugBlocks } from "./parser";
 import { resolveNullplug } from "./registry";
 import type {
   NullplugContext,
+  NullplugHandler,
   PluginBlock,
   RenderableDiff,
   RenderablePatch,
@@ -35,6 +36,11 @@ export class RenderCancelledError extends Error {
 
 const DEFAULT_CHUNK_SIZE = 6;
 const DEFAULT_FLUSH_INTERVAL_MS = 24;
+
+interface ResolvedPluginBlock {
+  block: PluginBlock;
+  handler: NullplugHandler;
+}
 
 const normalizeEmbedCandidate = (rawUrl: string): string => {
   const trimmed = rawUrl.trim();
@@ -183,7 +189,19 @@ export const renderMarkdownWithNullplug = async (
   );
 
   const escapedSource = escapeRawIframeSyntax(source);
-  const blocks = parseNullplugBlocks(escapedSource);
+  const blocks = parseNullplugBlocks(escapedSource)
+    .map((block) => {
+      const handler = resolveNullplug(block.id);
+      if (!handler) {
+        return null;
+      }
+
+      return {
+        block,
+        handler,
+      };
+    })
+    .filter((entry): entry is ResolvedPluginBlock => entry !== null);
 
   if (!blocks.length) {
     options.onFlush?.(escapedSource, buildChunkStatus(0, 0));
@@ -197,15 +215,12 @@ export const renderMarkdownWithNullplug = async (
   for (let index = 0; index < blocks.length; index += 1) {
     guardCancellation(options.shouldCancel);
 
-    const block = blocks[index];
-    const handler = resolveNullplug(block.id);
+    const { block, handler } = blocks[index];
 
-    if (handler) {
-      const patch = await handler(context, block.content, block);
-      const diff = toRenderableDiff(block, patch);
-      if (diff) {
-        diffs.push(diff);
-      }
+    const patch = await handler(context, block.content, block);
+    const diff = toRenderableDiff(block, patch);
+    if (diff) {
+      diffs.push(diff);
     }
 
     const processedBlocks = index + 1;

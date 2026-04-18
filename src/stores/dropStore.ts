@@ -210,7 +210,7 @@ const parseSyntaxMode = (value: string | null): EditorSyntaxMode =>
   normalizeSyntaxMode(value ?? "rendered");
 
 const parsePasskeyProtectionEnabled = (value: string | null): boolean =>
-  value === null ? true : value === "1" || value === "true";
+  value === null ? false : value === "1" || value === "true";
 
 const parseAllowedUrls = (value: string | null): string[] => {
   if (!value) {
@@ -604,11 +604,13 @@ const resolveDropOwnershipRecord = async (
       localError,
       remoteError,
     );
-    console.error("[dropStore] " + resolutionError.message);
+    console.error(`[dropStore] ${resolutionError.message}`);
     throw resolutionError;
   }
 
-  console.warn('[dropStore] resolveDropOwnership could not resolve "' + id + '" in local or remote providers.');
+  console.warn(
+    `[dropStore] resolveDropOwnership could not resolve "${id}" in local or remote providers.`,
+  );
 
   return null;
 };
@@ -617,7 +619,7 @@ const DEFAULT_SETTINGS_SNAPSHOT: DropSettingsSnapshot = {
   mode: "online",
   shareVisibility: "unlisted",
   draftDiffPolicy: "edited-only",
-  passkeyProtectionEnabled: true,
+  passkeyProtectionEnabled: false,
   syntaxMode: "rendered",
   allowedUrls: [...DEFAULT_IFRAME_ALLOWLIST],
 };

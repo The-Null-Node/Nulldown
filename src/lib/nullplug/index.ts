@@ -6,7 +6,11 @@ export {
   type RenderChunkStatus,
   type RenderPipelineOptions,
 } from "./renderPipeline";
-export { parseNullplugBlocks, parsePluginId } from "./parser";
+export {
+  parseNullplugBlocks,
+  parsePluginId,
+  parsePluginInvocation,
+} from "./parser";
 export type {
   NullplugContext,
   NullplugHandler,

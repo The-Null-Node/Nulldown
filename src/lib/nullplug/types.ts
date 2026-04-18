@@ -1,5 +1,6 @@
 export interface PluginBlock {
   id: string;
+  args: string | null;
   start: number;
   end: number;
   content: string;

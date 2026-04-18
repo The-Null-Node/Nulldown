@@ -312,7 +312,7 @@ export class PasskeyVault {
   }
 
   private parsePasskeyProtection(value: string | null): boolean {
-    return value === null ? true : value === "1" || value === "true";
+    return value === null ? false : value === "1" || value === "true";
   }
 
   private readPasskeyProtectionFromLocalStorage(): boolean | null {
@@ -354,7 +354,7 @@ export class PasskeyVault {
       return localValue;
     }
 
-    return true;
+    return false;
   }
 
   private async ensurePasskeyCredential(

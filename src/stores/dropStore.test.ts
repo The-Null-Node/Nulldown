@@ -113,7 +113,6 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     url: "https://example.com/d/local",
     scope: "local",
   });
-
   localGet.mockResolvedValue(null);
   remoteGet.mockResolvedValue(null);
   remoteCreate.mockResolvedValue({
@@ -328,6 +327,16 @@ describe("dropStore resolution", () => {
     expect(useDropStore.getState().offlineMode).toBe(true);
     expect(useDropStore.getState().syncTargetProvider).toBe("local");
     expect(useDropStore.getState().unlockPolicy).toBe("vault-only");
+  });
+
+  it("defaults passkey protection to disabled when unset", async () => {
+    const { useDropStore } = await loadDropStore();
+
+    expect(useDropStore.getState().passkeyProtectionEnabled).toBe(false);
+
+    await useDropStore.getState().hydrateSharePreferences();
+
+    expect(useDropStore.getState().passkeyProtectionEnabled).toBe(false);
   });
 
   it("detects when the current account owns a drop", async () => {
