@@ -9,6 +9,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import useEditorStore, { type EditorState } from "../stores/editorStore";
 import useStorageStore from "../stores/storageStore";
 import useDropStore, { type OwnedDropRecord } from "../stores/dropStore";
+import { normalizeNetworkAllowlist } from "../lib/networkAllowlist";
 import { useDraftStorage } from "../hooks/useLocalStorage";
 import EditorToolbar from "./editor/components/EditorToolbar";
 import ErrorBanner from "./editor/components/ErrorBanner";
@@ -144,6 +145,7 @@ const EditorPage: React.FC = () => {
     (state) => state.resolveDropOwnership,
   );
   const listOwnedDrops = useDropStore((state) => state.listOwnedDrops);
+  const setAllowedUrls = useDropStore((state) => state.setAllowedUrls);
   const [modeSwitching, setModeSwitching] = useState(false);
 
   const setDraftContent = useCallback(
@@ -203,6 +205,16 @@ const EditorPage: React.FC = () => {
   const handleToggleShareVisibility = useCallback(() => {
     void setShareVisibility(nextVisibility(shareVisibility));
   }, [setShareVisibility, shareVisibility]);
+
+  const handleRequestAddNetworkHost = useCallback(
+    (host: string) => {
+      const normalized = normalizeNetworkAllowlist([host]);
+      if (!normalized.length) return;
+      const next = normalizeNetworkAllowlist([...allowedUrls, ...normalized]);
+      void setAllowedUrls(next);
+    },
+    [allowedUrls, setAllowedUrls],
+  );
 
   useEffect(() => {
     if (ignoreDraftLoadRef.current) {
@@ -916,6 +928,7 @@ const EditorPage: React.FC = () => {
           canRequestEdit={canRequestEdit}
           allowedUrls={allowedUrls}
           onRequestEdit={handlePreviewRequestEdit}
+          onRequestAddNetworkHost={handleRequestAddNetworkHost}
         />
       </div>
     </div>

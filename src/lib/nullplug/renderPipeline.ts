@@ -1,7 +1,7 @@
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  normalizeIframeAllowlist,
-} from "../iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  normalizeNetworkAllowlist,
+} from "../networkAllowlist";
 import { parseNullplugBlocks } from "./parser";
 import { resolveNullplug } from "./registry";
 import type {
@@ -85,11 +85,11 @@ const createTrustedEmbedResolver = (allowedHosts: ReadonlySet<string>) => {
 };
 
 const createNullplugContext = (allowedUrls: readonly string[]): NullplugContext => {
-  const allowedEmbedHosts = new Set(normalizeIframeAllowlist(allowedUrls));
+  const allowedNetworkHosts = new Set(normalizeNetworkAllowlist(allowedUrls));
 
   return {
-    allowedEmbedHosts,
-    toTrustedEmbedUrl: createTrustedEmbedResolver(allowedEmbedHosts),
+    allowedNetworkHosts,
+    toTrustedEmbedUrl: createTrustedEmbedResolver(allowedNetworkHosts),
   };
 };
 
@@ -181,7 +181,7 @@ export const renderMarkdownWithNullplug = async (
   source: string,
   options: RenderPipelineOptions = {},
 ): Promise<string> => {
-  const allowedUrls = options.allowedUrls ?? DEFAULT_IFRAME_ALLOWLIST;
+  const allowedUrls = options.allowedUrls ?? DEFAULT_NETWORK_ALLOWLIST;
   const chunkSize = Math.max(1, options.chunkSize ?? DEFAULT_CHUNK_SIZE);
   const flushIntervalMs = Math.max(
     10,

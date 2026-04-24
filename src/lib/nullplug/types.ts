@@ -20,7 +20,7 @@ export interface RenderableReplacement {
 export type RenderablePatch = RenderableDiff | RenderableReplacement;
 
 export interface NullplugContext {
-  allowedEmbedHosts: ReadonlySet<string>;
+  allowedNetworkHosts: ReadonlySet<string>;
   toTrustedEmbedUrl: (rawUrl: string) => string | null;
 }
 

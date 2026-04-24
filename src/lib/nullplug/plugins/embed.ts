@@ -66,8 +66,17 @@ const embed: NullplugHandler & { pluginId: string } = Object.assign(
 
     const trustedSource = ctx.toTrustedEmbedUrl(rawSource);
     if (!trustedSource) {
+      let host = "";
+      try {
+        const parsed = new URL(
+          /^https?:\/\//i.test(rawSource) ? rawSource : `https://${rawSource}`,
+        );
+        host = escapeHtmlAttribute(parsed.hostname);
+      } catch {
+        host = escapeHtmlAttribute(rawSource);
+      }
       return {
-        text: "> Blocked embed from untrusted host.",
+        text: `<div class="blocked-embed" data-host="${host}">Blocked embed from untrusted host.</div>`,
       };
     }
 

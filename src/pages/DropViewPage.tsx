@@ -12,9 +12,9 @@ import {
 } from "../lib/nullplug";
 import { toUserFacingDropError } from "../lib/drop/userErrors";
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  resolveIframeAllowlist,
-} from "../lib/iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  resolveNetworkAllowlist,
+} from "../lib/networkAllowlist";
 import { toShortDropId } from "../../shared/drop/id";
 import { upsertRecentExternalDrop } from "../lib/drop/recentExternalDrops";
 
@@ -38,7 +38,7 @@ const DropViewPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sourceAllowedUrls, setSourceAllowedUrls] = useState<string[]>([
-    ...DEFAULT_IFRAME_ALLOWLIST,
+    ...DEFAULT_NETWORK_ALLOWLIST,
   ]);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
@@ -109,13 +109,13 @@ const DropViewPage: React.FC = () => {
         if (!payload) {
           setError("We couldn't find that drop.");
           setDropContent(null);
-          setSourceAllowedUrls([...DEFAULT_IFRAME_ALLOWLIST]);
+          setSourceAllowedUrls([...DEFAULT_NETWORK_ALLOWLIST]);
           return;
         }
 
         setDropContent(payload.content);
         setRenderedContent(payload.content);
-        setSourceAllowedUrls(resolveIframeAllowlist(payload.metadata?.allowedUrls));
+        setSourceAllowedUrls(resolveNetworkAllowlist(payload.metadata?.allowedUrls));
         void setThemeId(payload.metadata?.themeId ?? "system");
 
         if (!ownedByCurrentAccount) {
@@ -131,7 +131,7 @@ const DropViewPage: React.FC = () => {
         console.error(`Failed to fetch drop "${id}":`, err);
         setError(formatDropLoadError(err));
         setDropContent(null);
-        setSourceAllowedUrls([...DEFAULT_IFRAME_ALLOWLIST]);
+        setSourceAllowedUrls([...DEFAULT_NETWORK_ALLOWLIST]);
       } finally {
         setIsLoading(false);
       }

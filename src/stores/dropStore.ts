@@ -26,19 +26,18 @@ import type {
   DropVisibility,
 } from "../../shared/drop/types";
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  normalizeIframeAllowlist,
-  parseIframeAllowlistInput,
-} from "../lib/iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  normalizeNetworkAllowlist,
+  parseNetworkAllowlistInput,
+} from "../lib/networkAllowlist";
 
 const OFFLINE_MODE_KEY = "nulldown_offline_mode";
 const SHARE_VISIBILITY_KEY = "nulldown_share_visibility";
 const UNLOCK_POLICY_KEY = "nulldown_unlock_policy";
 const SYNC_TARGET_PROVIDER_KEY = "nulldown_sync_target_provider";
 const DRAFT_DIFF_POLICY_KEY = "nulldown_draft_diff_policy";
-const ALLOWED_URLS_KEY = "nulldown_allowed_urls";
+const NETWORK_ALLOWLIST_KEY = "nulldown_network_allowlist";
 const SYNTAX_MODE_KEY = "nulldown_syntax_mode";
-const LEGACY_IFRAME_ALLOWLIST_KEY = "nulldown_iframe_allowlist";
 
 const dropProviderRegistry = getDefaultDropProviderRegistry();
 
@@ -66,7 +65,7 @@ export interface DropSettingsState {
   editor: {
     syntaxMode: EditorSyntaxMode;
   };
-  embeds: {
+  network: {
     allowedUrls: string[];
   };
 }
@@ -214,21 +213,21 @@ const parsePasskeyProtectionEnabled = (value: string | null): boolean =>
 
 const parseAllowedUrls = (value: string | null): string[] => {
   if (!value) {
-    return [...DEFAULT_IFRAME_ALLOWLIST];
+    return [...DEFAULT_NETWORK_ALLOWLIST];
   }
 
   try {
     const parsed = JSON.parse(value) as unknown;
     if (Array.isArray(parsed)) {
-      return normalizeIframeAllowlist(
+      return normalizeNetworkAllowlist(
         parsed.filter((entry): entry is string => typeof entry === "string"),
       );
     }
   } catch {
-    return parseIframeAllowlistInput(value);
+    return parseNetworkAllowlistInput(value);
   }
 
-  return parseIframeAllowlistInput(value);
+  return parseNetworkAllowlistInput(value);
 };
 
 const serializeMode = (mode: DropMode) => mode;
@@ -236,7 +235,7 @@ const serializeMode = (mode: DropMode) => mode;
 const serializeBoolean = (enabled: boolean) => (enabled ? "1" : "0");
 
 const serializeAllowedUrls = (urls: readonly string[]): string =>
-  JSON.stringify(normalizeIframeAllowlist(urls));
+  JSON.stringify(normalizeNetworkAllowlist(urls));
 
 const deriveSyncTargetProvider = (mode: DropMode): DropProviderScope =>
   mode === "offline" ? "local" : "remote";
@@ -279,7 +278,7 @@ const createSettingsObject = (
   editor: {
     syntaxMode: snapshot.syntaxMode,
   },
-  embeds: {
+  network: {
     allowedUrls: [...snapshot.allowedUrls],
   },
 });
@@ -292,7 +291,7 @@ const normalizeSettingsSnapshot = (
   draftDiffPolicy: normalizeDraftDiffPolicy(snapshot.draftDiffPolicy),
   passkeyProtectionEnabled: Boolean(snapshot.passkeyProtectionEnabled),
   syntaxMode: normalizeSyntaxMode(snapshot.syntaxMode),
-  allowedUrls: normalizeIframeAllowlist(snapshot.allowedUrls),
+  allowedUrls: normalizeNetworkAllowlist(snapshot.allowedUrls),
 });
 
 const settingsSnapshotFromState = (state: {
@@ -368,9 +367,9 @@ const SETTINGS_DESCRIPTORS: {
     serialize: (value) => value,
   },
   allowedUrls: {
-    storageKey: ALLOWED_URLS_KEY,
+    storageKey: NETWORK_ALLOWLIST_KEY,
     apply: (snapshot, value) => {
-      snapshot.allowedUrls = normalizeIframeAllowlist(value);
+      snapshot.allowedUrls = normalizeNetworkAllowlist(value);
     },
     serialize: (value) => serializeAllowedUrls(value),
   },
@@ -621,7 +620,7 @@ const DEFAULT_SETTINGS_SNAPSHOT: DropSettingsSnapshot = {
   draftDiffPolicy: "edited-only",
   passkeyProtectionEnabled: false,
   syntaxMode: "rendered",
-  allowedUrls: [...DEFAULT_IFRAME_ALLOWLIST],
+  allowedUrls: [...DEFAULT_NETWORK_ALLOWLIST],
 };
 
 const useDropStore = create<DropStoreState>((set, get) => ({
@@ -666,7 +665,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
       readPersistedItem(DRAFT_DIFF_POLICY_KEY),
       readPersistedItem(PASSKEY_PROTECTION_STORAGE_KEY),
       readPersistedItem(SYNTAX_MODE_KEY),
-      readPersistedItem(ALLOWED_URLS_KEY),
+      readPersistedItem(NETWORK_ALLOWLIST_KEY),
       readPersistedItem(UNLOCK_POLICY_KEY),
       readPersistedItem(SYNC_TARGET_PROVIDER_KEY),
     ]);
@@ -679,9 +678,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
         ? "private"
         : parseShareVisibility(storedVisibility);
 
-    const allowedUrls = parseAllowedUrls(
-      storedAllowedUrls ?? (await readPersistedItem(LEGACY_IFRAME_ALLOWLIST_KEY)),
-    );
+    const allowedUrls = parseAllowedUrls(storedAllowedUrls);
 
     const nextSnapshot = normalizeSettingsSnapshot({
       mode,
@@ -709,7 +706,7 @@ const useDropStore = create<DropStoreState>((set, get) => ({
       ),
       writePersistedItem(SYNTAX_MODE_KEY, nextSnapshot.syntaxMode),
       writePersistedItem(
-        ALLOWED_URLS_KEY,
+        NETWORK_ALLOWLIST_KEY,
         serializeAllowedUrls(nextSnapshot.allowedUrls),
       ),
     ]);

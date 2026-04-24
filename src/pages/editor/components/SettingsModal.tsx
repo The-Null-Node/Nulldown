@@ -29,10 +29,10 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  normalizeIframeAllowlist,
-  parseIframeAllowlistInput,
-} from "../../../lib/iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  normalizeNetworkAllowlist,
+  parseNetworkAllowlistInput,
+} from "../../../lib/networkAllowlist";
 
 interface SettingsModalProps {
   open: boolean;
@@ -296,12 +296,12 @@ const AccessSection: React.FC<AccessSectionProps> = ({
   </SettingsSection>
 );
 
-interface EmbedsSectionProps {
+interface NetworkSectionProps {
   allowedUrls: readonly string[];
   onAllowedUrlsChange: (urls: readonly string[]) => void;
 }
 
-const EmbedsSection: React.FC<EmbedsSectionProps> = ({
+const NetworkSection: React.FC<NetworkSectionProps> = ({
   allowedUrls,
   onAllowedUrlsChange,
 }) => {
@@ -312,12 +312,12 @@ const EmbedsSection: React.FC<EmbedsSectionProps> = ({
   }, [allowedUrls]);
 
   const parsedAllowlist = useMemo(
-    () => parseIframeAllowlistInput(draftValue),
+    () => parseNetworkAllowlistInput(draftValue),
     [draftValue],
   );
 
   const activeAllowlist = useMemo(
-    () => normalizeIframeAllowlist(allowedUrls),
+    () => normalizeNetworkAllowlist(allowedUrls),
     [allowedUrls],
   );
 
@@ -325,7 +325,7 @@ const EmbedsSection: React.FC<EmbedsSectionProps> = ({
     parsedAllowlist.join("\n") !== activeAllowlist.join("\n");
 
   return (
-    <SettingsSection title="Embeds">
+    <SettingsSection title="Network">
       <div className="space-y-2">
         <Label htmlFor="allowed-urls-input" className={FIELD_LABEL_CLASS}>
           Allowed URLs
@@ -339,7 +339,7 @@ const EmbedsSection: React.FC<EmbedsSectionProps> = ({
           spellCheck={false}
           rows={6}
           className="w-full rounded-md border border-input bg-transparent px-2.5 py-2 text-sm text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          placeholder={DEFAULT_IFRAME_ALLOWLIST.join("\n")}
+          placeholder={DEFAULT_NETWORK_ALLOWLIST.join("\n")}
         />
         <p className="text-xs text-muted">
           One URL or host per line. Only these URLs are allowed for embeds.
@@ -360,7 +360,7 @@ const EmbedsSection: React.FC<EmbedsSectionProps> = ({
             size="sm"
             variant="outline"
             onClick={() => {
-              const defaults = [...DEFAULT_IFRAME_ALLOWLIST];
+              const defaults = [...DEFAULT_NETWORK_ALLOWLIST];
               setDraftValue(defaults.join("\n"));
               onAllowedUrlsChange(defaults);
             }}
@@ -543,7 +543,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
 
             <Separator className="bg-border" />
 
-            <EmbedsSection
+            <NetworkSection
               allowedUrls={allowedUrls}
               onAllowedUrlsChange={(urls) => {
                 void setAllowedUrls(urls);

@@ -1,13 +1,13 @@
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  normalizeIframeAllowlist,
-  parseIframeAllowlistInput,
-  resolveIframeAllowlist,
-} from "./iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  normalizeNetworkAllowlist,
+  parseNetworkAllowlistInput,
+  resolveNetworkAllowlist,
+} from "./networkAllowlist";
 
-describe("iframe allowlist", () => {
+describe("network allowlist", () => {
   it("normalizes hostnames from URLs and raw host entries", () => {
-    const normalized = normalizeIframeAllowlist([
+    const normalized = normalizeNetworkAllowlist([
       "https://www.youtube.com/watch?v=demo",
       "player.vimeo.com",
       "HTTPS://YOUTU.BE/abc",
@@ -25,7 +25,7 @@ describe("iframe allowlist", () => {
   });
 
   it("deduplicates entries while preserving order", () => {
-    const normalized = normalizeIframeAllowlist([
+    const normalized = normalizeNetworkAllowlist([
       "youtube.com",
       "https://youtube.com",
       "www.youtube.com",
@@ -36,7 +36,7 @@ describe("iframe allowlist", () => {
   });
 
   it("parses newline and comma separated input", () => {
-    const parsed = parseIframeAllowlistInput(
+    const parsed = parseNetworkAllowlistInput(
       "https://youtube.com\nplayer.vimeo.com, youtu.be",
     );
 
@@ -44,16 +44,16 @@ describe("iframe allowlist", () => {
   });
 
   it("keeps a non-empty built-in default allowlist", () => {
-    expect(DEFAULT_IFRAME_ALLOWLIST.length).toBeGreaterThan(0);
+    expect(DEFAULT_NETWORK_ALLOWLIST.length).toBeGreaterThan(0);
   });
 
   it("falls back to built-in defaults when no source allowlist exists", () => {
-    expect(resolveIframeAllowlist(undefined)).toEqual([...DEFAULT_IFRAME_ALLOWLIST]);
+    expect(resolveNetworkAllowlist(undefined)).toEqual([...DEFAULT_NETWORK_ALLOWLIST]);
   });
 
   it("uses normalized source allowlists when present", () => {
     expect(
-      resolveIframeAllowlist([
+      resolveNetworkAllowlist([
         "HTTPS://WWW.YouTube.com/embed/demo",
         "player.vimeo.com",
         "not a host",

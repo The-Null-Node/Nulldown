@@ -26,6 +26,7 @@ interface RenderedEditPaneProps {
   onChange: (value: string) => void;
   onSelectionChange: (start: number, end: number) => void;
   onExitEdit: () => void;
+  onRequestAddNetworkHost?: (host: string) => void;
 }
 
 interface CaretState {
@@ -148,6 +149,7 @@ const RenderedEditPane: React.FC<RenderedEditPaneProps> = ({
   onChange,
   onSelectionChange,
   onExitEdit,
+  onRequestAddNetworkHost,
 }) => {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [hasFocus, setHasFocus] = useState(false);
@@ -340,7 +342,10 @@ const RenderedEditPane: React.FC<RenderedEditPaneProps> = ({
 
         <div className="relative z-0 p-4">
           <Suspense fallback={<LoadingFallback />}>
-            <EnhancedMarkdown allowedUrls={allowedUrls}>
+            <EnhancedMarkdown
+              allowedUrls={allowedUrls}
+              callbacks={{ onRequestAddNetworkHost }}
+            >
               {renderedMarkdown || sourceMarkdown || "*Click to edit*"}
             </EnhancedMarkdown>
           </Suspense>
