@@ -419,6 +419,27 @@ const handleGet = async (
 
     const url = new URL(request.url);
     const cursorParam = url.searchParams.get("cursor");
+
+    if (cursorParam === "__latest__") {
+      const all = await readDiffLog(env.R2_BUCKET, id);
+      const maxSeq = all.length > 0 ? Math.max(...all.map((event) => event.seq)) : -1;
+      const response: DropDiffPollResponse = {
+        events: [],
+        cursor: maxSeq >= 0 ? String(maxSeq) : null,
+      };
+      logger.logEnd(200, {
+        dropRef: toLogRef(id),
+        returned: 0,
+        totalStored: all.length,
+      });
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     const afterSeq = cursorParam !== null ? Number.parseInt(cursorParam, 10) : -1;
     const excludeClient = url.searchParams.get("excludeClient") || undefined;
     const limitParam = Number.parseInt(url.searchParams.get("limit") || "", 10);

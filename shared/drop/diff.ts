@@ -13,6 +13,7 @@ export interface DropDiffEvent {
   dropId: string;
   sourceClientId: string;
   createdAt: number;
+  snapshotId?: number;
   ops: DropDiffOp[];
 }
 
@@ -47,6 +48,7 @@ export const isDropDiffEvent = (value: unknown): value is DropDiffEvent => {
   if (!isString(value.dropId)) return false;
   if (!isString(value.sourceClientId)) return false;
   if (!isNumber(value.createdAt)) return false;
+  if (value.snapshotId !== undefined && !isNumber(value.snapshotId)) return false;
   if (!Array.isArray(value.ops)) return false;
   return value.ops.every((op) => isDropDiffOp(op));
 };

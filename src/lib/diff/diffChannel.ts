@@ -4,6 +4,7 @@ import type {
   DropDiffOp,
   DropDiffPollResponse,
 } from "../../../shared/drop/diff";
+import { emitEvent } from "../events/eventBus";
 
 export type DiffChannelListener = (events: DropDiffEvent[]) => void;
 
@@ -15,6 +16,7 @@ export interface DiffChannel {
   subscribe: (listener: DiffChannelListener) => () => void;
   start: () => void;
   stop: () => void;
+  readonly cursor: string | null;
 }
 
 const generateClientId = (): string => {
@@ -38,6 +40,7 @@ export interface RemoteDiffChannelOptions {
   dropId: string;
   clientId?: string;
   pollIntervalMs?: number;
+  initialCursor?: string | null;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
@@ -49,10 +52,30 @@ export const createRemoteDiffChannel = (
   const clientId = options.clientId ?? generateClientId();
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
-  let cursor: string | null = null;
+  let cursor: string | null = options.initialCursor ?? null;
   let timer: ReturnType<typeof setInterval> | null = null;
   const listeners = new Set<DiffChannelListener>();
   let localSeq = 0;
+  let hasCompletedHandshake = false;
+
+  const doHandshake = async (): Promise<void> => {
+    const response = await fetch(
+      `/api/diff/${encodeURIComponent(dropId)}?cursor=__latest__`,
+    );
+
+    if (!response.ok) {
+      console.error("[diff-channel] Handshake failed:", response.statusText);
+      return;
+    }
+
+    const data = (await response.json()) as DropDiffPollResponse;
+
+    if (data.cursor !== null) {
+      cursor = data.cursor;
+    }
+
+    hasCompletedHandshake = true;
+  };
 
   const publish = async (ops: DropDiffOp[]): Promise<void> => {
     if (!ops.length) return;
@@ -110,8 +133,13 @@ export const createRemoteDiffChannel = (
 
   const runPoll = async () => {
     try {
+      if (!hasCompletedHandshake) {
+        await doHandshake();
+      }
+
       const events = await poll();
       if (events.length > 0) {
+        emitEvent("diff:received", { dropId, count: events.length });
         listeners.forEach((listener) => {
           try {
             listener(events);
@@ -154,6 +182,9 @@ export const createRemoteDiffChannel = (
     subscribe,
     start,
     stop,
+    get cursor() {
+      return cursor;
+    },
   };
 };
 
