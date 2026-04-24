@@ -12,19 +12,26 @@ import "katex/dist/katex.min.css";
 import { useTheme } from "../theme/themeContext";
 import { syntaxThemeStyles } from "../theme/syntaxThemes";
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  normalizeIframeAllowlist,
-} from "../lib/iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  normalizeNetworkAllowlist,
+} from "../lib/networkAllowlist";
 
 export interface MarkdownRenderCallbacks {
-  onLinkClick?: (href: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
-  onImageClick?: (src: string, event: React.MouseEvent<HTMLImageElement>) => void;
+  onLinkClick?: (
+    href: string,
+    event: React.MouseEvent<HTMLAnchorElement>,
+  ) => void;
+  onImageClick?: (
+    src: string,
+    event: React.MouseEvent<HTMLImageElement>,
+  ) => void;
   onCodeRender?: (context: {
     language: string;
     inline: boolean;
     content: string;
   }) => void;
   onBlockedEmbed?: (src: string) => void;
+  onRequestAddNetworkHost?: (host: string) => void;
 }
 
 export interface MarkdownRendererModule {
@@ -41,15 +48,20 @@ interface EnhancedMarkdownProps {
   allowedUrls?: readonly string[];
 }
 
-const asList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []);
+const asList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 
-const unique = (values: readonly string[]): string[] => Array.from(new Set(values));
+const unique = (values: readonly string[]): string[] =>
+  Array.from(new Set(values));
 
 const sanitizeSchema = {
   ...defaultSchema,
   tagNames: unique([
     ...asList(defaultSchema.tagNames),
     "iframe",
+    "div",
     "u",
     "ins",
     "sub",
@@ -76,6 +88,7 @@ const sanitizeSchema = {
       "sandbox",
       "frameborder",
     ],
+    div: ["className", "dataHost"],
     u: [...asList(defaultSchema.attributes?.u)],
     ins: [...asList(defaultSchema.attributes?.ins)],
     sub: [...asList(defaultSchema.attributes?.sub)],
@@ -84,7 +97,12 @@ const sanitizeSchema = {
   },
   protocols: {
     ...(defaultSchema.protocols ?? {}),
-    href: unique([...(defaultSchema.protocols?.href ?? []), "http", "https", "mailto"]),
+    href: unique([
+      ...(defaultSchema.protocols?.href ?? []),
+      "http",
+      "https",
+      "mailto",
+    ]),
     src: unique([...(defaultSchema.protocols?.src ?? []), "https"]),
   },
 } as const;
@@ -96,7 +114,7 @@ const defaultRehypePlugins: PluggableList = [
   rehypeKatex as any,
 ];
 
-const getTrustedIframeUrl = (rawSrc: string, allowedHosts: Set<string>) => {
+const getTrustedNetworkUrl = (rawSrc: string, allowedHosts: Set<string>) => {
   try {
     const parsed = new URL(rawSrc);
     if (parsed.protocol !== "https:") {
@@ -113,6 +131,29 @@ const getTrustedIframeUrl = (rawSrc: string, allowedHosts: Set<string>) => {
     return null;
   }
 };
+
+const BlockedEmbed: React.FC<{
+  host: string;
+  onAdd?: (host: string) => void;
+}> = ({ host, onAdd }) => (
+  <div className="group relative my-4 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted">
+    <div className="flex items-center justify-between gap-2">
+      <span>Blocked embed from untrusted host.</span>
+      {onAdd && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onAdd(host);
+          }}
+          className="shrink-0 rounded bg-accent px-2 py-1 text-[11px] font-medium text-accent-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-accent/90"
+        >
+          + Add to whitelist
+        </button>
+      )}
+    </div>
+  </div>
+);
 
 const mergeModules = (
   baseComponents: Components,
@@ -151,13 +192,13 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
     className = "prose max-w-none",
     callbacks,
     modules,
-    allowedUrls = DEFAULT_IFRAME_ALLOWLIST,
+    allowedUrls = DEFAULT_NETWORK_ALLOWLIST,
   }) => {
     const { theme } = useTheme();
     const syntaxStyle =
       syntaxThemeStyles[theme.syntax] ?? syntaxThemeStyles.vscDarkPlus;
     const trustedHosts = useMemo(
-      () => new Set(normalizeIframeAllowlist(allowedUrls)),
+      () => new Set(normalizeNetworkAllowlist(allowedUrls)),
       [allowedUrls],
     );
 
@@ -168,14 +209,18 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
             <table className="min-w-full divide-y divide-border" {...props} />
           </div>
         ),
-        thead: ({ node, ...props }) => <thead className="bg-card/60" {...props} />,
+        thead: ({ node, ...props }) => (
+          <thead className="bg-card/60" {...props} />
+        ),
         th: ({ node, ...props }) => (
           <th
             className="px-4 py-3 text-left text-xs font-medium text-muted uppercase tracking-wider"
             {...props}
           />
         ),
-        td: ({ node, ...props }) => <td className="px-4 py-3 text-sm" {...props} />,
+        td: ({ node, ...props }) => (
+          <td className="px-4 py-3 text-sm" {...props} />
+        ),
         tr: ({ node, isHeader, ...props }) => (
           <tr className={isHeader ? "" : "border-t border-border"} {...props} />
         ),
@@ -206,6 +251,22 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
             }}
           />
         ),
+        div: ({ node, className: divClass, dataHost, children, ...props }) => {
+          if (divClass === "blocked-embed" && typeof dataHost === "string") {
+            return (
+              <BlockedEmbed
+                host={dataHost}
+                onAdd={callbacks?.onRequestAddNetworkHost}
+              />
+            );
+          }
+
+          return (
+            <div className={divClass} {...props}>
+              {children}
+            </div>
+          );
+        },
         iframe: ({
           node,
           src,
@@ -219,17 +280,25 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
           ...props
         }) => {
           const rawSrc = typeof src === "string" ? src : "";
-          const safeSrc = getTrustedIframeUrl(rawSrc, trustedHosts);
+          const safeSrc = getTrustedNetworkUrl(rawSrc, trustedHosts);
 
           if (!safeSrc) {
             if (rawSrc && callbacks?.onBlockedEmbed) {
               callbacks.onBlockedEmbed(rawSrc);
             }
 
+            let host = "";
+            try {
+              host = new URL(rawSrc).hostname;
+            } catch {
+              host = rawSrc;
+            }
+
             return (
-              <div className="my-4 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted">
-                Blocked embed from untrusted host.
-              </div>
+              <BlockedEmbed
+                host={host}
+                onAdd={callbacks?.onRequestAddNetworkHost}
+              />
             );
           }
 
@@ -241,7 +310,11 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
                 title={typeof title === "string" ? title : "Embedded content"}
                 width={typeof width === "string" ? width : "100%"}
                 height={typeof height === "string" ? height : "360"}
-                allow={typeof allow === "string" ? allow : "fullscreen; encrypted-media"}
+                allow={
+                  typeof allow === "string"
+                    ? allow
+                    : "fullscreen; encrypted-media"
+                }
                 allowFullScreen
                 loading={typeof loading === "string" ? loading : "lazy"}
                 referrerPolicy={

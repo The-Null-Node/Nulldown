@@ -12,6 +12,7 @@ interface PreviewPaneProps {
   canRequestEdit?: boolean;
   allowedUrls?: readonly string[];
   onRequestEdit?: (selection: { start: number; end: number } | null) => void;
+  onRequestAddNetworkHost?: (host: string) => void;
 }
 
 const getPlainTextOffsetFromPoint = (
@@ -60,6 +61,7 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
   canRequestEdit = false,
   allowedUrls,
   onRequestEdit,
+  onRequestAddNetworkHost,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -102,7 +104,10 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
       }`}
     >
       <Suspense fallback={<LoadingFallback />}>
-        <EnhancedMarkdown allowedUrls={allowedUrls}>
+        <EnhancedMarkdown
+          allowedUrls={allowedUrls}
+          callbacks={{ onRequestAddNetworkHost }}
+        >
           {markdown || "*Click to edit*"}
         </EnhancedMarkdown>
       </Suspense>

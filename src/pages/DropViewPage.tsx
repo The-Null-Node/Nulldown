@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { useParams, Link, type LinkProps } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import EnhancedMarkdown from "../components/EnhancedMarkdown";
 import { useTheme } from "../theme/themeContext";
 import useDropStore from "../stores/dropStore";
@@ -10,9 +12,11 @@ import {
 } from "../lib/nullplug";
 import { toUserFacingDropError } from "../lib/drop/userErrors";
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  resolveIframeAllowlist,
-} from "../lib/iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  resolveNetworkAllowlist,
+} from "../lib/networkAllowlist";
+import { toShortDropId } from "../../shared/drop/id";
+import { upsertRecentExternalDrop } from "../lib/drop/recentExternalDrops";
 
 function useDocumentTitle(title: string) {
   useEffect(() => {
@@ -34,13 +38,18 @@ const DropViewPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sourceAllowedUrls, setSourceAllowedUrls] = useState<string[]>([
-    ...DEFAULT_IFRAME_ALLOWLIST,
+    ...DEFAULT_NETWORK_ALLOWLIST,
   ]);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
   );
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [editHref, setEditHref] = useState<string>("/");
   const { setThemeId } = useTheme();
   const getDrop = useDropStore((state) => state.getDrop);
+  const resolveDropOwnership = useDropStore(
+    (state) => state.resolveDropOwnership,
+  );
   const LinkComponent = Link as unknown as React.FC<LinkProps>;
 
   const handleCopyContent = async () => {
@@ -77,30 +86,59 @@ const DropViewPage: React.FC = () => {
       setError(null);
 
       try {
+        let resolvedDropId = id;
+        let ownedByCurrentAccount = false;
+
+        try {
+          const ownership = await resolveDropOwnership(id);
+          if (ownership) {
+            resolvedDropId = ownership.id;
+            ownedByCurrentAccount = ownership.ownedByCurrentAccount;
+          }
+        } catch (ownershipError) {
+          console.error("Failed to resolve drop ownership:", ownershipError);
+        }
+
+        setEditHref(
+          `/?${ownedByCurrentAccount ? "edit" : "clone"}=${encodeURIComponent(
+            resolvedDropId,
+          )}`,
+        );
+
         const payload = await getDrop(id);
         if (!payload) {
           setError("We couldn't find that drop.");
           setDropContent(null);
-          setSourceAllowedUrls([...DEFAULT_IFRAME_ALLOWLIST]);
+          setSourceAllowedUrls([...DEFAULT_NETWORK_ALLOWLIST]);
           return;
         }
 
         setDropContent(payload.content);
         setRenderedContent(payload.content);
-        setSourceAllowedUrls(resolveIframeAllowlist(payload.metadata?.allowedUrls));
+        setSourceAllowedUrls(resolveNetworkAllowlist(payload.metadata?.allowedUrls));
         void setThemeId(payload.metadata?.themeId ?? "system");
+
+        if (!ownedByCurrentAccount) {
+          upsertRecentExternalDrop({
+            id: resolvedDropId,
+            title:
+              getMarkdownTitle(payload.content) ||
+              `Nulldown ${toShortDropId(resolvedDropId)}`,
+            preview: payload.content,
+          });
+        }
       } catch (err: unknown) {
         console.error(`Failed to fetch drop "${id}":`, err);
         setError(formatDropLoadError(err));
         setDropContent(null);
-        setSourceAllowedUrls([...DEFAULT_IFRAME_ALLOWLIST]);
+        setSourceAllowedUrls([...DEFAULT_NETWORK_ALLOWLIST]);
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchDrop();
-  }, [getDrop, id, setThemeId]);
+  }, [getDrop, id, resolveDropOwnership, setThemeId]);
 
   useEffect(() => {
     if (!dropContent) {
@@ -173,7 +211,7 @@ const DropViewPage: React.FC = () => {
           <div className="flex items-center justify-center gap-4 text-sm">
             {id && (
               <LinkComponent
-                to={`/?clone=${id}`}
+                to={editHref}
                 className="text-accent hover:underline"
               >
                 Edit Nulldown
@@ -197,7 +235,7 @@ const DropViewPage: React.FC = () => {
           <div className="flex items-center justify-center gap-4 text-sm">
             {id && (
               <LinkComponent
-                to={`/?clone=${id}`}
+                to={editHref}
                 className="text-accent hover:underline"
               >
                 Edit Nulldown
@@ -213,7 +251,7 @@ const DropViewPage: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 flex flex-col bg-background">
+    <div className="fixed inset-0 flex min-h-0 flex-col bg-background">
       <div className="border-b border-border p-4 flex justify-between items-center">
         <LinkComponent to="/" className="text-sm text-accent hover:underline">
           NULLDOWN
@@ -221,40 +259,82 @@ const DropViewPage: React.FC = () => {
         <div className="text-xs text-muted">Drop ID: {id}</div>
       </div>
 
-      <div className="flex-1 overflow-auto p-4">
-        <div className="group relative max-w-3xl mx-auto bg-card border border-border rounded-md p-6">
-          <button
-            type="button"
-            onClick={handleCopyContent}
-            className="absolute right-3 top-3 rounded-md border border-border bg-background/90 px-2.5 py-1 text-xs text-foreground opacity-0 transition-opacity hover:bg-background focus:opacity-100 focus-visible:opacity-100 group-hover:opacity-100"
+      <div
+        className={
+          isExpanded ? "flex-1 min-h-0 overflow-hidden p-4" : "flex-1 overflow-auto p-4"
+        }
+      >
+        <div
+          className={
+            isExpanded
+              ? "mx-auto flex h-full w-full flex-col gap-4"
+              : "mx-auto max-w-3xl"
+          }
+        >
+          <div
+            className={
+              isExpanded
+                ? "group relative min-h-0 flex-1 overflow-auto rounded-md border border-border bg-card p-6"
+                : "group relative rounded-md border border-border bg-card p-6"
+            }
           >
-            {copyState === "copied"
-              ? "Copied"
-              : copyState === "error"
-                ? "Copy failed"
-                : "Copy"}
-          </button>
-          <EnhancedMarkdown allowedUrls={sourceAllowedUrls}>
-            {renderedContent ?? dropContent}
-          </EnhancedMarkdown>
-        </div>
+            <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsExpanded((current) => !current)}
+                className="border-border bg-background/90 text-foreground shadow-sm backdrop-blur-sm hover:bg-background"
+                aria-pressed={isExpanded}
+                aria-label={isExpanded ? "Collapse content" : "Expand content"}
+                title={isExpanded ? "Collapse content" : "Expand content"}
+              >
+                {isExpanded ? (
+                  <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                {isExpanded ? "Collapse" : "Expand"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleCopyContent}
+                className="border-border bg-background/90 text-foreground shadow-sm backdrop-blur-sm hover:bg-background"
+              >
+                {copyState === "copied"
+                  ? "Copied"
+                  : copyState === "error"
+                    ? "Copy failed"
+                    : "Copy"}
+              </Button>
+            </div>
 
-        <div className="mt-6 text-center">
-          <div className="inline-flex items-center gap-4 text-sm">
-            {id && (
+            <div className="pt-10">
+              <EnhancedMarkdown allowedUrls={sourceAllowedUrls}>
+                {renderedContent ?? dropContent}
+              </EnhancedMarkdown>
+            </div>
+          </div>
+
+          <div className={isExpanded ? "text-center" : "mt-6 text-center"}>
+            <div className="inline-flex items-center gap-4 text-sm">
+              {id && (
+                <LinkComponent
+                  to={editHref}
+                  className="text-accent hover:underline transition-colors"
+                >
+                  Edit Nulldown
+                </LinkComponent>
+              )}
               <LinkComponent
-                to={`/?clone=${id}`}
+                to="/"
                 className="text-accent hover:underline transition-colors"
               >
-                Edit Nulldown
+                New Nulldown
               </LinkComponent>
-            )}
-            <LinkComponent
-              to="/"
-              className="text-accent hover:underline transition-colors"
-            >
-              New Nulldown
-            </LinkComponent>
+            </div>
           </div>
         </div>
       </div>

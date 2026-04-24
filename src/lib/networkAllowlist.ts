@@ -1,4 +1,4 @@
-export const DEFAULT_IFRAME_ALLOWLIST = [
+export const DEFAULT_NETWORK_ALLOWLIST = [
   "www.youtube.com",
   "youtube.com",
   "www.youtube-nocookie.com",
@@ -9,7 +9,7 @@ export const DEFAULT_IFRAME_ALLOWLIST = [
 
 const HOSTNAME_PATTERN = /^[a-z0-9.-]+$/;
 
-const normalizeIframeAllowlistEntry = (value: string): string | null => {
+const normalizeNetworkAllowlistEntry = (value: string): string | null => {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) {
     return null;
@@ -37,14 +37,14 @@ const normalizeIframeAllowlistEntry = (value: string): string | null => {
   }
 };
 
-export const normalizeIframeAllowlist = (
+export const normalizeNetworkAllowlist = (
   values: readonly string[],
 ): string[] => {
   const seen = new Set<string>();
   const normalized: string[] = [];
 
   values.forEach((value) => {
-    const host = normalizeIframeAllowlistEntry(value);
+    const host = normalizeNetworkAllowlistEntry(value);
     if (!host) {
       return;
     }
@@ -64,24 +64,24 @@ export const normalizeIframeAllowlist = (
   return normalized;
 };
 
-export const resolveIframeAllowlist = (
+export const resolveNetworkAllowlist = (
   value: unknown,
-  fallback: readonly string[] = DEFAULT_IFRAME_ALLOWLIST,
+  fallback: readonly string[] = DEFAULT_NETWORK_ALLOWLIST,
 ): string[] => {
   if (!Array.isArray(value)) {
-    return normalizeIframeAllowlist(fallback);
+    return normalizeNetworkAllowlist(fallback);
   }
 
-  return normalizeIframeAllowlist(
+  return normalizeNetworkAllowlist(
     value.filter((entry): entry is string => typeof entry === "string"),
   );
 };
 
-export const parseIframeAllowlistInput = (input: string): string[] => {
+export const parseNetworkAllowlistInput = (input: string): string[] => {
   const entries = input
     .split(/[\n,]/)
     .map((entry) => entry.trim())
     .filter(Boolean);
 
-  return normalizeIframeAllowlist(entries);
+  return normalizeNetworkAllowlist(entries);
 };

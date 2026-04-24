@@ -71,7 +71,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
     () => [
       { key: "H", label: "Heading", hint: "##" },
       { key: "I", label: "Image", hint: "![alt]" },
-      { key: "E", label: "Embed", hint: "plugin(embed)" },
+      { key: "E", label: "Embed", hint: "embed(...)" },
     ],
     [],
   );
@@ -187,7 +187,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
         const normalizedSelection = selection.trim();
         const defaultUrl = "https://www.youtube.com/embed/";
         const selectedUrl = normalizedSelection || defaultUrl;
-        const template = `\`\`\`plugin("embed")\n${selectedUrl}\n\`\`\``;
+        const template = `\`\`\`embed\n${selectedUrl}\n\`\`\``;
 
         if (selection) {
           const value =

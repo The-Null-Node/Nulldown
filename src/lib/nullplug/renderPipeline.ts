@@ -1,11 +1,12 @@
 import {
-  DEFAULT_IFRAME_ALLOWLIST,
-  normalizeIframeAllowlist,
-} from "../iframeAllowlist";
+  DEFAULT_NETWORK_ALLOWLIST,
+  normalizeNetworkAllowlist,
+} from "../networkAllowlist";
 import { parseNullplugBlocks } from "./parser";
 import { resolveNullplug } from "./registry";
 import type {
   NullplugContext,
+  NullplugHandler,
   PluginBlock,
   RenderableDiff,
   RenderablePatch,
@@ -35,6 +36,11 @@ export class RenderCancelledError extends Error {
 
 const DEFAULT_CHUNK_SIZE = 6;
 const DEFAULT_FLUSH_INTERVAL_MS = 24;
+
+interface ResolvedPluginBlock {
+  block: PluginBlock;
+  handler: NullplugHandler;
+}
 
 const normalizeEmbedCandidate = (rawUrl: string): string => {
   const trimmed = rawUrl.trim();
@@ -79,11 +85,11 @@ const createTrustedEmbedResolver = (allowedHosts: ReadonlySet<string>) => {
 };
 
 const createNullplugContext = (allowedUrls: readonly string[]): NullplugContext => {
-  const allowedEmbedHosts = new Set(normalizeIframeAllowlist(allowedUrls));
+  const allowedNetworkHosts = new Set(normalizeNetworkAllowlist(allowedUrls));
 
   return {
-    allowedEmbedHosts,
-    toTrustedEmbedUrl: createTrustedEmbedResolver(allowedEmbedHosts),
+    allowedNetworkHosts,
+    toTrustedEmbedUrl: createTrustedEmbedResolver(allowedNetworkHosts),
   };
 };
 
@@ -175,7 +181,7 @@ export const renderMarkdownWithNullplug = async (
   source: string,
   options: RenderPipelineOptions = {},
 ): Promise<string> => {
-  const allowedUrls = options.allowedUrls ?? DEFAULT_IFRAME_ALLOWLIST;
+  const allowedUrls = options.allowedUrls ?? DEFAULT_NETWORK_ALLOWLIST;
   const chunkSize = Math.max(1, options.chunkSize ?? DEFAULT_CHUNK_SIZE);
   const flushIntervalMs = Math.max(
     10,
@@ -183,7 +189,19 @@ export const renderMarkdownWithNullplug = async (
   );
 
   const escapedSource = escapeRawIframeSyntax(source);
-  const blocks = parseNullplugBlocks(escapedSource);
+  const blocks = parseNullplugBlocks(escapedSource)
+    .map((block) => {
+      const handler = resolveNullplug(block.id);
+      if (!handler) {
+        return null;
+      }
+
+      return {
+        block,
+        handler,
+      };
+    })
+    .filter((entry): entry is ResolvedPluginBlock => entry !== null);
 
   if (!blocks.length) {
     options.onFlush?.(escapedSource, buildChunkStatus(0, 0));
@@ -197,15 +215,12 @@ export const renderMarkdownWithNullplug = async (
   for (let index = 0; index < blocks.length; index += 1) {
     guardCancellation(options.shouldCancel);
 
-    const block = blocks[index];
-    const handler = resolveNullplug(block.id);
+    const { block, handler } = blocks[index];
 
-    if (handler) {
-      const patch = await handler(context, block.content, block);
-      const diff = toRenderableDiff(block, patch);
-      if (diff) {
-        diffs.push(diff);
-      }
+    const patch = await handler(context, block.content, block);
+    const diff = toRenderableDiff(block, patch);
+    if (diff) {
+      diffs.push(diff);
     }
 
     const processedBlocks = index + 1;

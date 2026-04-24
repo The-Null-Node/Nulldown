@@ -1,5 +1,6 @@
 export interface PluginBlock {
   id: string;
+  args: string | null;
   start: number;
   end: number;
   content: string;
@@ -19,7 +20,7 @@ export interface RenderableReplacement {
 export type RenderablePatch = RenderableDiff | RenderableReplacement;
 
 export interface NullplugContext {
-  allowedEmbedHosts: ReadonlySet<string>;
+  allowedNetworkHosts: ReadonlySet<string>;
   toTrustedEmbedUrl: (rawUrl: string) => string | null;
 }
 
