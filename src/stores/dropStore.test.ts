@@ -360,6 +360,42 @@ describe("dropStore resolution", () => {
     expect(remoteCrudGet).not.toHaveBeenCalled();
   });
 
+  it("detects ownership from promoted remote payload metadata", async () => {
+    const { useDropStore, localCrudGet, remoteCrudGet } = await loadDropStore();
+    const originalFetch = global.fetch;
+
+    localCrudGet.mockResolvedValue(null);
+    remoteCrudGet.mockResolvedValue(null);
+    global.fetch = jest.fn(async () =>
+      new Response(
+        JSON.stringify({
+          content: "promoted branch content",
+          metadata: { ownerAccountId: "account-1" },
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Drop-Canonical-Id": "promoted_drop_123456",
+          },
+        },
+      ),
+    ) as typeof fetch;
+
+    try {
+      const result = await useDropStore
+        .getState()
+        .resolveDropOwnership("promoted_drop_123456");
+
+      expect(result).toEqual({
+        id: "promoted_drop_123456",
+        ownedByCurrentAccount: true,
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it("passes upsert options when overwriting an existing drop", async () => {
     const { useDropStore, localCreate } = await loadDropStore();
     const payload: DropPayload = {
