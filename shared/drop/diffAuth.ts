@@ -13,6 +13,7 @@ export interface DiffAuthRegisterRequest {
 
 export interface DiffAuthRegisterResponse {
   dropId: string;
+  branchId: string;
   clientId: string;
   kid: string;
   wrappedSecret: string;

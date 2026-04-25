@@ -9,6 +9,7 @@ const CLIENT_OR_KID_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/;
 export interface DiffAuthCredentialRecord {
   version: 1;
   dropId: string;
+  branchId: string;
   clientId: string;
   kid: string;
   secret: string;
@@ -119,6 +120,7 @@ export const isDiffAuthCredentialRecord = (
 
   if (
     !isString(value.dropId) ||
+    !isString(value.branchId) ||
     !isString(value.clientId) ||
     !isString(value.kid)
   ) {

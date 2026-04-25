@@ -18,6 +18,14 @@ import {
   readDiffAuthCredential,
   sanitizeDiffAuthToken,
 } from "../_lib/diffAuth";
+import { readRequestAccountId } from "../_lib/accountAuth";
+import { type DropBranchRecord } from "../../../shared/drop/branch";
+import {
+  appendEventsToBranch,
+  readBranch,
+  readBranchDiffLog,
+  resolveBranchForActor,
+} from "../_lib/branchState";
 import { resolveRemoteDropId } from "../_lib/dropId";
 import { createRequestLogger, toLogRef } from "../_lib/logger";
 
@@ -25,16 +33,14 @@ interface Env {
   R2_BUCKET: R2Bucket;
   DIFF_WEBHOOK_SECRET?: string;
   DIFF_AUTH_MAX_SKEW_MS?: string;
+  PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
 }
 
 const textEncoder = new TextEncoder();
 
-const DIFF_KEY_PREFIX = "__drop_diffs__/";
 const MAX_EVENTS_PER_REQUEST = 100;
 const MAX_POLL_LIMIT = 200;
 const DEFAULT_POLL_LIMIT = 50;
-
-const diffKey = (dropId: string) => `${DIFF_KEY_PREFIX}${dropId}`;
 
 const resolveId = (id: string | string[] | undefined) =>
   typeof id === "string" ? id : Array.isArray(id) ? id[0] : "";
@@ -102,42 +108,10 @@ const verifyHmacSignature = async (
   );
 };
 
-const readDiffLog = async (
-  bucket: R2Bucket,
-  dropId: string,
-): Promise<DropDiffEvent[]> => {
-  const object = await bucket.get(diffKey(dropId));
-  if (!object) {
-    return [];
-  }
-
-  const text = await new Response(object.body).text();
-  if (!text.trim()) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "object")) {
-      return parsed as DropDiffEvent[];
-    }
-  } catch {
-    // fallback to empty log
-  }
-
-  return [];
-};
-
-const writeDiffLog = async (
-  bucket: R2Bucket,
-  dropId: string,
-  events: DropDiffEvent[],
-): Promise<void> => {
-  await bucket.put(diffKey(dropId), JSON.stringify(events), {
-    httpMetadata: {
-      contentType: "application/json",
-    },
-  });
+const resolveRequestedBranchId = (request: Request): string | null => {
+  const url = new URL(request.url);
+  const branchId = url.searchParams.get("branchId");
+  return sanitizeDiffAuthToken(branchId);
 };
 
 const verifyDiffRequestAuth = async (
@@ -145,7 +119,15 @@ const verifyDiffRequestAuth = async (
   request: Request,
   dropId: string,
   rawBody: string,
-): Promise<{ ok: true; mode: "provider" | "env" | "none" } | { ok: false; status: number; message: string; reason: string }> => {
+): Promise<
+  | {
+      ok: true;
+      mode: "provider" | "env" | "none";
+      branchId: string | null;
+      clientId: string | null;
+    }
+  | { ok: false; status: number; message: string; reason: string }
+> => {
   const signature = request.headers.get(DIFF_SIGNATURE_HEADER)?.trim() || "";
   const clientId = sanitizeDiffAuthToken(request.headers.get(DIFF_CLIENT_ID_HEADER));
   const kid = sanitizeDiffAuthToken(request.headers.get(DIFF_SECRET_KID_HEADER));
@@ -206,6 +188,8 @@ const verifyDiffRequestAuth = async (
     return {
       ok: true,
       mode: "provider",
+      branchId: credential.branchId,
+      clientId,
     };
   }
 
@@ -246,13 +230,50 @@ const verifyDiffRequestAuth = async (
     return {
       ok: true,
       mode: "env",
+      branchId: null,
+      clientId: null,
     };
   }
 
   return {
     ok: true,
     mode: "none",
+    branchId: null,
+    clientId,
   };
+};
+
+const resolveBranchForRequest = async (
+  env: Env,
+  dropId: string,
+  request: Request,
+  auth: { mode: "provider" | "env" | "none"; branchId: string | null; clientId: string | null },
+): Promise<DropBranchRecord> => {
+  if (auth.branchId) {
+    const branch = await readBranch(env.R2_BUCKET, dropId, auth.branchId);
+    if (!branch) {
+      throw new Error("Resolved branch credential points to a missing branch.");
+    }
+    return branch;
+  }
+
+  const accountId = readRequestAccountId(request);
+  const requestedBranchId = resolveRequestedBranchId(request);
+  if (requestedBranchId) {
+    const branch = await readBranch(env.R2_BUCKET, dropId, requestedBranchId);
+    if (branch) {
+      return branch;
+    }
+  }
+
+  const resolved = await resolveBranchForActor(
+    env.R2_BUCKET,
+    dropId,
+    accountId,
+    auth.clientId,
+    env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
+  );
+  return resolved.branch;
 };
 
 const handlePost = async (
@@ -317,13 +338,15 @@ const handlePost = async (
       );
     }
 
+    const branch = await resolveBranchForRequest(env, id, request, auth);
+
     const mismatch = parsed.events.find((event) => event.dropId !== id);
     if (mismatch) {
       logger.logEnd(400, { reason: "drop_id_mismatch", dropRef: toLogRef(id) });
       return new Response("Event dropId does not match route.", { status: 400 });
     }
 
-    const existing = await readDiffLog(env.R2_BUCKET, id);
+    const existing = await readBranchDiffLog(env.R2_BUCKET, id, branch.branchId);
     const existingIds = new Set(existing.map((event) => event.eventId));
     const newEvents = parsed.events.filter((event) => !existingIds.has(event.eventId));
 
@@ -333,22 +356,26 @@ const handlePost = async (
       const sequenced = newEvents.map((event, index) => ({
         ...event,
         seq: nextSeqBase + index,
+        snapshotId: branch.headSnapshotId + 1,
       }));
-
+      const appended = await appendEventsToBranch(env.R2_BUCKET, branch, sequenced);
       const merged = [...existing, ...sequenced];
-      await writeDiffLog(env.R2_BUCKET, id, merged);
 
       logger.logEnd(200, {
         dropRef: toLogRef(id),
+        branchRef: toLogRef(branch.branchId),
         authMode: auth.mode,
         accepted: sequenced.length,
         deduplicated: parsed.events.length - newEvents.length,
         totalStored: merged.length,
+        snapshotId: appended.snapshot.snapshotId,
       });
 
       return new Response(
         JSON.stringify({
           accepted: sequenced.length,
+          branchId: branch.branchId,
+          snapshotId: appended.snapshot.snapshotId,
           totalStored: merged.length,
         }),
         {
@@ -362,6 +389,7 @@ const handlePost = async (
 
     logger.logEnd(200, {
       dropRef: toLogRef(id),
+      branchRef: toLogRef(branch.branchId),
       authMode: auth.mode,
       accepted: 0,
       deduplicated: parsed.events.length,
@@ -371,6 +399,8 @@ const handlePost = async (
     return new Response(
       JSON.stringify({
         accepted: 0,
+        branchId: branch.branchId,
+        snapshotId: branch.headSnapshotId,
         totalStored: existing.length,
       }),
       {
@@ -421,17 +451,23 @@ const handleGet = async (
     const cursorParam = url.searchParams.get("cursor");
 
     if (cursorParam === "__latest__") {
-      const all = await readDiffLog(env.R2_BUCKET, id);
+      const branch = await resolveBranchForRequest(env, id, request, {
+        mode: "none",
+        branchId: resolveRequestedBranchId(request),
+        clientId: sanitizeDiffAuthToken(url.searchParams.get("excludeClient")),
+      });
+      const all = await readBranchDiffLog(env.R2_BUCKET, id, branch.branchId);
       const maxSeq = all.length > 0 ? Math.max(...all.map((event) => event.seq)) : -1;
       const response: DropDiffPollResponse = {
         events: [],
         cursor: maxSeq >= 0 ? String(maxSeq) : null,
       };
-      logger.logEnd(200, {
-        dropRef: toLogRef(id),
-        returned: 0,
-        totalStored: all.length,
-      });
+        logger.logEnd(200, {
+          dropRef: toLogRef(id),
+          branchRef: toLogRef(branch.branchId),
+          returned: 0,
+          totalStored: all.length,
+        });
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: {
@@ -447,7 +483,13 @@ const handleGet = async (
       ? Math.max(1, Math.min(MAX_POLL_LIMIT, limitParam))
       : DEFAULT_POLL_LIMIT;
 
-    const all = await readDiffLog(env.R2_BUCKET, id);
+    const branch = await resolveBranchForRequest(env, id, request, {
+      mode: "none",
+      branchId: resolveRequestedBranchId(request),
+      clientId: sanitizeDiffAuthToken(excludeClient),
+    });
+
+    const all = await readBranchDiffLog(env.R2_BUCKET, id, branch.branchId);
 
     let filtered = all.filter((event) => event.seq > afterSeq);
     if (excludeClient) {
@@ -464,6 +506,7 @@ const handleGet = async (
 
     logger.logEnd(200, {
       dropRef: toLogRef(id),
+      branchRef: toLogRef(branch.branchId),
       returned: page.length,
       totalStored: all.length,
     });

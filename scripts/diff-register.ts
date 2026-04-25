@@ -27,6 +27,7 @@ const main = async () => {
   await upsertCredential(credential);
 
   console.log(`Registered diff auth for drop ${credential.dropId}`);
+  console.log(`Branch ID: ${credential.branchId}`);
   console.log(`Client ID: ${credential.clientId}`);
   console.log(`KID: ${credential.kid}`);
   console.log(`Expires At: ${credential.expiresAt ?? "none"}`);

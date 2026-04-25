@@ -6,6 +6,8 @@ import {
   sanitizeDiffAuthToken,
   toBase64,
 } from "../../_lib/diffAuth";
+import { readRequestAccountId } from "../../_lib/accountAuth";
+import { resolveBranchForActor } from "../../_lib/branchState";
 import { resolveRemoteDropId } from "../../_lib/dropId";
 import { createRequestLogger, serializeError, toLogRef } from "../../_lib/logger";
 import type {
@@ -16,6 +18,7 @@ import type {
 interface Env {
   R2_BUCKET: R2Bucket;
   DIFF_AUTH_TTL_MS?: string;
+  PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
 }
 
 const textEncoder = new TextEncoder();
@@ -106,6 +109,14 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     const clientId =
       sanitizeDiffAuthToken(body.clientId) ??
       `client_${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : Date.now().toString(36)}`;
+    const accountId = readRequestAccountId(request);
+    const { branch } = await resolveBranchForActor(
+      env.R2_BUCKET,
+      id,
+      accountId,
+      clientId,
+      env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
+    );
     const kid =
       typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
@@ -139,6 +150,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     await putDiffAuthCredential(env.R2_BUCKET, {
       version: 1,
       dropId: id,
+      branchId: branch.branchId,
       clientId,
       kid,
       secret,
@@ -148,6 +160,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
 
     const responseBody: DiffAuthRegisterResponse = {
       dropId: id,
+      branchId: branch.branchId,
       clientId,
       kid,
       wrappedSecret: toBase64(wrappedSecret),
@@ -155,10 +168,11 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     };
 
     logger.logEnd(200, {
-      dropRef: toLogRef(id),
-      clientIdRef: toLogRef(clientId),
-      kidRef: toLogRef(kid),
-      expiresAt,
+        dropRef: toLogRef(id),
+        branchRef: toLogRef(branch.branchId),
+        clientIdRef: toLogRef(clientId),
+        kidRef: toLogRef(kid),
+        expiresAt,
     });
 
     return new Response(JSON.stringify(responseBody), {

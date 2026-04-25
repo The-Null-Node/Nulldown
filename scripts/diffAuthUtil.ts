@@ -18,6 +18,7 @@ export interface DiffClientKeysRecord {
 export interface DiffCredentialEntry {
   version: 1;
   dropId: string;
+  branchId: string;
   baseUrl: string;
   clientId: string;
   kid: string;
@@ -181,6 +182,7 @@ export const registerCredentialAndUnwrap = async (
   return {
     version: 1,
     dropId: payload.dropId,
+    branchId: payload.branchId,
     baseUrl,
     clientId: payload.clientId,
     kid: payload.kid,

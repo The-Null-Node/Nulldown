@@ -1,5 +1,11 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import { isDropEnvelopeV1 } from "../../../shared/drop/types";
+import {
+  fromBase64,
+  parseProviderPrivateKey,
+  parseRequesterPublicKey,
+  toBase64,
+} from "../_lib/providerEscrow";
 import { resolveRemoteDropId } from "../_lib/dropId";
 import { createRequestLogger, serializeError, toLogRef } from "../_lib/logger";
 
@@ -14,54 +20,6 @@ interface UnlockRequestBody {
 
 const resolveId = (id: string | string[] | undefined) =>
   typeof id === "string" ? id : Array.isArray(id) ? id[0] : "";
-
-const fromBase64 = (value: string): Uint8Array => {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-
-  return bytes;
-};
-
-const toBase64 = (value: ArrayBuffer): string => {
-  const bytes = new Uint8Array(value);
-  let binary = "";
-
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-
-  return btoa(binary);
-};
-
-const parseProviderPrivateKey = async (raw: string): Promise<CryptoKey> => {
-  const jwk = JSON.parse(raw) as JsonWebKey;
-  return crypto.subtle.importKey(
-    "jwk",
-    jwk,
-    {
-      name: "RSA-OAEP",
-      hash: "SHA-256",
-    },
-    false,
-    ["decrypt"],
-  );
-};
-
-const parseRequesterPublicKey = async (jwk: JsonWebKey): Promise<CryptoKey> =>
-  crypto.subtle.importKey(
-    "jwk",
-    jwk,
-    {
-      name: "RSA-OAEP",
-      hash: "SHA-256",
-    },
-    false,
-    ["encrypt"],
-  );
 
 export const onRequestPost: PagesFunction<Env, "id"> = async ({
   env,
