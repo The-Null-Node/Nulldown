@@ -44,6 +44,9 @@ const editorDiffToDropDiffOps = (diffs: Diff[]): DropDiffOp[] =>
 
 export interface UseDiffChannelOptions {
   dropId: string | null;
+  branchId?: string | null;
+  accountId?: string | null;
+  clientId?: string | null;
   isOffline: boolean;
   editor: EditorDiffApi | null;
   enabled?: boolean;
@@ -51,6 +54,9 @@ export interface UseDiffChannelOptions {
 
 export function useDiffChannel({
   dropId,
+  branchId,
+  accountId,
+  clientId,
   isOffline,
   editor,
   enabled = true,
@@ -69,7 +75,12 @@ export function useDiffChannel({
 
     const channel = isOffline
       ? createLocalDiffChannel({ dropId })
-      : createRemoteDiffChannel({ dropId });
+      : createRemoteDiffChannel({
+          dropId,
+          branchId,
+          accountId,
+          clientId: clientId ?? undefined,
+        });
 
     channelRef.current = channel;
 
@@ -91,7 +102,7 @@ export function useDiffChannel({
       channel.stop();
       channelRef.current = null;
     };
-  }, [dropId, isOffline, enabled]);
+  }, [accountId, branchId, clientId, dropId, isOffline, enabled]);
 
   // Publish local diffs to channel
   const publishDiffs = useCallback(

@@ -566,6 +566,62 @@ const resolveDropOwnershipRecord = async (
   id: string,
 ): Promise<{ id: string; ownedByCurrentAccount: boolean } | null> => {
   const { accountId } = await getUnlockedVault();
+
+  const resolveLegacyOwnership = async (
+    scope: DropProviderScope,
+  ): Promise<{ id: string; ownedByCurrentAccount: boolean } | null> => {
+    if (scope === "local") {
+      const payload = await dropProviderRegistry.local.get(id);
+      const ownerAccountId =
+        typeof payload?.metadata?.ownerAccountId === "string"
+          ? payload.metadata.ownerAccountId
+          : null;
+
+      if (!ownerAccountId) {
+        return null;
+      }
+
+      return {
+        id,
+        ownedByCurrentAccount: ownerAccountId === accountId,
+      };
+    }
+
+    const response = await fetch(`/api/get/${encodeURIComponent(id)}`);
+    if (!response.ok) {
+      if (response.status === 404) {
+        return null;
+      }
+      throw new Error((await response.text()) || `Failed to fetch drop: ${response.statusText}`);
+    }
+
+    const canonicalId = response.headers.get("X-Drop-Canonical-Id") || id;
+    const contentType = response.headers.get("Content-Type") || "";
+    if (!contentType.includes("application/json")) {
+      return null;
+    }
+
+    const payload = (await response.json()) as unknown;
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+
+    const ownerAccountId =
+      typeof (payload as { metadata?: { ownerAccountId?: unknown } }).metadata
+        ?.ownerAccountId === "string"
+        ? (payload as { metadata: { ownerAccountId: string } }).metadata.ownerAccountId
+        : null;
+
+    if (!ownerAccountId) {
+      return null;
+    }
+
+    return {
+      id: canonicalId,
+      ownedByCurrentAccount: ownerAccountId === accountId,
+    };
+  };
+
   let localError: unknown = null;
 
   try {
@@ -575,6 +631,11 @@ const resolveDropOwnershipRecord = async (
         id: localRecord.id,
         ownedByCurrentAccount: localRecord.envelope.accountId === accountId,
       };
+    }
+
+    const localLegacy = await resolveLegacyOwnership("local");
+    if (localLegacy) {
+      return localLegacy;
     }
   } catch (error) {
     localError = error;
@@ -590,6 +651,11 @@ const resolveDropOwnershipRecord = async (
         id: remoteRecord.id,
         ownedByCurrentAccount: remoteRecord.envelope.accountId === accountId,
       };
+    }
+
+    const remoteLegacy = await resolveLegacyOwnership("remote");
+    if (remoteLegacy) {
+      return remoteLegacy;
     }
   } catch (error) {
     remoteError = error;

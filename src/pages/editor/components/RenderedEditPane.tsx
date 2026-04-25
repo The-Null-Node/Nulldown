@@ -20,7 +20,7 @@ interface RenderedEditPaneProps {
   visible?: boolean;
   sourceMarkdown: string;
   renderedMarkdown: string;
-  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   selectionLocked: boolean;
   allowedUrls?: readonly string[];
   onChange: (value: string) => void;

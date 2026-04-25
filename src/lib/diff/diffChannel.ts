@@ -4,6 +4,7 @@ import type {
   DropDiffOp,
   DropDiffPollResponse,
 } from "../../../shared/drop/diff";
+import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../shared/drop/branch";
 import { emitEvent } from "../events/eventBus";
 
 export type DiffChannelListener = (events: DropDiffEvent[]) => void;
@@ -38,6 +39,8 @@ const nextEventId = (clientId: string): string => {
 
 export interface RemoteDiffChannelOptions {
   dropId: string;
+  branchId?: string | null;
+  accountId?: string | null;
   clientId?: string;
   pollIntervalMs?: number;
   initialCursor?: string | null;
@@ -49,6 +52,8 @@ export const createRemoteDiffChannel = (
   options: RemoteDiffChannelOptions,
 ): DiffChannel => {
   const dropId = options.dropId;
+  const branchId = options.branchId ?? null;
+  const accountId = options.accountId ?? null;
   const clientId = options.clientId ?? generateClientId();
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
@@ -58,10 +63,35 @@ export const createRemoteDiffChannel = (
   let localSeq = 0;
   let hasCompletedHandshake = false;
 
+  const buildHeaders = (): HeadersInit => {
+    const headers: Record<string, string> = {
+      "x-nulldown-client-id": clientId,
+    };
+
+    if (accountId) {
+      headers[NULLDOWN_ACCOUNT_ID_HEADER] = accountId;
+    }
+
+    return headers;
+  };
+
+  const buildDiffUrl = (params?: URLSearchParams): string => {
+    const nextParams = new URLSearchParams(params);
+    if (branchId) {
+      nextParams.set("branchId", branchId);
+    }
+
+    const query = nextParams.toString();
+    return query
+      ? `/api/diff/${encodeURIComponent(dropId)}?${query}`
+      : `/api/diff/${encodeURIComponent(dropId)}`;
+  };
+
   const doHandshake = async (): Promise<void> => {
-    const response = await fetch(
-      `/api/diff/${encodeURIComponent(dropId)}?cursor=__latest__`,
-    );
+    const params = new URLSearchParams({ cursor: "__latest__" });
+    const response = await fetch(buildDiffUrl(params), {
+      headers: buildHeaders(),
+    });
 
     if (!response.ok) {
       console.error("[diff-channel] Handshake failed:", response.statusText);
@@ -94,9 +124,12 @@ export const createRemoteDiffChannel = (
       events: [event],
     };
 
-    const response = await fetch(`/api/diff/${encodeURIComponent(dropId)}`, {
+    const response = await fetch(buildDiffUrl(), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        ...buildHeaders(),
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(envelope),
     });
 
@@ -113,9 +146,9 @@ export const createRemoteDiffChannel = (
     }
     params.set("excludeClient", clientId);
 
-    const response = await fetch(
-      `/api/diff/${encodeURIComponent(dropId)}?${params.toString()}`,
-    );
+    const response = await fetch(buildDiffUrl(params), {
+      headers: buildHeaders(),
+    });
 
     if (!response.ok) {
       console.error("[diff-channel] Poll failed:", response.statusText);
@@ -279,5 +312,8 @@ export const createLocalDiffChannel = (
     subscribe,
     start,
     stop,
+    get cursor() {
+      return null;
+    },
   };
 };

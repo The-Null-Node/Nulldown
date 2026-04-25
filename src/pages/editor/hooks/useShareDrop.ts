@@ -11,6 +11,7 @@ export function useShareDrop(
   clearDraft: () => void | Promise<unknown>,
   snapshotMeta?: {
     baseDropId?: string | null;
+    rootDropId?: string | null;
     existingDropId?: string | null;
     snapshotId?: number | null;
     buildDraftPack?: () => DropDraftPackV1 | undefined;
@@ -55,6 +56,7 @@ export function useShareDrop(
         metadata: {
           themeId,
           baseDropId: snapshotMeta?.baseDropId ?? undefined,
+          rootDropId: snapshotMeta?.rootDropId ?? undefined,
           snapshotId: snapshotMeta?.snapshotId ?? undefined,
           allowedUrls,
         },
@@ -104,6 +106,7 @@ export function useShareDrop(
     snapshotMeta?.existingDropId,
     markdown,
     snapshotMeta?.baseDropId,
+    snapshotMeta?.rootDropId,
     snapshotMeta?.buildDraftPack,
     snapshotMeta?.snapshotId,
     themeId,
