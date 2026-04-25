@@ -259,3 +259,34 @@ export function mapPlainTextOffsetToMarkdownIndex(
 
   return markdown.length;
 }
+
+export function mapMarkdownIndexToPlainTextOffset(
+  markdown: string,
+  markdownIndex: number,
+): number {
+  const target = Math.max(0, Math.min(markdownIndex, markdown.length));
+
+  if (target === 0 || !markdown.length) {
+    return 0;
+  }
+
+  let plainOffset = 0;
+  let previousResolved = -1;
+
+  while (plainOffset <= markdown.length) {
+    const resolvedIndex = mapPlainTextOffsetToMarkdownIndex(markdown, plainOffset);
+    if (resolvedIndex >= target) {
+      return plainOffset;
+    }
+
+    if (resolvedIndex === previousResolved) {
+      plainOffset += 1;
+      continue;
+    }
+
+    previousResolved = resolvedIndex;
+    plainOffset += 1;
+  }
+
+  return plainOffset;
+}

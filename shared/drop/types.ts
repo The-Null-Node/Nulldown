@@ -36,6 +36,7 @@ export interface DropDraftPackV1 {
 export interface DropMetadata {
   themeId?: string;
   baseDropId?: string;
+  rootDropId?: string;
   snapshotId?: number;
   allowedUrls?: string[];
   [key: string]: unknown;

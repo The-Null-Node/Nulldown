@@ -24,7 +24,7 @@ interface EditorPaneProps {
 
   markdown: string;
   showPreview: boolean;
-  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   selectionLocked: boolean;
 
   onChange: (value: string) => void;
