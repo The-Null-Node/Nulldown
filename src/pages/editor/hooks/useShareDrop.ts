@@ -1,3 +1,9 @@
+/*
+Sharing always flows through the drop store so mode, visibility, unlock policy, and
+draft-pack behavior are derived from the same settings the rest of the editor uses.
+This hook prepares the payload and reports UI state; it does not talk to providers directly.
+*/
+
 import { useCallback, useState } from "react";
 import type { DropDraftPackV1 } from "../../../../shared/drop/types";
 import { useTheme } from "../../../theme/themeContext";
@@ -65,6 +71,7 @@ export function useShareDrop(
       const shouldPersistDraftPack =
         draftDiffPolicy === "always" ||
         Boolean(snapshotMeta?.existingDropId ?? snapshotMeta?.baseDropId);
+      // Existing drops keep edit lineage by default; brand-new shares only include it when policy says so.
       const draftPack = shouldPersistDraftPack
         ? snapshotMeta?.buildDraftPack?.()
         : undefined;

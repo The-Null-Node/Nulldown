@@ -1,3 +1,9 @@
+/*
+`/api/store` is the remote write boundary for drops. It accepts either plaintext payloads
+or already-sealed envelopes, optionally adds a provider signature, and reserves the same
+short-id alias namespace that `/d/:id` later resolves through.
+*/
+
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   DROP_ID_LENGTH,
@@ -11,10 +17,12 @@ import {
   serializeDropEnvelopeForProviderSignature,
   type DropEnvelopeV1,
 } from "../../shared/drop/types";
+import { syncPublicDropIndexForEnvelope } from "./_lib/dropIndex";
+import { removeRemoteAliasIfMatch, reserveRemoteAlias } from "./_lib/dropId";
 import {
-  removeRemoteAliasIfMatch,
-  reserveRemoteAlias,
-} from "./_lib/dropId";
+  R2DropObjectRepository,
+  type PutDropObjectResult,
+} from "./_lib/dropObjectRepository";
 import {
   createRequestLogger,
   serializeError,
@@ -31,7 +39,14 @@ interface Env {
 interface StoreRequestBody {
   id?: string;
   upsert?: boolean;
+  expectedRevision?: string;
   envelope?: unknown;
+}
+
+interface ApiErrorBody {
+  error: string;
+  code: string;
+  details?: Record<string, unknown>;
 }
 
 const textEncoder = new TextEncoder();
@@ -63,28 +78,13 @@ const sanitizeDropId = (value: string | undefined): string | null => {
   return trimmed;
 };
 
-const putDropObject = async (
-  bucket: R2Bucket,
-  id: string,
-  payload: string,
-  contentType: string,
-  upsert: boolean,
-): Promise<boolean> => {
-  if (upsert) {
-    await bucket.put(id, payload, {
-      httpMetadata: { contentType },
-    });
-    return true;
+const sanitizeRevision = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
   }
 
-  const created = await bucket.put(id, payload, {
-    onlyIf: {
-      etagDoesNotMatch: "*",
-    },
-    httpMetadata: { contentType },
-  });
-
-  return Boolean(created);
+  const trimmed = value.trim();
+  return trimmed || null;
 };
 
 const signProviderEnvelope = async (
@@ -130,7 +130,8 @@ const signProviderEnvelope = async (
   );
 
   const keyIdSource = jwk as unknown as Record<string, unknown>;
-  const keyId = typeof keyIdSource.kid === "string" ? keyIdSource.kid : "provider";
+  const keyId =
+    typeof keyIdSource.kid === "string" ? keyIdSource.kid : "provider";
 
   logger.debug("store.provider_signature_applied", {
     providerKeyId: keyId,
@@ -162,7 +163,12 @@ function validateEnv(env: Env): void {
 
 const parseStoreRequest = (parsed: unknown) => {
   if (typeof parsed !== "object" || parsed === null) {
-    return { id: null as string | null, upsert: false, payload: parsed };
+    return {
+      id: null as string | null,
+      upsert: false,
+      expectedRevision: null as string | null,
+      payload: parsed,
+    };
   }
 
   const body = parsed as StoreRequestBody;
@@ -170,6 +176,7 @@ const parseStoreRequest = (parsed: unknown) => {
     return {
       id: sanitizeDropId(body.id),
       upsert: Boolean(body.upsert),
+      expectedRevision: sanitizeRevision(body.expectedRevision),
       payload: body.envelope,
     };
   }
@@ -177,8 +184,29 @@ const parseStoreRequest = (parsed: unknown) => {
   return {
     id: sanitizeDropId(body.id),
     upsert: Boolean(body.upsert),
+    expectedRevision: sanitizeRevision(body.expectedRevision),
     payload: parsed,
   };
+};
+
+const jsonErrorResponse = (
+  status: number,
+  code: string,
+  error: string,
+  details?: Record<string, unknown>,
+): Response => {
+  const payload: ApiErrorBody = {
+    error,
+    code,
+    details,
+  };
+
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
 };
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
@@ -199,11 +227,14 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     let storedContentType = isJson ? "application/json" : "text/plain";
     let requestedId: string | null = null;
     let upsert = false;
+    let expectedRevision: string | null = null;
     let payloadKind: "plain_text" | "drop_payload" | "drop_envelope" =
       "plain_text";
+    let storedEnvelope: DropEnvelopeV1 | null = null;
     let allocationAttempts = 0;
     let aliasConflictCount = 0;
     let objectConflictCount = 0;
+    const dropRepository = new R2DropObjectRepository(env.R2_BUCKET);
 
     if (isJson) {
       let parsed: unknown;
@@ -217,20 +248,23 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
         logger.logEnd(400, {
           reason: "invalid_json",
         });
-        return new Response("Invalid JSON payload.", { status: 400 });
+        return jsonErrorResponse(400, "invalid_json", "Invalid JSON payload.");
       }
 
       const parsedRequest = parseStoreRequest(parsed);
       requestedId = parsedRequest.id;
       upsert = parsedRequest.upsert;
+      expectedRevision = parsedRequest.expectedRevision;
 
       if (isDropEnvelopeV1(parsedRequest.payload)) {
         payloadKind = "drop_envelope";
+        // Provider signatures are attached server-side so the server only attests to what it actually stored.
         const signedEnvelope = await signProviderEnvelope(
           parsedRequest.payload,
           env,
           logger,
         );
+        storedEnvelope = signedEnvelope;
         storedPayload = JSON.stringify(signedEnvelope);
       } else if (isDropPayload(parsedRequest.payload)) {
         payloadKind = "drop_payload";
@@ -243,7 +277,11 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
             reason: "empty_payload_content",
             requestedDropRef: toLogRef(requestedId),
           });
-          return new Response("Request body cannot be empty.", { status: 400 });
+          return jsonErrorResponse(
+            400,
+            "empty_payload_content",
+            "Request body cannot be empty.",
+          );
         }
 
         storedPayload = JSON.stringify({
@@ -259,9 +297,13 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
           reason: "unsupported_payload",
           requestedDropRef: toLogRef(requestedId),
         });
-        return new Response(
+        return jsonErrorResponse(
+          400,
+          "unsupported_payload",
           "Unsupported JSON payload. Expected a drop payload or encrypted drop envelope.",
-          { status: 400 },
+          {
+            requestedDropRef: toLogRef(requestedId),
+          },
         );
       }
     } else if (!rawBody.trim()) {
@@ -269,14 +311,22 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       logger.logEnd(400, {
         reason: "empty_plain_text_body",
       });
-      return new Response("Request body cannot be empty.", { status: 400 });
+      return jsonErrorResponse(
+        400,
+        "empty_plain_text_body",
+        "Request body cannot be empty.",
+      );
     }
 
     let id: string | null = null;
 
     if (requestedId) {
       allocationAttempts = 1;
-      const aliasState = await reserveRemoteAlias(env.R2_BUCKET, requestedId, logger);
+      const aliasState = await reserveRemoteAlias(
+        env.R2_BUCKET,
+        requestedId,
+        logger,
+      );
       if (aliasState === "conflict") {
         aliasConflictCount += 1;
         logger.warn("store.alias_conflict", {
@@ -286,19 +336,24 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
           reason: "alias_conflict",
           requestedDropRef: toLogRef(requestedId),
         });
-        return new Response("Drop short link is already in use.", { status: 409 });
+        return jsonErrorResponse(
+          409,
+          "alias_conflict",
+          "Drop short link is already in use.",
+          {
+            requestedDropRef: toLogRef(requestedId),
+          },
+        );
       }
 
-      let stored = false;
+      let storeResult: PutDropObjectResult = "conflict";
 
       try {
-        stored = await putDropObject(
-          env.R2_BUCKET,
-          requestedId,
-          storedPayload,
-          storedContentType,
+        storeResult = await dropRepository.put(requestedId, storedPayload, {
+          contentType: storedContentType,
           upsert,
-        );
+          expectedRevision,
+        });
       } catch (error) {
         if (aliasState === "reserved") {
           await removeRemoteAliasIfMatch(env.R2_BUCKET, requestedId, logger);
@@ -307,7 +362,30 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
         throw error;
       }
 
-      if (!stored) {
+      if (storeResult !== "stored") {
+        if (storeResult === "precondition_failed") {
+          logger.warn("store.revision_precondition_failed", {
+            requestedDropRef: toLogRef(requestedId),
+            upsert,
+            hasExpectedRevision: Boolean(expectedRevision),
+          });
+          logger.logEnd(412, {
+            reason: "revision_precondition_failed",
+            requestedDropRef: toLogRef(requestedId),
+            upsert,
+            hasExpectedRevision: Boolean(expectedRevision),
+          });
+          return jsonErrorResponse(
+            412,
+            "revision_precondition_failed",
+            "Drop revision precondition failed. Refresh and try again.",
+            {
+              requestedDropRef: toLogRef(requestedId),
+              upsert,
+            },
+          );
+        }
+
         objectConflictCount += 1;
         logger.warn("store.object_conflict", {
           requestedDropRef: toLogRef(requestedId),
@@ -318,30 +396,37 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
           requestedDropRef: toLogRef(requestedId),
           upsert,
         });
-        return new Response("Drop ID already exists.", { status: 409 });
+        return jsonErrorResponse(409, "object_conflict", "Drop ID already exists.", {
+          requestedDropRef: toLogRef(requestedId),
+          upsert,
+        });
       }
 
       id = requestedId;
     } else {
-      for (let attempt = 0; attempt < MAX_ID_ALLOCATION_ATTEMPTS; attempt += 1) {
+      for (
+        let attempt = 0;
+        attempt < MAX_ID_ALLOCATION_ATTEMPTS;
+        attempt += 1
+      ) {
         allocationAttempts = attempt + 1;
         const candidateId = generateDropId(DROP_ID_LENGTH);
-        const aliasState = await reserveRemoteAlias(env.R2_BUCKET, candidateId, logger);
+        const aliasState = await reserveRemoteAlias(
+          env.R2_BUCKET,
+          candidateId,
+          logger,
+        );
         if (aliasState === "conflict") {
           aliasConflictCount += 1;
           continue;
         }
 
-        let stored = false;
+        let storeResult: PutDropObjectResult = "conflict";
 
         try {
-          stored = await putDropObject(
-            env.R2_BUCKET,
-            candidateId,
-            storedPayload,
-            storedContentType,
-            false,
-          );
+          storeResult = await dropRepository.put(candidateId, storedPayload, {
+            contentType: storedContentType,
+          });
         } catch (error) {
           if (aliasState === "reserved") {
             await removeRemoteAliasIfMatch(env.R2_BUCKET, candidateId, logger);
@@ -350,7 +435,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
           throw error;
         }
 
-        if (stored) {
+        if (storeResult === "stored") {
           id = candidateId;
           break;
         }
@@ -374,8 +459,24 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
         aliasConflictCount,
         objectConflictCount,
       });
-      return new Response("Failed to allocate a unique drop ID.", { status: 500 });
+      return jsonErrorResponse(
+        500,
+        "id_allocation_failed",
+        "Failed to allocate a unique drop ID.",
+        {
+          attempts: allocationAttempts,
+          aliasConflictCount,
+          objectConflictCount,
+        },
+      );
     }
+
+    await syncPublicDropIndexForEnvelope(
+      env.R2_BUCKET,
+      id,
+      storedEnvelope,
+      Date.now(),
+    );
 
     const baseUrl = env.PUBLIC_BASE_URL.replace(/\/$/, "");
     const dropUrl = `${baseUrl}/d/${toShortDropId(id)}`;
@@ -400,9 +501,11 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     logger.logEnd(500, {
       reason: "unhandled_error",
     });
-    return new Response(`Failed to store drop: ${errorMessage}`, {
-      status: 500,
-    });
+    return jsonErrorResponse(
+      500,
+      "unhandled_error",
+      `Failed to store drop: ${errorMessage}`,
+    );
   }
 };
 

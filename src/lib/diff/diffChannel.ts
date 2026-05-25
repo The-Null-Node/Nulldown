@@ -1,6 +1,13 @@
+/*
+Diff channels abstract the transport used for live editing. Offline editing stays local
+with BroadcastChannel, while online editing polls the branch API and excludes events
+originating from the current client to avoid replaying our own writes.
+*/
+
 import type {
   DropDiffEnvelope,
   DropDiffEvent,
+  DropDiffEventMetadata,
   DropDiffOp,
   DropDiffPollResponse,
 } from "../../../shared/drop/diff";
@@ -12,12 +19,16 @@ export type DiffChannelListener = (events: DropDiffEvent[]) => void;
 export interface DiffChannel {
   readonly dropId: string;
   readonly clientId: string;
-  publish: (ops: DropDiffOp[]) => Promise<void>;
+  publish: (ops: DropDiffOp[], options?: DiffChannelPublishOptions) => Promise<void>;
   poll: () => Promise<DropDiffEvent[]>;
   subscribe: (listener: DiffChannelListener) => () => void;
   start: () => void;
   stop: () => void;
   readonly cursor: string | null;
+}
+
+export interface DiffChannelPublishOptions {
+  metadata?: DropDiffEventMetadata;
 }
 
 const generateClientId = (): string => {
@@ -35,13 +46,15 @@ const nextEventId = (clientId: string): string => {
   return `${clientId}:${Date.now()}:${globalEventCounter}`;
 };
 
-// --- Remote diff channel (polls /api/diff/:id) ---
+/* Remote diff channel (polls /api/diff/:id). */
 
 export interface RemoteDiffChannelOptions {
   dropId: string;
   branchId?: string | null;
   accountId?: string | null;
   clientId?: string;
+  authToken?: string | null;
+  authTokenProvider?: (() => Promise<string | null>) | null;
   pollIntervalMs?: number;
   initialCursor?: string | null;
 }
@@ -54,6 +67,8 @@ export const createRemoteDiffChannel = (
   const dropId = options.dropId;
   const branchId = options.branchId ?? null;
   const accountId = options.accountId ?? null;
+  const authToken = options.authToken ?? null;
+  const authTokenProvider = options.authTokenProvider ?? null;
   const clientId = options.clientId ?? generateClientId();
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
@@ -63,13 +78,18 @@ export const createRemoteDiffChannel = (
   let localSeq = 0;
   let hasCompletedHandshake = false;
 
-  const buildHeaders = (): HeadersInit => {
+  const buildHeaders = async (): Promise<HeadersInit> => {
     const headers: Record<string, string> = {
       "x-nulldown-client-id": clientId,
     };
 
     if (accountId) {
       headers[NULLDOWN_ACCOUNT_ID_HEADER] = accountId;
+    }
+
+    const bearerToken = authToken ?? (await authTokenProvider?.());
+    if (bearerToken) {
+      headers.Authorization = `Bearer ${bearerToken}`;
     }
 
     return headers;
@@ -90,7 +110,7 @@ export const createRemoteDiffChannel = (
   const doHandshake = async (): Promise<void> => {
     const params = new URLSearchParams({ cursor: "__latest__" });
     const response = await fetch(buildDiffUrl(params), {
-      headers: buildHeaders(),
+      headers: await buildHeaders(),
     });
 
     if (!response.ok) {
@@ -100,6 +120,7 @@ export const createRemoteDiffChannel = (
 
     const data = (await response.json()) as DropDiffPollResponse;
 
+    // Start from the current branch head so opening an editor does not replay the entire backlog.
     if (data.cursor !== null) {
       cursor = data.cursor;
     }
@@ -107,16 +128,20 @@ export const createRemoteDiffChannel = (
     hasCompletedHandshake = true;
   };
 
-  const publish = async (ops: DropDiffOp[]): Promise<void> => {
+  const publish = async (
+    ops: DropDiffOp[],
+    options: DiffChannelPublishOptions = {},
+  ): Promise<void> => {
     if (!ops.length) return;
 
     const event: DropDiffEvent = {
       eventId: nextEventId(clientId),
-      seq: 0, // server assigns canonical seq
+      seq: 0,
       dropId,
       sourceClientId: clientId,
       createdAt: Date.now(),
       ops,
+      metadata: options.metadata,
     };
 
     const envelope: DropDiffEnvelope = {
@@ -124,10 +149,11 @@ export const createRemoteDiffChannel = (
       events: [event],
     };
 
+    const requestHeaders = await buildHeaders();
     const response = await fetch(buildDiffUrl(), {
       method: "POST",
       headers: {
-        ...buildHeaders(),
+        ...(requestHeaders as Record<string, string>),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(envelope),
@@ -147,7 +173,7 @@ export const createRemoteDiffChannel = (
     params.set("excludeClient", clientId);
 
     const response = await fetch(buildDiffUrl(params), {
-      headers: buildHeaders(),
+      headers: await buildHeaders(),
     });
 
     if (!response.ok) {
@@ -221,7 +247,7 @@ export const createRemoteDiffChannel = (
   };
 };
 
-// --- Local diff channel (BroadcastChannel + in-memory) ---
+/* Local diff channel (BroadcastChannel + in-memory). */
 
 export interface LocalDiffChannelOptions {
   dropId: string;
@@ -263,7 +289,10 @@ export const createLocalDiffChannel = (
     };
   };
 
-  const publish = async (ops: DropDiffOp[]): Promise<void> => {
+  const publish = async (
+    ops: DropDiffOp[],
+    options: DiffChannelPublishOptions = {},
+  ): Promise<void> => {
     if (!ops.length) return;
 
     localSeq += 1;
@@ -274,9 +303,10 @@ export const createLocalDiffChannel = (
       sourceClientId: clientId,
       createdAt: Date.now(),
       ops,
+      metadata: options.metadata,
     };
 
-    // Broadcast to other tabs
+    // Local state already applied this diff; the broadcast is only for sibling tabs.
     broadcastChannel?.postMessage({
       sourceClientId: clientId,
       events: [event],
@@ -284,7 +314,6 @@ export const createLocalDiffChannel = (
   };
 
   const poll = async (): Promise<DropDiffEvent[]> => {
-    // Local channel is push-only via BroadcastChannel; nothing to poll.
     return [];
   };
 

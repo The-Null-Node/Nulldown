@@ -1,3 +1,10 @@
+/*
+Providers are the boundary between the editor's plain payload model and the actual
+storage backends. Every create goes through the crypto port first, then through either
+local IndexedDB or remote Pages Functions, and lineage is reconstructed from payload
+metadata instead of any separate graph object.
+*/
+
 import {
   generateDropId,
   isShortDropId,
@@ -37,6 +44,7 @@ export type DropProviderScope = "local" | "remote";
 export interface DropCreateOptions {
   id?: string;
   upsert?: boolean;
+  expectedRevision?: string;
   visibility?: DropVisibility;
   unlockPolicy?: DropUnlockPolicy;
 }
@@ -64,10 +72,29 @@ export interface DropCrudRecord {
   envelope: DropEnvelopeV1;
   createdAt: number;
   updatedAt: number;
+  revision?: string | null;
 }
 
-export interface DropCrud {
-  create: (record: DropCrudRecord, options?: { upsert?: boolean }) => Promise<void>;
+export interface DropCrudCreateOptions {
+  upsert?: boolean;
+  expectedRevision?: string;
+}
+
+export interface Crud<T, TOptions> {
+  // single options for now, must expand later if needed.
+  create: (record: T, options?: TOptions) => Promise<void>;
+  get: (id: string) => Promise<DropCrudRecord | null>;
+  update: (id: string, record: Partial<DropCrudRecord>) => Promise<void>;
+  delete: (id: string) => Promise<void>;
+  list: () => Promise<DropCrudRecord[]>;
+}
+
+export interface DropCrud extends Crud<DropCrudRecord, DropCrudCreateOptions> {
+  create: (
+    record: DropCrudRecord,
+    options?: DropCrudCreateOptions,
+  ) => Promise<void>;
+
   get: (id: string) => Promise<DropCrudRecord | null>;
   update: (id: string, record: Partial<DropCrudRecord>) => Promise<void>;
   delete: (id: string) => Promise<void>;
@@ -79,14 +106,21 @@ export interface DropCrudContext {
 }
 
 type StoredDropRecord =
-  | { kind: "sealed"; id: string; envelope: DropEnvelopeV1; createdAt: number; updatedAt: number }
+  | {
+      kind: "sealed";
+      id: string;
+      envelope: DropEnvelopeV1;
+      createdAt: number;
+      updatedAt: number;
+      revision?: string | null;
+    }
   | { kind: "legacy"; id: string; payload: DropPayload };
 
 interface DropStoragePort {
   scope: DropProviderScope;
   create: (
     envelope: DropEnvelopeV1,
-    options?: { id?: string; upsert?: boolean },
+    options?: { id?: string; upsert?: boolean; expectedRevision?: string },
   ) => Promise<{ id: string; url: string }>;
   get: (id: string) => Promise<StoredDropRecord | null>;
   list: () => Promise<DropCrudRecord[]>;
@@ -101,6 +135,7 @@ interface DropGraphPort {
 }
 
 export interface DropProvider {
+  /* VoidProvider, v0.0 */
   scope: DropProviderScope;
   crud: DropCrudContext;
   create: (
@@ -138,11 +173,81 @@ interface ListApiResponse {
   error?: string;
 }
 
+interface ApiErrorResponse {
+  error?: string;
+  code?: string;
+  details?: unknown;
+}
+
+export class DropProviderHttpError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly details: unknown;
+
+  constructor(input: {
+    status: number;
+    message: string;
+    code?: string | null;
+    details?: unknown;
+  }) {
+    super(input.message);
+    this.name = "DropProviderHttpError";
+    this.status = input.status;
+    this.code = input.code ?? null;
+    this.details = input.details;
+  }
+}
+
+export const isDropProviderHttpError = (
+  value: unknown,
+): value is DropProviderHttpError => value instanceof DropProviderHttpError;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const parseApiErrorBody = (raw: string): ApiErrorResponse | null => {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) {
+      return null;
+    }
+
+    return {
+      error: typeof parsed.error === "string" ? parsed.error : undefined,
+      code: typeof parsed.code === "string" ? parsed.code : undefined,
+      details: parsed.details,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const createHttpErrorFromResponse = async (
+  response: Response,
+  fallbackMessage: string,
+): Promise<DropProviderHttpError> => {
+  const rawBody = await response.text();
+  const apiError = parseApiErrorBody(rawBody);
+  const bodyMessage = apiError?.error || rawBody || response.statusText;
+
+  return new DropProviderHttpError({
+    status: response.status,
+    code: apiError?.code ?? null,
+    details: apiError?.details,
+    message: `${response.status}: ${bodyMessage || fallbackMessage}`,
+  });
+};
+
 const createDropId = () => generateDropId();
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
-    const prefix = error.name && error.name !== "Error" ? `${error.name}: ` : "";
+    const prefix =
+      error.name && error.name !== "Error" ? `${error.name}: ` : "";
     return `${prefix}${error.message}`.trim();
   }
 
@@ -167,7 +272,7 @@ class LocalDropStorage implements DropStoragePort {
 
   async create(
     envelope: DropEnvelopeV1,
-    options: { id?: string; upsert?: boolean } = {},
+    options: { id?: string; upsert?: boolean; expectedRevision?: string } = {},
   ): Promise<{ id: string; url: string }> {
     if (!isIndexedDbSupported()) {
       throw new Error(
@@ -182,10 +287,13 @@ class LocalDropStorage implements DropStoragePort {
       const id = options.id ?? createDropId();
       const shortId = toShortDropId(id);
 
+      // Short ids are cached locally so `/d/<short>` can still resolve after the page reloads.
       const aliasState = await this.reserveShortAlias(shortId, id);
       if (aliasState === "conflict") {
         if (options.id) {
-          throw new Error(`Drop short id "${shortId}" is already in use locally.`);
+          throw new Error(
+            `Drop short id "${shortId}" is already in use locally.`,
+          );
         }
         continue;
       }
@@ -271,8 +379,12 @@ class LocalDropStorage implements DropStoragePort {
     const records = await listOfflineDrops();
     return records
       .filter(
-        (record): record is IndexedDbDropRecord & { sealedEnvelope: DropEnvelopeV1 } =>
-          Boolean(record.sealedEnvelope && isDropEnvelopeV1(record.sealedEnvelope)),
+        (
+          record,
+        ): record is IndexedDbDropRecord & { sealedEnvelope: DropEnvelopeV1 } =>
+          Boolean(
+            record.sealedEnvelope && isDropEnvelopeV1(record.sealedEnvelope),
+          ),
       )
       .map((record) => ({
         id: record.id,
@@ -368,7 +480,7 @@ class RemoteDropStorage implements DropStoragePort {
 
   async create(
     envelope: DropEnvelopeV1,
-    options: { id?: string; upsert?: boolean } = {},
+    options: { id?: string; upsert?: boolean; expectedRevision?: string } = {},
   ): Promise<{ id: string; url: string }> {
     const response = await fetch("/api/store", {
       method: "POST",
@@ -378,14 +490,15 @@ class RemoteDropStorage implements DropStoragePort {
       body: JSON.stringify({
         id: options.id,
         upsert: options.upsert,
+        expectedRevision: options.expectedRevision,
         envelope,
       }),
     });
 
     if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(
-        errorBody || `Failed to store drop: ${response.statusText}`,
+      throw await createHttpErrorFromResponse(
+        response,
+        "Failed to store drop.",
       );
     }
 
@@ -409,9 +522,9 @@ class RemoteDropStorage implements DropStoragePort {
     }
 
     if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(
-        errorBody || `Failed to fetch drop: ${response.statusText}`,
+      throw await createHttpErrorFromResponse(
+        response,
+        "Failed to fetch drop.",
       );
     }
 
@@ -422,12 +535,14 @@ class RemoteDropStorage implements DropStoragePort {
       const payload = (await response.json()) as unknown;
 
       if (isDropEnvelopeV1(payload)) {
+        const revisionHeader = response.headers.get("X-Drop-Revision");
         return {
           kind: "sealed",
           id: canonicalId,
           envelope: payload,
           createdAt: payload.createdAt,
           updatedAt: payload.createdAt,
+          revision: revisionHeader,
         };
       }
 
@@ -456,8 +571,10 @@ class RemoteDropStorage implements DropStoragePort {
     const response = await fetch("/api/list");
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(body || `Failed to list remote drops: ${response.statusText}`);
+      throw await createHttpErrorFromResponse(
+        response,
+        "Failed to list remote drops.",
+      );
     }
 
     const payload = (await response.json()) as ListApiResponse;
@@ -478,7 +595,9 @@ class RemoteDropStorage implements DropStoragePort {
       }),
     );
 
-    return hydrated.filter((record): record is DropCrudRecord => Boolean(record));
+    return hydrated.filter((record): record is DropCrudRecord =>
+      Boolean(record),
+    );
   }
 
   async delete(id: string): Promise<void> {
@@ -487,8 +606,10 @@ class RemoteDropStorage implements DropStoragePort {
     });
 
     if (!response.ok && response.status !== 404) {
-      const body = await response.text();
-      throw new Error(body || `Failed to delete remote drop: ${response.statusText}`);
+      throw await createHttpErrorFromResponse(
+        response,
+        "Failed to delete remote drop.",
+      );
     }
   }
 }
@@ -598,6 +719,7 @@ class ComposedDropProvider implements DropProvider {
           await this.storage.create(record.envelope, {
             id: record.id,
             upsert: options.upsert,
+            expectedRevision: options.expectedRevision,
           });
         },
         get: async (id) => {
@@ -611,6 +733,7 @@ class ComposedDropProvider implements DropProvider {
             envelope: record.envelope,
             createdAt: record.createdAt,
             updatedAt: record.updatedAt,
+            revision: record.revision,
           };
         },
         update: async (id, record) => {
@@ -642,6 +765,7 @@ class ComposedDropProvider implements DropProvider {
     const created = await this.storage.create(envelope, {
       id: options.id,
       upsert: options.upsert,
+      expectedRevision: options.expectedRevision,
     });
 
     return {
@@ -699,11 +823,15 @@ class ComposedDropProvider implements DropProvider {
 
     for (const record of sourceRecords) {
       try {
+        // Sync works on already-sealed envelopes so the target provider never needs plaintext.
         await target.crud.drops.create(record, { upsert: true });
         completed += 1;
       } catch (error) {
         skipped += 1;
-        console.error(`Failed syncing drop "${record.id}" to ${target.scope}:`, error);
+        console.error(
+          `Failed syncing drop "${record.id}" to ${target.scope}:`,
+          error,
+        );
       }
 
       onProgress?.({
@@ -714,7 +842,12 @@ class ComposedDropProvider implements DropProvider {
       });
     }
 
-    onProgress?.({ phase: "complete", total, completed, dropId: options.dropId });
+    onProgress?.({
+      phase: "complete",
+      total,
+      completed,
+      dropId: options.dropId,
+    });
 
     return {
       total,
@@ -790,7 +923,8 @@ export const getDefaultDropProviderRegistry = (): DropProviderRegistry => {
   return defaultRegistry;
 };
 
-export const isOfflineDropId = (id: string) => id.startsWith(OFFLINE_DROP_PREFIX);
+export const isOfflineDropId = (id: string) =>
+  id.startsWith(OFFLINE_DROP_PREFIX);
 
 export const getProviderForDropId = (id: string): DropProvider =>
   getDefaultDropProviderRegistry().forDropId(id);

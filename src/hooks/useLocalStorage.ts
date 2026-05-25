@@ -1,14 +1,6 @@
 import { useEffect, useCallback, useRef } from "react";
 import useStorageStore from "../stores/storageStore";
 
-/**
- * Hook to sync a value with browser storage
- * 
- * @param key - The localStorage key
- * @param value - The current value to sync
- * @param options - Configuration options
- * @returns Object with storage operations
- */
 export function useLocalStorageSync(
   key: string,
   value: string,
@@ -59,13 +51,6 @@ export function useLocalStorageSync(
   };
 }
 
-/**
- * Hook to load a value from browser storage on mount
- * 
- * @param key - The localStorage key
- * @param onLoad - Callback to handle the loaded value
- * @returns Object with load function
- */
 export function useLocalStorageLoad<T = string>(
   key: string,
   onLoad: (value: string | null) => void,
@@ -136,15 +121,6 @@ export function useLocalStorageLoad<T = string>(
   };
 }
 
-/**
- * Combined hook for both loading and syncing with browser storage
- * 
- * @param key - The localStorage key
- * @param value - The current value to sync
- * @param onLoad - Callback to handle the loaded value on mount
- * @param options - Configuration options
- * @returns Object with storage operations
- */
 export function useLocalStorage(
   key: string,
   value: string,
@@ -165,15 +141,6 @@ export function useLocalStorage(
   };
 }
 
-/**
- * Hook for draft-specific browser storage operations
- * Provides specialized functions for managing draft content
- * 
- * @param draftKey - The localStorage key for the draft
- * @param content - The current draft content
- * @param setContent - Function to update the draft content
- * @returns Object with draft-specific operations
- */
 export function useDraftStorage(
   draftKey: string,
   content: string,

@@ -1,52 +1,36 @@
+/*
+This hook keeps the editor bound to either a local BroadcastChannel transport or the
+remote branch diff API. Switching `dropId` or branch context tears down the old channel
+so incoming events are always scoped to the currently open editing target.
+*/
+
 import { useCallback, useEffect, useRef } from "react";
-import type { DropDiffOp } from "../../../../shared/drop/diff";
+import {
+  diffToDropDiffOp,
+  dropDiffOpToDiff,
+  type DropDiffEventMetadata,
+  type DropDiffOp,
+} from "../../../../shared/drop/diff";
 import {
   createLocalDiffChannel,
   createRemoteDiffChannel,
   type DiffChannel,
 } from "../../../lib/diff/diffChannel";
-import { DiffOp, type Diff } from "../../../lib/nulledit/types";
-import { encodeText } from "../../../lib/nulledit/textDiff";
+import type { Diff } from "../../../../shared/nulledit/types";
 
 type EditorDiffApi = {
   addDiffs: (diffs: Diff[]) => void;
 };
 
-const dropDiffOpToEditorDiff = (op: DropDiffOp): Diff => {
-  if (op.type === "insert") {
-    return {
-      op: DiffOp.INSERT,
-      data: encodeText(op.text),
-      range: { start: op.start, end: op.end },
-    };
-  }
-
-  return {
-    op: DiffOp.DELETE,
-    data: encodeText(op.text),
-    range: { start: op.start, end: op.end },
-  };
-};
-
 const editorDiffToDropDiffOps = (diffs: Diff[]): DropDiffOp[] =>
-  diffs
-    .filter((d) => d.op === DiffOp.INSERT || d.op === DiffOp.DELETE)
-    .map((d) => {
-      const range = d.range ?? { start: 0, end: 0 };
-      const decoder = new TextDecoder();
-      return {
-        type: d.op === DiffOp.INSERT ? ("insert" as const) : ("delete" as const),
-        start: range.start,
-        end: range.end,
-        text: decoder.decode(d.data),
-      };
-    });
+  diffs.map((diff) => diffToDropDiffOp(diff));
 
 export interface UseDiffChannelOptions {
   dropId: string | null;
   branchId?: string | null;
   accountId?: string | null;
   clientId?: string | null;
+  authTokenProvider?: (() => Promise<string | null>) | null;
   isOffline: boolean;
   editor: EditorDiffApi | null;
   enabled?: boolean;
@@ -57,6 +41,7 @@ export function useDiffChannel({
   branchId,
   accountId,
   clientId,
+  authTokenProvider,
   isOffline,
   editor,
   enabled = true,
@@ -80,6 +65,7 @@ export function useDiffChannel({
           branchId,
           accountId,
           clientId: clientId ?? undefined,
+          authTokenProvider,
         });
 
     channelRef.current = channel;
@@ -88,8 +74,11 @@ export function useDiffChannel({
       const editorApi = editorRef.current;
       if (!editorApi) return;
 
+      // Remote events can arrive batched; flatten them so the editor applies one ordered diff stream.
       const allOps = events.flatMap((event) => event.ops);
-      const editorDiffs = allOps.map(dropDiffOpToEditorDiff);
+      const editorDiffs = allOps
+        .map((op) => dropDiffOpToDiff(op))
+        .filter((entry): entry is Diff => Boolean(entry));
       if (editorDiffs.length > 0) {
         editorApi.addDiffs(editorDiffs);
       }
@@ -102,17 +91,17 @@ export function useDiffChannel({
       channel.stop();
       channelRef.current = null;
     };
-  }, [accountId, branchId, clientId, dropId, isOffline, enabled]);
+  }, [accountId, authTokenProvider, branchId, clientId, dropId, isOffline, enabled]);
 
   // Publish local diffs to channel
   const publishDiffs = useCallback(
-    (diffs: Diff[]) => {
+    (diffs: Diff[], metadata?: DropDiffEventMetadata) => {
       const channel = channelRef.current;
       if (!channel) return;
 
       const ops = editorDiffToDropDiffOps(diffs);
       if (ops.length > 0) {
-        void channel.publish(ops);
+        void channel.publish(ops, { metadata });
       }
     },
     [],

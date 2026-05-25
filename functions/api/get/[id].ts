@@ -1,15 +1,19 @@
+/*
+`/api/get/:id` resolves the short-link alias namespace and streams back the canonical
+drop object from R2. The read path stays deliberately thin so the browser can decide
+how to interpret plaintext payloads versus sealed envelopes.
+*/
+
 import { R2Bucket } from "@cloudflare/workers-types";
 import { resolveRemoteDropId } from "../_lib/dropId";
 import { createRequestLogger, toLogRef } from "../_lib/logger";
 
-// Define the expected shape of the environment variables
 interface Env {
-  R2_BUCKET: R2Bucket; // R2 Bucket Binding (set in Cloudflare Pages dashboard)
+  R2_BUCKET: R2Bucket;
 }
 
 const READ_SUCCESS_SAMPLE_RATE = 0.1;
 
-// Basic validation for required environment variables
 function validateEnv(env: Env): void {
   if (!env.R2_BUCKET)
     throw new Error(
@@ -78,6 +82,7 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
     const headers = new Headers({
       "Content-Type": object.httpMetadata?.contentType || "text/plain",
       ETag: object.httpEtag,
+      "X-Drop-Revision": object.httpEtag,
       "X-Drop-Canonical-Id": id,
     });
 
@@ -108,7 +113,6 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
   }
 };
 
-// Fallback for other methods or if only onRequestGet is defined for this route file
 export const onRequest: PagesFunction<Env, "id"> = async (context) => {
   if (context.request.method === "GET") {
     return onRequestGet(context);

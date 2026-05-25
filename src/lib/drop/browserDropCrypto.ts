@@ -1,3 +1,9 @@
+/*
+This module seals browser-authored payloads into `nmdn.drop.v1` envelopes and reopens
+them later. Device signatures are verified before content keys are trusted, and provider
+escrow is only used as a fallback when the local vault cannot unwrap the stored key.
+*/
+
 import {
   DROP_ENVELOPE_SCHEMA_V1,
   DROP_ENVELOPE_VERSION_V1,
@@ -144,6 +150,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
       | undefined;
 
     if (payload.draftPack) {
+      // Draft history is encrypted with the same content key so it travels with the document atomically.
       const draftIv = crypto.getRandomValues(new Uint8Array(12));
       const draftCiphertext = await crypto.subtle.encrypt(
         {
@@ -250,6 +257,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
   ): Promise<DropPayload> {
     const dropLabel = getDropLabel(options.dropId);
     const vault = await this.vault.getUnlockedVault();
+    // Verify signatures before touching wrapped keys so tampered envelopes fail closed.
     await this.verifyDeviceSignature(envelope, vault);
     await this.verifyProviderSignature(envelope);
 
@@ -270,6 +278,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
         options.dropId
       ) {
         try {
+          // Provider escrow is the recovery path for multi-device access, not the primary unlock flow.
           rawContentKey = await this.requestEscrowUnlockedKey(options.dropId, vault);
         } catch (escrowError) {
           console.error(
@@ -363,6 +372,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
     dropId: string,
     vault: UnlockedVault,
   ): Promise<ArrayBuffer> {
+    // The server re-wraps the content key to this vault's public key; the browser still performs the final unwrap.
     const response = await fetch(`/api/unlock/${encodeURIComponent(dropId)}`, {
       method: "POST",
       headers: {
@@ -514,6 +524,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
     if (envelope.deviceSignerPublicJwk) {
       verifyKey = await importDeviceVerifyKey(envelope.deviceSignerPublicJwk);
     } else {
+      // Older same-device drops may omit the embedded verify key and instead rely on the current vault identity.
       if (vault.accountId !== envelope.accountId) {
         throw new Error(
           "This drop belongs to a different account vault and cannot be decrypted on this device.",

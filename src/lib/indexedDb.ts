@@ -1,3 +1,9 @@
+/*
+IndexedDB is the durable browser storage layer for encrypted drops and structured app
+state. `kv` stores generic settings and caches, while `drops` stores offline envelopes
+that must remain readable across page reloads and browser restarts.
+*/
+
 import type { DropEnvelopeV1 } from "../../shared/drop/types";
 
 const DB_NAME = "nulldown";
@@ -60,6 +66,7 @@ export const openNulldownDatabase = async (): Promise<IDBDatabase> => {
           db.createObjectStore(KV_STORE);
         }
         if (!db.objectStoreNames.contains(DROPS_STORE)) {
+          // Offline drops are keyed by canonical id because short ids are only aliases.
           const dropsStore = db.createObjectStore(DROPS_STORE, {
             keyPath: "id",
           });

@@ -1,3 +1,9 @@
+/*
+This file is the canonical drop contract shared by the browser and Pages Functions.
+Stored envelopes live in IndexedDB and R2, so compatibility changes here ripple through
+encryption, syncing, unlock flows, and branch editing.
+*/
+
 export const DROP_ENVELOPE_SCHEMA_V1 = "nmdn.drop.v1" as const;
 export const DROP_ENVELOPE_VERSION_V1 = 1 as const;
 
@@ -23,6 +29,11 @@ export interface DropDraftSnapshot {
   ops: DropDraftDiffOp[];
 }
 
+/*
+Draft packs let share/clone flows carry edit history forward without making the main
+drop payload itself append-only. `source` distinguishes a brand-new share from an
+edited existing drop because those flows are surfaced differently in the UI.
+*/
 export interface DropDraftPackV1 {
   version: 1;
   policy: DropDraftDiffPolicy;
@@ -72,6 +83,11 @@ export interface DropDetachedSignature {
   sig: string;
 }
 
+/*
+This is the exact shape signed by the device key. Provider signatures are derived from
+this payload plus the device signature so the server never signs content the device
+did not already attest to.
+*/
 export interface DropEnvelopeSignableV1 {
   schema: typeof DROP_ENVELOPE_SCHEMA_V1;
   version: typeof DROP_ENVELOPE_VERSION_V1;
@@ -94,6 +110,11 @@ export interface DropEnvelopeV1 extends DropEnvelopeSignableV1 {
   };
 }
 
+/*
+Lineage is stored as `baseDropId` pointers on payload metadata. The graph here is a
+materialized view built on demand so callers can reason about clone ancestry without
+hard-coding traversal rules.
+*/
 export interface DropGraphNode {
   id: string;
   baseDropId: string | null;
@@ -122,11 +143,7 @@ const isDropDraftDiffOp = (value: unknown): value is DropDraftDiffOp => {
     return false;
   }
 
-  return (
-    isNumber(value.start) &&
-    isNumber(value.end) &&
-    isString(value.text)
-  );
+  return isNumber(value.start) && isNumber(value.end) && isString(value.text);
 };
 
 const isDropDraftSnapshot = (value: unknown): value is DropDraftSnapshot => {
@@ -197,9 +214,7 @@ export const isDropPayload = (value: unknown): value is DropPayload => {
 const isDropCipherRecord = (value: unknown): value is DropCipherRecord => {
   if (!isRecord(value)) return false;
   return (
-    value.alg === "A256GCM" &&
-    isString(value.iv) &&
-    isString(value.ciphertext)
+    value.alg === "A256GCM" && isString(value.iv) && isString(value.ciphertext)
   );
 };
 
@@ -259,12 +274,18 @@ export const isDropEnvelopeV1 = (value: unknown): value is DropEnvelopeV1 => {
   }
 
   if (!isDropCipherRecord(value.cipher)) return false;
-  if (value.draftCipher !== undefined && !isDropCipherRecord(value.draftCipher)) {
+  if (
+    value.draftCipher !== undefined &&
+    !isDropCipherRecord(value.draftCipher)
+  ) {
     return false;
   }
   if (!isDropKeyEnvelope(value.keyEnvelope)) return false;
 
-  if (value.deviceSignerPublicJwk !== undefined && !isRecord(value.deviceSignerPublicJwk)) {
+  if (
+    value.deviceSignerPublicJwk !== undefined &&
+    !isRecord(value.deviceSignerPublicJwk)
+  ) {
     return false;
   }
 
@@ -310,6 +331,10 @@ const normalizeForCanonicalJson = (value: unknown): unknown => {
   return normalized;
 };
 
+/*
+Signatures and conflict detection depend on deterministic JSON ordering. Do not swap
+this serializer for plain `JSON.stringify` in any code path that compares envelopes.
+*/
 export const serializeCanonicalJson = (value: unknown): string =>
   JSON.stringify(normalizeForCanonicalJson(value));
 

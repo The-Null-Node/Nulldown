@@ -6,7 +6,10 @@ import {
   sanitizeDiffAuthToken,
   toBase64,
 } from "../../_lib/diffAuth";
-import { readRequestAccountId } from "../../_lib/accountAuth";
+import {
+  resolveAuthenticatedAccountId,
+  type AccountAuthEnv,
+} from "../../_lib/accountAuth";
 import { resolveBranchForActor } from "../../_lib/branchState";
 import { resolveRemoteDropId } from "../../_lib/dropId";
 import { createRequestLogger, serializeError, toLogRef } from "../../_lib/logger";
@@ -15,7 +18,7 @@ import type {
   DiffAuthRegisterResponse,
 } from "../../../../shared/drop/diffAuth";
 
-interface Env {
+interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
   DIFF_AUTH_TTL_MS?: string;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
@@ -109,7 +112,16 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     const clientId =
       sanitizeDiffAuthToken(body.clientId) ??
       `client_${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : Date.now().toString(36)}`;
-    const accountId = readRequestAccountId(request);
+    const accountId = await resolveAuthenticatedAccountId(request, env);
+    if (!accountId) {
+      logger.logEnd(401, {
+        reason: "unauthenticated_account",
+        dropRef: toLogRef(id),
+      });
+      return new Response("Authenticated account session is required.", {
+        status: 401,
+      });
+    }
     const { branch } = await resolveBranchForActor(
       env.R2_BUCKET,
       id,

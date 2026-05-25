@@ -1,20 +1,10 @@
 import { create, StateCreator } from "zustand";
 
-/**
- * Editor modes to switch the UI state between editing and previewing.
- */
 export enum EditorMode {
   Preview,
   Edit,
 }
 
-/**
- * The editor state is the state of the editor.
- * It contains the text content of the editor and the diffs of the editor.
- * The diffs are the changes to the text content of the editor.
- * The diffs are resolved to the text content of the editor.
- * The diffs are resolved to the text content of the editor.
- **/
 export interface EditorState {
   textContent: string;
   setTextContent: (newContent: string) => void;

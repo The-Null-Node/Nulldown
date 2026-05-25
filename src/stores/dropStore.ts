@@ -1,12 +1,22 @@
+/*
+Drop store is the stateful coordinator for mode, visibility, provider routing, local-first
+publishing, and sync conflict resolution. Local sealed drops are always created first;
+remote publication is modeled as a queued follow-up so offline editing and recovery paths
+share one code path.
+*/
+
 import { create } from "zustand";
 import { toShortDropId } from "../../shared/drop/id";
 import {
   getKvItem,
+  getKvValue,
   isIndexedDbSupported,
   setKvItem,
+  setKvValue,
 } from "../lib/indexedDb";
 import {
   getDefaultDropProviderRegistry,
+  isDropProviderHttpError,
   isOfflineDropId,
   OFFLINE_DROP_PREFIX,
   type DropCreateOptions,
@@ -18,6 +28,7 @@ import {
   PASSKEY_PROTECTION_STORAGE_KEY,
 } from "../lib/drop/passkeyVault";
 import type {
+  DropEnvelopeV1,
   DropDraftDiffPolicy,
   DropGraph,
   DropMetadata,
@@ -25,6 +36,15 @@ import type {
   DropUnlockPolicy,
   DropVisibility,
 } from "../../shared/drop/types";
+import { serializeCanonicalJson } from "../../shared/drop/types";
+import {
+  isDropSyncConflictRecordList,
+  isDropSyncQueueEntryList,
+  type DropSyncPublishSource,
+  type DropSyncQueueEntry,
+  type DropSyncConflictRecord,
+  type DropSyncConflictResolution,
+} from "../../shared/drop/sync";
 import {
   DEFAULT_NETWORK_ALLOWLIST,
   normalizeNetworkAllowlist,
@@ -38,6 +58,8 @@ const SYNC_TARGET_PROVIDER_KEY = "nulldown_sync_target_provider";
 const DRAFT_DIFF_POLICY_KEY = "nulldown_draft_diff_policy";
 const NETWORK_ALLOWLIST_KEY = "nulldown_network_allowlist";
 const SYNTAX_MODE_KEY = "nulldown_syntax_mode";
+const SYNC_CONFLICTS_KEY = "nulldown_sync_conflicts_v1";
+const SYNC_QUEUE_KEY = "nulldown_sync_queue_v1";
 
 const dropProviderRegistry = getDefaultDropProviderRegistry();
 
@@ -84,6 +106,20 @@ export interface ModeTransitionResult {
   };
 }
 
+type PublishSyncSource = DropSyncPublishSource;
+
+interface PublishSyncIntent {
+  dropId: string;
+  visibility: DropVisibility;
+  source: PublishSyncSource;
+  queuedAt: number;
+  waiters: Array<{
+    resolve: (value: ModeTransitionResult["publishedDrop"] | undefined) => void;
+    reject: (error: unknown) => void;
+    onProgress?: (progress: DropSyncProgress) => void;
+  }>;
+}
+
 interface DropSettingsChanges {
   mode?: DropMode;
   shareVisibility?: DropVisibility;
@@ -104,6 +140,9 @@ interface DropStoreState {
   passkeyProtectionEnabled: boolean;
   syntaxMode: EditorSyntaxMode;
   allowedUrls: string[];
+  syncGuardActive: boolean;
+  syncQueueDepth: number;
+  syncConflicts: DropSyncConflictRecord[];
   hydrated: boolean;
   hydrateOfflineMode: () => Promise<void>;
   hydrateSharePreferences: () => Promise<void>;
@@ -130,6 +169,11 @@ interface DropStoreState {
   syncDropToRemote: (
     id: string,
     onProgress?: (progress: DropSyncProgress) => void,
+  ) => Promise<void>;
+  listSyncConflicts: () => DropSyncConflictRecord[];
+  resolveSyncConflict: (
+    conflictId: string,
+    resolution: DropSyncConflictResolution,
   ) => Promise<void>;
   getDrop: (id: string) => Promise<DropPayload | null>;
   resolveDropOwnership: (
@@ -420,14 +464,71 @@ const buildDropUrlFromId = (id: string): string => {
 };
 
 const isConflictError = (error: unknown): boolean => {
+  if (isDropProviderHttpError(error)) {
+    return error.status === 409 || error.status === 412;
+  }
+
   const message = getErrorMessage(error).toLowerCase();
 
   return (
     message.includes("409") ||
+    message.includes("412") ||
+    message.includes("precondition") ||
     message.includes("already in use") ||
     message.includes("already exists") ||
     message.includes("conflict")
   );
+};
+
+const getConflictReasonFromError = (
+  error: unknown,
+): DropSyncConflictRecord["reason"] => {
+  if (isDropProviderHttpError(error)) {
+    if (
+      error.status === 412 ||
+      error.code === "revision_precondition_failed"
+    ) {
+      return "remote_state_mismatch";
+    }
+
+    if (error.status === 409) {
+      return "remote_id_conflict";
+    }
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  if (message.includes("412") || message.includes("precondition")) {
+    return "remote_state_mismatch";
+  }
+
+  return "remote_id_conflict";
+};
+
+const getConflictCodeFromError = (error: unknown): string | null => {
+  if (isDropProviderHttpError(error)) {
+    if (error.code) {
+      return error.code;
+    }
+
+    if (error.status === 412) {
+      return "revision_precondition_failed";
+    }
+
+    if (error.status === 409) {
+      return "remote_id_conflict";
+    }
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  if (message.includes("412") || message.includes("precondition")) {
+    return "revision_precondition_failed";
+  }
+
+  if (message.includes("409") || message.includes("conflict")) {
+    return "remote_id_conflict";
+  }
+
+  return null;
 };
 
 const readLocalStorageItem = (key: string): string | null => {
@@ -482,84 +583,49 @@ const writePersistedItem = async (key: string, value: string) => {
   writeLocalStorageItem(key, value);
 };
 
-const publishLocalDropToRemote = async (
-  id: string,
-  visibility: DropVisibility,
-  onProgress?: (progress: DropSyncProgress) => void,
-): Promise<ModeTransitionResult["publishedDrop"] | undefined> => {
-  const localRecord = await dropProviderRegistry.local.crud.drops.get(id);
-  if (!localRecord) {
-    return undefined;
+const readPersistedValue = async <T>(key: string): Promise<T | null> => {
+  if (isIndexedDbSupported()) {
+    try {
+      const value = await getKvValue<T>(key);
+      if (value !== null) {
+        return value;
+      }
+    } catch (error) {
+      console.error(`Failed reading "${key}" object value from IndexedDB:`, error);
+    }
   }
 
-  onProgress?.({ phase: "start", total: 1, completed: 0, dropId: localRecord.id });
+  const raw = readLocalStorageItem(key);
+  if (!raw) {
+    return null;
+  }
 
   try {
-    const existingRemote = await dropProviderRegistry.remote.crud.drops.get(
-      localRecord.id,
-    );
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+};
 
-    if (existingRemote) {
-      onProgress?.({
-        phase: "record",
-        total: 1,
-        completed: 1,
-        dropId: existingRemote.id,
-      });
-      onProgress?.({
-        phase: "complete",
-        total: 1,
-        completed: 1,
-        dropId: existingRemote.id,
-      });
-
-      return {
-        sourceId: localRecord.id,
-        id: existingRemote.id,
-        url: buildDropUrlFromId(existingRemote.id),
-      };
+const writePersistedValue = async (key: string, value: unknown) => {
+  if (isIndexedDbSupported()) {
+    try {
+      await setKvValue(key, value);
+      return;
+    } catch (error) {
+      console.error(`Failed writing "${key}" object value to IndexedDB:`, error);
     }
-  } catch (error) {
-    console.error(
-      `[dropStore] Failed checking remote publication state for "${localRecord.id}":`,
-      error,
-    );
   }
 
-  const payload = await dropProviderRegistry.local.get(localRecord.id);
-  if (!payload) {
-    return undefined;
+  writeLocalStorageItem(key, JSON.stringify(value));
+};
+
+const createSyncRecordId = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
   }
 
-  const unlockPolicy = deriveUnlockPolicy("online", visibility);
-
-  let created: Awaited<ReturnType<typeof dropProviderRegistry.remote.create>>;
-
-  try {
-    created = await dropProviderRegistry.remote.create(payload, {
-      id: localRecord.id,
-      visibility,
-      unlockPolicy,
-    });
-  } catch (error) {
-    if (!isConflictError(error)) {
-      throw error;
-    }
-
-    created = await dropProviderRegistry.remote.create(payload, {
-      visibility,
-      unlockPolicy,
-    });
-  }
-
-  onProgress?.({ phase: "record", total: 1, completed: 1, dropId: created.id });
-  onProgress?.({ phase: "complete", total: 1, completed: 1, dropId: created.id });
-
-  return {
-    sourceId: localRecord.id,
-    id: created.id,
-    url: created.url,
-  };
+  return `sync_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 };
 
 const resolveDropOwnershipRecord = async (
@@ -689,9 +755,520 @@ const DEFAULT_SETTINGS_SNAPSHOT: DropSettingsSnapshot = {
   allowedUrls: [...DEFAULT_NETWORK_ALLOWLIST],
 };
 
-const useDropStore = create<DropStoreState>((set, get) => ({
+const useDropStore = create<DropStoreState>((set, get) => {
+  const pendingPublishIntents = new Map<string, PublishSyncIntent>();
+  let publishLoopPromise: Promise<void> | null = null;
+  let syncConflictsHydrated = false;
+  let syncQueueHydrated = false;
+
+  const setSyncRuntimeState = () => {
+    set({
+      syncGuardActive: publishLoopPromise !== null,
+      syncQueueDepth: pendingPublishIntents.size,
+    });
+  };
+
+  const persistSyncConflicts = async (conflicts: DropSyncConflictRecord[]) => {
+    await writePersistedValue(SYNC_CONFLICTS_KEY, conflicts);
+  };
+
+  const toPersistedQueueEntries = (): DropSyncQueueEntry[] =>
+    [...pendingPublishIntents.values()]
+      .map((intent) => ({
+        version: 1 as const,
+        dropId: intent.dropId,
+        visibility: intent.visibility,
+        source: intent.source,
+        queuedAt: intent.queuedAt,
+      }))
+      .sort((a, b) => a.queuedAt - b.queuedAt);
+
+  const persistSyncQueue = async (): Promise<void> => {
+    await writePersistedValue(SYNC_QUEUE_KEY, toPersistedQueueEntries());
+  };
+
+  const hydrateSyncQueue = async (): Promise<void> => {
+    if (syncQueueHydrated) {
+      return;
+    }
+
+    const persisted = await readPersistedValue<unknown>(SYNC_QUEUE_KEY);
+    const entries = isDropSyncQueueEntryList(persisted) ? persisted : [];
+    entries.forEach((entry) => {
+      // Waiters are runtime-only; persisted queue entries only restore the work that still needs publishing.
+      pendingPublishIntents.set(entry.dropId, {
+        dropId: entry.dropId,
+        visibility: entry.visibility,
+        source: entry.source,
+        queuedAt: entry.queuedAt,
+        waiters: [],
+      });
+    });
+    syncQueueHydrated = true;
+    setSyncRuntimeState();
+  };
+
+  const hydrateSyncConflicts = async (): Promise<void> => {
+    if (syncConflictsHydrated) {
+      return;
+    }
+
+    const persisted = await readPersistedValue<unknown>(SYNC_CONFLICTS_KEY);
+    const conflicts = isDropSyncConflictRecordList(persisted) ? persisted : [];
+    syncConflictsHydrated = true;
+    set({ syncConflicts: conflicts });
+  };
+
+  const getPendingConflictForDrop = (dropId: string): DropSyncConflictRecord | null => {
+    const conflicts = get().syncConflicts;
+    return (
+      conflicts.find(
+        (entry) => entry.dropId === dropId && entry.status === "pending",
+      ) ?? null
+    );
+  };
+
+  const persistConflictRecord = async (
+    conflict: DropSyncConflictRecord,
+  ): Promise<DropSyncConflictRecord> => {
+    const next = [...get().syncConflicts];
+    const existingIndex = next.findIndex((entry) => entry.id === conflict.id);
+    if (existingIndex >= 0) {
+      next[existingIndex] = conflict;
+    } else {
+      next.unshift(conflict);
+    }
+    set({ syncConflicts: next });
+    await persistSyncConflicts(next);
+    return conflict;
+  };
+
+  const createConflictRecord = async (input: {
+    dropId: string;
+    reason: DropSyncConflictRecord["reason"];
+    code?: string | null;
+    local: {
+      id: string;
+      envelope: DropEnvelopeV1;
+      createdAt: number;
+      updatedAt: number;
+      revision?: string | null;
+    };
+    remote: {
+      id: string;
+      envelope: DropEnvelopeV1;
+      createdAt: number;
+      updatedAt: number;
+      revision?: string | null;
+    } | null;
+  }): Promise<DropSyncConflictRecord> => {
+    const existing = getPendingConflictForDrop(input.dropId);
+    if (existing) {
+      const refreshed: DropSyncConflictRecord = {
+        ...existing,
+        reason: input.reason,
+        code: input.code ?? existing.code,
+        local: input.local,
+        remote: input.remote,
+      };
+      return persistConflictRecord(refreshed);
+    }
+
+    const created: DropSyncConflictRecord = {
+      version: 1,
+      id: createSyncRecordId(),
+      dropId: input.dropId,
+      opKind: "publish",
+      reason: input.reason,
+      code: input.code ?? null,
+      status: "pending",
+      local: input.local,
+      remote: input.remote,
+      createdAt: Date.now(),
+    };
+
+    return persistConflictRecord(created);
+  };
+
+  const emitIntentProgress = (
+    intent: PublishSyncIntent,
+    progress: DropSyncProgress,
+  ): void => {
+    intent.waiters.forEach((waiter) => {
+      waiter.onProgress?.(progress);
+    });
+  };
+
+  const envelopeHash = (envelope: DropEnvelopeV1): string =>
+    serializeCanonicalJson(envelope);
+
+  const runPublishIntent = async (
+    intent: PublishSyncIntent,
+  ): Promise<ModeTransitionResult["publishedDrop"] | undefined> => {
+    const localRecord = await dropProviderRegistry.local.crud.drops.get(intent.dropId);
+    if (!localRecord) {
+      return undefined;
+    }
+
+    emitIntentProgress(intent, {
+      phase: "start",
+      total: 1,
+      completed: 0,
+      dropId: localRecord.id,
+    });
+
+    const remoteRecord = await dropProviderRegistry.remote.crud.drops.get(localRecord.id);
+    if (remoteRecord) {
+      const localHash = serializeCanonicalJson(localRecord.envelope);
+      const remoteHash = serializeCanonicalJson(remoteRecord.envelope);
+
+      if (localHash !== remoteHash) {
+        // Once remote state diverges, publishing stops and hands control to explicit conflict resolution.
+        await createConflictRecord({
+          dropId: localRecord.id,
+          reason: "remote_state_mismatch",
+          code: "remote_state_mismatch",
+          local: {
+            id: localRecord.id,
+            envelope: localRecord.envelope,
+            createdAt: localRecord.createdAt,
+            updatedAt: localRecord.updatedAt,
+            revision: localRecord.revision ?? null,
+          },
+          remote: {
+            id: remoteRecord.id,
+            envelope: remoteRecord.envelope,
+            createdAt: remoteRecord.createdAt,
+            updatedAt: remoteRecord.updatedAt,
+            revision: remoteRecord.revision ?? null,
+          },
+        });
+
+        throw new Error(
+          `Sync conflict for drop "${localRecord.id}". Resolve it before publishing again.`,
+        );
+      }
+
+      emitIntentProgress(intent, {
+        phase: "record",
+        total: 1,
+        completed: 1,
+        dropId: remoteRecord.id,
+      });
+      emitIntentProgress(intent, {
+        phase: "complete",
+        total: 1,
+        completed: 1,
+        dropId: remoteRecord.id,
+      });
+
+      return {
+        sourceId: localRecord.id,
+        id: remoteRecord.id,
+        url: buildDropUrlFromId(remoteRecord.id),
+      };
+    }
+
+    const payload = await dropProviderRegistry.local.get(localRecord.id);
+    if (!payload) {
+      return undefined;
+    }
+
+    const unlockPolicy = deriveUnlockPolicy("online", intent.visibility);
+
+    try {
+      const created = await dropProviderRegistry.remote.create(payload, {
+        id: localRecord.id,
+        visibility: intent.visibility,
+        unlockPolicy,
+      });
+
+      emitIntentProgress(intent, {
+        phase: "record",
+        total: 1,
+        completed: 1,
+        dropId: created.id,
+      });
+      emitIntentProgress(intent, {
+        phase: "complete",
+        total: 1,
+        completed: 1,
+        dropId: created.id,
+      });
+
+      return {
+        sourceId: localRecord.id,
+        id: created.id,
+        url: created.url,
+      };
+    } catch (error) {
+      if (!isConflictError(error)) {
+        throw error;
+      }
+
+      const conflictReason = getConflictReasonFromError(error);
+      const conflictCode = getConflictCodeFromError(error);
+      const competing = await dropProviderRegistry.remote.crud.drops.get(localRecord.id);
+      if (competing) {
+        await createConflictRecord({
+          dropId: localRecord.id,
+          reason: conflictReason,
+          code: conflictCode,
+          local: {
+            id: localRecord.id,
+            envelope: localRecord.envelope,
+            createdAt: localRecord.createdAt,
+            updatedAt: localRecord.updatedAt,
+            revision: localRecord.revision ?? null,
+          },
+          remote: {
+            id: competing.id,
+            envelope: competing.envelope,
+            createdAt: competing.createdAt,
+            updatedAt: competing.updatedAt,
+            revision: competing.revision ?? null,
+          },
+        });
+
+        throw new Error(
+          `Sync conflict for drop "${localRecord.id}". Resolve it before publishing again.`,
+        );
+      }
+
+      throw error;
+    }
+  };
+
+  const ensurePublishLoop = async () => {
+    await hydrateSyncQueue();
+
+    if (publishLoopPromise) {
+      return publishLoopPromise;
+    }
+
+    publishLoopPromise = (async () => {
+      setSyncRuntimeState();
+      while (pendingPublishIntents.size > 0) {
+        const firstEntry = pendingPublishIntents.entries().next().value as
+          | [string, PublishSyncIntent]
+          | undefined;
+        if (!firstEntry) {
+          break;
+        }
+
+        const [dropId, intent] = firstEntry;
+        pendingPublishIntents.delete(dropId);
+        setSyncRuntimeState();
+        await persistSyncQueue();
+
+        try {
+          // Intents run one-at-a-time so conflict handling sees a stable local/remote pair.
+          const published = await runPublishIntent(intent);
+          intent.waiters.forEach((waiter) => waiter.resolve(published));
+        } catch (error) {
+          intent.waiters.forEach((waiter) => waiter.reject(error));
+        }
+      }
+    })();
+
+    try {
+      await publishLoopPromise;
+    } finally {
+      publishLoopPromise = null;
+      setSyncRuntimeState();
+    }
+  };
+
+  const enqueuePublishIntent = async (input: {
+    dropId: string;
+    visibility: DropVisibility;
+    source: PublishSyncSource;
+    onProgress?: (progress: DropSyncProgress) => void;
+  }): Promise<ModeTransitionResult["publishedDrop"] | undefined> => {
+    await hydrateSyncConflicts();
+    await hydrateSyncQueue();
+
+    const pendingConflict = getPendingConflictForDrop(input.dropId);
+    if (pendingConflict) {
+      throw new Error(
+        `Drop "${input.dropId}" has a pending sync conflict (${pendingConflict.id}). Resolve it first.`,
+      );
+    }
+
+    return new Promise<ModeTransitionResult["publishedDrop"] | undefined>(
+      (resolve, reject) => {
+        const existing = pendingPublishIntents.get(input.dropId);
+        if (existing) {
+          existing.visibility = input.visibility;
+          existing.source = input.source;
+          existing.waiters.push({ resolve, reject, onProgress: input.onProgress });
+        } else {
+          const queuedAt = Date.now();
+          pendingPublishIntents.set(input.dropId, {
+            dropId: input.dropId,
+            visibility: input.visibility,
+            source: input.source,
+            queuedAt,
+            waiters: [{ resolve, reject, onProgress: input.onProgress }],
+          });
+        }
+
+        setSyncRuntimeState();
+        void persistSyncQueue();
+        void ensurePublishLoop();
+      },
+    );
+  };
+
+  const resolveConflictRecord = async (
+    conflictId: string,
+    resolution: DropSyncConflictResolution,
+  ): Promise<void> => {
+    await hydrateSyncConflicts();
+
+    const conflicts = [...get().syncConflicts];
+    const index = conflicts.findIndex((entry) => entry.id === conflictId);
+    if (index < 0) {
+      throw new Error(`Sync conflict "${conflictId}" was not found.`);
+    }
+
+    const target = conflicts[index];
+    if (target.status !== "pending") {
+      return;
+    }
+
+    if (resolution === "accept-local") {
+      const latestRemote = target.remote
+        ? await dropProviderRegistry.remote.crud.drops.get(target.dropId)
+        : null;
+
+      if (target.remote) {
+        if (
+          latestRemote &&
+          envelopeHash(latestRemote.envelope) !== envelopeHash(target.remote.envelope)
+        ) {
+          const refreshedConflict: DropSyncConflictRecord = {
+            ...target,
+            remote: {
+              id: latestRemote.id,
+              envelope: latestRemote.envelope,
+              createdAt: latestRemote.createdAt,
+              updatedAt: latestRemote.updatedAt,
+              revision: latestRemote.revision ?? null,
+            },
+          };
+          conflicts[index] = refreshedConflict;
+          set({ syncConflicts: conflicts });
+          await persistSyncConflicts(conflicts);
+          throw new Error(
+            `Remote state changed for drop "${target.dropId}". Review the refreshed conflict before resolving.`,
+          );
+        }
+      }
+
+      const localRecord =
+        (await dropProviderRegistry.local.crud.drops.get(target.dropId)) ?? {
+          id: target.local.id,
+          envelope: target.local.envelope,
+          createdAt: target.local.createdAt,
+          updatedAt: target.local.updatedAt,
+          revision: target.local.revision ?? null,
+        };
+
+      try {
+        await dropProviderRegistry.remote.crud.drops.create(localRecord, {
+          upsert: true,
+          expectedRevision:
+            latestRemote?.revision ?? target.remote?.revision ?? undefined,
+        });
+      } catch (error) {
+        if (!isConflictError(error)) {
+          throw error;
+        }
+
+        const refreshedRemote = await dropProviderRegistry.remote.crud.drops.get(
+          target.dropId,
+        );
+        if (refreshedRemote) {
+          conflicts[index] = {
+            ...target,
+            remote: {
+              id: refreshedRemote.id,
+              envelope: refreshedRemote.envelope,
+              createdAt: refreshedRemote.createdAt,
+              updatedAt: refreshedRemote.updatedAt,
+              revision: refreshedRemote.revision ?? null,
+            },
+          };
+          set({ syncConflicts: conflicts });
+          await persistSyncConflicts(conflicts);
+        }
+
+        throw new Error(
+          `Remote state changed for drop "${target.dropId}" while resolving. Review the refreshed conflict and retry.`,
+        );
+      }
+    } else {
+      const latestLocal = await dropProviderRegistry.local.crud.drops.get(
+        target.dropId,
+      );
+      if (
+        latestLocal &&
+        envelopeHash(latestLocal.envelope) !== envelopeHash(target.local.envelope)
+      ) {
+        const refreshedConflict: DropSyncConflictRecord = {
+          ...target,
+          local: {
+            id: latestLocal.id,
+            envelope: latestLocal.envelope,
+            createdAt: latestLocal.createdAt,
+            updatedAt: latestLocal.updatedAt,
+            revision: latestLocal.revision ?? null,
+          },
+        };
+        conflicts[index] = refreshedConflict;
+        set({ syncConflicts: conflicts });
+        await persistSyncConflicts(conflicts);
+        throw new Error(
+          `Local state changed for drop "${target.dropId}". Review the refreshed conflict before resolving.`,
+        );
+      }
+
+      if (!target.remote) {
+        throw new Error(
+          `Sync conflict "${conflictId}" does not have a remote candidate to accept.`,
+        );
+      }
+
+      await dropProviderRegistry.local.crud.drops.create(
+        {
+          id: target.remote.id,
+          envelope: target.remote.envelope,
+          createdAt: target.remote.createdAt,
+          updatedAt: Date.now(),
+          revision: target.remote.revision ?? null,
+        },
+        { upsert: true },
+      );
+    }
+
+    conflicts[index] = {
+      ...target,
+      status: "resolved",
+      resolution,
+      resolvedAt: Date.now(),
+    };
+
+    set({ syncConflicts: conflicts });
+    await persistSyncConflicts(conflicts);
+  };
+
+  return {
   ...derivedStateFromSnapshot(DEFAULT_SETTINGS_SNAPSHOT),
   hydrated: false,
+  syncGuardActive: false,
+  syncQueueDepth: 0,
+  syncConflicts: [],
 
   hydrateOfflineMode: async () => {
     if (get().hydrated) return;
@@ -716,6 +1293,12 @@ const useDropStore = create<DropStoreState>((set, get) => ({
   },
 
   hydrateSharePreferences: async () => {
+    await hydrateSyncConflicts();
+    await hydrateSyncQueue();
+    if (pendingPublishIntents.size > 0) {
+      void ensurePublishLoop();
+    }
+
     const [
       storedMode,
       storedVisibility,
@@ -839,11 +1422,12 @@ const useDropStore = create<DropStoreState>((set, get) => ({
     let publishedDrop: ModeTransitionResult["publishedDrop"];
 
     if (currentMode === "offline" && mode === "online" && options.activeDropId) {
-      publishedDrop = await publishLocalDropToRemote(
-        options.activeDropId,
-        get().shareVisibility,
-        options.onProgress,
-      );
+      publishedDrop = await enqueuePublishIntent({
+        dropId: options.activeDropId,
+        visibility: get().shareVisibility,
+        source: "mode_transition",
+        onProgress: options.onProgress,
+      });
     }
 
     return {
@@ -895,10 +1479,12 @@ const useDropStore = create<DropStoreState>((set, get) => ({
   },
 
   createDrop: async (payload: DropPayload, options: Partial<DropCreateOptions> = {}) => {
-    await Promise.all([
-      get().hydrateOfflineMode(),
-      get().hydrateSharePreferences(),
-    ]);
+    if (!get().hydrated) {
+      await Promise.all([
+        get().hydrateOfflineMode(),
+        get().hydrateSharePreferences(),
+      ]);
+    }
 
     const mode = get().mode;
     const visibility = resolveCreateVisibility(
@@ -918,18 +1504,20 @@ const useDropStore = create<DropStoreState>((set, get) => ({
       return localCreated;
     }
 
-    const syncResult = await dropProviderRegistry.local.sync(
-      dropProviderRegistry.remote,
-      { dropId: localCreated.id },
-    );
+    // Online mode still stages the sealed drop locally first so share retries do not lose work.
+    const published = await enqueuePublishIntent({
+      dropId: localCreated.id,
+      visibility,
+      source: "create_online",
+    });
 
-    if (syncResult.synced < 1) {
+    if (!published) {
       throw new Error("Failed to publish this drop to the remote provider.");
     }
 
     return {
-      id: localCreated.id,
-      url: localCreated.url,
+      id: published.id,
+      url: published.url,
       scope: "remote",
     };
   },
@@ -938,15 +1526,27 @@ const useDropStore = create<DropStoreState>((set, get) => ({
     id: string,
     onProgress?: (progress: DropSyncProgress) => void,
   ) => {
-    const published = await publishLocalDropToRemote(
-      id,
-      get().shareVisibility,
+    const published = await enqueuePublishIntent({
+      dropId: id,
+      visibility: get().shareVisibility,
+      source: "manual_sync",
       onProgress,
-    );
+    });
 
     if (!published) {
       throw new Error(`Drop "${id}" was not found in local storage.`);
     }
+  },
+
+  listSyncConflicts: () => {
+    return [...get().syncConflicts].sort((a, b) => b.createdAt - a.createdAt);
+  },
+
+  resolveSyncConflict: async (
+    conflictId: string,
+    resolution: DropSyncConflictResolution,
+  ) => {
+    await resolveConflictRecord(conflictId, resolution);
   },
 
   getDrop: async (id: string) => {
@@ -1053,7 +1653,8 @@ const useDropStore = create<DropStoreState>((set, get) => ({
   getOfflineDrop: async (id: string) => {
     return dropProviderRegistry.local.get(id);
   },
-}));
+  };
+});
 
 export type { DropGraph, DropMetadata, DropPayload };
 export { isOfflineDropId, OFFLINE_DROP_PREFIX };

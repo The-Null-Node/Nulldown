@@ -1,8 +1,18 @@
+/*
+These types describe the remote branch heap persisted by Pages Functions. They are not
+just API shapes: the same records are stored in R2 and replayed to rebuild branch
+content, so validation here protects both transport and storage integrity.
+*/
+
 export const NULLDOWN_ACCOUNT_ID_HEADER = "x-nulldown-account-id";
 
 export type DropBranchMode = "owner" | "clone";
 export type DropBranchStatus = "active" | "promoted" | "archived";
 
+/*
+`headSnapshotId` points at the latest materialized branch state. Event sequencing is
+tracked separately so the branch can rebuild content from checkpoints plus diff ranges.
+*/
 export interface DropBranchRecord {
   version: 1;
   branchId: string;
@@ -14,6 +24,9 @@ export interface DropBranchRecord {
   writerAccountId: string | null;
   writerClientId: string | null;
   headSnapshotId: number;
+  snapshotHeapVersion?: number;
+  headEventSeq?: number;
+  checkpointInterval?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -27,6 +40,9 @@ export interface DropSnapshotRecord {
   seq: number;
   eventIds: string[];
   checkpointed: boolean;
+  patchStartSeq?: number | null;
+  patchEndSeq?: number | null;
+  checkpointKey?: string;
   textLength: number;
   createdAt: number;
 }
@@ -73,7 +89,9 @@ const isNullableString = (value: unknown): value is string | null =>
 const isNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
-export const isDropBranchRecord = (value: unknown): value is DropBranchRecord => {
+export const isDropBranchRecord = (
+  value: unknown,
+): value is DropBranchRecord => {
   if (!isRecord(value)) return false;
   if (value.version !== 1) return false;
   if (!isString(value.branchId)) return false;
@@ -92,6 +110,11 @@ export const isDropBranchRecord = (value: unknown): value is DropBranchRecord =>
   if (!isNullableString(value.writerClientId)) return false;
   return (
     isNumber(value.headSnapshotId) &&
+    (value.snapshotHeapVersion === undefined ||
+      isNumber(value.snapshotHeapVersion)) &&
+    (value.headEventSeq === undefined || isNumber(value.headEventSeq)) &&
+    (value.checkpointInterval === undefined ||
+      isNumber(value.checkpointInterval)) &&
     isNumber(value.createdAt) &&
     isNumber(value.updatedAt)
   );
@@ -109,12 +132,29 @@ export const isDropSnapshotRecord = (
     return false;
   }
   if (!isNumber(value.seq)) return false;
-  if (!Array.isArray(value.eventIds) || !value.eventIds.every((entry) => isString(entry))) {
+  if (
+    !Array.isArray(value.eventIds) ||
+    !value.eventIds.every((entry) => isString(entry))
+  ) {
     return false;
   }
   if (typeof value.checkpointed !== "boolean") return false;
-  return (
-    isNumber(value.textLength) &&
-    isNumber(value.createdAt)
-  );
+  if (
+    value.patchStartSeq !== undefined &&
+    value.patchStartSeq !== null &&
+    !isNumber(value.patchStartSeq)
+  ) {
+    return false;
+  }
+  if (
+    value.patchEndSeq !== undefined &&
+    value.patchEndSeq !== null &&
+    !isNumber(value.patchEndSeq)
+  ) {
+    return false;
+  }
+  if (value.checkpointKey !== undefined && !isString(value.checkpointKey)) {
+    return false;
+  }
+  return isNumber(value.textLength) && isNumber(value.createdAt);
 };

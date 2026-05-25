@@ -133,6 +133,15 @@ The application is designed for deployment on [Cloudflare Pages](https://pages.c
 - [@aws-sdk/client-s3](https://github.com/aws/aws-sdk-js-v3) (for interacting with R2)
 - [nanoid](https://github.com/ai/nanoid) (for generating unique IDs)
 
+## Operations
+
+- CLI: `bun run nd -- --help`
+- Global CLI install from checkout: `bun install -g .`
+- CLI config path: `~/.config/nulldown`
+- Build CLI binary: `bun run cli:build`
+- Branch heap v2 backfill runbook: `docs/BRANCH_HEAP_BACKFILL.md`
+- Backfill CLI: `bun run branch:backfill -- --drop <rootDropId> --token <token>`
+
 ## License
 
 MIT

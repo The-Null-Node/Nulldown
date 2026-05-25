@@ -4,9 +4,9 @@ import type {
   DropDraftPackV1,
   DropDraftSnapshot,
 } from "../../../shared/drop/types";
-import type Snapshotter from "./snapshotter";
-import { decodeText } from "./textDiff";
-import { DiffOp, type SnapshotDiff } from "./types";
+import type Snapshotter from "../../../shared/nulledit/snapshotter";
+import { decodeText } from "../../../shared/nulledit/textDiff";
+import { DiffOp, type SnapshotDiff } from "../../../shared/nulledit/types";
 
 const DEFAULT_MAX_OPS = 160;
 const DEFAULT_MAX_BYTES = 24 * 1024;

@@ -54,9 +54,16 @@ Nulldown supports enhanced markdown out of the box:
 - **Code blocks** — syntax-highlighted in 100+ languages
 - **LaTeX math** — inline `$E = mc^2$` and block `$$\int_0^x f(u)\,du$$`
 - **Mermaid diagrams** — flowcharts, sequence diagrams, rendered as SVG
-- **Embeds** — YouTube and Vimeo videos inline, sandboxed and validated
+- **Native cards and embeds** — Nulldown drop cards plus sandboxed external videos
 
-### Embeds
+### Native Cards And Embeds
+
+Reference another Nulldown drop with an `nd` block. It renders as a compact card with title, preview, link, and metadata hints:
+
+````markdown
+```nd(id="H2oXJR")
+```
+````
 
 Drop a video URL into an embed block and it renders inline:
 
@@ -66,7 +73,7 @@ https://www.youtube.com/watch?v=dQw4w9WgXcQ
 ```
 ````
 
-Embeds are validated against a trusted host allowlist (YouTube, Vimeo). Untrusted URLs are blocked. Per-drop custom allowlists are supported.
+External embeds are validated against a trusted host allowlist (YouTube, Vimeo). Untrusted URLs are blocked. Per-drop custom allowlists are supported.
 
 ---
 
@@ -149,7 +156,7 @@ Light and dark modes. Syntax highlighting themes. Swap them without reloading.
 
 Under the hood, nulldown's rendering runs through **nullplug** — a plugin pipeline for fenced code blocks.
 
-When you write `` ```embed ``, nullplug intercepts the block, runs the embed handler, and patches the result back into the rendered output. The system is designed for more plugins — the registry is open, the handler interface is async-capable — but today `embed` is the one that ships.
+When you write `` ```nd `` or `` ```embed ``, nullplug intercepts the block, runs the handler, and patches the result back into the rendered output. Built-in `nd` blocks render Nulldown cards without iframe embedding; `embed` remains for trusted external sites.
 
 The pipeline renders progressively (partial results flush to the preview as plugins resolve) and supports cancellation (start typing again and the current render is abandoned).
 

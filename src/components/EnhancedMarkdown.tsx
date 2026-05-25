@@ -1,3 +1,9 @@
+/*
+This is the final markdown rendering boundary. Nullplug may already have produced embed
+markup upstream, but this component still re-validates iframe hosts before React mounts
+them so unsafe HTML cannot bypass the allowlist through raw markdown or custom modules.
+*/
+
 import React, { useDeferredValue, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import type { PluggableList } from "unified";
@@ -72,6 +78,7 @@ const sanitizeSchema = {
     ...(defaultSchema.attributes ?? {}),
     a: unique([
       ...asList(defaultSchema.attributes?.a),
+      "className",
       "target",
       "rel",
       "title",
@@ -89,6 +96,7 @@ const sanitizeSchema = {
       "frameborder",
     ],
     div: ["className", "dataHost"],
+    span: unique([...asList(defaultSchema.attributes?.span), "className"]),
     u: [...asList(defaultSchema.attributes?.u)],
     ins: [...asList(defaultSchema.attributes?.ins)],
     sub: [...asList(defaultSchema.attributes?.sub)],
@@ -282,6 +290,7 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
           const rawSrc = typeof src === "string" ? src : "";
           const safeSrc = getTrustedNetworkUrl(rawSrc, trustedHosts);
 
+          // Sanitization allows `iframe`, but host allowlisting still happens here right before render.
           if (!safeSrc) {
             if (rawSrc && callbacks?.onBlockedEmbed) {
               callbacks.onBlockedEmbed(rawSrc);
@@ -376,6 +385,7 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
 
     return (
       <ReactMarkdown
+        // Defer large markdown updates so editor typing stays responsive while preview catches up.
         className={className}
         remarkPlugins={remarkPlugins as any}
         rehypePlugins={rehypePlugins as any}

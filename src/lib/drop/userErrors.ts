@@ -58,6 +58,18 @@ export const toUserFacingDropError = (
 
   if (
     messageIncludes(message, [
+      "sync conflict",
+      "pending sync conflict",
+      "resolve it before",
+      "remote_id_conflict",
+      "revision_precondition_failed",
+    ])
+  ) {
+    return "This drop changed elsewhere. Refresh and try sharing again.";
+  }
+
+  if (
+    messageIncludes(message, [
       "failed to publish",
       "failed to store",
       "provider unlock request failed",

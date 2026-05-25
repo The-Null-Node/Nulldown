@@ -1,8 +1,5 @@
 import { create } from "zustand";
 
-/**
- * Storage operations that can be performed atomically
- */
 export enum StorageOperation {
   SET = "SET",
   REMOVE = "REMOVE",
@@ -37,17 +34,11 @@ export const createJsonStoragePayload = <T>(data: T): JsonStoragePayload => {
   } as JsonStoragePayload;
 };
 
-/**
- * Result of a storage operation
- */
 export interface StorageOperationResult {
   success: boolean;
   error?: string;
 }
 
-/**
- * Storage store state and actions
- */
 export interface StorageState {
   // Track if we're in a browser environment
   isClient: boolean;
@@ -69,9 +60,6 @@ export interface StorageState {
   batchRemove: (keys: string[]) => StorageOperationResult;
 }
 
-/**
- * Create the storage store with atomic operations
- */
 const useStorageStore = create<StorageState>((set, get) => ({
   isClient: false,
   pendingOperations: 0,

@@ -33,7 +33,6 @@ import {
   normalizeNetworkAllowlist,
   parseNetworkAllowlistInput,
 } from "../../../lib/networkAllowlist";
-
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
@@ -399,7 +398,6 @@ const ShortcutsSection: React.FC = () => (
 interface StorageSectionProps {
   offlineMode: boolean;
 }
-
 const StorageSection: React.FC<StorageSectionProps> = ({ offlineMode }) => (
   <SettingsSection title="Storage">
     <p className="text-sm text-foreground">
@@ -556,9 +554,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
 
             <Separator className="bg-border" />
 
-            <StorageSection
-              offlineMode={offlineMode}
-            />
+            <StorageSection offlineMode={offlineMode} />
           </div>
         </div>
       </DialogContent>

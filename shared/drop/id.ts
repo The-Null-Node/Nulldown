@@ -3,8 +3,7 @@ export const DROP_LINK_ID_LENGTH = 6;
 
 const DROP_ID_ALPHABET =
   "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const MAX_ACCEPTABLE_RANDOM_BYTE =
-  256 - (256 % DROP_ID_ALPHABET.length);
+const MAX_ACCEPTABLE_RANDOM_BYTE = 256 - (256 % DROP_ID_ALPHABET.length);
 const DROP_ID_TOKEN_REGEX = /^[A-Za-z0-9_-]+$/;
 
 const randomInt = (max: number) => Math.floor(Math.random() * max);

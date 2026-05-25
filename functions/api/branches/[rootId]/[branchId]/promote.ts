@@ -1,14 +1,20 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { readRequestAccountId } from "../../../_lib/accountAuth";
+import {
+  resolveAuthenticatedAccountId,
+  type AccountAuthEnv,
+} from "../../../_lib/accountAuth";
 import { readBranch, readBranchContent } from "../../../_lib/branchState";
+import { createPromotedEnvelope } from "../../../_lib/promotedEnvelope";
 import { createRemoteJsonDrop } from "../../../_lib/remoteDropCreate";
 import { sanitizeDiffAuthToken } from "../../../_lib/diffAuth";
 import { resolveRemoteDropId } from "../../../_lib/dropId";
 import { toShortDropId } from "../../../../../shared/drop/id";
 
-interface Env {
+interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
   PUBLIC_BASE_URL: string;
+  PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
+  PROVIDER_SIGNING_PRIVATE_JWK?: string;
 }
 
 const resolveParam = (value: string | string[] | undefined) =>
@@ -30,7 +36,7 @@ export const onRequestPost: PagesFunction<Env, "rootId" | "branchId"> = async ({
 
   const rootDropId = await resolveRemoteDropId(env.R2_BUCKET, resolveParam(params.rootId));
   const branchId = sanitizeDiffAuthToken(resolveParam(params.branchId));
-  const accountId = readRequestAccountId(request);
+  const accountId = await resolveAuthenticatedAccountId(request, env);
   if (!rootDropId || !branchId) {
     return new Response("Root drop ID and branch ID are required.", { status: 400 });
   }
@@ -59,17 +65,35 @@ export const onRequestPost: PagesFunction<Env, "rootId" | "branchId"> = async ({
     return new Response("Branch content not found.", { status: 404 });
   }
 
-  const promotedId = await createRemoteJsonDrop(env.R2_BUCKET, {
-    content,
-    metadata: {
-      ownerAccountId: branch.ownerAccountId,
-      baseDropId: rootDropId,
-      rootDropId,
-      branchId,
-      snapshotId: branch.headSnapshotId,
-      promotedFromBranchId: branchId,
-    },
-  });
+  const promotedMetadata = {
+    ownerAccountId: branch.ownerAccountId,
+    baseDropId: rootDropId,
+    rootDropId,
+    branchId,
+    snapshotId: branch.headSnapshotId,
+    promotedFromBranchId: branchId,
+  };
+
+  const providerEncryptionPrivateJwk = env.PROVIDER_ENCRYPTION_PRIVATE_JWK;
+  const providerSigningPrivateJwk = env.PROVIDER_SIGNING_PRIVATE_JWK;
+  const canSealPromotion =
+    typeof providerEncryptionPrivateJwk === "string" &&
+    typeof providerSigningPrivateJwk === "string";
+
+  const promotedPayload = canSealPromotion
+    ? await createPromotedEnvelope({
+        content,
+        accountId: branch.writerAccountId ?? branch.ownerAccountId ?? accountId,
+        metadata: promotedMetadata,
+        providerEncryptionPrivateJwk,
+        providerSigningPrivateJwk,
+      })
+    : {
+        content,
+        metadata: promotedMetadata,
+      };
+
+  const promotedId = await createRemoteJsonDrop(env.R2_BUCKET, promotedPayload);
 
   return new Response(
     JSON.stringify({

@@ -1,21 +1,47 @@
 {
   "name": "nulldown",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "description": "A simple markdown sharing tool",
+  "type": "module",
+  "bin": {
+    "nd": "./bin/nulldown.ts",
+    "nulldown": "./bin/nulldown.ts"
+  },
+  "files": [
+    "bin/",
+    "src/cli/",
+    "shared/drop/branch.ts",
+    "shared/drop/diff.ts",
+    "shared/drop/diffAuth.ts",
+    "shared/drop/resolved.ts",
+    "shared/drop/sidecar.ts",
+    "shared/nullplug/",
+    "shared/nulledit/",
+    "docs/NULDOWN_API.md",
+    "skill.md",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "nd": "bun run bin/nulldown.ts",
+    "cli": "bun run bin/nulldown.ts",
+    "cli:build": "bun build --compile --minify --sourcemap --bytecode bin/nulldown.ts --outfile dist/nulldown",
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview",
     "lint": "bunx --bun eslint .",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
-    "test:diff-webhook": "bun run scripts/test-diff-webhook.ts",
-    "diff:keygen": "bun run scripts/diff-keygen.ts",
-    "diff:register": "bun run scripts/diff-register.ts",
-    "diff:sign": "bun run scripts/diff-sign.ts",
-    "branch:resolve": "bun run scripts/branch-resolve.ts",
-    "branch:content": "bun run scripts/branch-content.ts",
-    "branch:promote": "bun run scripts/branch-promote.ts",
+    "test:diff-webhook": "bun run bin/nulldown.ts smoke diff",
+    "diff:keygen": "bun run bin/nulldown.ts diff keygen",
+    "diff:register": "bun run bin/nulldown.ts diff register",
+    "diff:sign": "bun run bin/nulldown.ts diff sign",
+    "branch:resolve": "bun run bin/nulldown.ts branch resolve",
+    "branch:content": "bun run bin/nulldown.ts branch content",
+    "branch:promote": "bun run bin/nulldown.ts branch promote",
+    "branch:backfill": "bun run bin/nulldown.ts admin branch-backfill",
     "pages:build": "bunx --bun vite build",
     "pages:dev": "bun run build && wrangler pages dev dist --live-reload",
     "pages:dev:remote": "bun run build && wrangler pages dev dist --live-reload --remote",
@@ -56,6 +82,7 @@
     "unified": "^11.0.5",
     "vfile": "^6.0.3",
     "vfile-message": "^4.0.2",
+    "zod": "^4.4.3",
     "zustand": "^4.0.0"
   },
   "devDependencies": {

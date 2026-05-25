@@ -1,30 +1,17 @@
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { DROP_ID_LENGTH, generateDropId } from "../../../shared/drop/id";
+import { syncPublicDropIndexForPayload } from "./dropIndex";
 import { removeRemoteAliasIfMatch, reserveRemoteAlias } from "./dropId";
+import { R2DropObjectRepository } from "./dropObjectRepository";
 
 const MAX_ID_ALLOCATION_ATTEMPTS = 64;
 
-const putDropObject = async (
-  bucket: R2Bucket,
-  id: string,
-  payload: string,
-  contentType: string,
-): Promise<boolean> => {
-  const created = await bucket.put(id, payload, {
-    onlyIf: {
-      etagDoesNotMatch: "*",
-    },
-    httpMetadata: { contentType },
-  });
-
-  return Boolean(created);
-};
-
 export const createRemoteJsonDrop = async (
   bucket: R2Bucket,
-  payload: unknown,
+  payload: object,
 ): Promise<string> => {
   const storedPayload = JSON.stringify(payload);
+  const dropRepository = new R2DropObjectRepository(bucket);
 
   for (let attempt = 0; attempt < MAX_ID_ALLOCATION_ATTEMPTS; attempt += 1) {
     const candidateId = generateDropId(DROP_ID_LENGTH);
@@ -33,19 +20,19 @@ export const createRemoteJsonDrop = async (
       continue;
     }
 
+    let storedSuccessfully = false;
+
     try {
-      const stored = await putDropObject(
-        bucket,
-        candidateId,
-        storedPayload,
-        "application/json",
-      );
-      if (stored) {
+      const stored = await dropRepository.put(candidateId, storedPayload, {
+        contentType: "application/json",
+      });
+      if (stored === "stored") {
+        storedSuccessfully = true;
+        await syncPublicDropIndexForPayload(bucket, candidateId, payload);
         return candidateId;
       }
     } finally {
-      const object = await bucket.get(candidateId);
-      if (!object && aliasState === "reserved") {
+      if (!storedSuccessfully && aliasState === "reserved") {
         await removeRemoteAliasIfMatch(bucket, candidateId);
       }
     }

@@ -1,6 +1,8 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { isDropEnvelopeV1 } from "../../shared/drop/types";
-import { REMOTE_DROP_ALIAS_PREFIX } from "./_lib/dropId";
+import {
+  REMOTE_PUBLIC_DROP_INDEX_PREFIX,
+  readPublicDropIndexEntryByKey,
+} from "./_lib/dropIndex";
 import { createRequestLogger } from "./_lib/logger";
 
 interface Env {
@@ -17,13 +19,7 @@ type ListScanResult =
   | { kind: "item"; item: PublicListItem }
   | {
       kind: "skip";
-      reason:
-        | "alias"
-        | "missing_object"
-        | "non_json"
-        | "invalid_json"
-        | "non_envelope"
-        | "non_public";
+      reason: "invalid_index_entry";
     };
 
 export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
@@ -52,75 +48,38 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
       : DEFAULT_LIMIT;
     const cursor = url.searchParams.get("cursor") || undefined;
 
-    const listed = await env.R2_BUCKET.list({ limit, cursor });
+    const listed = await env.R2_BUCKET.list({
+      prefix: REMOTE_PUBLIC_DROP_INDEX_PREFIX,
+      limit,
+      cursor,
+    });
 
     const scanned = await Promise.all(
       listed.objects.map(async (entry) => {
-        if (entry.key.startsWith(REMOTE_DROP_ALIAS_PREFIX)) {
+        const indexEntry = await readPublicDropIndexEntryByKey(
+          env.R2_BUCKET,
+          entry.key,
+        );
+        if (!indexEntry) {
           return {
             kind: "skip",
-            reason: "alias",
+            reason: "invalid_index_entry",
           } satisfies ListScanResult;
         }
 
-        const object = await env.R2_BUCKET.get(entry.key);
-        if (!object) {
-          return {
-            kind: "skip",
-            reason: "missing_object",
-          } satisfies ListScanResult;
-        }
-
-        const contentType = object.httpMetadata?.contentType || "";
-        if (!contentType.includes("application/json")) {
-          return {
-            kind: "skip",
-            reason: "non_json",
-          } satisfies ListScanResult;
-        }
-
-        const serialized = await new Response(object.body).text();
-
-        try {
-          const parsed = JSON.parse(serialized) as unknown;
-          if (!isDropEnvelopeV1(parsed)) {
-            return {
-              kind: "skip",
-              reason: "non_envelope",
-            } satisfies ListScanResult;
-          }
-
-          if ((parsed.visibility ?? "unlisted") !== "public") {
-            return {
-              kind: "skip",
-              reason: "non_public",
-            } satisfies ListScanResult;
-          }
-
-          return {
-            kind: "item",
-            item: {
-              id: entry.key,
-              createdAt: entry.uploaded.getTime(),
-              updatedAt: entry.uploaded.getTime(),
-            },
-          } satisfies ListScanResult;
-        } catch {
-          return {
-            kind: "skip",
-            reason: "invalid_json",
-          } satisfies ListScanResult;
-        }
+        return {
+          kind: "item",
+          item: {
+            id: indexEntry.id,
+            createdAt: indexEntry.createdAt,
+            updatedAt: indexEntry.updatedAt,
+          },
+        } satisfies ListScanResult;
       }),
     );
 
     const skipCounts = {
-      alias: 0,
-      missing_object: 0,
-      non_json: 0,
-      invalid_json: 0,
-      non_envelope: 0,
-      non_public: 0,
+      invalid_index_entry: 0,
     };
 
     const items = scanned.flatMap((result) => {
@@ -132,18 +91,15 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
       return [];
     });
 
+    items.sort((a, b) => b.updatedAt - a.updatedAt);
+
     logger.logEnd(200, {
       limit,
       hasCursor: Boolean(cursor),
       returned: items.length,
       scanned: listed.objects.length,
       truncated: listed.truncated,
-      skipAlias: skipCounts.alias,
-      skipMissingObject: skipCounts.missing_object,
-      skipNonJson: skipCounts.non_json,
-      skipInvalidJson: skipCounts.invalid_json,
-      skipNonEnvelope: skipCounts.non_envelope,
-      skipNonPublic: skipCounts.non_public,
+      skipInvalidIndexEntry: skipCounts.invalid_index_entry,
     });
 
     return new Response(

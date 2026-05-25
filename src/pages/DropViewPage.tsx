@@ -152,6 +152,10 @@ const DropViewPage: React.FC = () => {
       try {
         const rendered = await renderMarkdownWithNullplug(dropContent, {
           allowedUrls: sourceAllowedUrls,
+          caller: {
+            dropId: id,
+          },
+          resolveDrop: getDrop,
           onFlush: (buffered) => {
             if (active) {
               setRenderedContent(buffered);
@@ -180,7 +184,7 @@ const DropViewPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [dropContent, sourceAllowedUrls]);
+  }, [dropContent, getDrop, id, sourceAllowedUrls]);
 
   // Set document title based on drop content (basic version)
   const dropTitle = dropContent ? getMarkdownTitle(dropContent) : "";

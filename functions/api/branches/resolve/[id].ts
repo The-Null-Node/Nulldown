@@ -1,10 +1,13 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { readRequestAccountId } from "../../_lib/accountAuth";
+import {
+  resolveAuthenticatedAccountId,
+  type AccountAuthEnv,
+} from "../../_lib/accountAuth";
 import { resolveBranchForActor } from "../../_lib/branchState";
 import { sanitizeDiffAuthToken } from "../../_lib/diffAuth";
 import { resolveRemoteDropId } from "../../_lib/dropId";
 
-interface Env {
+interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
 }
@@ -26,7 +29,12 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     return new Response("Drop ID is required.", { status: 400 });
   }
 
-  const accountId = readRequestAccountId(request);
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  if (!accountId) {
+    return new Response("Authenticated account session is required.", {
+      status: 401,
+    });
+  }
   const clientId = sanitizeDiffAuthToken(
     request.headers.get("x-nulldown-client-id") || new URL(request.url).searchParams.get("clientId"),
   );

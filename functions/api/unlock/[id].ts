@@ -58,7 +58,9 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
         reason: "provider_key_missing",
         requestedDropRef: toLogRef(requestedId),
       });
-      return new Response("Provider escrow key is not configured.", { status: 501 });
+      return new Response("Provider escrow key is not configured.", {
+        status: 501,
+      });
     }
 
     const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger);
@@ -193,7 +195,9 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     let requesterPublicKey: CryptoKey;
 
     try {
-      requesterPublicKey = await parseRequesterPublicKey(body.requesterPublicJwk);
+      requesterPublicKey = await parseRequesterPublicKey(
+        body.requesterPublicJwk,
+      );
     } catch (error) {
       logger.warn("unlock.requester_public_key_invalid", {
         requestedDropRef: toLogRef(requestedId),

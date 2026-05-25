@@ -1,3 +1,9 @@
+/*
+The passkey vault stores the account keypair used to wrap content keys and sign drop
+envelopes. IndexedDB is the preferred backing store, while localStorage is only a
+fallback so existing browsers can still unlock previously created vaults.
+*/
+
 import {
   getKvItem,
   getKvValue,
@@ -54,9 +60,11 @@ export class PasskeyVault {
   private readonly storageKey: string;
   private readonly unlockLeaseKey: string;
   private readonly unlockTtlMs: number;
-  private unlockState:
-    | { accountId: string; expiresAt: number; passkeyProtected: boolean }
-    | null = null;
+  private unlockState: {
+    accountId: string;
+    expiresAt: number;
+    passkeyProtected: boolean;
+  } | null = null;
 
   constructor(options: PasskeyVaultOptions = {}) {
     this.storageKey = options.storageKey ?? DEFAULT_VAULT_RECORD_KEY;
@@ -287,7 +295,7 @@ export class PasskeyVault {
     try {
       window.localStorage.setItem(this.unlockLeaseKey, JSON.stringify(lease));
     } catch {
-      // ignore fallback failures
+      // Losing the UX lease only forces another prompt; it does not destroy the vault itself.
     }
   }
 
@@ -297,7 +305,7 @@ export class PasskeyVault {
     try {
       window.localStorage.removeItem(this.unlockLeaseKey);
     } catch {
-      // ignore fallback failures
+      // Lease cleanup is best-effort because stale leases are revalidated on the next unlock.
     }
   }
 
@@ -307,7 +315,7 @@ export class PasskeyVault {
     try {
       window.localStorage.setItem(this.storageKey, JSON.stringify(record));
     } catch {
-      // ignore fallback failures
+      // IndexedDB remains the primary store; this fallback write is only for degraded browsers.
     }
   }
 
@@ -364,7 +372,9 @@ export class PasskeyVault {
       return record;
     }
 
-    const passkeyCredentialId = await this.createPasskeyCredential(record.accountId);
+    const passkeyCredentialId = await this.createPasskeyCredential(
+      record.accountId,
+    );
     const upgraded: VaultRecordV1 = {
       ...record,
       passkeyCredentialId,
@@ -410,7 +420,9 @@ export class PasskeyVault {
     return created;
   }
 
-  private async ensureVaultUnlocked(record: VaultRecordV1): Promise<VaultRecordV1> {
+  private async ensureVaultUnlocked(
+    record: VaultRecordV1,
+  ): Promise<VaultRecordV1> {
     const passkeyProtectionEnabled = await this.isPasskeyProtectionEnabled();
     if (!passkeyProtectionEnabled) {
       this.unlockState = null;
@@ -435,6 +447,7 @@ export class PasskeyVault {
         persistedLease.accountId === guardedRecord.accountId &&
         persistedLease.expiresAt > now
       ) {
+        // The lease is a local prompt throttle, not an authorization token shared with the server.
         this.unlockState = {
           accountId: persistedLease.accountId,
           expiresAt: persistedLease.expiresAt,

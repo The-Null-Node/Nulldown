@@ -9,8 +9,41 @@ import { toLogRef, type RequestLogger } from "./logger";
 export const REMOTE_DROP_ALIAS_PREFIX = "__drop_alias__/";
 
 const ALIAS_CONTENT_TYPE = "text/plain";
+const ALIAS_CACHE_TTL_MS = 30_000;
+
+interface AliasCacheEntry {
+  fullId: string;
+  expiresAt: number;
+}
+
+const aliasCache = new Map<string, AliasCacheEntry>();
 
 type DropIdLogger = Pick<RequestLogger, "debug" | "info" | "warn">;
+
+const readAliasCache = (shortId: string): string | null => {
+  const cached = aliasCache.get(shortId);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    aliasCache.delete(shortId);
+    return null;
+  }
+
+  return cached.fullId;
+};
+
+const writeAliasCache = (shortId: string, fullId: string): void => {
+  aliasCache.set(shortId, {
+    fullId,
+    expiresAt: Date.now() + ALIAS_CACHE_TTL_MS,
+  });
+};
+
+const removeAliasCache = (shortId: string): void => {
+  aliasCache.delete(shortId);
+};
 
 const readObjectText = async (
   object: { body?: ReadableStream | null } | null,
@@ -30,8 +63,17 @@ export const readRemoteAlias = async (
   bucket: R2Bucket,
   shortId: string,
 ): Promise<string | null> => {
+  const cached = readAliasCache(shortId);
+  if (cached) {
+    return cached;
+  }
+
   const object = await bucket.get(createRemoteAliasKey(shortId));
-  return readObjectText(object);
+  const value = await readObjectText(object);
+  if (value) {
+    writeAliasCache(shortId, value);
+  }
+  return value;
 };
 
 export const reserveRemoteAlias = async (
@@ -48,6 +90,7 @@ export const reserveRemoteAlias = async (
         shortIdRef: toLogRef(shortId),
         dropRef: toLogRef(fullId),
       });
+      writeAliasCache(shortId, fullId);
       return "already-registered";
     }
 
@@ -73,6 +116,7 @@ export const reserveRemoteAlias = async (
       shortIdRef: toLogRef(shortId),
       dropRef: toLogRef(fullId),
     });
+    writeAliasCache(shortId, fullId);
     return "reserved";
   }
 
@@ -82,7 +126,12 @@ export const reserveRemoteAlias = async (
       shortIdRef: toLogRef(shortId),
       dropRef: toLogRef(fullId),
     });
+    writeAliasCache(shortId, fullId);
     return "already-registered";
+  }
+
+  if (winner) {
+    writeAliasCache(shortId, winner);
   }
 
   logger?.warn("drop.alias.reserve_race_conflict", {
@@ -105,6 +154,7 @@ export const removeRemoteAliasIfMatch = async (
 
   if (existing === fullId) {
     await bucket.delete(aliasKey);
+    removeAliasCache(shortId);
     logger?.debug("drop.alias.remove_success", {
       shortIdRef: toLogRef(shortId),
       dropRef: toLogRef(fullId),
@@ -148,36 +198,8 @@ export const resolveRemoteDropId = async (
     return aliased;
   }
 
-  const listed = await bucket.list({
-    prefix: candidate,
-    limit: 16,
+  logger?.debug("drop.id.resolve_alias_miss", {
+    shortIdRef: toLogRef(candidate),
   });
-
-  const matches = listed.objects
-    .filter((entry) => !entry.key.startsWith(REMOTE_DROP_ALIAS_PREFIX))
-    .sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime());
-
-  const resolved = matches[0]?.key ?? candidate;
-  if (resolved !== candidate) {
-    logger?.info("drop.id.resolve_prefix_match", {
-      shortIdRef: toLogRef(candidate),
-      dropRef: toLogRef(resolved),
-      candidates: matches.length,
-    });
-    try {
-      await reserveRemoteAlias(bucket, resolved, logger);
-    } catch (error) {
-      logger?.warn("drop.alias.backfill_failed", {
-        shortIdRef: toLogRef(candidate),
-        dropRef: toLogRef(resolved),
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    }
-  } else {
-    logger?.debug("drop.id.resolve_miss", {
-      shortIdRef: toLogRef(candidate),
-    });
-  }
-
-  return resolved;
+  return candidate;
 };

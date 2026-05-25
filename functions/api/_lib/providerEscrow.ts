@@ -1,3 +1,10 @@
+/*
+This is the narrow server-side escape hatch for provider-escrow flows. Most of the app
+keeps plaintext in the browser, but branch bootstrapping and unlock handshakes sometimes
+need the provider key to rehydrate content or re-wrap the content key for another device.
+Treat every call site here as a trust boundary.
+*/
+
 import {
   isDropEnvelopeV1,
   isDropDraftPackV1,
@@ -87,6 +94,7 @@ export const decryptProviderEscrowEnvelope = async (
     providerPrivateKey,
     fromBase64(envelope.providerEscrow.wrappedKey),
   );
+
   const contentKey = await importAesKey(rawContentKey, ["decrypt"]);
   const plaintext = await crypto.subtle.decrypt(
     {
@@ -100,6 +108,7 @@ export const decryptProviderEscrowEnvelope = async (
   let draftPack: DropPayload["draftPack"];
   if (envelope.draftCipher) {
     try {
+      // Draft history is optional; a bad draft pack should not make the main content unreadable.
       const draftPlaintext = await crypto.subtle.decrypt(
         {
           name: "AES-GCM",

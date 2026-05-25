@@ -39,6 +39,7 @@ interface LoadedDropStore {
       envelope: DropEnvelopeV1;
       createdAt: number;
       updatedAt: number;
+      revision?: string | null;
     } | null>
   >;
   remoteCrudGet: jest.MockedFunction<
@@ -49,7 +50,32 @@ interface LoadedDropStore {
       envelope: DropEnvelopeV1;
       createdAt: number;
       updatedAt: number;
+      revision?: string | null;
     } | null>
+  >;
+  localCrudCreate: jest.MockedFunction<
+    (
+      record: {
+        id: string;
+        envelope: DropEnvelopeV1;
+        createdAt: number;
+        updatedAt: number;
+        revision?: string | null;
+      },
+      options?: { upsert?: boolean; expectedRevision?: string },
+    ) => Promise<void>
+  >;
+  remoteCrudCreate: jest.MockedFunction<
+    (
+      record: {
+        id: string;
+        envelope: DropEnvelopeV1;
+        createdAt: number;
+        updatedAt: number;
+        revision?: string | null;
+      },
+      options?: { upsert?: boolean; expectedRevision?: string },
+    ) => Promise<void>
   >;
   localResolveGraph: jest.MockedFunction<(id: string) => Promise<DropGraph>>;
   remoteResolveGraph: jest.MockedFunction<(id: string) => Promise<DropGraph>>;
@@ -105,8 +131,11 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
   const remoteCreate = jest.fn() as LoadedDropStore["remoteCreate"];
   const localCrudGet = jest.fn() as LoadedDropStore["localCrudGet"];
   const remoteCrudGet = jest.fn() as LoadedDropStore["remoteCrudGet"];
+  const localCrudCreate = jest.fn(async () => undefined) as LoadedDropStore["localCrudCreate"];
+  const remoteCrudCreate = jest.fn(async () => undefined) as LoadedDropStore["remoteCrudCreate"];
   const localResolveGraph = jest.fn() as LoadedDropStore["localResolveGraph"];
   const remoteResolveGraph = jest.fn() as LoadedDropStore["remoteResolveGraph"];
+  const kvStore = new Map<string, unknown>();
 
   localCreate.mockResolvedValue({
     id: "local_id_1234",
@@ -127,14 +156,14 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     scope: "local",
     get: localGet,
     resolveGraph: localResolveGraph,
-    create: localCreate,
-    sync: localSync,
-    crud: {
-      drops: {
-        create: jest.fn(),
-        get: localCrudGet,
-        update: jest.fn(),
-        delete: jest.fn(),
+      create: localCreate,
+      sync: localSync,
+      crud: {
+        drops: {
+          create: localCrudCreate,
+          get: localCrudGet,
+          update: jest.fn(),
+          delete: jest.fn(),
         list: jest.fn(async () => []),
       },
     },
@@ -144,23 +173,35 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     scope: "remote",
     get: remoteGet,
     resolveGraph: remoteResolveGraph,
-    create: remoteCreate,
-    sync: jest.fn(),
-    crud: {
-      drops: {
-        create: jest.fn(),
-        get: remoteCrudGet,
-        update: jest.fn(),
-        delete: jest.fn(),
+      create: remoteCreate,
+      sync: jest.fn(),
+      crud: {
+        drops: {
+          create: remoteCrudCreate,
+          get: remoteCrudGet,
+          update: jest.fn(),
+          delete: jest.fn(),
         list: jest.fn(async () => []),
       },
     },
   };
 
   jest.unstable_mockModule("../lib/indexedDb", () => ({
-    getKvItem: jest.fn(async () => null),
+    getKvItem: jest.fn(async (key: string) => {
+      const value = kvStore.get(key);
+      return value === undefined || value === null ? null : String(value);
+    }),
+    getKvValue: jest.fn(async (key: string) => {
+      const value = kvStore.get(key);
+      return value === undefined ? null : value;
+    }),
     isIndexedDbSupported: jest.fn().mockReturnValue(false),
-    setKvItem: jest.fn(async () => undefined),
+    setKvItem: jest.fn(async (key: string, value: string) => {
+      kvStore.set(key, value);
+    }),
+    setKvValue: jest.fn(async (key: string, value: unknown) => {
+      kvStore.set(key, value);
+    }),
   }));
 
   jest.unstable_mockModule("../lib/drop/passkeyVault", () => ({
@@ -177,6 +218,8 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
       forDropId: (id: string) =>
         id.startsWith("offline_") ? localProvider : remoteProvider,
     }),
+    isDropProviderHttpError: (value: unknown) =>
+      typeof value === "object" && value !== null && "status" in value,
     isOfflineDropId: (id: string) => id.startsWith("offline_"),
     OFFLINE_DROP_PREFIX: "offline_",
   }));
@@ -191,6 +234,8 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     remoteCreate,
     localCrudGet,
     remoteCrudGet,
+    localCrudCreate,
+    remoteCrudCreate,
     localResolveGraph,
     remoteResolveGraph,
   };
@@ -461,6 +506,156 @@ describe("dropStore resolution", () => {
       id: localRecordId,
       visibility: "unlisted",
       unlockPolicy: "provider-escrow",
+    });
+  });
+
+  it("queues a pending sync conflict when remote diverges", async () => {
+    const { useDropStore, localCrudGet, remoteCrudGet } = await loadDropStore();
+    const localRecordId = "local_drop_conflict";
+
+    localCrudGet.mockResolvedValue({
+      id: localRecordId,
+      envelope: createEnvelope("account-1"),
+      createdAt: 10,
+      updatedAt: 20,
+    });
+    remoteCrudGet.mockResolvedValue({
+      id: localRecordId,
+      envelope: createEnvelope("account-2"),
+      createdAt: 10,
+      updatedAt: 25,
+      revision: "remote-rev-1",
+    });
+
+    await useDropStore.getState().setMode("offline");
+
+    await expect(
+      useDropStore
+        .getState()
+        .setMode("online", { activeDropId: localRecordId }),
+    ).rejects.toThrow("Resolve it before publishing again");
+
+    const conflicts = useDropStore.getState().listSyncConflicts();
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({
+      dropId: localRecordId,
+      status: "pending",
+      reason: "remote_state_mismatch",
+    });
+  });
+
+  it("resolves conflicts by accepting local state", async () => {
+    const { useDropStore, localCrudGet, remoteCrudGet, remoteCrudCreate } =
+      await loadDropStore();
+    const localRecordId = "local_drop_resolve";
+
+    localCrudGet.mockResolvedValue({
+      id: localRecordId,
+      envelope: createEnvelope("account-1"),
+      createdAt: 10,
+      updatedAt: 20,
+    });
+    remoteCrudGet.mockResolvedValue({
+      id: localRecordId,
+      envelope: createEnvelope("account-2"),
+      createdAt: 10,
+      updatedAt: 25,
+      revision: "remote-rev-1",
+    });
+
+    await useDropStore.getState().setMode("offline");
+    await expect(
+      useDropStore
+        .getState()
+        .setMode("online", { activeDropId: localRecordId }),
+    ).rejects.toThrow();
+
+    const conflict = useDropStore.getState().listSyncConflicts()[0];
+    await useDropStore
+      .getState()
+      .resolveSyncConflict(conflict.id, "accept-local");
+
+    expect(remoteCrudCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: localRecordId }),
+      { upsert: true, expectedRevision: "remote-rev-1" },
+    );
+    expect(useDropStore.getState().listSyncConflicts()[0]).toMatchObject({
+      id: conflict.id,
+      status: "resolved",
+      resolution: "accept-local",
+    });
+  });
+
+  it("coalesces duplicate publish intents for the same drop", async () => {
+    const { useDropStore, localCrudGet, localGet, remoteCrudGet, remoteCreate } =
+      await loadDropStore();
+    const localRecordId = "local_drop_dupe_queue";
+    const payload: DropPayload = {
+      content: "offline draft",
+      metadata: { themeId: "system" },
+    };
+
+    localCrudGet.mockResolvedValue({
+      id: localRecordId,
+      envelope: createEnvelope("account-1"),
+      createdAt: 10,
+      updatedAt: 20,
+    });
+    localGet.mockResolvedValue(payload);
+    remoteCrudGet.mockResolvedValue(null);
+    remoteCreate.mockResolvedValue({
+      id: localRecordId,
+      url: "https://nulldown.test/d/dupeqq",
+      scope: "remote",
+    });
+
+    await Promise.all([
+      useDropStore.getState().syncDropToRemote(localRecordId),
+      useDropStore.getState().syncDropToRemote(localRecordId),
+    ]);
+
+    expect(remoteCreate).toHaveBeenCalledTimes(1);
+    expect(useDropStore.getState().syncQueueDepth).toBe(0);
+  });
+
+  it("resolves conflicts by accepting remote state", async () => {
+    const { useDropStore, localCrudGet, remoteCrudGet, localCrudCreate } =
+      await loadDropStore();
+    const localRecordId = "local_drop_accept_remote";
+
+    localCrudGet.mockResolvedValue({
+      id: localRecordId,
+      envelope: createEnvelope("account-1"),
+      createdAt: 10,
+      updatedAt: 20,
+    });
+    remoteCrudGet.mockResolvedValue({
+      id: localRecordId,
+      envelope: createEnvelope("account-2"),
+      createdAt: 10,
+      updatedAt: 25,
+    });
+
+    await useDropStore.getState().setMode("offline");
+    await expect(
+      useDropStore
+        .getState()
+        .setMode("online", { activeDropId: localRecordId }),
+    ).rejects.toThrow();
+
+    const conflict = useDropStore.getState().listSyncConflicts()[0];
+    await useDropStore
+      .getState()
+      .resolveSyncConflict(conflict.id, "accept-remote");
+
+    expect(localCrudCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: localRecordId }),
+      { upsert: true },
+    );
+    expect(useDropStore.getState().listSyncConflicts()[0]).toMatchObject({
+      id: conflict.id,
+      status: "resolved",
+      resolution: "accept-remote",
     });
   });
 });

@@ -1,12 +1,19 @@
+/*
+This is the browser-side editor runtime that bridges text diffs, snapshot history, and
+progressive markdown rendering. The key invariant is that renders are always tied to a
+snapshot id so stale async flushes cannot overwrite newer typing.
+*/
+
 import useEditorStore, { type EditorState } from "../../stores/editorStore";
 import useDropStore from "../../stores/dropStore";
-import {
-  RenderCancelledError,
-  renderMarkdownWithNullplug,
-} from "../nullplug";
-import Snapshotter from "./snapshotter";
-import { applyDiff, computeDiffOps } from "./textDiff";
-import type { Diff, SnapshotDiff, SnapshotId } from "./types";
+import { RenderCancelledError, renderMarkdownWithNullplug } from "../nullplug";
+import Snapshotter from "../../../shared/nulledit/snapshotter";
+import { applyDiff, computeDiffOps } from "../../../shared/nulledit/textDiff";
+import type {
+  Diff,
+  SnapshotDiff,
+  SnapshotId,
+} from "../../../shared/nulledit/types";
 
 export interface IEditor {
   state: EditorState;
@@ -34,6 +41,7 @@ export default function createEditor(): IEditor {
   };
 
   const ensureSnapshotId = () => {
+    // Reuse the current pending snapshot until it has been rendered and registered.
     if (currentSnapshotId && currentSnapshotId !== lastRenderedSnapshotId) {
       return currentSnapshotId;
     }
@@ -46,6 +54,7 @@ export default function createEditor(): IEditor {
   const queueRender = () => {
     if (renderScheduled) return;
     renderScheduled = true;
+    // Batch rapid keystrokes into a single render turn without delaying the store update itself.
     queueMicrotask(async () => {
       renderScheduled = false;
       await editor.render();
@@ -60,6 +69,7 @@ export default function createEditor(): IEditor {
       (text, diff) => applyDiff(text, diff),
       prevText,
     );
+
     useEditorStore.getState().setTextContent(nextText);
     snapshotter.updateSnapshot(snapshotId, { content: nextText });
 
@@ -123,9 +133,16 @@ export default function createEditor(): IEditor {
 
       try {
         const allowedUrls = useDropStore.getState().allowedUrls;
+        const resolveDrop = useDropStore.getState().getDrop;
         renderedMarkdown = await renderMarkdownWithNullplug(content, {
           allowedUrls,
+          caller: {
+            dropId: useEditorStore.getState().baseDropId ?? undefined,
+            snapshotId,
+          },
+          resolveDrop,
           onFlush: (buffered, status) => {
+            // Flushes are advisory; only the latest render token is allowed to touch UI state.
             if (token !== renderToken || snapshotId !== currentSnapshotId) {
               return;
             }
@@ -155,6 +172,7 @@ export default function createEditor(): IEditor {
         return renderedMarkdown;
       }
 
+      // The render diff is recorded after the final winning render so draft packs reflect visible output.
       snapshotter.upsertRenderDiff(snapshotId, renderDiff);
       snapshotter.updateSnapshot(snapshotId, {
         content,

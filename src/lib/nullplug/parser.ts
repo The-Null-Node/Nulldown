@@ -1,8 +1,13 @@
+/*
+Nullplug piggybacks on fenced code blocks. The parser intentionally accepts only fully
+closed fences with conservative plugin ids so plugin execution never depends on loose
+markdown parsing or partial user input.
+*/
+
 import type { PluginBlock } from "./types";
 
 const KEYWORD_PATTERN = /^[a-z0-9._:-]+$/i;
-const LEGACY_PLUGIN_INFO_PATTERN =
-  /^plugin\(\s*(["'])([a-z0-9._:-]+)\1\s*\)$/i;
+const LEGACY_PLUGIN_INFO_PATTERN = /^plugin\(\s*(["'])([a-z0-9._:-]+)\1\s*\)$/i;
 
 export interface ParsedPluginInvocation {
   id: string;
@@ -141,7 +146,8 @@ export const parseNullplugBlocks = (markdown: string): PluginBlock[] => {
       continue;
     }
 
-    const contentStart = lineEnd < markdown.length ? lineEnd + 1 : markdown.length;
+    const contentStart =
+      lineEnd < markdown.length ? lineEnd + 1 : markdown.length;
 
     let search = contentStart;
     let closeLineStart = -1;
@@ -152,11 +158,7 @@ export const parseNullplugBlocks = (markdown: string): PluginBlock[] => {
       const candidate = markdown.slice(search, candidateEnd);
 
       if (
-        isFenceCloser(
-          candidate,
-          fenceHeader.fenceChar,
-          fenceHeader.fenceLength,
-        )
+        isFenceCloser(candidate, fenceHeader.fenceChar, fenceHeader.fenceLength)
       ) {
         closeLineStart = search;
         blockEnd =
@@ -172,6 +174,7 @@ export const parseNullplugBlocks = (markdown: string): PluginBlock[] => {
     }
 
     if (closeLineStart === -1) {
+      // Unterminated fences stay as plain markdown so typing half a plugin block is harmless.
       cursor = lineEnd < markdown.length ? lineEnd + 1 : markdown.length;
       continue;
     }

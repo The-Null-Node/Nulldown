@@ -1,68 +1,19 @@
-export const DEFAULT_NETWORK_ALLOWLIST = [
-  "www.youtube.com",
-  "youtube.com",
-  "www.youtube-nocookie.com",
-  "youtu.be",
-  "player.vimeo.com",
-  "vimeo.com",
-] as const;
+import {
+  DEFAULT_RUNTIME_NETWORK_ALLOWLIST,
+  normalizeAllowedHosts,
+} from "../../shared/nullplug/policy";
 
-const HOSTNAME_PATTERN = /^[a-z0-9.-]+$/;
+/*
+ Allowlist entries are stored as hostnames, not raw URLs, so the same policy can be
+ applied consistently in the render pipeline, markdown renderer, and persisted settings.
+ Normalization aggressively strips formatting differences to keep trust checks simple.
+*/
 
-const normalizeNetworkAllowlistEntry = (value: string): string | null => {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) {
-    return null;
-  }
-
-  try {
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      const parsed = new URL(trimmed);
-      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-        return null;
-      }
-
-      return parsed.hostname.toLowerCase() || null;
-    }
-
-    if (trimmed.startsWith("//")) {
-      const parsed = new URL(`https:${trimmed}`);
-      return parsed.hostname.toLowerCase() || null;
-    }
-
-    const parsed = new URL(`https://${trimmed}`);
-    return parsed.hostname.toLowerCase() || null;
-  } catch {
-    return null;
-  }
-};
+export const DEFAULT_NETWORK_ALLOWLIST = DEFAULT_RUNTIME_NETWORK_ALLOWLIST;
 
 export const normalizeNetworkAllowlist = (
   values: readonly string[],
-): string[] => {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-
-  values.forEach((value) => {
-    const host = normalizeNetworkAllowlistEntry(value);
-    if (!host) {
-      return;
-    }
-
-    if (!HOSTNAME_PATTERN.test(host) && host !== "localhost") {
-      return;
-    }
-
-    if (seen.has(host)) {
-      return;
-    }
-
-    seen.add(host);
-    normalized.push(host);
-  });
-
-  return normalized;
-};
+): string[] => normalizeAllowedHosts(values);
 
 export const resolveNetworkAllowlist = (
   value: unknown,

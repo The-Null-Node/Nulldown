@@ -10,7 +10,7 @@ async function walk(dir) {
   for (const name of await readdir(dir)) {
     const p = join(dir, name);
     const s = await stat(p);
-    if (s.isDirectory()) out.push(...await walk(p));
+    if (s.isDirectory()) out.push(...(await walk(p)));
     else out.push(p);
   }
   return out;
@@ -22,11 +22,10 @@ const entries = await Promise.all(
     const rel = relative(DIST, p).replaceAll("\\", "/");
     const b64 = (await readFile(p)).toString("base64");
     return { rel, b64 };
-  })
+  }),
 );
 
-const ts =
-`// AUTO-GENERATED. Do not edit.
+const ts = `// AUTO-GENERATED. Do not edit.
 export const embedded = new Map<string, Uint8Array>([
 ${entries.map(({ rel, b64 }) => `  ["${rel}", Uint8Array.from(atob("${b64}"), c => c.charCodeAt(0))],`).join("\n")}
 ]);
@@ -34,4 +33,3 @@ ${entries.map(({ rel, b64 }) => `  ["${rel}", Uint8Array.from(atob("${b64}"), c 
 
 await writeFile(OUT, ts);
 console.log(`Embedded ${entries.length} files -> ${OUT}`);
-

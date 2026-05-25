@@ -1,10 +1,31 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { resolveRemoteDropId } from "../_lib/dropId";
+import { removePublicDropIndexEntry } from "../_lib/dropIndex";
+import { removeRemoteAliasIfMatch, resolveRemoteDropId } from "../_lib/dropId";
 import { createRequestLogger, toLogRef } from "../_lib/logger";
 
 interface Env {
   R2_BUCKET: R2Bucket;
 }
+
+const jsonErrorResponse = (
+  status: number,
+  code: string,
+  error: string,
+  details?: Record<string, unknown>,
+): Response =>
+  new Response(
+    JSON.stringify({
+      error,
+      code,
+      details,
+    }),
+    {
+      status,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  );
 
 const resolveId = (id: string | string[] | undefined) =>
   typeof id === "string" ? id : Array.isArray(id) ? id[0] : "";
@@ -35,7 +56,11 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
         reason: "bucket_binding_missing",
         requestedDropRef: toLogRef(requestedId),
       });
-      return new Response("R2 bucket binding is required.", { status: 500 });
+      return jsonErrorResponse(
+        500,
+        "bucket_binding_missing",
+        "R2 bucket binding is required.",
+      );
     }
 
     const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger);
@@ -48,10 +73,51 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
         reason: "invalid_drop_id",
         requestedDropRef: toLogRef(requestedId),
       });
-      return new Response("Drop ID is required.", { status: 400 });
+      return jsonErrorResponse(400, "invalid_drop_id", "Drop ID is required.");
+    }
+
+    const expectedRevisionHeader = request.headers.get("If-Match")?.trim() || null;
+    if (expectedRevisionHeader) {
+      const object = await env.R2_BUCKET.get(id);
+      if (!object) {
+        logger.logEnd(404, {
+          reason: "drop_not_found",
+          requestedDropRef: toLogRef(requestedId),
+          canonicalDropRef: toLogRef(id),
+        });
+        return jsonErrorResponse(404, "drop_not_found", "Drop not found.", {
+          requestedDropRef: toLogRef(requestedId),
+          canonicalDropRef: toLogRef(id),
+        });
+      }
+
+      if (object.httpEtag !== expectedRevisionHeader) {
+        logger.warn("delete.revision_precondition_failed", {
+          requestedDropRef: toLogRef(requestedId),
+          canonicalDropRef: toLogRef(id),
+        });
+        logger.logEnd(412, {
+          reason: "revision_precondition_failed",
+          requestedDropRef: toLogRef(requestedId),
+          canonicalDropRef: toLogRef(id),
+        });
+        return jsonErrorResponse(
+          412,
+          "revision_precondition_failed",
+          "Drop revision precondition failed. Refresh and try again.",
+          {
+            requestedDropRef: toLogRef(requestedId),
+            canonicalDropRef: toLogRef(id),
+          },
+        );
+      }
     }
 
     await env.R2_BUCKET.delete(id);
+    await Promise.all([
+      removeRemoteAliasIfMatch(env.R2_BUCKET, id, logger),
+      removePublicDropIndexEntry(env.R2_BUCKET, id),
+    ]);
 
     logger.logEnd(204, {
       requestedDropRef: toLogRef(requestedId),
@@ -68,7 +134,11 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       reason: "unhandled_error",
       requestedDropRef: toLogRef(requestedId),
     });
-    return new Response(`Failed to delete drop: ${message}`, { status: 500 });
+    return jsonErrorResponse(
+      500,
+      "unhandled_error",
+      `Failed to delete drop: ${message}`,
+    );
   }
 };
 

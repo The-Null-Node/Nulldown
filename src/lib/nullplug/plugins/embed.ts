@@ -57,7 +57,8 @@ const escapeHtmlAttribute = (value: string): string => {
 const embed: NullplugHandler & { pluginId: string } = Object.assign(
   (ctx: NullplugContext, blockContent: string, block: PluginBlock) => {
     const rawSource =
-      extractEmbedSourceFromArgs(block.args) || extractEmbedSource(blockContent);
+      extractEmbedSourceFromArgs(block.args) ||
+      extractEmbedSource(blockContent);
     if (!rawSource) {
       return {
         text: "> Embed block is empty. Add a URL on the first line.",
