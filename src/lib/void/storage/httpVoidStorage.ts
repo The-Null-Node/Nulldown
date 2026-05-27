@@ -3,7 +3,7 @@ import {
   isDropPayload,
   type DropEnvelopeV1,
 } from "../../../../shared/drop/types";
-import { createHttpErrorFromResponse } from "./errors";
+import { createHttpErrorFromResponse } from "../provider/errors";
 import type {
   DropCrudRecord,
   StoredDropRecord,
@@ -23,7 +23,7 @@ interface ListApiResponse {
 }
 
 /** HTTP-backed sealed storage for remote void provider ports. */
-export class RemoteDropStorage implements VoidStorage {
+export class HttpVoidStorage implements VoidStorage {
   readonly scope = "remote" as const;
 
   async create(

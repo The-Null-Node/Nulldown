@@ -24,7 +24,7 @@ import type {
   VoidStorage,
   VoidStorageCreateOptions,
 } from "./types";
-import { buildDropUrl } from "./url";
+import { buildDropUrl } from "../provider/url";
 
 const OFFLINE_DROP_ALIAS_PREFIX = "nulldown_drop_alias_local_";
 
@@ -34,7 +34,7 @@ const createOfflineAliasKey = (shortId: string) =>
   `${OFFLINE_DROP_ALIAS_PREFIX}${shortId}`;
 
 /** IndexedDB-backed sealed storage for local void provider ports. */
-export class LocalDropStorage implements VoidStorage {
+export class IndexedDbVoidStorage implements VoidStorage {
   readonly scope = "local" as const;
 
   async create(

@@ -1,7 +1,8 @@
 /*
 The void provider is the app-facing boundary between plaintext drop payloads and
 sealed storage backends. The implementation is split by concern under
-`void/provider/*`; this file is the stable public import path for the runtime.
+`void/provider/*`, `void/storage/*`, and `void/crypto/*`; this file is the
+stable public import path for the runtime.
 */
 
 export type {

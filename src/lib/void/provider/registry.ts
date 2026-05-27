@@ -8,8 +8,8 @@ import {
   OFFLINE_DROP_GRAPH_CACHE_PREFIX,
   REMOTE_DROP_GRAPH_CACHE_PREFIX,
 } from "./graph";
-import { LocalDropStorage } from "./localStorage";
-import { RemoteDropStorage } from "./remoteStorage";
+import { HttpVoidStorage } from "../storage/httpVoidStorage";
+import { IndexedDbVoidStorage } from "../storage/indexedDbVoidStorage";
 import type { VoidProvider, VoidProviderRegistry } from "./types";
 import { isOfflineDropId } from "./url";
 
@@ -36,7 +36,7 @@ export const createLocalVoidProvider = (
   const crypto = options.crypto ?? createBrowserVoidCrypto();
 
   return new DefaultVoidProvider(
-    new LocalDropStorage(),
+    new IndexedDbVoidStorage(),
     crypto,
     new LineageVoidGraph(OFFLINE_DROP_GRAPH_CACHE_PREFIX),
   );
@@ -53,7 +53,7 @@ export const createRemoteVoidProvider = (
 ): VoidProvider => {
   const crypto = options.crypto ?? createBrowserVoidCrypto();
   return new DefaultVoidProvider(
-    new RemoteDropStorage(),
+    new HttpVoidStorage(),
     crypto,
     new LineageVoidGraph(REMOTE_DROP_GRAPH_CACHE_PREFIX),
   );
