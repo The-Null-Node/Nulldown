@@ -1,13 +1,8 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import { isDropEnvelopeV1 } from "../../../shared/drop/types";
-import {
-  fromBase64,
-  parseProviderPrivateKey,
-  parseRequesterPublicKey,
-  toBase64,
-} from "../_lib/providerEscrow";
 import { resolveRemoteDropId } from "../_lib/dropId";
 import { createRequestLogger, serializeError, toLogRef } from "../_lib/logger";
+import { serverVoidCrypto } from "../_lib/void/serverVoidCrypto";
 
 interface Env {
   R2_BUCKET: R2Bucket;
@@ -175,7 +170,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     let providerPrivateKey: CryptoKey;
 
     try {
-      providerPrivateKey = await parseProviderPrivateKey(
+      providerPrivateKey = await serverVoidCrypto.importProviderPrivateKey(
         env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
       );
     } catch (error) {
@@ -195,7 +190,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     let requesterPublicKey: CryptoKey;
 
     try {
-      requesterPublicKey = await parseRequesterPublicKey(
+      requesterPublicKey = await serverVoidCrypto.importRequesterPublicKey(
         body.requesterPublicJwk,
       );
     } catch (error) {
@@ -212,21 +207,16 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("requesterPublicJwk is invalid.", { status: 400 });
     }
 
-    const rawContentKey = await crypto.subtle.decrypt(
-      {
-        name: "RSA-OAEP",
-      },
+    const rawContentKey = await serverVoidCrypto.decryptProviderWrappedContentKey(
       providerPrivateKey,
-      fromBase64(parsed.providerEscrow.wrappedKey),
+      parsed.providerEscrow.wrappedKey,
     );
 
-    const requesterWrappedKey = await crypto.subtle.encrypt(
-      {
-        name: "RSA-OAEP",
-      },
-      requesterPublicKey,
-      rawContentKey,
-    );
+    const requesterWrappedKey =
+      await serverVoidCrypto.wrapRawContentKeyWithRequesterPublicKey(
+        requesterPublicKey,
+        rawContentKey,
+      );
 
     logger.logEnd(200, {
       requestedDropRef: toLogRef(requestedId),
@@ -236,7 +226,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
 
     return new Response(
       JSON.stringify({
-        wrappedKey: toBase64(requesterWrappedKey),
+        wrappedKey: requesterWrappedKey,
       }),
       {
         status: 200,

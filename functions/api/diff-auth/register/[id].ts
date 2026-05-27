@@ -4,27 +4,25 @@ import {
   generateDiffSecret,
   putDiffAuthCredential,
   sanitizeDiffAuthToken,
-  toBase64,
 } from "../../_lib/diffAuth";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
 } from "../../_lib/accountAuth";
-import { resolveBranchForActor } from "../../_lib/branchState";
+import { resolveBranchForActor } from "../../_lib/branchLifecycleService";
 import { resolveRemoteDropId } from "../../_lib/dropId";
 import { createRequestLogger, serializeError, toLogRef } from "../../_lib/logger";
 import type {
   DiffAuthRegisterRequest,
   DiffAuthRegisterResponse,
 } from "../../../../shared/drop/diffAuth";
+import { serverVoidCrypto } from "../../_lib/void/serverVoidCrypto";
 
 interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
   DIFF_AUTH_TTL_MS?: string;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
 }
-
-const textEncoder = new TextEncoder();
 
 const resolveId = (id: string | string[] | undefined) =>
   typeof id === "string" ? id : Array.isArray(id) ? id[0] : "";
@@ -41,18 +39,6 @@ const resolveTtlMs = (rawTtl: string | undefined): number => {
 
   return parsed;
 };
-
-const importRequesterPublicKey = async (jwk: JsonWebKey): Promise<CryptoKey> =>
-  crypto.subtle.importKey(
-    "jwk",
-    jwk,
-    {
-      name: "RSA-OAEP",
-      hash: "SHA-256",
-    },
-    false,
-    ["encrypt"],
-  );
 
 export const onRequestPost: PagesFunction<Env, "id"> = async ({
   env,
@@ -137,10 +123,14 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     const createdAt = Date.now();
     const expiresAt = createdAt + ttlMs;
 
-    let requesterPublicKey: CryptoKey;
+    let wrappedSecret: string;
+    const secret = generateDiffSecret();
 
     try {
-      requesterPublicKey = await importRequesterPublicKey(body.requesterPublicJwk);
+      wrappedSecret = await serverVoidCrypto.wrapTextForRequester(
+        body.requesterPublicJwk,
+        secret,
+      );
     } catch (error) {
       logger.logEnd(400, {
         reason: "requester_public_key_invalid",
@@ -149,15 +139,6 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       });
       return new Response("requesterPublicJwk is invalid.", { status: 400 });
     }
-
-    const secret = generateDiffSecret();
-    const wrappedSecret = await crypto.subtle.encrypt(
-      {
-        name: "RSA-OAEP",
-      },
-      requesterPublicKey,
-      textEncoder.encode(secret),
-    );
 
     await putDiffAuthCredential(env.R2_BUCKET, {
       version: 1,
@@ -175,16 +156,16 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       branchId: branch.branchId,
       clientId,
       kid,
-      wrappedSecret: toBase64(wrappedSecret),
+      wrappedSecret,
       expiresAt,
     };
 
     logger.logEnd(200, {
-        dropRef: toLogRef(id),
-        branchRef: toLogRef(branch.branchId),
-        clientIdRef: toLogRef(clientId),
-        kidRef: toLogRef(kid),
-        expiresAt,
+      dropRef: toLogRef(id),
+      branchRef: toLogRef(branch.branchId),
+      clientIdRef: toLogRef(clientId),
+      kidRef: toLogRef(kid),
+      expiresAt,
     });
 
     return new Response(JSON.stringify(responseBody), {

@@ -50,7 +50,7 @@ const parsePublicIndexEntryFromObject = async (
 
   let parsed: unknown;
   try {
-    parsed = await Response(object.body).json();
+    parsed = await object.json<unknown>();
   } catch {
     return null;
   }

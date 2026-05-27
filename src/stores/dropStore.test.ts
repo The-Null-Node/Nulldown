@@ -204,21 +204,21 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     }),
   }));
 
-  jest.unstable_mockModule("../lib/drop/passkeyVault", () => ({
+  jest.unstable_mockModule("../lib/void/vault/passkeyVault", () => ({
     PASSKEY_PROTECTION_STORAGE_KEY: "nulldown_passkey_protection",
     getUnlockedVault: jest.fn(async () => ({
       accountId: "account-1",
     })),
   }));
 
-  jest.unstable_mockModule("../lib/drop/provider", () => ({
-    getDefaultDropProviderRegistry: () => ({
+  jest.unstable_mockModule("../lib/void/provider", () => ({
+    getDefaultVoidProviderRegistry: () => ({
       local: localProvider,
       remote: remoteProvider,
       forDropId: (id: string) =>
         id.startsWith("offline_") ? localProvider : remoteProvider,
     }),
-    isDropProviderHttpError: (value: unknown) =>
+    isVoidProviderHttpError: (value: unknown) =>
       typeof value === "object" && value !== null && "status" in value,
     isOfflineDropId: (id: string) => id.startsWith("offline_"),
     OFFLINE_DROP_PREFIX: "offline_",

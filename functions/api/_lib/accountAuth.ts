@@ -274,7 +274,7 @@ export const readAccountRecord = async (
 
   let parsed: unknown;
   try {
-    parsed = await new Response(object.body).json();
+    parsed = await object.json<unknown>();
   } catch {
     return null;
   }

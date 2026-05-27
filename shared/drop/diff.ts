@@ -128,24 +128,28 @@ export const isDropDiffEventMetadata = (
     return false;
   }
 
-  if (value.kind !== undefined && !isDropDiffEventKind(value.kind)) return false;
+  if (value.kind !== undefined && !isDropDiffEventKind(value.kind))
+    return false;
   if (value.intent !== undefined && !isString(value.intent)) return false;
   if (value.pluginId !== undefined && !isString(value.pluginId)) return false;
   if (value.args !== undefined) {
     if (!isPlainRecord(value.args)) return false;
-    if (!Object.values(value.args).every((entry) => isJsonValue(entry))) return false;
+    if (!Object.values(value.args).every((entry) => isJsonValue(entry)))
+      return false;
   }
   if (value.batchId !== undefined && !isString(value.batchId)) return false;
   if (value.batchIndex !== undefined) {
     if (!isNumber(value.batchIndex)) return false;
-    if (!Number.isInteger(value.batchIndex) || value.batchIndex < 0) return false;
+    if (!Number.isInteger(value.batchIndex) || value.batchIndex < 0)
+      return false;
   }
   if (value.parentEventId !== undefined && !isString(value.parentEventId)) {
     return false;
   }
   if (value.followsSeq !== undefined) {
     if (!isNumber(value.followsSeq)) return false;
-    if (!Number.isInteger(value.followsSeq) || value.followsSeq < -1) return false;
+    if (!Number.isInteger(value.followsSeq) || value.followsSeq < -1)
+      return false;
   }
   if (value.labels !== undefined) {
     if (!Array.isArray(value.labels)) return false;

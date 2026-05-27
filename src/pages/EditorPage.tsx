@@ -50,7 +50,7 @@ import {
 } from "../lib/search/searchable";
 import { toShortDropId } from "../../shared/drop/id";
 import { toUserFacingDropError } from "../lib/drop/userErrors";
-import { getUnlockedVault } from "../lib/drop/passkeyVault";
+import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
 import { createBranchApiClient } from "../../shared/drop/branchApi";
 import { getAccountSessionToken } from "../lib/auth/accountSession";
 

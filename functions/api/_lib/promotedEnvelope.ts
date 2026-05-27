@@ -5,55 +5,7 @@ import {
   type DropEnvelopeV1,
   type DropMetadata,
 } from "../../../shared/drop/types";
-import { toBase64 } from "./providerEscrow";
-
-const textEncoder = new TextEncoder();
-
-interface JwkWithKid extends JsonWebKey {
-  kid?: string;
-}
-
-const deriveRsaPublicJwk = (privateJwk: JwkWithKid): JwkWithKid => {
-  if (
-    privateJwk.kty !== "RSA" ||
-    typeof privateJwk.n !== "string" ||
-    typeof privateJwk.e !== "string"
-  ) {
-    throw new Error("Provider encryption key is not a valid RSA JWK.");
-  }
-
-  return {
-    kty: "RSA",
-    n: privateJwk.n,
-    e: privateJwk.e,
-    alg: "RSA-OAEP-256",
-    ext: true,
-    key_ops: ["encrypt"],
-    kid: typeof privateJwk.kid === "string" ? privateJwk.kid : "provider",
-  };
-};
-
-const deriveEcPublicJwk = (privateJwk: JwkWithKid): JwkWithKid => {
-  if (
-    privateJwk.kty !== "EC" ||
-    privateJwk.crv !== "P-256" ||
-    typeof privateJwk.x !== "string" ||
-    typeof privateJwk.y !== "string"
-  ) {
-    throw new Error("Provider signing key is not a valid P-256 EC JWK.");
-  }
-
-  return {
-    kty: "EC",
-    crv: "P-256",
-    x: privateJwk.x,
-    y: privateJwk.y,
-    alg: "ES256",
-    ext: true,
-    key_ops: ["verify"],
-    kid: typeof privateJwk.kid === "string" ? privateJwk.kid : "provider",
-  };
-};
+import { serverVoidCrypto } from "./void/serverVoidCrypto";
 
 export interface CreatePromotedEnvelopeInput {
   content: string;
@@ -68,84 +20,30 @@ export const createPromotedEnvelope = async (
 ): Promise<DropEnvelopeV1> => {
   const encryptionPrivateJwk = JSON.parse(
     input.providerEncryptionPrivateJwk,
-  ) as JwkWithKid;
+  ) as JsonWebKey;
   const signingPrivateJwk = JSON.parse(
     input.providerSigningPrivateJwk,
-  ) as JwkWithKid;
+  ) as JsonWebKey;
 
-  const encryptionPublicJwk = deriveRsaPublicJwk(encryptionPrivateJwk);
-  const signingPublicJwk = deriveEcPublicJwk(signingPrivateJwk);
-
-  const encryptionPublicKey = await crypto.subtle.importKey(
-    "jwk",
-    encryptionPublicJwk,
-    {
-      name: "RSA-OAEP",
-      hash: "SHA-256",
-    },
-    false,
-    ["encrypt"],
+  const { jwk: encryptionPublicJwk, kid: keyId } =
+    serverVoidCrypto.deriveProviderEncryptionPublicJwk(encryptionPrivateJwk);
+  const { jwk: signingPublicJwk, kid: signingKeyId } =
+    serverVoidCrypto.deriveProviderSigningPublicJwk(signingPrivateJwk);
+  const encryptedContent = await serverVoidCrypto.encryptTextWithNewContentKey(
+    input.content,
   );
-
-  const signingPrivateKey = await crypto.subtle.importKey(
-    "jwk",
-    signingPrivateJwk,
-    {
-      name: "ECDSA",
-      namedCurve: "P-256",
-    },
-    false,
-    ["sign"],
-  );
-
-  const contentKey = (await crypto.subtle.generateKey(
-    {
-      name: "AES-GCM",
-      length: 256,
-    },
-    true,
-    ["encrypt", "decrypt"],
-  )) as CryptoKey;
-
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    {
-      name: "AES-GCM",
-      iv,
-    },
-    contentKey,
-    textEncoder.encode(input.content),
-  );
-
-  const rawContentKey = (await crypto.subtle.exportKey(
-    "raw",
-    contentKey,
-  )) as ArrayBuffer;
-  const wrappedKey = await crypto.subtle.encrypt(
-    {
-      name: "RSA-OAEP",
-    },
-    encryptionPublicKey,
-    rawContentKey,
-  );
-
-  const escrowWrappedKey = await crypto.subtle.encrypt(
-    {
-      name: "RSA-OAEP",
-    },
-    encryptionPublicKey,
-    rawContentKey,
-  );
+  const wrappedKey =
+    await serverVoidCrypto.wrapRawContentKeyWithProviderPublicJwk(
+      encryptionPublicJwk,
+      encryptedContent.rawContentKey,
+    );
+  const escrowWrappedKey =
+    await serverVoidCrypto.wrapRawContentKeyWithProviderPublicJwk(
+      encryptionPublicJwk,
+      encryptedContent.rawContentKey,
+    );
 
   const now = Date.now();
-  const keyId =
-    typeof encryptionPublicJwk.kid === "string"
-      ? encryptionPublicJwk.kid
-      : "provider";
-  const signingKeyId =
-    typeof signingPublicJwk.kid === "string"
-      ? signingPublicJwk.kid
-      : "provider";
 
   const signableEnvelope = {
     schema: DROP_ENVELOPE_SCHEMA_V1,
@@ -157,33 +55,27 @@ export const createPromotedEnvelope = async (
     metadata: input.metadata,
     cipher: {
       alg: "A256GCM" as const,
-      iv: toBase64(
-        iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength),
-      ),
-      ciphertext: toBase64(ciphertext),
+      iv: serverVoidCrypto.encodeIv(encryptedContent.iv),
+      ciphertext: serverVoidCrypto.toBase64(encryptedContent.ciphertext),
     },
     keyEnvelope: {
       mode: "account-vault-rsa-oaep" as const,
       kid: keyId,
-      wrappedKey: toBase64(wrappedKey),
+      wrappedKey: serverVoidCrypto.toBase64(wrappedKey),
     },
     providerEscrow: {
       mode: "provider-rsa-oaep" as const,
       kid: keyId,
-      wrappedKey: toBase64(escrowWrappedKey),
+      wrappedKey: serverVoidCrypto.toBase64(escrowWrappedKey),
     },
     deviceSignerPublicJwk: signingPublicJwk,
   };
 
   const signaturePayload =
     serializeDropEnvelopeForDeviceSignature(signableEnvelope);
-  const signature = await crypto.subtle.sign(
-    {
-      name: "ECDSA",
-      hash: "SHA-256",
-    },
-    signingPrivateKey,
-    textEncoder.encode(signaturePayload),
+  const signature = await serverVoidCrypto.signWithProviderKey(
+    signaturePayload,
+    signingPrivateJwk,
   );
 
   return {
@@ -192,7 +84,7 @@ export const createPromotedEnvelope = async (
       device: {
         kid: signingKeyId,
         alg: "ECDSA_P256_SHA256",
-        sig: toBase64(signature),
+        sig: serverVoidCrypto.toBase64(signature),
       },
     },
   };

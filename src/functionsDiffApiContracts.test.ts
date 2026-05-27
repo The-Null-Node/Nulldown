@@ -4,9 +4,9 @@ import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/diff/[id]";
 import {
   appendEventsToBranch,
-  resolveBranchForActor,
   type BranchAppendObserver,
-} from "../functions/api/_lib/branchState";
+} from "../functions/api/_lib/branchAppendService";
+import { resolveBranchForActor } from "../functions/api/_lib/branchLifecycleService";
 
 interface StoredObject {
   value: string;

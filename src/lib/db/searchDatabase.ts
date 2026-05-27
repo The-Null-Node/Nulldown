@@ -34,8 +34,10 @@ export class SearchDatabase {
   }
 
   async index(record: SearchIndexRecord): Promise<void> {
-    const metadataJson = record.metadata ? JSON.stringify(record.metadata) : null;
-    
+    const metadataJson = record.metadata
+      ? JSON.stringify(record.metadata)
+      : null;
+
     await this.db
       .prepare(
         `INSERT INTO search_index (id, drop_id, title, content_preview, content_hash, owner_account_id, visibility, created_at, updated_at, metadata)
@@ -47,7 +49,7 @@ export class SearchDatabase {
            owner_account_id = excluded.owner_account_id,
            visibility = excluded.visibility,
            updated_at = excluded.updated_at,
-           metadata = excluded.metadata`
+           metadata = excluded.metadata`,
       )
       .bind(
         record.id,
@@ -59,7 +61,7 @@ export class SearchDatabase {
         record.visibility,
         record.createdAt,
         record.updatedAt,
-        metadataJson
+        metadataJson,
       )
       .run();
   }
@@ -72,8 +74,14 @@ export class SearchDatabase {
   }
 
   async search(options: SearchQuery): Promise<SearchResult> {
-    const { query, ownerAccountId, visibility, limit = 50, offset = 0 } = options;
-    
+    const {
+      query,
+      ownerAccountId,
+      visibility,
+      limit = 50,
+      offset = 0,
+    } = options;
+
     if (!query.trim()) {
       return this.listAll({ ownerAccountId, visibility, limit, offset });
     }
@@ -105,7 +113,10 @@ export class SearchDatabase {
     sql += " ORDER BY si.updated_at DESC LIMIT ? OFFSET ?";
     params.push(limit, offset);
 
-    const { results } = await this.db.prepare(sql).bind(...params).all();
+    const { results } = await this.db
+      .prepare(sql)
+      .bind(...params)
+      .all();
 
     // Get total count
     let countSql = `
@@ -125,7 +136,10 @@ export class SearchDatabase {
       countParams.push(...visibility);
     }
 
-    const countResult = await this.db.prepare(countSql).bind(...countParams).first();
+    const countResult = await this.db
+      .prepare(countSql)
+      .bind(...countParams)
+      .first();
     const total = countResult ? (countResult.total as number) : 0;
 
     return {
@@ -158,7 +172,10 @@ export class SearchDatabase {
     sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?";
     params.push(limit, offset);
 
-    const { results } = await this.db.prepare(sql).bind(...params).all();
+    const { results } = await this.db
+      .prepare(sql)
+      .bind(...params)
+      .all();
 
     let countSql = "SELECT COUNT(*) as total FROM search_index WHERE 1=1";
     const countParams: (string | number)[] = [];
@@ -173,7 +190,10 @@ export class SearchDatabase {
       countParams.push(...visibility);
     }
 
-    const countResult = await this.db.prepare(countSql).bind(...countParams).first();
+    const countResult = await this.db
+      .prepare(countSql)
+      .bind(...countParams)
+      .first();
     const total = countResult ? (countResult.total as number) : 0;
 
     return {
@@ -199,7 +219,9 @@ export class SearchDatabase {
       title: row.title ? String(row.title) : null,
       contentPreview: row.content_preview ? String(row.content_preview) : null,
       contentHash: row.content_hash ? String(row.content_hash) : null,
-      ownerAccountId: row.owner_account_id ? String(row.owner_account_id) : null,
+      ownerAccountId: row.owner_account_id
+        ? String(row.owner_account_id)
+        : null,
       visibility: String(row.visibility || "unlisted"),
       createdAt: Number(row.created_at) || 0,
       updatedAt: Number(row.updated_at) || 0,

@@ -16,35 +16,44 @@ import {
   type DropPayload,
   type DropUnlockPolicy,
   type DropVisibility,
-} from "../../../shared/drop/types";
+} from "../../../../shared/drop/types";
 import { fromBase64, toBase64 } from "./base64";
 import {
   createPasskeyVault,
   type PasskeyVault,
   type UnlockedVault,
-} from "./passkeyVault";
+} from "../vault/passkeyVault";
 
-export interface DropSealOptions {
+/** Options for sealing plaintext payloads into encrypted drop envelopes. */
+export interface VoidSealOptions {
   visibility?: DropVisibility;
   unlockPolicy?: DropUnlockPolicy;
 }
 
-export interface DropOpenOptions {
+/** Options for opening encrypted drop envelopes through browser crypto. */
+export interface VoidOpenOptions {
   dropId?: string;
 }
 
-export interface DropCryptoPort {
+/**
+ * Cryptographic boundary for the void runtime.
+ *
+ * Implementations seal plaintext into `DropEnvelopeV1` records and open sealed
+ * envelopes back into payloads, but they do not own persistence.
+ */
+export interface VoidCrypto {
   seal: (
     payload: DropPayload,
-    options?: DropSealOptions,
+    options?: VoidSealOptions,
   ) => Promise<DropEnvelopeV1>;
   open: (
     envelope: DropEnvelopeV1,
-    options?: DropOpenOptions,
+    options?: VoidOpenOptions,
   ) => Promise<DropPayload>;
 }
 
-export interface BrowserDropCryptoOptions {
+/** Options for constructing browser Web Crypto based void crypto. */
+export interface BrowserVoidCryptoOptions {
   vault?: PasskeyVault;
   providerSigningPublicJwk?: string;
   providerEncryptionPublicJwk?: string;
@@ -60,7 +69,8 @@ const textDecoder = new TextDecoder();
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
-    const prefix = error.name && error.name !== "Error" ? `${error.name}: ` : "";
+    const prefix =
+      error.name && error.name !== "Error" ? `${error.name}: ` : "";
     return `${prefix}${error.message}`.trim();
   }
 
@@ -98,7 +108,8 @@ const importDeviceVerifyKey = (jwk: JsonWebKey) =>
     ["verify"],
   );
 
-export class BrowserDropCrypto implements DropCryptoPort {
+/** Browser implementation of `VoidCrypto` backed by the passkey vault. */
+export class BrowserVoidCrypto implements VoidCrypto {
   private readonly vault: PasskeyVault;
   private readonly providerSigningPublicJwk?: string;
   private readonly providerEncryptionPublicJwk?: string;
@@ -108,7 +119,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
     kid: string;
   } | null> | null = null;
 
-  constructor(options: BrowserDropCryptoOptions = {}) {
+  constructor(options: BrowserVoidCryptoOptions = {}) {
     this.vault = options.vault ?? createPasskeyVault();
     this.providerSigningPublicJwk = options.providerSigningPublicJwk;
     this.providerEncryptionPublicJwk = options.providerEncryptionPublicJwk;
@@ -116,7 +127,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
 
   async seal(
     payload: DropPayload,
-    options: DropSealOptions = {},
+    options: VoidSealOptions = {},
   ): Promise<DropEnvelopeV1> {
     const vault = await this.vault.getUnlockedVault();
     const visibility = options.visibility ?? "unlisted";
@@ -253,7 +264,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
 
   async open(
     envelope: DropEnvelopeV1,
-    options: DropOpenOptions = {},
+    options: VoidOpenOptions = {},
   ): Promise<DropPayload> {
     const dropLabel = getDropLabel(options.dropId);
     const vault = await this.vault.getUnlockedVault();
@@ -279,10 +290,13 @@ export class BrowserDropCrypto implements DropCryptoPort {
       ) {
         try {
           // Provider escrow is the recovery path for multi-device access, not the primary unlock flow.
-          rawContentKey = await this.requestEscrowUnlockedKey(options.dropId, vault);
+          rawContentKey = await this.requestEscrowUnlockedKey(
+            options.dropId,
+            vault,
+          );
         } catch (escrowError) {
           console.error(
-            `[drop-crypto] Provider escrow unlock failed for ${dropLabel}:`,
+            `[void-crypto] Provider escrow unlock failed for ${dropLabel}:`,
             escrowError,
           );
           throw new Error(
@@ -293,7 +307,7 @@ export class BrowserDropCrypto implements DropCryptoPort {
         }
       } else {
         console.error(
-          `[drop-crypto] Failed to unwrap content key for ${dropLabel}:`,
+          `[void-crypto] Failed to unwrap content key for ${dropLabel}:`,
           error,
         );
         throw new Error(
@@ -321,7 +335,10 @@ export class BrowserDropCrypto implements DropCryptoPort {
         fromBase64(envelope.cipher.ciphertext),
       );
     } catch (error) {
-      console.error(`[drop-crypto] Failed to decrypt payload for ${dropLabel}:`, error);
+      console.error(
+        `[void-crypto] Failed to decrypt payload for ${dropLabel}:`,
+        error,
+      );
       throw new Error(
         `Unable to decrypt payload for ${dropLabel}. ` +
           `The encrypted content may be corrupted or key material is invalid. ` +
@@ -562,8 +579,9 @@ export class BrowserDropCrypto implements DropCryptoPort {
   }
 }
 
-export const createBrowserDropCrypto = (
-  options: BrowserDropCryptoOptions = {},
-) => new BrowserDropCrypto(options);
+/** Creates browser crypto for the default void runtime. */
+export const createBrowserVoidCrypto = (
+  options: BrowserVoidCryptoOptions = {},
+) => new BrowserVoidCrypto(options);
 
-export const browserDropCrypto = createBrowserDropCrypto();
+export const browserVoidCrypto = createBrowserVoidCrypto();

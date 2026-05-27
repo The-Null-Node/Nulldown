@@ -3,10 +3,8 @@ import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest as onResolvedQueryRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
 import { onRequest as onResolvedUpdateRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/update";
-import {
-  appendEventsToBranch,
-  resolveBranchForActor,
-} from "../functions/api/_lib/branchState";
+import { appendEventsToBranch } from "../functions/api/_lib/branchAppendService";
+import { resolveBranchForActor } from "../functions/api/_lib/branchLifecycleService";
 import type { DropDiffEvent } from "../shared/drop/diff";
 import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved";
 import {

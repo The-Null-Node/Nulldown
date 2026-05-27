@@ -1,9 +1,9 @@
 import { jest } from "@jest/globals";
 import {
-  BrowserDropCrypto,
-  createBrowserDropCrypto,
-} from "./browserDropCrypto";
-import type { DropEnvelopeV1 } from "../../../shared/drop/types";
+  BrowserVoidCrypto,
+  createBrowserVoidCrypto,
+} from "./browserVoidCrypto";
+import type { DropEnvelopeV1 } from "../../../../shared/drop/types";
 
 interface MockSubtle {
   generateKey: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
@@ -79,14 +79,14 @@ const createVaultMock = () => {
   };
 };
 
-describe("browser drop crypto", () => {
+describe("browser void crypto", () => {
   beforeEach(() => {
     ensureBase64Globals();
   });
 
-  it("creates BrowserDropCrypto with createBrowserDropCrypto", () => {
-    const instance = createBrowserDropCrypto();
-    expect(instance).toBeInstanceOf(BrowserDropCrypto);
+  it("creates BrowserVoidCrypto with createBrowserVoidCrypto", () => {
+    const instance = createBrowserVoidCrypto();
+    expect(instance).toBeInstanceOf(BrowserVoidCrypto);
   });
 
   it("seals payloads into encrypted envelopes", async () => {
@@ -100,7 +100,7 @@ describe("browser drop crypto", () => {
 
     const vault = createVaultMock();
 
-    const cryptoPort = new BrowserDropCrypto({
+    const cryptoPort = new BrowserVoidCrypto({
       vault: vault as any,
     });
 
@@ -127,7 +127,7 @@ describe("browser drop crypto", () => {
 
     const vault = createVaultMock();
 
-    const cryptoPort = new BrowserDropCrypto({
+    const cryptoPort = new BrowserVoidCrypto({
       vault: vault as any,
     });
 
@@ -202,7 +202,7 @@ describe("browser drop crypto", () => {
 
     const vault = createVaultMock();
 
-    const cryptoPort = new BrowserDropCrypto({
+    const cryptoPort = new BrowserVoidCrypto({
       vault: vault as any,
     });
 
@@ -254,7 +254,7 @@ describe("browser drop crypto", () => {
 
     const vault = createVaultMock();
 
-    const cryptoPort = new BrowserDropCrypto({
+    const cryptoPort = new BrowserVoidCrypto({
       vault: vault as any,
     });
 
@@ -300,7 +300,7 @@ describe("browser drop crypto", () => {
 
     const vault = createVaultMock();
 
-    const cryptoPort = new BrowserDropCrypto({
+    const cryptoPort = new BrowserVoidCrypto({
       vault: vault as any,
     });
 

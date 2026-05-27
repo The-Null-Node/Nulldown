@@ -9,8 +9,8 @@ import {
   getKvValue,
   isIndexedDbSupported,
   setKvValue,
-} from "../indexedDb";
-import { fromBase64, toBase64 } from "./base64";
+} from "../../indexedDb";
+import { fromBase64, toBase64 } from "../crypto/base64";
 
 const DEFAULT_VAULT_RECORD_KEY = "nulldown_account_vault_v1";
 const DEFAULT_UNLOCK_TTL_MS = 8 * 60 * 60 * 1000;

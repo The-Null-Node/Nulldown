@@ -8,25 +8,15 @@ share one code path.
 import { create } from "zustand";
 import { toShortDropId } from "../../shared/drop/id";
 import {
-  getKvItem,
-  getKvValue,
-  isIndexedDbSupported,
-  setKvItem,
-  setKvValue,
-} from "../lib/indexedDb";
-import {
-  getDefaultDropProviderRegistry,
-  isDropProviderHttpError,
+  getDefaultVoidProviderRegistry,
+  isVoidProviderHttpError,
   isOfflineDropId,
   OFFLINE_DROP_PREFIX,
-  type DropCreateOptions,
-  type DropProviderScope,
-  type DropSyncProgress,
-} from "../lib/drop/provider";
-import {
-  getUnlockedVault,
-  PASSKEY_PROTECTION_STORAGE_KEY,
-} from "../lib/drop/passkeyVault";
+  type VoidCreateOptions,
+  type VoidProviderScope,
+  type VoidSyncProgress,
+} from "../lib/void/provider";
+import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
 import type {
   DropEnvelopeV1,
   DropDraftDiffPolicy,
@@ -46,22 +36,47 @@ import {
   type DropSyncConflictResolution,
 } from "../../shared/drop/sync";
 import {
-  DEFAULT_NETWORK_ALLOWLIST,
-  normalizeNetworkAllowlist,
-  parseNetworkAllowlistInput,
-} from "../lib/networkAllowlist";
+  DEFAULT_SETTINGS_SNAPSHOT,
+  DRAFT_DIFF_POLICY_KEY,
+  NETWORK_ALLOWLIST_KEY,
+  OFFLINE_MODE_KEY,
+  PASSKEY_PROTECTION_STORAGE_KEY,
+  SETTINGS_DESCRIPTORS,
+  SHARE_VISIBILITY_KEY,
+  SYNTAX_MODE_KEY,
+  UNLOCK_POLICY_KEY,
+  derivedStateFromSnapshot,
+  deriveUnlockPolicy,
+  normalizeSettingsSnapshot,
+  parseAllowedUrls,
+  parseDraftDiffPolicy,
+  parseLegacyUnlockPolicy,
+  parseModeFromStoredValue,
+  parsePasskeyProtectionEnabled,
+  parseShareVisibility,
+  parseSyntaxMode,
+  readPersistedItem,
+  readPersistedValue,
+  resolveCreateVisibility,
+  serializeAllowedUrls,
+  serializeBoolean,
+  serializeMode,
+  settingsSnapshotFromState,
+  writePersistedItem,
+  writePersistedValue,
+  type DropMode,
+  type DropSettingsChanges,
+  type DropSettingsSnapshot,
+  type DropSettingsState,
+  type EditorSyntaxMode,
+  type SettingName,
+} from "./drop/settings";
 
-const OFFLINE_MODE_KEY = "nulldown_offline_mode";
-const SHARE_VISIBILITY_KEY = "nulldown_share_visibility";
-const UNLOCK_POLICY_KEY = "nulldown_unlock_policy";
 const SYNC_TARGET_PROVIDER_KEY = "nulldown_sync_target_provider";
-const DRAFT_DIFF_POLICY_KEY = "nulldown_draft_diff_policy";
-const NETWORK_ALLOWLIST_KEY = "nulldown_network_allowlist";
-const SYNTAX_MODE_KEY = "nulldown_syntax_mode";
 const SYNC_CONFLICTS_KEY = "nulldown_sync_conflicts_v1";
 const SYNC_QUEUE_KEY = "nulldown_sync_queue_v1";
 
-const dropProviderRegistry = getDefaultDropProviderRegistry();
+const voidProviderRegistry = getDefaultVoidProviderRegistry();
 
 export interface OwnedDropRecord {
   id: string;
@@ -70,31 +85,11 @@ export interface OwnedDropRecord {
   updatedAt: number;
 }
 
-export type EditorSyntaxMode = "rendered" | "source";
-export type DropMode = "offline" | "online";
-
-export interface DropSettingsState {
-  mode: {
-    value: DropMode;
-  };
-  sharing: {
-    visibility: DropVisibility;
-    draftDiffPolicy: DropDraftDiffPolicy;
-  };
-  security: {
-    passkeyProtectionEnabled: boolean;
-  };
-  editor: {
-    syntaxMode: EditorSyntaxMode;
-  };
-  network: {
-    allowedUrls: string[];
-  };
-}
+export type { DropMode, DropSettingsState, EditorSyntaxMode } from "./drop/settings";
 
 export interface ModeTransitionOptions {
   activeDropId?: string | null;
-  onProgress?: (progress: DropSyncProgress) => void;
+  onProgress?: (progress: VoidSyncProgress) => void;
 }
 
 export interface ModeTransitionResult {
@@ -113,27 +108,18 @@ interface PublishSyncIntent {
   visibility: DropVisibility;
   source: PublishSyncSource;
   queuedAt: number;
-  waiters: Array<{
-    resolve: (value: ModeTransitionResult["publishedDrop"] | undefined) => void;
-    reject: (error: unknown) => void;
-    onProgress?: (progress: DropSyncProgress) => void;
-  }>;
-}
-
-interface DropSettingsChanges {
-  mode?: DropMode;
-  shareVisibility?: DropVisibility;
-  draftDiffPolicy?: DropDraftDiffPolicy;
-  passkeyProtectionEnabled?: boolean;
-  syntaxMode?: EditorSyntaxMode;
-  allowedUrls?: readonly string[];
-}
+    waiters: Array<{
+      resolve: (value: ModeTransitionResult["publishedDrop"] | undefined) => void;
+      reject: (error: unknown) => void;
+      onProgress?: (progress: VoidSyncProgress) => void;
+    }>;
+  }
 
 interface DropStoreState {
   mode: DropMode;
   settings: DropSettingsState;
   offlineMode: boolean;
-  syncTargetProvider: DropProviderScope;
+  syncTargetProvider: VoidProviderScope;
   shareVisibility: DropVisibility;
   unlockPolicy: DropUnlockPolicy;
   draftDiffPolicy: DropDraftDiffPolicy;
@@ -155,7 +141,7 @@ interface DropStoreState {
     enabled: boolean,
     options?: ModeTransitionOptions,
   ) => Promise<ModeTransitionResult>;
-  setSyncTargetProvider: (scope: DropProviderScope) => Promise<void>;
+  setSyncTargetProvider: (scope: VoidProviderScope) => Promise<void>;
   setShareVisibility: (visibility: DropVisibility) => Promise<void>;
   setUnlockPolicy: (policy: DropUnlockPolicy) => Promise<void>;
   setDraftDiffPolicy: (policy: DropDraftDiffPolicy) => Promise<void>;
@@ -164,11 +150,11 @@ interface DropStoreState {
   setAllowedUrls: (urls: readonly string[]) => Promise<void>;
   createDrop: (
     payload: DropPayload,
-    options?: Partial<DropCreateOptions>,
-  ) => Promise<{ id: string; url: string; scope: DropProviderScope }>;
+    options?: Partial<VoidCreateOptions>,
+  ) => Promise<{ id: string; url: string; scope: VoidProviderScope }>;
   syncDropToRemote: (
     id: string,
-    onProgress?: (progress: DropSyncProgress) => void,
+    onProgress?: (progress: VoidSyncProgress) => void,
   ) => Promise<void>;
   listSyncConflicts: () => DropSyncConflictRecord[];
   resolveSyncConflict: (
@@ -186,238 +172,6 @@ interface DropStoreState {
   ) => Promise<{ id: string; url: string }>;
   getOfflineDrop: (id: string) => Promise<DropPayload | null>;
 }
-
-interface DropSettingsSnapshot {
-  mode: DropMode;
-  shareVisibility: DropVisibility;
-  draftDiffPolicy: DropDraftDiffPolicy;
-  passkeyProtectionEnabled: boolean;
-  syntaxMode: EditorSyntaxMode;
-  allowedUrls: string[];
-}
-
-type SettingName = keyof DropSettingsSnapshot;
-
-interface SettingDescriptor<K extends SettingName> {
-  storageKey: string;
-  apply: (snapshot: DropSettingsSnapshot, value: DropSettingsSnapshot[K]) => void;
-  serialize: (value: DropSettingsSnapshot[K]) => string;
-}
-
-const normalizeShareVisibility = (value: string): DropVisibility => {
-  if (value === "private" || value === "public" || value === "unlisted") {
-    return value;
-  }
-
-  return "unlisted";
-};
-
-const normalizeDraftDiffPolicy = (value: string): DropDraftDiffPolicy =>
-  value === "always" ? "always" : "edited-only";
-
-const normalizeSyntaxMode = (value: string): EditorSyntaxMode =>
-  value === "source" ? "source" : "rendered";
-
-const parseLegacyUnlockPolicy = (value: string | null): DropUnlockPolicy =>
-  value === "provider-escrow" ? "provider-escrow" : "vault-only";
-
-const parseSyncTargetProvider = (value: string | null): DropProviderScope =>
-  value === "local" ? "local" : "remote";
-
-const parseModeFromStoredValue = (
-  modeValue: string | null,
-  legacySyncTarget: string | null,
-): DropMode => {
-  if (modeValue === "online" || modeValue === "offline") {
-    return modeValue;
-  }
-
-  if (modeValue === "1" || modeValue === "true") {
-    return "offline";
-  }
-
-  if (legacySyncTarget && parseSyncTargetProvider(legacySyncTarget) === "local") {
-    return "offline";
-  }
-
-  return "online";
-};
-
-const parseShareVisibility = (value: string | null): DropVisibility =>
-  normalizeShareVisibility(value ?? "unlisted");
-
-const parseDraftDiffPolicy = (value: string | null): DropDraftDiffPolicy =>
-  normalizeDraftDiffPolicy(value ?? "edited-only");
-
-const parseSyntaxMode = (value: string | null): EditorSyntaxMode =>
-  normalizeSyntaxMode(value ?? "rendered");
-
-const parsePasskeyProtectionEnabled = (value: string | null): boolean =>
-  value === null ? false : value === "1" || value === "true";
-
-const parseAllowedUrls = (value: string | null): string[] => {
-  if (!value) {
-    return [...DEFAULT_NETWORK_ALLOWLIST];
-  }
-
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (Array.isArray(parsed)) {
-      return normalizeNetworkAllowlist(
-        parsed.filter((entry): entry is string => typeof entry === "string"),
-      );
-    }
-  } catch {
-    return parseNetworkAllowlistInput(value);
-  }
-
-  return parseNetworkAllowlistInput(value);
-};
-
-const serializeMode = (mode: DropMode) => mode;
-
-const serializeBoolean = (enabled: boolean) => (enabled ? "1" : "0");
-
-const serializeAllowedUrls = (urls: readonly string[]): string =>
-  JSON.stringify(normalizeNetworkAllowlist(urls));
-
-const deriveSyncTargetProvider = (mode: DropMode): DropProviderScope =>
-  mode === "offline" ? "local" : "remote";
-
-const deriveUnlockPolicy = (
-  mode: DropMode,
-  visibility: DropVisibility,
-): DropUnlockPolicy => {
-  if (mode === "online" && visibility !== "private") {
-    return "provider-escrow";
-  }
-
-  return "vault-only";
-};
-
-const resolveCreateVisibility = (
-  mode: DropMode,
-  visibility: DropVisibility,
-): DropVisibility => {
-  if (mode === "offline") {
-    return "private";
-  }
-
-  return visibility;
-};
-
-const createSettingsObject = (
-  snapshot: DropSettingsSnapshot,
-): DropSettingsState => ({
-  mode: {
-    value: snapshot.mode,
-  },
-  sharing: {
-    visibility: snapshot.shareVisibility,
-    draftDiffPolicy: snapshot.draftDiffPolicy,
-  },
-  security: {
-    passkeyProtectionEnabled: snapshot.passkeyProtectionEnabled,
-  },
-  editor: {
-    syntaxMode: snapshot.syntaxMode,
-  },
-  network: {
-    allowedUrls: [...snapshot.allowedUrls],
-  },
-});
-
-const normalizeSettingsSnapshot = (
-  snapshot: DropSettingsSnapshot,
-): DropSettingsSnapshot => ({
-  mode: snapshot.mode === "offline" ? "offline" : "online",
-  shareVisibility: normalizeShareVisibility(snapshot.shareVisibility),
-  draftDiffPolicy: normalizeDraftDiffPolicy(snapshot.draftDiffPolicy),
-  passkeyProtectionEnabled: Boolean(snapshot.passkeyProtectionEnabled),
-  syntaxMode: normalizeSyntaxMode(snapshot.syntaxMode),
-  allowedUrls: normalizeNetworkAllowlist(snapshot.allowedUrls),
-});
-
-const settingsSnapshotFromState = (state: {
-  mode: DropMode;
-  shareVisibility: DropVisibility;
-  draftDiffPolicy: DropDraftDiffPolicy;
-  passkeyProtectionEnabled: boolean;
-  syntaxMode: EditorSyntaxMode;
-  allowedUrls: string[];
-}): DropSettingsSnapshot => ({
-  mode: state.mode,
-  shareVisibility: state.shareVisibility,
-  draftDiffPolicy: state.draftDiffPolicy,
-  passkeyProtectionEnabled: state.passkeyProtectionEnabled,
-  syntaxMode: state.syntaxMode,
-  allowedUrls: [...state.allowedUrls],
-});
-
-const derivedStateFromSnapshot = (snapshot: DropSettingsSnapshot) => {
-  const normalized = normalizeSettingsSnapshot(snapshot);
-  const offlineMode = normalized.mode === "offline";
-
-  return {
-    mode: normalized.mode,
-    settings: createSettingsObject(normalized),
-    offlineMode,
-    syncTargetProvider: deriveSyncTargetProvider(normalized.mode),
-    shareVisibility: normalized.shareVisibility,
-    unlockPolicy: deriveUnlockPolicy(normalized.mode, normalized.shareVisibility),
-    draftDiffPolicy: normalized.draftDiffPolicy,
-    passkeyProtectionEnabled: normalized.passkeyProtectionEnabled,
-    syntaxMode: normalized.syntaxMode,
-    allowedUrls: normalized.allowedUrls,
-  };
-};
-
-const SETTINGS_DESCRIPTORS: {
-  [K in SettingName]: SettingDescriptor<K>;
-} = {
-  mode: {
-    storageKey: OFFLINE_MODE_KEY,
-    apply: (snapshot, value) => {
-      snapshot.mode = value;
-    },
-    serialize: (value) => serializeMode(value),
-  },
-  shareVisibility: {
-    storageKey: SHARE_VISIBILITY_KEY,
-    apply: (snapshot, value) => {
-      snapshot.shareVisibility = value;
-    },
-    serialize: (value) => value,
-  },
-  draftDiffPolicy: {
-    storageKey: DRAFT_DIFF_POLICY_KEY,
-    apply: (snapshot, value) => {
-      snapshot.draftDiffPolicy = value;
-    },
-    serialize: (value) => value,
-  },
-  passkeyProtectionEnabled: {
-    storageKey: PASSKEY_PROTECTION_STORAGE_KEY,
-    apply: (snapshot, value) => {
-      snapshot.passkeyProtectionEnabled = value;
-    },
-    serialize: (value) => serializeBoolean(value),
-  },
-  syntaxMode: {
-    storageKey: SYNTAX_MODE_KEY,
-    apply: (snapshot, value) => {
-      snapshot.syntaxMode = value;
-    },
-    serialize: (value) => value,
-  },
-  allowedUrls: {
-    storageKey: NETWORK_ALLOWLIST_KEY,
-    apply: (snapshot, value) => {
-      snapshot.allowedUrls = normalizeNetworkAllowlist(value);
-    },
-    serialize: (value) => serializeAllowedUrls(value),
-  },
-};
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error && error.message) {
@@ -443,7 +197,7 @@ const buildResolutionError = (
 
 const logProviderFailure = (
   operation: "getDrop" | "resolveDropGraph" | "resolveDropOwnership",
-  provider: DropProviderScope,
+  provider: VoidProviderScope,
   id: string,
   error: unknown,
 ) => {
@@ -464,7 +218,7 @@ const buildDropUrlFromId = (id: string): string => {
 };
 
 const isConflictError = (error: unknown): boolean => {
-  if (isDropProviderHttpError(error)) {
+  if (isVoidProviderHttpError(error)) {
     return error.status === 409 || error.status === 412;
   }
 
@@ -483,7 +237,7 @@ const isConflictError = (error: unknown): boolean => {
 const getConflictReasonFromError = (
   error: unknown,
 ): DropSyncConflictRecord["reason"] => {
-  if (isDropProviderHttpError(error)) {
+  if (isVoidProviderHttpError(error)) {
     if (
       error.status === 412 ||
       error.code === "revision_precondition_failed"
@@ -505,7 +259,7 @@ const getConflictReasonFromError = (
 };
 
 const getConflictCodeFromError = (error: unknown): string | null => {
-  if (isDropProviderHttpError(error)) {
+  if (isVoidProviderHttpError(error)) {
     if (error.code) {
       return error.code;
     }
@@ -531,95 +285,6 @@ const getConflictCodeFromError = (error: unknown): string | null => {
   return null;
 };
 
-const readLocalStorageItem = (key: string): string | null => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-};
-
-const writeLocalStorageItem = (key: string, value: string) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // ignore fallback failure
-  }
-};
-
-const readPersistedItem = async (key: string): Promise<string | null> => {
-  if (isIndexedDbSupported()) {
-    try {
-      const value = await getKvItem(key);
-      if (value !== null) {
-        return value;
-      }
-    } catch (error) {
-      console.error(`Failed reading "${key}" from IndexedDB:`, error);
-    }
-  }
-
-  return readLocalStorageItem(key);
-};
-
-const writePersistedItem = async (key: string, value: string) => {
-  if (isIndexedDbSupported()) {
-    try {
-      await setKvItem(key, value);
-      return;
-    } catch (error) {
-      console.error(`Failed writing "${key}" to IndexedDB:`, error);
-    }
-  }
-
-  writeLocalStorageItem(key, value);
-};
-
-const readPersistedValue = async <T>(key: string): Promise<T | null> => {
-  if (isIndexedDbSupported()) {
-    try {
-      const value = await getKvValue<T>(key);
-      if (value !== null) {
-        return value;
-      }
-    } catch (error) {
-      console.error(`Failed reading "${key}" object value from IndexedDB:`, error);
-    }
-  }
-
-  const raw = readLocalStorageItem(key);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-};
-
-const writePersistedValue = async (key: string, value: unknown) => {
-  if (isIndexedDbSupported()) {
-    try {
-      await setKvValue(key, value);
-      return;
-    } catch (error) {
-      console.error(`Failed writing "${key}" object value to IndexedDB:`, error);
-    }
-  }
-
-  writeLocalStorageItem(key, JSON.stringify(value));
-};
-
 const createSyncRecordId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -634,10 +299,10 @@ const resolveDropOwnershipRecord = async (
   const { accountId } = await getUnlockedVault();
 
   const resolveLegacyOwnership = async (
-    scope: DropProviderScope,
+    scope: VoidProviderScope,
   ): Promise<{ id: string; ownedByCurrentAccount: boolean } | null> => {
     if (scope === "local") {
-      const payload = await dropProviderRegistry.local.get(id);
+      const payload = await voidProviderRegistry.local.get(id);
       const ownerAccountId =
         typeof payload?.metadata?.ownerAccountId === "string"
           ? payload.metadata.ownerAccountId
@@ -691,7 +356,7 @@ const resolveDropOwnershipRecord = async (
   let localError: unknown = null;
 
   try {
-    const localRecord = await dropProviderRegistry.local.crud.drops.get(id);
+    const localRecord = await voidProviderRegistry.local.crud.drops.get(id);
     if (localRecord) {
       return {
         id: localRecord.id,
@@ -711,7 +376,7 @@ const resolveDropOwnershipRecord = async (
   let remoteError: unknown = null;
 
   try {
-    const remoteRecord = await dropProviderRegistry.remote.crud.drops.get(id);
+    const remoteRecord = await voidProviderRegistry.remote.crud.drops.get(id);
     if (remoteRecord) {
       return {
         id: remoteRecord.id,
@@ -744,15 +409,6 @@ const resolveDropOwnershipRecord = async (
   );
 
   return null;
-};
-
-const DEFAULT_SETTINGS_SNAPSHOT: DropSettingsSnapshot = {
-  mode: "online",
-  shareVisibility: "unlisted",
-  draftDiffPolicy: "edited-only",
-  passkeyProtectionEnabled: false,
-  syntaxMode: "rendered",
-  allowedUrls: [...DEFAULT_NETWORK_ALLOWLIST],
 };
 
 const useDropStore = create<DropStoreState>((set, get) => {
@@ -892,7 +548,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
   const emitIntentProgress = (
     intent: PublishSyncIntent,
-    progress: DropSyncProgress,
+    progress: VoidSyncProgress,
   ): void => {
     intent.waiters.forEach((waiter) => {
       waiter.onProgress?.(progress);
@@ -905,7 +561,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
   const runPublishIntent = async (
     intent: PublishSyncIntent,
   ): Promise<ModeTransitionResult["publishedDrop"] | undefined> => {
-    const localRecord = await dropProviderRegistry.local.crud.drops.get(intent.dropId);
+    const localRecord = await voidProviderRegistry.local.crud.drops.get(intent.dropId);
     if (!localRecord) {
       return undefined;
     }
@@ -917,7 +573,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
       dropId: localRecord.id,
     });
 
-    const remoteRecord = await dropProviderRegistry.remote.crud.drops.get(localRecord.id);
+    const remoteRecord = await voidProviderRegistry.remote.crud.drops.get(localRecord.id);
     if (remoteRecord) {
       const localHash = serializeCanonicalJson(localRecord.envelope);
       const remoteHash = serializeCanonicalJson(remoteRecord.envelope);
@@ -969,7 +625,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
       };
     }
 
-    const payload = await dropProviderRegistry.local.get(localRecord.id);
+    const payload = await voidProviderRegistry.local.get(localRecord.id);
     if (!payload) {
       return undefined;
     }
@@ -977,7 +633,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     const unlockPolicy = deriveUnlockPolicy("online", intent.visibility);
 
     try {
-      const created = await dropProviderRegistry.remote.create(payload, {
+      const created = await voidProviderRegistry.remote.create(payload, {
         id: localRecord.id,
         visibility: intent.visibility,
         unlockPolicy,
@@ -1008,7 +664,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
       const conflictReason = getConflictReasonFromError(error);
       const conflictCode = getConflictCodeFromError(error);
-      const competing = await dropProviderRegistry.remote.crud.drops.get(localRecord.id);
+      const competing = await voidProviderRegistry.remote.crud.drops.get(localRecord.id);
       if (competing) {
         await createConflictRecord({
           dropId: localRecord.id,
@@ -1083,7 +739,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     dropId: string;
     visibility: DropVisibility;
     source: PublishSyncSource;
-    onProgress?: (progress: DropSyncProgress) => void;
+    onProgress?: (progress: VoidSyncProgress) => void;
   }): Promise<ModeTransitionResult["publishedDrop"] | undefined> => {
     await hydrateSyncConflicts();
     await hydrateSyncQueue();
@@ -1139,7 +795,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
     if (resolution === "accept-local") {
       const latestRemote = target.remote
-        ? await dropProviderRegistry.remote.crud.drops.get(target.dropId)
+        ? await voidProviderRegistry.remote.crud.drops.get(target.dropId)
         : null;
 
       if (target.remote) {
@@ -1167,7 +823,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
       }
 
       const localRecord =
-        (await dropProviderRegistry.local.crud.drops.get(target.dropId)) ?? {
+        (await voidProviderRegistry.local.crud.drops.get(target.dropId)) ?? {
           id: target.local.id,
           envelope: target.local.envelope,
           createdAt: target.local.createdAt,
@@ -1176,7 +832,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
         };
 
       try {
-        await dropProviderRegistry.remote.crud.drops.create(localRecord, {
+        await voidProviderRegistry.remote.crud.drops.create(localRecord, {
           upsert: true,
           expectedRevision:
             latestRemote?.revision ?? target.remote?.revision ?? undefined,
@@ -1186,7 +842,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
           throw error;
         }
 
-        const refreshedRemote = await dropProviderRegistry.remote.crud.drops.get(
+        const refreshedRemote = await voidProviderRegistry.remote.crud.drops.get(
           target.dropId,
         );
         if (refreshedRemote) {
@@ -1209,7 +865,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
         );
       }
     } else {
-      const latestLocal = await dropProviderRegistry.local.crud.drops.get(
+      const latestLocal = await voidProviderRegistry.local.crud.drops.get(
         target.dropId,
       );
       if (
@@ -1240,7 +896,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
         );
       }
 
-      await dropProviderRegistry.local.crud.drops.create(
+      await voidProviderRegistry.local.crud.drops.create(
         {
           id: target.remote.id,
           envelope: target.remote.envelope,
@@ -1443,7 +1099,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     return get().setMode(enabled ? "offline" : "online", options);
   },
 
-  setSyncTargetProvider: async (scope: DropProviderScope) => {
+  setSyncTargetProvider: async (scope: VoidProviderScope) => {
     await get().setMode(scope === "local" ? "offline" : "online");
   },
 
@@ -1478,7 +1134,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     await get().applySettings({ allowedUrls: urls });
   },
 
-  createDrop: async (payload: DropPayload, options: Partial<DropCreateOptions> = {}) => {
+  createDrop: async (payload: DropPayload, options: Partial<VoidCreateOptions> = {}) => {
     if (!get().hydrated) {
       await Promise.all([
         get().hydrateOfflineMode(),
@@ -1493,7 +1149,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     );
     const unlockPolicy = deriveUnlockPolicy(mode, visibility);
 
-    const localCreated = await dropProviderRegistry.local.create(payload, {
+    const localCreated = await voidProviderRegistry.local.create(payload, {
       visibility,
       unlockPolicy,
       id: options.id,
@@ -1524,7 +1180,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
   syncDropToRemote: async (
     id: string,
-    onProgress?: (progress: DropSyncProgress) => void,
+    onProgress?: (progress: VoidSyncProgress) => void,
   ) => {
     const published = await enqueuePublishIntent({
       dropId: id,
@@ -1553,7 +1209,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     let localError: unknown = null;
 
     try {
-      const local = await dropProviderRegistry.local.get(id);
+      const local = await voidProviderRegistry.local.get(id);
       if (local) {
         return local;
       }
@@ -1565,7 +1221,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     let remoteError: unknown = null;
 
     try {
-      const remote = await dropProviderRegistry.remote.get(id);
+      const remote = await voidProviderRegistry.remote.get(id);
       if (remote) {
         return remote;
       }
@@ -1595,14 +1251,14 @@ const useDropStore = create<DropStoreState>((set, get) => {
     let localError: unknown = null;
 
     try {
-      return await dropProviderRegistry.local.resolveGraph(id);
+      return await voidProviderRegistry.local.resolveGraph(id);
     } catch (error) {
       localError = error;
       logProviderFailure("resolveDropGraph", "local", id, error);
     }
 
     try {
-      return await dropProviderRegistry.remote.resolveGraph(id);
+      return await voidProviderRegistry.remote.resolveGraph(id);
     } catch (remoteError) {
       logProviderFailure("resolveDropGraph", "remote", id, remoteError);
       const resolutionError = buildResolutionError(
@@ -1618,11 +1274,11 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
   listOwnedDrops: async () => {
     let records: Awaited<
-      ReturnType<typeof dropProviderRegistry.local.crud.drops.list>
+      ReturnType<typeof voidProviderRegistry.local.crud.drops.list>
     >;
 
     try {
-      records = await dropProviderRegistry.local.crud.drops.list();
+      records = await voidProviderRegistry.local.crud.drops.list();
     } catch (error) {
       console.error("Failed to list locally-owned drops:", error);
       return [];
@@ -1639,7 +1295,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
   },
 
   createOfflineDrop: async (payload: DropPayload) => {
-    const result = await dropProviderRegistry.local.create(payload, {
+    const result = await voidProviderRegistry.local.create(payload, {
       visibility: "private",
       unlockPolicy: "vault-only",
     });
@@ -1651,7 +1307,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
   },
 
   getOfflineDrop: async (id: string) => {
-    return dropProviderRegistry.local.get(id);
+    return voidProviderRegistry.local.get(id);
   },
   };
 });

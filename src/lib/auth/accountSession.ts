@@ -1,4 +1,4 @@
-import { getUnlockedVault } from "../drop/passkeyVault";
+import { getUnlockedVault } from "../void/vault/passkeyVault";
 
 interface AccountSessionResponse {
   token: string;
@@ -24,7 +24,10 @@ const toBase64Url = (bytes: Uint8Array): string => {
   bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 };
 
 const readStoredSession = (): CachedAccountSession | null => {
@@ -64,7 +67,10 @@ const writeStoredSession = (session: CachedAccountSession): void => {
   }
 
   try {
-    window.sessionStorage.setItem(ACCOUNT_SESSION_STORAGE_KEY, JSON.stringify(session));
+    window.sessionStorage.setItem(
+      ACCOUNT_SESSION_STORAGE_KEY,
+      JSON.stringify(session),
+    );
   } catch {
     // ignore storage failures
   }
@@ -166,7 +172,9 @@ export const getAccountSessionToken = async (
   return promise;
 };
 
-export const getAccountAuthHeaders = async (): Promise<Record<string, string>> => {
+export const getAccountAuthHeaders = async (): Promise<
+  Record<string, string>
+> => {
   const token = await getAccountSessionToken();
   if (!token) {
     return {};

@@ -10,11 +10,13 @@ const toBinaryString = (bytes: Uint8Array): string => {
   return binary;
 };
 
+/** Encodes binary key and cipher material as base64 for drop envelopes. */
 export const toBase64 = (value: ArrayBuffer | Uint8Array): string => {
   const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
   return btoa(toBinaryString(bytes));
 };
 
+/** Decodes base64 envelope material into bytes for Web Crypto calls. */
 export const fromBase64 = (value: string): Uint8Array => {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);

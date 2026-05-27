@@ -9,7 +9,10 @@ type NullplugHandlerWithId = NullplugHandler & {
   pluginId?: string;
 };
 
-const registerNullplug = (id: string, handler: NullplugHandler): NullplugHandler => {
+const registerNullplug = (
+  id: string,
+  handler: NullplugHandler,
+): NullplugHandler => {
   const normalized = normalizePluginId(id);
   if (!normalized) {
     throw new Error("Plugin id must be a non-empty string.");
@@ -37,7 +40,9 @@ const getHandlerId = (handler: NullplugHandlerWithId): string => {
   );
 };
 
-export function nullplug(id: string): (handler: NullplugHandler) => NullplugHandler;
+export function nullplug(
+  id: string,
+): (handler: NullplugHandler) => NullplugHandler;
 export function nullplug(id: string, handler: NullplugHandler): NullplugHandler;
 export function nullplug(handler: NullplugHandlerWithId): NullplugHandler;
 export function nullplug(

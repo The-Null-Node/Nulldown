@@ -1,10 +1,11 @@
 import { jest } from "@jest/globals";
 import { indexedDB } from "fake-indexeddb";
 import {
-  createDropProviderRegistry,
-  createLocalDropProvider,
-  createRemoteDropProvider,
+  createLocalVoidProvider,
+  createRemoteVoidProvider,
+  createVoidProviderRegistry,
 } from "./provider";
+import type { VoidCrypto } from "./crypto/browserVoidCrypto";
 import type { DropEnvelopeV1, DropPayload } from "../../../shared/drop/types";
 
 const ensureWindowWithIndexedDb = () => {
@@ -55,25 +56,25 @@ const createEnvelope = (): DropEnvelopeV1 => ({
 const createCryptoPort = (
   payload: DropPayload,
   envelope = createEnvelope(),
-) => ({
-  seal: jest.fn().mockResolvedValue(envelope),
-  open: jest.fn().mockResolvedValue(payload),
+): VoidCrypto => ({
+  seal: jest.fn<VoidCrypto["seal"]>().mockResolvedValue(envelope),
+  open: jest.fn<VoidCrypto["open"]>().mockResolvedValue(payload),
 });
 
-describe("drop providers", () => {
+describe("void providers", () => {
   beforeEach(() => {
     ensureWindowWithIndexedDb();
-    (globalThis as { fetch?: unknown }).fetch = jest.fn();
+    (globalThis as { fetch?: typeof fetch }).fetch = jest.fn<typeof fetch>();
   });
 
-  it("creates and reads local drops with createLocalDropProvider", async () => {
+  it("creates and reads local drops with createLocalVoidProvider", async () => {
     const payload: DropPayload = {
       content: "local content",
       metadata: { themeId: "system" },
     };
     const envelope = createEnvelope();
     const cryptoPort = createCryptoPort(payload, envelope);
-    const provider = createLocalDropProvider({
+    const provider = createLocalVoidProvider({
       crypto: cryptoPort,
     });
 
@@ -97,18 +98,20 @@ describe("drop providers", () => {
     expect(cryptoPort.open).toHaveBeenCalledWith(envelope, { dropId: created.id });
   });
 
-  it("creates and reads remote drops with createRemoteDropProvider", async () => {
+  it("creates and reads remote drops with createRemoteVoidProvider", async () => {
     const payload: DropPayload = {
       content: "remote content",
       metadata: { themeId: "system" },
     };
     const envelope = createEnvelope();
     const cryptoPort = createCryptoPort(payload, envelope);
-    const provider = createRemoteDropProvider({
+    const provider = createRemoteVoidProvider({
       crypto: cryptoPort,
     });
 
-    (globalThis.fetch as jest.Mock).mockResolvedValueOnce(
+    const fetchMock = globalThis.fetch as jest.MockedFunction<typeof fetch>;
+
+    fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({ id: "abc123def456", url: "https://app/d/abc123" }),
         {
@@ -128,7 +131,7 @@ describe("drop providers", () => {
       scope: "remote",
     });
 
-    (globalThis.fetch as jest.Mock).mockResolvedValueOnce(
+    fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify(envelope), {
         status: 200,
         headers: {
@@ -158,11 +161,13 @@ describe("drop providers", () => {
       metadata: {},
     };
 
-    const registry = createDropProviderRegistry({
-      crypto: createCryptoPort({ content: "unused" }) as any,
+    const registry = createVoidProviderRegistry({
+      crypto: createCryptoPort({ content: "unused" }),
     });
 
-    (globalThis.fetch as jest.Mock)
+    const fetchMock = globalThis.fetch as jest.MockedFunction<typeof fetch>;
+
+    fetchMock
       .mockResolvedValueOnce(
         new Response(JSON.stringify(payloadHead), {
           status: 200,
@@ -185,17 +190,17 @@ describe("drop providers", () => {
     expect(firstGraph.headId).toBe(headId);
     expect(firstGraph.rootId).toBe(rootId);
     expect(firstGraph.lineage).toEqual([headId, rootId]);
-    expect((globalThis.fetch as jest.Mock).mock.calls).toHaveLength(2);
+    expect(fetchMock.mock.calls).toHaveLength(2);
 
     const secondGraph = await registry.remote.resolveGraph(headId);
 
     expect(secondGraph.lineage).toEqual([headId, rootId]);
-    expect((globalThis.fetch as jest.Mock).mock.calls).toHaveLength(2);
+    expect(fetchMock.mock.calls).toHaveLength(2);
   });
 
-  it("selects provider by drop id with createDropProviderRegistry", () => {
-    const registry = createDropProviderRegistry({
-      crypto: createCryptoPort({ content: "unused" }) as any,
+  it("selects provider by drop id with createVoidProviderRegistry", () => {
+    const registry = createVoidProviderRegistry({
+      crypto: createCryptoPort({ content: "unused" }),
     });
 
     expect(registry.forDropId("offline_abc").scope).toBe("local");

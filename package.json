@@ -2,7 +2,7 @@
   "name": "nulldown",
   "version": "1.0.0",
   "private": false,
-  "description": "A simple markdown sharing tool",
+  "description": "A Markdown-native document runtime for encrypted drops",
   "type": "module",
   "bin": {
     "nd": "./bin/nulldown.ts",
@@ -18,7 +18,7 @@
     "shared/drop/sidecar.ts",
     "shared/nullplug/",
     "shared/nulledit/",
-    "docs/NULDOWN_API.md",
+    "AGENTS.md",
     "skill.md",
     "README.md"
   ],

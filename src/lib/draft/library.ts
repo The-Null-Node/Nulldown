@@ -58,7 +58,10 @@ const writeRawIndex = (entries: DraftLibraryEntry[]) => {
   }
 
   try {
-    window.localStorage.setItem(DRAFT_LIBRARY_INDEX_KEY, JSON.stringify(entries));
+    window.localStorage.setItem(
+      DRAFT_LIBRARY_INDEX_KEY,
+      JSON.stringify(entries),
+    );
   } catch {
     // noop
   }
@@ -88,7 +91,9 @@ export const readDraftContent = (draftKey: string): string | null => {
 };
 
 export const removeDraftLibraryEntry = (draftKey: string) => {
-  const remaining = readRawIndex().filter((entry) => entry.draftKey !== draftKey);
+  const remaining = readRawIndex().filter(
+    (entry) => entry.draftKey !== draftKey,
+  );
   writeRawIndex(remaining);
 };
 
@@ -117,7 +122,9 @@ export const upsertDraftLibraryEntry = (
     updatedAt,
   };
 
-  const existing = readRawIndex().filter((entry) => entry.draftKey !== draftKey);
+  const existing = readRawIndex().filter(
+    (entry) => entry.draftKey !== draftKey,
+  );
   existing.push(nextEntry);
   existing.sort((a, b) => b.updatedAt - a.updatedAt);
   writeRawIndex(existing);
@@ -128,7 +135,9 @@ export const listDraftLibraryEntries = (): DraftLibraryEntry[] => {
 
   const legacyContent = readDraftContent(LEGACY_DRAFT_KEY);
   if (legacyContent && legacyContent.trim()) {
-    const hasLegacy = indexEntries.some((entry) => entry.draftKey === LEGACY_DRAFT_KEY);
+    const hasLegacy = indexEntries.some(
+      (entry) => entry.draftKey === LEGACY_DRAFT_KEY,
+    );
     if (!hasLegacy) {
       indexEntries.push({
         draftKey: LEGACY_DRAFT_KEY,

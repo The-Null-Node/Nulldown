@@ -288,6 +288,32 @@ describe("functions api conflict contracts", () => {
     expect(body.error).toContain("Refresh and try again");
   });
 
+  it("accepts quoted revision tokens from /api/get headers for /api/store upserts", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "QuoteRev1234";
+
+    const etag = bucket.seed(id, JSON.stringify(createEnvelope()), "application/json");
+    bucket.seed(createRemoteAliasKey("QuoteR"), id, "text/plain");
+
+    const response = await onStorePost({
+      request: createStoreRequest({
+        id,
+        upsert: true,
+        expectedRevision: `"${etag}"`,
+        envelope: createEnvelope("account-2"),
+      }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    const body = (await response.json()) as { id: string; url: string };
+
+    expect(response.status).toBe(200);
+    expect(body.id).toBe(id);
+  });
+
   it("returns 412 revision_precondition_failed from /api/delete/:id as structured JSON", async () => {
     const bucket = new MemoryR2Bucket();
     const id = "ZxCvBn123456";

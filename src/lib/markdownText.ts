@@ -271,21 +271,197 @@ export function mapMarkdownIndexToPlainTextOffset(
   }
 
   let plainOffset = 0;
-  let previousResolved = -1;
+  let i = 0;
+  let inCodeBlock = false;
+  let codeFence = "";
+  let inlineCode = false;
+  let lineStart = true;
 
-  while (plainOffset <= markdown.length) {
-    const resolvedIndex = mapPlainTextOffsetToMarkdownIndex(markdown, plainOffset);
-    if (resolvedIndex >= target) {
-      return plainOffset;
+  const emit = (mdIndex: number): boolean => {
+    if (mdIndex >= target) {
+      return true;
     }
 
-    if (resolvedIndex === previousResolved) {
-      plainOffset += 1;
+    plainOffset += 1;
+    return false;
+  };
+
+  const skipLine = () => {
+    while (i < markdown.length && markdown[i] !== "\n") {
+      i += 1;
+    }
+    if (i < markdown.length && markdown[i] === "\n") {
+      i += 1;
+    }
+    lineStart = true;
+    inlineCode = false;
+  };
+
+  const emitLinkText = (start: number, end: number): boolean => {
+    let j = start;
+    while (j < end) {
+      const char = markdown[j];
+      if (char === "\\") {
+        j += 1;
+        if (j < end) {
+          if (emit(j)) return true;
+          j += 1;
+        }
+        continue;
+      }
+
+      if (char === "~" && markdown[j + 1] === "~") {
+        j += 2;
+        continue;
+      }
+
+      if (char === "*" || char === "_" || char === "~" || char === "`") {
+        j += 1;
+        continue;
+      }
+
+      if (emit(j)) return true;
+      j += 1;
+    }
+    return false;
+  };
+
+  while (i < markdown.length && i < target) {
+    const char = markdown[i];
+
+    if (char === "\r") {
+      i += 1;
       continue;
     }
 
-    previousResolved = resolvedIndex;
-    plainOffset += 1;
+    if (char === "\n") {
+      if (emit(i)) return plainOffset;
+      i += 1;
+      lineStart = true;
+      inlineCode = false;
+      continue;
+    }
+
+    if (lineStart) {
+      if (char === "`" || char === "~") {
+        let count = 0;
+        while (markdown[i + count] === char) count += 1;
+        if (count >= 3) {
+          if (!inCodeBlock) {
+            inCodeBlock = true;
+            codeFence = char;
+            skipLine();
+            continue;
+          }
+          if (inCodeBlock && char === codeFence) {
+            inCodeBlock = false;
+            skipLine();
+            continue;
+          }
+        }
+      }
+
+      if (!inCodeBlock) {
+        if (char === "#") {
+          let j = i;
+          while (markdown[j] === "#") j += 1;
+          if (markdown[j] === " ") {
+            i = j + 1;
+            lineStart = false;
+            continue;
+          }
+        }
+
+        if (char === ">") {
+          let j = i + 1;
+          if (markdown[j] === " ") j += 1;
+          i = j;
+          lineStart = false;
+          continue;
+        }
+
+        if (
+          (char === "-" || char === "*" || char === "+") &&
+          markdown[i + 1] === " "
+        ) {
+          i += 2;
+          lineStart = false;
+          continue;
+        }
+
+        if (isDigit(char)) {
+          let j = i;
+          while (isDigit(markdown[j] ?? "")) j += 1;
+          if (
+            (markdown[j] === "." || markdown[j] === ")") &&
+            markdown[j + 1] === " "
+          ) {
+            i = j + 2;
+            lineStart = false;
+            continue;
+          }
+        }
+      }
+    }
+
+    if (!inCodeBlock && char === "`") {
+      inlineCode = !inlineCode;
+      i += 1;
+      lineStart = false;
+      continue;
+    }
+
+    if (!inCodeBlock && !inlineCode) {
+      if (char === "!" && markdown[i + 1] === "[") {
+        const linkEnd = findUnescaped(markdown, i + 2, "]");
+        if (linkEnd !== -1 && markdown[linkEnd + 1] === "(") {
+          const urlEnd = findUnescaped(markdown, linkEnd + 2, ")");
+          if (urlEnd !== -1) {
+            if (emitLinkText(i + 2, linkEnd)) return plainOffset;
+            i = urlEnd + 1;
+            lineStart = false;
+            continue;
+          }
+        }
+      }
+
+      if (char === "[") {
+        const linkEnd = findUnescaped(markdown, i + 1, "]");
+        if (linkEnd !== -1 && markdown[linkEnd + 1] === "(") {
+          const urlEnd = findUnescaped(markdown, linkEnd + 2, ")");
+          if (urlEnd !== -1) {
+            if (emitLinkText(i + 1, linkEnd)) return plainOffset;
+            i = urlEnd + 1;
+            lineStart = false;
+            continue;
+          }
+        }
+      }
+
+      if (char === "~" && markdown[i + 1] === "~") {
+        i += 2;
+        lineStart = false;
+        continue;
+      }
+
+      if (char === "*" || char === "_" || char === "~") {
+        i += 1;
+        lineStart = false;
+        continue;
+      }
+
+      if (char === "\\" && i + 1 < markdown.length) {
+        i += 1;
+        if (emit(i)) return plainOffset;
+        i += 1;
+        lineStart = false;
+        continue;
+      }
+    }
+
+    if (emit(i)) return plainOffset;
+    i += 1;
+    lineStart = false;
   }
 
   return plainOffset;

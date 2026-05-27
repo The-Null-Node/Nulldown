@@ -26,7 +26,11 @@ export interface RenderableReplacement {
 
 export type RenderablePatch = RenderableDiff | RenderableReplacement;
 
-export type NullplugHandlerReturn = RenderablePatch | NullplugResult | string | null;
+export type NullplugHandlerReturn =
+  | RenderablePatch
+  | NullplugResult
+  | string
+  | null;
 
 export interface NullplugContext {
   allowedNetworkHosts: ReadonlySet<string>;

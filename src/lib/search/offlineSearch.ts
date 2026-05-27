@@ -108,7 +108,7 @@ export function resetOfflineSearchIndex(): void {
 export function searchableToOfflineDocument<T>(
   entity: Searchable<T>,
   content?: string,
-  updatedAt?: number
+  updatedAt?: number,
 ): OfflineSearchDocument {
   return {
     id: entity.id,

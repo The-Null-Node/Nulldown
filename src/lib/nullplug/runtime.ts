@@ -137,7 +137,11 @@ const normalizePolicyControlledMutations = (
 ): { mutations?: NullplugMutation[]; diagnostics: NullplugDiagnostic[] } => {
   const diagnostics: NullplugDiagnostic[] = [];
   const sourceMutations = [...(result.mutations ?? [])];
-  const canProposeDiff = isGrantAllowed(proposeMutationGrant, policy, maxGrants);
+  const canProposeDiff = isGrantAllowed(
+    proposeMutationGrant,
+    policy,
+    maxGrants,
+  );
   const canApplyDiff = isGrantAllowed(applyMutationGrant, policy, maxGrants);
 
   if (result.diffs) {
@@ -147,7 +151,10 @@ const normalizePolicyControlledMutations = (
       reason: "Normalized from legacy top-level diffs.",
     });
     diagnostics.push(
-      diagnostic("info", "Normalized top-level diffs into a proposed mutation."),
+      diagnostic(
+        "info",
+        "Normalized top-level diffs into a proposed mutation.",
+      ),
     );
   }
 
@@ -196,12 +203,18 @@ const normalizePolicyControlledMutations = (
 
   if (downgraded > 0) {
     diagnostics.push(
-      diagnostic("warn", "Root policy downgraded one or more apply mutations to proposals."),
+      diagnostic(
+        "warn",
+        "Root policy downgraded one or more apply mutations to proposals.",
+      ),
     );
   }
   if (rejected > 0) {
     diagnostics.push(
-      diagnostic("warn", "Root policy rejected one or more nullplug mutations."),
+      diagnostic(
+        "warn",
+        "Root policy rejected one or more nullplug mutations.",
+      ),
     );
   }
 
@@ -228,7 +241,10 @@ export const validateNullplugRuntimeResult = (
       patch: null,
       diagnostics: [
         ...normalized.diagnostics,
-        diagnostic("error", `Root policy denied nullplug invocation${pluginId ? `: ${pluginId}` : ""}.`),
+        diagnostic(
+          "error",
+          `Root policy denied nullplug invocation${pluginId ? `: ${pluginId}` : ""}.`,
+        ),
       ],
     };
   }
@@ -269,7 +285,10 @@ export const validateNullplugRuntimeResult = (
     );
     if (allowed.length !== result.calls.length) {
       diagnostics.push(
-        diagnostic("warn", "Root policy rejected one or more nested nullplug calls."),
+        diagnostic(
+          "warn",
+          "Root policy rejected one or more nested nullplug calls.",
+        ),
       );
     }
     if (allowed.length) {
@@ -287,7 +306,10 @@ export const validateNullplugRuntimeResult = (
     );
     if (allowed.length !== result.streams.length) {
       diagnostics.push(
-        diagnostic("warn", "Root policy rejected one or more nullplug streams."),
+        diagnostic(
+          "warn",
+          "Root policy rejected one or more nullplug streams.",
+        ),
       );
     }
     if (allowed.length) {

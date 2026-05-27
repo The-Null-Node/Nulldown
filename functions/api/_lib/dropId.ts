@@ -46,13 +46,13 @@ const removeAliasCache = (shortId: string): void => {
 };
 
 const readObjectText = async (
-  object: { body?: ReadableStream | null } | null,
+  object: { text: () => Promise<string> } | null,
 ): Promise<string | null> => {
-  if (!object || !object.body) {
+  if (!object) {
     return null;
   }
 
-  const value = (await new Response(object.body).text()).trim();
+  const value = (await object.text()).trim();
   return value || null;
 };
 

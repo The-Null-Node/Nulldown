@@ -22,7 +22,13 @@ import {
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 interface ParsedArgs {
   positionals: string[];
@@ -91,7 +97,10 @@ class CliError extends Error {
   readonly status?: number;
   readonly code?: string;
 
-  constructor(message: string, options: { status?: number; code?: string } = {}) {
+  constructor(
+    message: string,
+    options: { status?: number; code?: string } = {},
+  ) {
     super(message);
     this.name = "CliError";
     this.status = options.status;
@@ -203,7 +212,8 @@ const flagString = (args: ParsedArgs, name: string): string | null => {
   return typeof value === "string" ? value : null;
 };
 
-const hasFlag = (args: ParsedArgs, name: string): boolean => args.flags[name] === true;
+const hasFlag = (args: ParsedArgs, name: string): boolean =>
+  args.flags[name] === true;
 
 const readJsonFile = async <T>(filePath: string): Promise<T | null> => {
   try {
@@ -215,7 +225,11 @@ const readJsonFile = async <T>(filePath: string): Promise<T | null> => {
 
 const defaultConfigDir = (): string => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-  return resolve(xdgConfigHome ? join(xdgConfigHome, DEFAULT_CONFIG_DIR_NAME) : join(homedir(), ".config", DEFAULT_CONFIG_DIR_NAME));
+  return resolve(
+    xdgConfigHome
+      ? join(xdgConfigHome, DEFAULT_CONFIG_DIR_NAME)
+      : join(homedir(), ".config", DEFAULT_CONFIG_DIR_NAME),
+  );
 };
 
 const readConfig = async (args: ParsedArgs): Promise<Partial<CliConfig>> => {
@@ -244,13 +258,28 @@ const resolveConfig = async (args: ParsedArgs): Promise<CliConfig> => {
 
   return {
     baseUrl,
-    token: flagString(args, "token") || process.env.ND_TOKEN || fileConfig.token || null,
+    token:
+      flagString(args, "token") ||
+      process.env.ND_TOKEN ||
+      fileConfig.token ||
+      null,
     accountId:
-      flagString(args, "account") || process.env.ND_ACCOUNT_ID || fileConfig.accountId || null,
-    clientId: flagString(args, "client") || process.env.ND_CLIENT_ID || fileConfig.clientId || null,
+      flagString(args, "account") ||
+      process.env.ND_ACCOUNT_ID ||
+      fileConfig.accountId ||
+      null,
+    clientId:
+      flagString(args, "client") ||
+      process.env.ND_CLIENT_ID ||
+      fileConfig.clientId ||
+      null,
     configDir,
     diffAuthDir: configDir,
-    diffAuthToken: flagString(args, "diff-auth-token") || process.env.ND_DIFF_AUTH_TOKEN || fileConfig.diffAuthToken || null,
+    diffAuthToken:
+      flagString(args, "diff-auth-token") ||
+      process.env.ND_DIFF_AUTH_TOKEN ||
+      fileConfig.diffAuthToken ||
+      null,
     diffAuthTokenPath: resolve(
       flagString(args, "diff-auth-token-file") ||
         process.env.ND_DIFF_AUTH_TOKEN_FILE ||
@@ -270,9 +299,15 @@ const redact = (value: unknown): unknown => {
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     const lowerKey = key.toLowerCase();
-    const isPresenceFlag = typeof entry === "boolean" && lowerKey.startsWith("has");
-    const isLocationField = typeof entry === "string" && /(path|dir|file)$/i.test(key);
-    if (!isPresenceFlag && !isLocationField && /token|secret|private|wrappedkey|signature|sig/i.test(key)) {
+    const isPresenceFlag =
+      typeof entry === "boolean" && lowerKey.startsWith("has");
+    const isLocationField =
+      typeof entry === "string" && /(path|dir|file)$/i.test(key);
+    if (
+      !isPresenceFlag &&
+      !isLocationField &&
+      /token|secret|private|wrappedkey|signature|sig/i.test(key)
+    ) {
       output[key] = "[redacted]";
       continue;
     }
@@ -304,6 +339,9 @@ const parseJsonLoose = (text: string): unknown | null => {
     return null;
   }
 };
+
+const encodeBranchPathSegment = (value: string): string =>
+  encodeURIComponent(value).replace(/%3A/gi, ":");
 
 const request = async <T = unknown>(
   config: CliConfig,
@@ -348,14 +386,20 @@ const request = async <T = unknown>(
   };
 };
 
-const readDrop = async (config: CliConfig, id: string): Promise<DropReadResult> => {
+const readDrop = async (
+  config: CliConfig,
+  id: string,
+): Promise<DropReadResult> => {
   const response = await request(config, `/api/get/${encodeURIComponent(id)}`);
   const contentType = response.headers.get("Content-Type") || "";
-  const body = contentType.includes("application/json") ? response.data : response.text;
+  const body = contentType.includes("application/json")
+    ? response.data
+    : response.text;
   return {
     id: response.headers.get("X-Drop-Canonical-Id") || id,
     requestedId: id,
-    revision: response.headers.get("X-Drop-Revision") || response.headers.get("ETag"),
+    revision:
+      response.headers.get("X-Drop-Revision") || response.headers.get("ETag"),
     contentType,
     body,
     text: response.text,
@@ -369,7 +413,9 @@ const readInput = async (path: string | null): Promise<string> => {
   return await readFile(path, "utf8");
 };
 
-const parseMetadata = async (args: ParsedArgs): Promise<Record<string, unknown> | undefined> => {
+const parseMetadata = async (
+  args: ParsedArgs,
+): Promise<Record<string, unknown> | undefined> => {
   const inline = flagString(args, "metadata");
   const file = flagString(args, "metadata-file");
   if (!inline && !file) return undefined;
@@ -395,8 +441,12 @@ const parseDiffEventMetadata = async (
   return parsed;
 };
 
-const parseDiffEnvelopeInput = async (args: ParsedArgs): Promise<DropDiffEnvelope> => {
-  const body = await readInput(flagString(args, "body-file") || flagString(args, "body") || "-");
+const parseDiffEnvelopeInput = async (
+  args: ParsedArgs,
+): Promise<DropDiffEnvelope> => {
+  const body = await readInput(
+    flagString(args, "body-file") || flagString(args, "body") || "-",
+  );
   const parsed = JSON.parse(body) as unknown;
   if (!isDropDiffEnvelope(parsed)) {
     throw new CliError("Diff body must match DropDiffEnvelope.");
@@ -438,10 +488,13 @@ const normalizeDiffAuthBundle = (value: unknown): DiffAuthTokenBundle => {
   return {
     version: 1,
     kind: DIFF_AUTH_TOKEN_KIND,
-    createdAt: typeof record.createdAt === "number" ? record.createdAt : Date.now(),
+    createdAt:
+      typeof record.createdAt === "number" ? record.createdAt : Date.now(),
     keys: record.keys ?? null,
     credentials:
-      record.credentials && typeof record.credentials === "object" && !Array.isArray(record.credentials)
+      record.credentials &&
+      typeof record.credentials === "object" &&
+      !Array.isArray(record.credentials)
         ? (record.credentials as Record<string, DiffCredentialEntry>)
         : {},
   };
@@ -457,25 +510,38 @@ const decodeDiffAuthToken = (token: string): DiffAuthTokenBundle => {
     ? trimmed.slice(DIFF_AUTH_TOKEN_PREFIX.length)
     : trimmed;
   try {
-    return normalizeDiffAuthBundle(JSON.parse(base64UrlDecode(encoded)) as unknown);
+    return normalizeDiffAuthBundle(
+      JSON.parse(base64UrlDecode(encoded)) as unknown,
+    );
   } catch (error) {
     if (error instanceof CliError) throw error;
     throw new CliError("Invalid diff auth token.");
   }
 };
 
-const readDiffAuthBundle = async (config: CliConfig): Promise<DiffAuthTokenBundle> => {
+const readDiffAuthBundle = async (
+  config: CliConfig,
+): Promise<DiffAuthTokenBundle> => {
   if (config.diffAuthToken) return decodeDiffAuthToken(config.diffAuthToken);
   try {
-    return decodeDiffAuthToken(await readFile(config.diffAuthTokenPath, "utf8"));
+    return decodeDiffAuthToken(
+      await readFile(config.diffAuthTokenPath, "utf8"),
+    );
   } catch {
     return emptyDiffAuthBundle();
   }
 };
 
-const writeDiffAuthBundle = async (config: CliConfig, bundle: DiffAuthTokenBundle): Promise<void> => {
+const writeDiffAuthBundle = async (
+  config: CliConfig,
+  bundle: DiffAuthTokenBundle,
+): Promise<void> => {
   await mkdir(dirname(config.diffAuthTokenPath), { recursive: true });
-  await writeFile(config.diffAuthTokenPath, `${encodeDiffAuthToken(bundle)}\n`, { mode: 0o600 });
+  await writeFile(
+    config.diffAuthTokenPath,
+    `${encodeDiffAuthToken(bundle)}\n`,
+    { mode: 0o600 },
+  );
 };
 
 const mergeDiffAuthBundles = (
@@ -486,7 +552,10 @@ const mergeDiffAuthBundles = (
   version: 1,
   kind: DIFF_AUTH_TOKEN_KIND,
   createdAt: current.createdAt || incoming.createdAt || Date.now(),
-  keys: overwriteKeys || !current.keys ? incoming.keys ?? current.keys : current.keys,
+  keys:
+    overwriteKeys || !current.keys
+      ? (incoming.keys ?? current.keys)
+      : current.keys,
   credentials: {
     ...current.credentials,
     ...incoming.credentials,
@@ -505,7 +574,10 @@ const signDiffPayload = (
   return `${DIFF_SIGNATURE_PREFIX}${hex}`;
 };
 
-const unwrapSecret = async (wrappedSecretBase64: string, privateJwk: JsonWebKey): Promise<string> => {
+const unwrapSecret = async (
+  wrappedSecretBase64: string,
+  privateJwk: JsonWebKey,
+): Promise<string> => {
   const privateKey = await crypto.subtle.importKey(
     "jwk",
     privateJwk,
@@ -521,7 +593,10 @@ const unwrapSecret = async (wrappedSecretBase64: string, privateJwk: JsonWebKey)
   return textDecoder.decode(plaintext);
 };
 
-const writeCredential = async (config: CliConfig, entry: DiffCredentialEntry): Promise<void> => {
+const writeCredential = async (
+  config: CliConfig,
+  entry: DiffCredentialEntry,
+): Promise<void> => {
   const current = await readDiffAuthBundle(config);
   await writeDiffAuthBundle(config, {
     ...current,
@@ -548,8 +623,13 @@ const postDiffEnvelope = async (
 ) => {
   const body = JSON.stringify(envelope);
   const path = `/api/diff/${encodeURIComponent(routeDropId)}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const credential = await findCredential(config, envelope.events[0]?.dropId || routeDropId);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const credential = await findCredential(
+    config,
+    envelope.events[0]?.dropId || routeDropId,
+  );
   const webhookSecret = process.env.DIFF_WEBHOOK_SECRET || "";
 
   if (credential) {
@@ -567,7 +647,13 @@ const postDiffEnvelope = async (
   } else if (webhookSecret) {
     const timestamp = String(Date.now());
     headers[DIFF_TIMESTAMP_HEADER] = timestamp;
-    headers[DIFF_SIGNATURE_HEADER] = signDiffPayload(webhookSecret, "POST", path, timestamp, body);
+    headers[DIFF_SIGNATURE_HEADER] = signDiffPayload(
+      webhookSecret,
+      "POST",
+      path,
+      timestamp,
+      body,
+    );
   }
 
   const query = branchId ? `?branchId=${encodeURIComponent(branchId)}` : "";
@@ -582,7 +668,8 @@ const parsePosition = (value: string): { start: number; text: string } => {
   const separator = value.indexOf(":");
   if (separator === -1) throw new CliError("Expected insert format pos:text.");
   const start = Number.parseInt(value.slice(0, separator), 10);
-  if (!Number.isFinite(start) || start < 0) throw new CliError("Insert position must be >= 0.");
+  if (!Number.isFinite(start) || start < 0)
+    throw new CliError("Insert position must be >= 0.");
   return { start, text: value.slice(separator + 1) };
 };
 
@@ -590,7 +677,12 @@ const parseRange = (value: string): { start: number; end: number } => {
   const [rawStart, rawEnd] = value.split(":");
   const start = Number.parseInt(rawStart || "", 10);
   const end = Number.parseInt(rawEnd || "", 10);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) {
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start < 0 ||
+    end < start
+  ) {
     throw new CliError("Expected delete format start:end with end >= start.");
   }
   return { start, end };
@@ -620,11 +712,15 @@ const commandCreate = async (config: CliConfig, args: ParsedArgs) => {
   const source = args.positionals[1] ?? "-";
   const content = await readInput(source);
   const metadata = (await parseMetadata(args)) ?? { themeId: "system" };
-  const response = await request<{ id: string; url: string }>(config, "/api/store", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content, metadata }),
-  });
+  const response = await request<{ id: string; url: string }>(
+    config,
+    "/api/store",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, metadata }),
+    },
+  );
   print(config, response.data, `created ${response.data?.url}`);
 };
 
@@ -640,7 +736,13 @@ const commandGet = async (config: CliConfig, args: ParsedArgs) => {
     console.log(drop.text);
     return;
   }
-  print(config, drop, typeof drop.body === "string" ? drop.body : JSON.stringify(redact(drop.body), null, 2));
+  print(
+    config,
+    drop,
+    typeof drop.body === "string"
+      ? drop.body
+      : JSON.stringify(redact(drop.body), null, 2),
+  );
 };
 
 const commandUpdate = async (config: CliConfig, args: ParsedArgs) => {
@@ -651,22 +753,33 @@ const commandUpdate = async (config: CliConfig, args: ParsedArgs) => {
   const content = await readInput(source);
   const metadataOverride = await parseMetadata(args);
   const currentMetadata =
-    current.body && typeof current.body === "object" && "metadata" in current.body
-      ? ((current.body as { metadata?: unknown }).metadata as Record<string, unknown> | undefined)
+    current.body &&
+    typeof current.body === "object" &&
+    "metadata" in current.body
+      ? ((current.body as { metadata?: unknown }).metadata as
+          | Record<string, unknown>
+          | undefined)
       : undefined;
-  const metadata = metadataOverride ? { ...(currentMetadata ?? {}), ...metadataOverride } : (currentMetadata ?? { themeId: "system" });
+  const metadata = metadataOverride
+    ? { ...(currentMetadata ?? {}), ...metadataOverride }
+    : (currentMetadata ?? { themeId: "system" });
   const body: Record<string, unknown> = {
     id: current.id,
     upsert: true,
     content,
     metadata,
   };
-  if (!hasFlag(args, "force") && current.revision) body.expectedRevision = current.revision;
-  const response = await request<{ id: string; url: string }>(config, "/api/store", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  if (!hasFlag(args, "force") && current.revision)
+    body.expectedRevision = current.revision;
+  const response = await request<{ id: string; url: string }>(
+    config,
+    "/api/store",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
   print(config, response.data, `updated ${response.data?.url}`);
 };
 
@@ -678,7 +791,10 @@ const commandDelete = async (config: CliConfig, args: ParsedArgs) => {
     const current = await readDrop(config, id);
     if (current.revision) headers["If-Match"] = current.revision;
   }
-  await request(config, `/api/delete/${encodeURIComponent(id)}`, { method: "DELETE", headers });
+  await request(config, `/api/delete/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers,
+  });
   print(config, { deleted: id }, `deleted ${id}`);
 };
 
@@ -688,7 +804,10 @@ const commandList = async (config: CliConfig, args: ParsedArgs) => {
   const cursor = flagString(args, "cursor");
   if (limit) params.set("limit", limit);
   if (cursor) params.set("cursor", cursor);
-  const response = await request(config, `/api/list${params.size ? `?${params}` : ""}`);
+  const response = await request(
+    config,
+    `/api/list${params.size ? `?${params}` : ""}`,
+  );
   print(config, response.data);
 };
 
@@ -708,50 +827,76 @@ const commandBranch = async (config: CliConfig, args: ParsedArgs) => {
   if (sub === "list") {
     const id = args.positionals[2];
     if (!id) throw new CliError("Usage: nd branch list <rootId>");
-    const response = await request(config, `/api/branches/${encodeURIComponent(id)}`);
+    const response = await request(
+      config,
+      `/api/branches/${encodeURIComponent(id)}`,
+    );
     print(config, response.data);
     return;
   }
   if (sub === "resolve") {
-    const id = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+    const id =
+      args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
     if (!id) throw new CliError("Usage: nd branch resolve <dropId>");
-    const response = await request(config, `/api/branches/resolve/${encodeURIComponent(id)}`, {
-      method: "POST",
-    });
+    const response = await request(
+      config,
+      `/api/branches/resolve/${encodeURIComponent(id)}`,
+      {
+        method: "POST",
+      },
+    );
     print(config, response.data);
     return;
   }
   if (sub === "content") {
-    const rootId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+    const rootId =
+      args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
     const branchId = args.positionals[3] || flagString(args, "branch");
-    if (!rootId || !branchId) throw new CliError("Usage: nd branch content <rootId> <branchId>");
-    const response = await request(config, `/api/branches/${encodeURIComponent(rootId)}/${encodeURIComponent(branchId)}/content`);
-    print(config, response.data, (response.data as { content?: string } | null)?.content);
+    if (!rootId || !branchId)
+      throw new CliError("Usage: nd branch content <rootId> <branchId>");
+    const response = await request(
+      config,
+      `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/content`,
+    );
+    print(
+      config,
+      response.data,
+      (response.data as { content?: string } | null)?.content,
+    );
     return;
   }
   if (sub === "snapshots") {
     const rootId = args.positionals[2];
     const branchId = args.positionals[3] || flagString(args, "branch");
-    if (!rootId || !branchId) throw new CliError("Usage: nd branch snapshots <rootId> <branchId>");
-    const response = await request(config, `/api/branches/${encodeURIComponent(rootId)}/${encodeURIComponent(branchId)}/snapshots`);
+    if (!rootId || !branchId)
+      throw new CliError("Usage: nd branch snapshots <rootId> <branchId>");
+    const response = await request(
+      config,
+      `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/snapshots`,
+    );
     print(config, response.data);
     return;
   }
   if (sub === "query") {
-    const rootId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+    const rootId =
+      args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
     const branchId = args.positionals[3] || flagString(args, "branch");
-    if (!rootId || !branchId) throw new CliError("Usage: nd branch query <rootId> <branchId>");
+    if (!rootId || !branchId)
+      throw new CliError("Usage: nd branch query <rootId> <branchId>");
     const params = new URLSearchParams();
     const query = flagString(args, "query") || flagString(args, "q");
     const top = flagString(args, "top") || flagString(args, "k");
-    const snapshotId = flagString(args, "snapshot") || flagString(args, "snapshotId");
-    const resolverId = flagString(args, "resolver") || flagString(args, "resolverId");
+    const snapshotId =
+      flagString(args, "snapshot") || flagString(args, "snapshotId");
+    const resolverId =
+      flagString(args, "resolver") || flagString(args, "resolverId");
     const kind = flagString(args, "kind");
     const fromSeq = flagString(args, "from-seq") || flagString(args, "fromSeq");
     const toSeq = flagString(args, "to-seq") || flagString(args, "toSeq");
     const pluginId = flagString(args, "plugin") || flagString(args, "pluginId");
     const callId = flagString(args, "call") || flagString(args, "callId");
-    const primitiveId = flagString(args, "primitive") || flagString(args, "primitiveId");
+    const primitiveId =
+      flagString(args, "primitive") || flagString(args, "primitiveId");
     if (query) params.set("q", query);
     if (top) params.set("k", top);
     if (snapshotId) params.set("snapshotId", snapshotId);
@@ -763,79 +908,135 @@ const commandBranch = async (config: CliConfig, args: ParsedArgs) => {
     if (callId) params.set("callId", callId);
     if (primitiveId) params.set("primitiveId", primitiveId);
     if (hasFlag(args, "changed-only")) params.set("changedOnly", "true");
-    if (hasFlag(args, "include-ancestors")) params.set("includeAncestors", "true");
-    if (hasFlag(args, "no-event-metadata")) params.set("includeEventMetadata", "false");
+    if (hasFlag(args, "include-ancestors"))
+      params.set("includeAncestors", "true");
+    if (hasFlag(args, "no-event-metadata"))
+      params.set("includeEventMetadata", "false");
     const suffix = params.size ? `?${params}` : "";
-    const response = await request(config, `/api/branches/${encodeURIComponent(rootId)}/${encodeURIComponent(branchId)}/resolved/query${suffix}`);
+    const response = await request(
+      config,
+      `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/resolved/query${suffix}`,
+    );
     print(config, response.data);
     return;
   }
   if (sub === "heap-update" || sub === "resolved-update") {
-    const rootId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+    const rootId =
+      args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
     const branchId = args.positionals[3] || flagString(args, "branch");
-    if (!rootId || !branchId) throw new CliError("Usage: nd branch heap-update <rootId> <branchId>");
-    const resolverId = flagString(args, "resolver") || flagString(args, "resolverId") || "all";
-    const snapshotId = flagString(args, "snapshot") || flagString(args, "snapshotId");
+    if (!rootId || !branchId)
+      throw new CliError("Usage: nd branch heap-update <rootId> <branchId>");
+    const resolverId =
+      flagString(args, "resolver") || flagString(args, "resolverId") || "all";
+    const snapshotId =
+      flagString(args, "snapshot") || flagString(args, "snapshotId");
     const body: Record<string, unknown> = { resolverId };
     if (snapshotId) {
-      body.snapshotId = /^\d+$/.test(snapshotId) ? Number.parseInt(snapshotId, 10) : snapshotId;
+      body.snapshotId = /^\d+$/.test(snapshotId)
+        ? Number.parseInt(snapshotId, 10)
+        : snapshotId;
     }
-    const response = await request(config, `/api/branches/${encodeURIComponent(rootId)}/${encodeURIComponent(branchId)}/resolved/update`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const response = await request(
+      config,
+      `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/resolved/update`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
     print(config, response.data);
     return;
   }
   if (sub === "promote") {
-    const rootId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+    const rootId =
+      args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
     const branchId = args.positionals[3] || flagString(args, "branch");
-    if (!rootId || !branchId) throw new CliError("Usage: nd branch promote <rootId> <branchId>");
-    const response = await request(config, `/api/branches/${encodeURIComponent(rootId)}/${encodeURIComponent(branchId)}/promote`, {
-      method: "POST",
-    });
-    print(config, response.data, `promoted ${(response.data as { url?: string } | null)?.url ?? "branch"}`);
+    if (!rootId || !branchId)
+      throw new CliError("Usage: nd branch promote <rootId> <branchId>");
+    const response = await request(
+      config,
+      `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/promote`,
+      {
+        method: "POST",
+      },
+    );
+    print(
+      config,
+      response.data,
+      `promoted ${(response.data as { url?: string } | null)?.url ?? "branch"}`,
+    );
     return;
   }
-  throw new CliError("Usage: nd branch <list|resolve|content|snapshots|query|heap-update|promote> ...");
+  throw new CliError(
+    "Usage: nd branch <list|resolve|content|snapshots|query|heap-update|promote> ...",
+  );
 };
 
 const commandDiffKeygen = async (config: CliConfig, args: ParsedArgs) => {
   const bundle = await readDiffAuthBundle(config);
   if (bundle.keys && !hasFlag(args, "force")) {
-    print(config, { path: config.diffAuthTokenPath, clientId: bundle.keys.clientId }, `diff auth token already has keys at ${config.diffAuthTokenPath}`);
+    print(
+      config,
+      { path: config.diffAuthTokenPath, clientId: bundle.keys.clientId },
+      `diff auth token already has keys at ${config.diffAuthTokenPath}`,
+    );
     return;
   }
   const pair = (await crypto.subtle.generateKey(
-    { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    {
+      name: "RSA-OAEP",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
     true,
     ["encrypt", "decrypt"],
   )) as CryptoKeyPair;
   const record: DiffClientKeysRecord = {
     version: 1,
-    clientId: flagString(args, "client") || config.clientId || `client_${randomUUID()}`,
+    clientId:
+      flagString(args, "client") || config.clientId || `client_${randomUUID()}`,
     createdAt: Date.now(),
     encryptionPublicJwk: await crypto.subtle.exportKey("jwk", pair.publicKey),
     encryptionPrivateJwk: await crypto.subtle.exportKey("jwk", pair.privateKey),
   };
   await writeDiffAuthBundle(config, { ...bundle, keys: record });
-  print(config, { path: config.diffAuthTokenPath, clientId: record.clientId }, `created diff auth token at ${config.diffAuthTokenPath}`);
+  print(
+    config,
+    { path: config.diffAuthTokenPath, clientId: record.clientId },
+    `created diff auth token at ${config.diffAuthTokenPath}`,
+  );
 };
 
 const commandDiffRegister = async (config: CliConfig, args: ParsedArgs) => {
-  const dropId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+  const dropId =
+    args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
   if (!dropId) throw new CliError("Usage: nd diff register <dropId>");
   const bundle = await readDiffAuthBundle(config);
   const keys = bundle.keys;
-  if (!keys) throw new CliError(`Missing keypair in ${config.diffAuthTokenPath}. Run nd diff keygen first.`);
-  const response = await request<DiffAuthRegisterResponse>(config, `/api/diff-auth/register/${encodeURIComponent(dropId)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ clientId: keys.clientId, requesterPublicJwk: keys.encryptionPublicJwk }),
-  });
-  if (!response.data) throw new CliError("Diff auth registration returned no body.");
-  const secret = await unwrapSecret(response.data.wrappedSecret, keys.encryptionPrivateJwk);
+  if (!keys)
+    throw new CliError(
+      `Missing keypair in ${config.diffAuthTokenPath}. Run nd diff keygen first.`,
+    );
+  const response = await request<DiffAuthRegisterResponse>(
+    config,
+    `/api/diff-auth/register/${encodeURIComponent(dropId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientId: keys.clientId,
+        requesterPublicJwk: keys.encryptionPublicJwk,
+      }),
+    },
+  );
+  if (!response.data)
+    throw new CliError("Diff auth registration returned no body.");
+  const secret = await unwrapSecret(
+    response.data.wrappedSecret,
+    keys.encryptionPrivateJwk,
+  );
   const entry: DiffCredentialEntry = {
     version: 1,
     dropId: response.data.dropId,
@@ -848,13 +1049,18 @@ const commandDiffRegister = async (config: CliConfig, args: ParsedArgs) => {
     expiresAt: response.data.expiresAt,
   };
   await writeCredential(config, entry);
-  print(config, entry, `registered diff auth for ${entry.dropId} branch=${entry.branchId}`);
+  print(
+    config,
+    entry,
+    `registered diff auth for ${entry.dropId} branch=${entry.branchId}`,
+  );
 };
 
 const commandDiffToken = async (config: CliConfig, args: ParsedArgs) => {
   const action = args.positionals[2];
   if (action === "export" || action === "show") {
-    const dropId = args.positionals[3] || flagString(args, "drop") || flagString(args, "id");
+    const dropId =
+      args.positionals[3] || flagString(args, "drop") || flagString(args, "id");
     const bundle = await readDiffAuthBundle(config);
     const credentials = dropId
       ? bundle.credentials[dropId]
@@ -867,7 +1073,13 @@ const commandDiffToken = async (config: CliConfig, args: ParsedArgs) => {
     };
     const token = encodeDiffAuthToken(exportedBundle);
     if (config.json) {
-      console.log(JSON.stringify({ token, credentialDropIds: Object.keys(credentials) }, null, 2));
+      console.log(
+        JSON.stringify(
+          { token, credentialDropIds: Object.keys(credentials) },
+          null,
+          2,
+        ),
+      );
     } else {
       console.log(token);
     }
@@ -883,9 +1095,13 @@ const commandDiffToken = async (config: CliConfig, args: ParsedArgs) => {
       : await readInput(flagString(args, "token-file") || "-");
     const imported = decodeDiffAuthToken(rawToken);
     const existing = await readDiffAuthBundle(config);
-    const hasExisting = Boolean(existing.keys || Object.keys(existing.credentials).length);
+    const hasExisting = Boolean(
+      existing.keys || Object.keys(existing.credentials).length,
+    );
     if (hasExisting && !hasFlag(args, "force") && !hasFlag(args, "merge")) {
-      throw new CliError("Diff auth token already exists. Use --merge or --force.");
+      throw new CliError(
+        "Diff auth token already exists. Use --merge or --force.",
+      );
     }
     const next = hasFlag(args, "merge")
       ? mergeDiffAuthBundles(existing, imported, hasFlag(args, "force"))
@@ -907,20 +1123,39 @@ const commandDiffToken = async (config: CliConfig, args: ParsedArgs) => {
 };
 
 const commandDiffSign = async (config: CliConfig, args: ParsedArgs) => {
-  const dropId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
-  if (!dropId) throw new CliError("Usage: nd diff sign <dropId> --body-file <file|->");
-  const body = await readInput(flagString(args, "body-file") || flagString(args, "body") || "-");
+  const dropId =
+    args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+  if (!dropId)
+    throw new CliError("Usage: nd diff sign <dropId> --body-file <file|->");
+  const body = await readInput(
+    flagString(args, "body-file") || flagString(args, "body") || "-",
+  );
   const credential = await findCredential(config, dropId);
-  if (!credential) throw new CliError(`No credential for ${dropId}. Run nd diff register ${dropId}.`);
+  if (!credential)
+    throw new CliError(
+      `No credential for ${dropId}. Run nd diff register ${dropId}.`,
+    );
   const timestamp = String(Date.now());
   const path = `/api/diff/${encodeURIComponent(dropId)}`;
   const headers = {
     [DIFF_CLIENT_ID_HEADER]: credential.clientId,
     [DIFF_SECRET_KID_HEADER]: credential.kid,
     [DIFF_TIMESTAMP_HEADER]: timestamp,
-    [DIFF_SIGNATURE_HEADER]: signDiffPayload(credential.secret, "POST", path, timestamp, body),
+    [DIFF_SIGNATURE_HEADER]: signDiffPayload(
+      credential.secret,
+      "POST",
+      path,
+      timestamp,
+      body,
+    ),
   };
-  print(config, { headers }, Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join("\n"));
+  print(
+    config,
+    { headers },
+    Object.entries(headers)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join("\n"),
+  );
 };
 
 const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
@@ -930,19 +1165,29 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
   if (sub === "sign") return commandDiffSign(config, args);
   if (sub === "token") return commandDiffToken(config, args);
 
-  const dropId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
-  if (!dropId) throw new CliError("Usage: nd diff <poll|latest|apply|replace|batch|event> <dropId>");
+  const dropId =
+    args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+  if (!dropId)
+    throw new CliError(
+      "Usage: nd diff <poll|latest|apply|replace|batch|event> <dropId>",
+    );
   const branchId = flagString(args, "branch");
 
   if (sub === "poll" || sub === "latest") {
     const params = new URLSearchParams();
     if (branchId) params.set("branchId", branchId);
-    params.set("cursor", sub === "latest" ? "__latest__" : (flagString(args, "cursor") ?? "-1"));
+    params.set(
+      "cursor",
+      sub === "latest" ? "__latest__" : (flagString(args, "cursor") ?? "-1"),
+    );
     const limit = flagString(args, "limit");
     const exclude = flagString(args, "exclude-client");
     if (limit) params.set("limit", limit);
     if (exclude) params.set("excludeClient", exclude);
-    const response = await request(config, `/api/diff/${encodeURIComponent(dropId)}?${params}`);
+    const response = await request(
+      config,
+      `/api/diff/${encodeURIComponent(dropId)}?${params}`,
+    );
     print(config, response.data);
     return;
   }
@@ -955,7 +1200,8 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
   }
 
   if (sub === "batch") {
-    if (!branchId) throw new CliError("nd diff batch requires --branch <branchId>.");
+    if (!branchId)
+      throw new CliError("nd diff batch requires --branch <branchId>.");
     const parsed = await parseDiffEnvelopeInput(args);
     const response = await postDiffEnvelope(config, dropId, branchId, parsed);
     print(config, response.data);
@@ -970,29 +1216,54 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
     const del = flagString(args, "delete");
     if (del) {
       const range = parseRange(del);
-      ops.push({ type: "delete", start: range.start, end: range.end, text: "" });
+      ops.push({
+        type: "delete",
+        start: range.start,
+        end: range.end,
+        text: "",
+      });
     }
     if (insert) {
       const value = parsePosition(insert);
-      ops.push({ type: "insert", start: value.start, end: value.start, text: value.text });
+      ops.push({
+        type: "insert",
+        start: value.start,
+        end: value.start,
+        text: value.text,
+      });
     }
-    if (!ops.length) throw new CliError("Provide --insert pos:text and/or --delete start:end.");
-    const envelope = createEvent({ dropId: canonical.id, clientId: config.clientId || "nd-cli", ops, metadata });
+    if (!ops.length)
+      throw new CliError(
+        "Provide --insert pos:text and/or --delete start:end.",
+      );
+    const envelope = createEvent({
+      dropId: canonical.id,
+      clientId: config.clientId || "nd-cli",
+      ops,
+      metadata,
+    });
     const response = await postDiffEnvelope(config, dropId, branchId, envelope);
     print(config, response.data);
     return;
   }
 
   if (sub === "replace") {
-    if (!branchId) throw new CliError("nd diff replace requires --branch <branchId>.");
+    if (!branchId)
+      throw new CliError("nd diff replace requires --branch <branchId>.");
     const metadata = await parseDiffEventMetadata(args);
-    const contentResponse = await request<{ rootDropId: string; content: string }>(
+    const contentResponse = await request<{
+      rootDropId: string;
+      content: string;
+    }>(
       config,
-      `/api/branches/${encodeURIComponent(dropId)}/${encodeURIComponent(branchId)}/content`,
+      `/api/branches/${encodeURIComponent(dropId)}/${encodeBranchPathSegment(branchId)}/content`,
     );
-    const from = flagString(args, "from-file") ? await readInput(flagString(args, "from-file")) : (contentResponse.data?.content ?? "");
+    const from = flagString(args, "from-file")
+      ? await readInput(flagString(args, "from-file"))
+      : (contentResponse.data?.content ?? "");
     const toFile = flagString(args, "to-file");
-    if (!toFile) throw new CliError("nd diff replace requires --to-file <file|->.");
+    if (!toFile)
+      throw new CliError("nd diff replace requires --to-file <file|->.");
     const to = await readInput(toFile);
     const diffs = computeDiffOps(from, to);
     if (!diffs.length) {
@@ -1001,7 +1272,8 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
     }
     const ops = diffs.map((diff) => diffToDropDiffOp(diff));
     const envelope = createEvent({
-      dropId: contentResponse.data?.rootDropId ?? (await readDrop(config, dropId)).id,
+      dropId:
+        contentResponse.data?.rootDropId ?? (await readDrop(config, dropId)).id,
       clientId: config.clientId || "nd-cli",
       ops,
       metadata,
@@ -1009,22 +1281,34 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
     const posted = await postDiffEnvelope(config, dropId, branchId, envelope);
     const verify = await request<{ content: string }>(
       config,
-      `/api/branches/${encodeURIComponent(dropId)}/${encodeURIComponent(branchId)}/content`,
+      `/api/branches/${encodeURIComponent(dropId)}/${encodeBranchPathSegment(branchId)}/content`,
     );
-    print(config, { posted: posted.data, verified: verify.data?.content === to }, `updated branch ${branchId}`);
+    print(
+      config,
+      { posted: posted.data, verified: verify.data?.content === to },
+      `updated branch ${branchId}`,
+    );
     return;
   }
 
-  throw new CliError("Usage: nd diff <poll|latest|apply|replace|batch|event|keygen|register|sign|token> ...");
+  throw new CliError(
+    "Usage: nd diff <poll|latest|apply|replace|batch|event|keygen|register|sign|token> ...",
+  );
 };
 
 const commandAuth = async (config: CliConfig, args: ParsedArgs) => {
   const sub = args.positionals[1];
-  if (sub !== "session") throw new CliError("Usage: nd auth session --account <id> --proof <file|->");
+  if (sub !== "session")
+    throw new CliError(
+      "Usage: nd auth session --account <id> --proof <file|->",
+    );
   const accountId = flagString(args, "account");
   const proofPath = flagString(args, "proof") || "-";
   if (!accountId) throw new CliError("Missing --account <id>.");
-  const proof = JSON.parse(await readInput(proofPath)) as Record<string, unknown>;
+  const proof = JSON.parse(await readInput(proofPath)) as Record<
+    string,
+    unknown
+  >;
   const response = await request(config, "/api/auth/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1039,12 +1323,22 @@ const sleep = async (ms: number): Promise<void> => {
 
 const commandAdmin = async (config: CliConfig, args: ParsedArgs) => {
   const sub = args.positionals[1];
-  const limit = flagString(args, "limit") || (sub === "index-backfill" ? "200" : "100");
-  const maxBatches = Number.parseInt(flagString(args, "max-batches") || "1000", 10);
+  const limit =
+    flagString(args, "limit") || (sub === "index-backfill" ? "200" : "100");
+  const maxBatches = Number.parseInt(
+    flagString(args, "max-batches") || "1000",
+    10,
+  );
   let cursor = flagString(args, "cursor");
-  const token = flagString(args, "token") || (sub === "index-backfill" ? process.env.DROP_INDEX_BACKFILL_TOKEN : process.env.BRANCH_HEAP_BACKFILL_TOKEN);
-  if (!token) throw new CliError("Missing admin token. Use --token or relevant env var.");
-  const rootId = args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+  const token =
+    flagString(args, "token") ||
+    (sub === "index-backfill"
+      ? process.env.DROP_INDEX_BACKFILL_TOKEN
+      : process.env.BRANCH_HEAP_BACKFILL_TOKEN);
+  if (!token)
+    throw new CliError("Missing admin token. Use --token or relevant env var.");
+  const rootId =
+    args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
   const batches: unknown[] = [];
   for (let batch = 0; batch < maxBatches; batch += 1) {
     const params = new URLSearchParams({ limit });
@@ -1053,14 +1347,20 @@ const commandAdmin = async (config: CliConfig, args: ParsedArgs) => {
       sub === "branch-backfill"
         ? `/api/branches/backfill/${encodeURIComponent(rootId || "")}?${params}`
         : `/api/index/backfill?${params}`;
-    if (sub === "branch-backfill" && !rootId) throw new CliError("Usage: nd admin branch-backfill <rootId>");
+    if (sub === "branch-backfill" && !rootId)
+      throw new CliError("Usage: nd admin branch-backfill <rootId>");
     const response = await request(config, path, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
     batches.push(response.data);
-    cursor = (response.data as { cursor?: string | null } | null)?.cursor || undefined;
-    if (!(response.data as { truncated?: boolean } | null)?.truncated || !cursor) break;
+    cursor =
+      (response.data as { cursor?: string | null } | null)?.cursor || undefined;
+    if (
+      !(response.data as { truncated?: boolean } | null)?.truncated ||
+      !cursor
+    )
+      break;
     await sleep(Number.parseInt(flagString(args, "retry-ms") || "50", 10));
   }
   print(config, { batches });
@@ -1084,23 +1384,48 @@ const commandDoctor = async (config: CliConfig) => {
 };
 
 const commandSmoke = async (config: CliConfig, args: ParsedArgs) => {
-  if (args.positionals[1] !== "diff") throw new CliError("Usage: nd smoke diff");
-  const created = await request<{ id: string; url: string }>(config, "/api/store", {
-    method: "POST",
-    headers: { "Content-Type": "text/plain" },
-    body: `nd-smoke-${Date.now()}`,
-  });
+  if (args.positionals[1] !== "diff")
+    throw new CliError("Usage: nd smoke diff");
+  const created = await request<{ id: string; url: string }>(
+    config,
+    "/api/store",
+    {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: `nd-smoke-${Date.now()}`,
+    },
+  );
   if (!created.data?.id) throw new CliError("Smoke create failed: missing id.");
   const canonical = await readDrop(config, created.data.id);
-  const ops: DropDiffOp[] = [{ type: "insert", start: canonical.text.length, end: canonical.text.length, text: "-ok" }];
-  const envelope = createEvent({ dropId: canonical.id, clientId: config.clientId || "nd-smoke", ops });
+  const ops: DropDiffOp[] = [
+    {
+      type: "insert",
+      start: canonical.text.length,
+      end: canonical.text.length,
+      text: "-ok",
+    },
+  ];
+  const envelope = createEvent({
+    dropId: canonical.id,
+    clientId: config.clientId || "nd-smoke",
+    ops,
+  });
   const posted = await postDiffEnvelope(config, canonical.id, null, envelope);
-  print(config, { created: created.data, posted: posted.data }, `smoke ok ${created.data.url}`);
+  print(
+    config,
+    { created: created.data, posted: posted.data },
+    `smoke ok ${created.data.url}`,
+  );
 };
 
 const dispatch = async (config: CliConfig, args: ParsedArgs): Promise<void> => {
   const command = args.positionals[0];
-  if (!command || command === "help" || hasFlag(args, "help") || hasFlag(args, "h")) {
+  if (
+    !command ||
+    command === "help" ||
+    hasFlag(args, "help") ||
+    hasFlag(args, "h")
+  ) {
     console.log(helpText);
     return;
   }
@@ -1127,7 +1452,10 @@ export const runCli = async (argv: string[]): Promise<void> => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (config.json) {
-      const output = error instanceof CliError ? { error: message, code: error.code, status: error.status } : { error: message };
+      const output =
+        error instanceof CliError
+          ? { error: message, code: error.code, status: error.status }
+          : { error: message };
       console.error(JSON.stringify(redact(output), null, 2));
     } else {
       console.error(`error: ${message}`);

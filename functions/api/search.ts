@@ -27,14 +27,19 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
     const ownerAccountId = url.searchParams.get("owner") || undefined;
     const visibility = url.searchParams.get("visibility") || undefined;
     const limitParam = Number.parseInt(url.searchParams.get("limit") || "", 10);
-    const limit = Number.isFinite(limitParam) ? Math.max(1, Math.min(100, limitParam)) : 20;
-    const offsetParam = Number.parseInt(url.searchParams.get("offset") || "", 10);
+    const limit = Number.isFinite(limitParam)
+      ? Math.max(1, Math.min(100, limitParam))
+      : 20;
+    const offsetParam = Number.parseInt(
+      url.searchParams.get("offset") || "",
+      10,
+    );
     const offset = Number.isFinite(offsetParam) ? Math.max(0, offsetParam) : 0;
 
     const db = createSearchDatabase(env.DB);
-    
+
     const visibilities = visibility ? visibility.split(",") : undefined;
-    
+
     const result = await db.search({
       query,
       ownerAccountId: ownerAccountId || null,
@@ -62,7 +67,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
         headers: {
           "Content-Type": "application/json",
         },
-      }
+      },
     );
   } catch (error: unknown) {
     logger.logError("search.unhandled_error", error);
