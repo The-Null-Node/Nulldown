@@ -1,405 +1,80 @@
 ```metadata
-title: Nulldown Drop Provider Usage and Scaling Guide
+title: Nulldown Void Provider Usage and Scaling Guide
 format: nmdn
 version: 1
 ```
 
-# Nulldown Drop Provider Usage and Scaling Guide
+# Nulldown Void Provider Usage and Scaling Guide
 
-This is a usage-first guide for the drop provider system in Nulldown. It explains how to call the provider APIs, how requests flow through local and remote paths, and how the architecture scales as usage and product surface grow.
+This is a usage-first guide for the void provider runtime in Nulldown. It explains how app code creates, opens, and resolves drops while the runtime chooses local or remote sealed storage.
 
-If you are looking for "how do I create/get/clone drops" and "what happens at scale", this is the source of truth.
+If you are looking for how to create, fetch, or resolve drops, start with `dropStore`. Use providers directly only for tests, tooling, or runtime integration work.
 
-## What the provider layer is
+## What the void provider layer is
 
-The drop provider layer gives the app one stable interface for drop operations while allowing different backends:
+The void provider layer gives the app one stable facade for plaintext drop operations while keeping storage and crypto separated:
 
-- local provider: encrypted storage in IndexedDB
-- remote provider: encrypted storage through `/api/store` and `/api/get/:id`
+- Local provider: sealed envelope storage in IndexedDB.
+- Remote provider: sealed envelope storage through `/api/store` and `/api/get/:id`.
 
-Both providers expose the same API and are selected by:
+Providers are selected by:
 
-- write mode (`offlineMode` in the store)
-- drop id prefix (`offline_` routes to local provider)
+- Write mode: `offlineMode` in the store.
+- Drop id prefix: `offline_` routes to the local provider.
 
-## Provider API (actual runtime contract)
+Storage implementations receive sealed envelopes only. Crypto seals, opens, signs, and verifies. The provider composes storage, crypto, and graph resolution without letting those boundaries overlap.
 
-Defined in `src/lib/drop/provider.ts`:
+## Public runtime contract
+
+Defined through `src/lib/void/provider.ts` with implementation details split under `src/lib/void/provider/*`, `src/lib/void/storage/*`, `src/lib/void/crypto/*`, and `src/lib/void/vault/*`.
 
 ```ts
-type DropProviderScope = "local" | "remote";
+type VoidProviderScope = "local" | "remote";
 
-interface DropProvider {
-  scope: DropProviderScope;
-  create(payload: DropPayload): Promise<{ id: string; url: string; scope: DropProviderScope }>;
+interface DropProviderPort {
+  scope: VoidProviderScope;
+  create(
+    payload: DropPayload,
+    options?: VoidCreateOptions,
+  ): Promise<{ id: string; url: string; scope: VoidProviderScope }>;
   get(id: string): Promise<DropPayload | null>;
   resolveGraph(id: string): Promise<DropGraph>;
+  sync(
+    target: DropProviderPort,
+    options?: VoidSyncOptions,
+    onProgress?: (progress: VoidSyncProgress) => void,
+  ): Promise<VoidSyncResult>;
 }
 
-interface DropProviderRegistry {
-  local: DropProvider;
-  remote: DropProvider;
-  forDropId(id: string): DropProvider;
+interface VoidProvider extends DropProviderPort {}
+
+interface VoidProviderRegistry {
+  local: VoidProvider;
+  remote: VoidProvider;
+  forDropId(id: string): VoidProvider;
 }
 ```
+
+`VoidProvider` is the app-facing facade. `DropProviderPort` is only the child local, remote, or server capability port under a `VoidProvider`; do not reintroduce an app-facing `DropProvider` abstraction.
 
 ### What each call guarantees
 
-- `create(payload)` always encrypts first, then persists, then returns a provider-scoped result.
-- `get(id)` returns normalized `DropPayload` for both legacy and sealed formats.
-- `resolveGraph(id)` returns lineage based on `meThe official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
-
-It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
-
-### Key Points for Password Hashes (Email/Password Users)
-Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
-
-To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
-
-In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
-
-```ts
-import bcrypt from "bcryptjs"; // or bcrypt
-
-// ...
-
-emailAndPassword: {
-  enabled: true,
-  password: {
-    hash: async (password: string) => {
-      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
-      const salt = await bcrypt.genSalt(10);
-      return bcrypt.hash(password, salt);
-    },
-    verify: async ({ hash, password }: { hash: string; password: string }) => {
-      // Better Auth often auto-detects bcrypt, but to be safe:
-      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
-        return bcrypt.compare(password, hash);
-      }
-      // Fallback for scrypt (new users after migration)
-      // Use Better Auth's built-in scrypt verify here if needed
-      return false; // or implement scrypt verify
-    },
-  },
-},
-```
-
-Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
-
-### Exporting Data from Clerk
-1. Go to your Clerk dashboard → Export users (CSV download available for admins).
-   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
-2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
-
-### Typical Migration Flow (from the Official Guide)
-1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
-2. Export users from Clerk (CSV/JSON).
-3. Run a migration script (examples in the guide) to:
-   - Insert users into Better Auth's `user` table.
-   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
-   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
-   - Handle 2FA (TOTP secrets), phone verification, etc.
-4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
-5. Update your app code:
-   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
-   - Remove Clerk SDK / middleware.
-6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
-7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
-8. Go live, monitor for issues.
-
-### For Third-Party / Social Sign-Ins Only
-If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
-- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
-- No hash worries.
-- The guide covers this explicitly.
-
-Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
-
-If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
-
-It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
-
-### Key Points for Password Hashes (Email/Password Users)
-Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
-
-To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
-
-In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
-
-```ts
-import bcrypt from "bcryptjs"; // or bcrypt
-
-// ...
-
-emailAndPassword: {
-  enabled: true,
-  password: {
-    hash: async (password: string) => {
-      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
-      const salt = await bcrypt.genSalt(10);
-      return bcrypt.hash(password, salt);
-    },
-    verify: async ({ hash, password }: { hash: string; password: string }) => {
-      // Better Auth often auto-detects bcrypt, but to be safe:
-      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
-        return bcrypt.compare(password, hash);
-      }
-      // Fallback for scrypt (new users after migration)
-      // Use Better Auth's built-in scrypt verify here if needed
-      return false; // or implement scrypt verify
-    },
-  },
-},
-```
-
-Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
-
-### Exporting Data from Clerk
-1. Go to your Clerk dashboard → Export users (CSV download available for admins).
-   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
-2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
-
-### Typical Migration Flow (from the Official Guide)
-1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
-2. Export users from Clerk (CSV/JSON).
-3. Run a migration script (examples in the guide) to:
-   - Insert users into Better Auth's `user` table.
-   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
-   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
-   - Handle 2FA (TOTP secrets), phone verification, etc.
-4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
-5. Update your app code:
-   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
-   - Remove Clerk SDK / middleware.
-6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
-7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
-8. Go live, monitor for issues.
-
-### For Third-Party / Social Sign-Ins Only
-If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
-- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
-- No hash worries.
-- The guide covers this explicitly.
-
-Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
-
-If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
-
-It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
-
-### Key Points for Password Hashes (Email/Password Users)
-Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
-
-To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
-
-In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
-
-```ts
-import bcrypt from "bcryptjs"; // or bcrypt
-
-// ...
-
-emailAndPassword: {
-  enabled: true,
-  password: {
-    hash: async (password: string) => {
-      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
-      const salt = await bcrypt.genSalt(10);
-      return bcrypt.hash(password, salt);
-    },
-    verify: async ({ hash, password }: { hash: string; password: string }) => {
-      // Better Auth often auto-detects bcrypt, but to be safe:
-      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
-        return bcrypt.compare(password, hash);
-      }
-      // Fallback for scrypt (new users after migration)
-      // Use Better Auth's built-in scrypt verify here if needed
-      return false; // or implement scrypt verify
-    },
-  },
-},
-```
-
-Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
-
-### Exporting Data from Clerk
-1. Go to your Clerk dashboard → Export users (CSV download available for admins).
-   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
-2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
-
-### Typical Migration Flow (from the Official Guide)
-1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
-2. Export users from Clerk (CSV/JSON).
-3. Run a migration script (examples in the guide) to:
-   - Insert users into Better Auth's `user` table.
-   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
-   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
-   - Handle 2FA (TOTP secrets), phone verification, etc.
-4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
-5. Update your app code:
-   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
-   - Remove Clerk SDK / middleware.
-6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
-7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
-8. Go live, monitor for issues.
-
-### For Third-Party / Social Sign-Ins Only
-If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
-- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
-- No hash worries.
-- The guide covers this explicitly.
-
-Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
-
-If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
-
-It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
-
-### Key Points for Password Hashes (Email/Password Users)
-Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
-
-To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
-
-In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
-
-```ts
-import bcrypt from "bcryptjs"; // or bcrypt
-
-// ...
-
-emailAndPassword: {
-  enabled: true,
-  password: {
-    hash: async (password: string) => {
-      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
-      const salt = await bcrypt.genSalt(10);
-      return bcrypt.hash(password, salt);
-    },
-    verify: async ({ hash, password }: { hash: string; password: string }) => {
-      // Better Auth often auto-detects bcrypt, but to be safe:
-      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
-        return bcrypt.compare(password, hash);
-      }
-      // Fallback for scrypt (new users after migration)
-      // Use Better Auth's built-in scrypt verify here if needed
-      return false; // or implement scrypt verify
-    },
-  },
-},
-```
-
-Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
-
-### Exporting Data from Clerk
-1. Go to your Clerk dashboard → Export users (CSV download available for admins).
-   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
-2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
-
-### Typical Migration Flow (from the Official Guide)
-1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
-2. Export users from Clerk (CSV/JSON).
-3. Run a migration script (examples in the guide) to:
-   - Insert users into Better Auth's `user` table.
-   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
-   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
-   - Handle 2FA (TOTP secrets), phone verification, etc.
-4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
-5. Update your app code:
-   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
-   - Remove Clerk SDK / middleware.
-6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
-7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
-8. Go live, monitor for issues.
-
-### For Third-Party / Social Sign-Ins Only
-If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
-- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
-- No hash worries.
-- The guide covers this explicitly.
-
-Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
-
-If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!The official guide for migrating from **Clerk** to **Better Auth** (including handling third-party sign-ins / social accounts and password hashes) is available here: https://www.better-auth.com/docs/guides/clerk-migration-guide
-
-It covers migrating users, accounts (including OAuth/social providers), phone numbers, 2FA, and more, with step-by-step instructions and sample code/scripts.
-
-### Key Points for Password Hashes (Email/Password Users)
-Clerk uses **bcrypt** for password hashing, while Better Auth defaults to **scrypt** (a secure, memory-hard algorithm).
-
-To let existing users sign in with their current passwords (without forcing resets), you must configure Better Auth to verify bcrypt hashes during login. Better Auth can auto-detect and handle bcrypt hashes in many cases (especially with prefixes like `$2a$` or `$2b$`), but for Clerk migrations, the guide explicitly recommends overriding the hashing functions to use bcrypt-compatible logic.
-
-In your Better Auth config (e.g., `auth.ts` or wherever you initialize it), enable email/password and set custom hash/verify:
-
-```ts
-import bcrypt from "bcryptjs"; // or bcrypt
-
-// ...
-
-emailAndPassword: {
-  enabled: true,
-  password: {
-    hash: async (password: string) => {
-      // For new users, you can keep bcrypt (to stay compatible) or switch to scrypt later
-      const salt = await bcrypt.genSalt(10);
-      return bcrypt.hash(password, salt);
-    },
-    verify: async ({ hash, password }: { hash: string; password: string }) => {
-      // Better Auth often auto-detects bcrypt, but to be safe:
-      if (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$")) {
-        return bcrypt.compare(password, hash);
-      }
-      // Fallback for scrypt (new users after migration)
-      // Use Better Auth's built-in scrypt verify here if needed
-      return false; // or implement scrypt verify
-    },
-  },
-},
-```
-
-Many real-world migrations simply use bcrypt for both hash and verify during/after migration, then optionally re-hash to scrypt on next password change (via a "rehash on login" flag or similar).
-
-### Exporting Data from Clerk
-1. Go to your Clerk dashboard → Export users (CSV download available for admins).
-   - This includes user details, but **password hashes** may require extra steps (some exports include `password_digest` and `password_hasher` via backend API or special request).
-2. For full password hashes, check Clerk's docs on exporting users (sometimes contact support or use their backend API to get a more complete export with `password_digest`).
-
-### Typical Migration Flow (from the Official Guide)
-1. Set up Better Auth in your project (install, configure schema in Prisma/Kysely/etc.).
-2. Export users from Clerk (CSV/JSON).
-3. Run a migration script (examples in the guide) to:
-   - Insert users into Better Auth's `user` table.
-   - Insert social/OAuth accounts into `account` table (provider, providerId, access_token, etc.).
-   - Migrate password hashes to `credential` / password field with bcrypt compatibility.
-   - Handle 2FA (TOTP secrets), phone verification, etc.
-4. Use a command like `npx auth migrate` (if using their CLI tools) or custom script.
-5. Update your app code:
-   - Replace Clerk components/hooks with Better Auth's (e.g., `useSession`, sign-in methods).
-   - Remove Clerk SDK / middleware.
-6. Test thoroughly (sign-in with existing email/password, social logins, password reset, etc.).
-7. Optional: Force password reset for email users if you don't want to deal with bcrypt compatibility (simpler but worse UX).
-8. Go live, monitor for issues.
-
-### For Third-Party / Social Sign-Ins Only
-If your users mostly use OAuth (Google, GitHub, etc.) and few/no password users:
-- Migration is easier — map Clerk's `external_accounts` to Better Auth's `account` table.
-- No hash worries.
-- The guide covers this explicitly.
-
-Check the full guide linked above (it includes code samples and handles edge cases like orgs/multi-session if you're using those). There's also a YouTube video walkthrough ("Goodbye Clerk, Hello Better Auth – Full Migration Guide!") that follows the same steps.
-
-If you run into schema mismatches or specific errors (e.g., Prisma schema changes), share more details about your stack (Next.js? Prisma? Drizzle?) and I can help narrow it down. Good luck with the switch — many devs report it's worth it for the cost/control gains!tadata.baseDropId`, with IndexedDB caching.
-
-## Recommended usage path (application code)
+- `create(payload)` seals first, persists the envelope second, then returns a provider-scoped result.
+- `get(id)` opens sealed envelopes and normalizes legacy payloads to `DropPayload`.
+- `resolveGraph(id)` returns lineage based on `metadata.baseDropId`, with IndexedDB-backed graph caching.
+- `sync(target)` copies sealed records between provider ports without giving target storage plaintext.
+
+## Recommended usage path
 
 Most app code should use `dropStore`, not providers directly.
 
 From `src/stores/dropStore.ts`:
 
-- `createDrop(payload)` chooses local/remote by `offlineMode`
-- `getDrop(id)` routes by id prefix
-- `resolveDropGraph(id)` routes by id prefix
+- `createDrop(payload)` chooses local or remote storage by `offlineMode`.
+- `getDrop(id)` routes by id prefix.
+- `resolveDropGraph(id)` routes by id prefix.
 
-### Example: share from UI (recommended)
+### Example: share from UI
 
 ```ts
 const createDrop = useDropStore((state) => state.createDrop);
@@ -419,39 +94,39 @@ const result = await createDrop({
 // result => { id, url, scope: "local" | "remote" }
 ```
 
-## Direct provider usage (advanced)
+## Direct provider usage
 
-Use this when building tests, custom workflows, or tooling.
+Use direct providers for tests, custom workflows, or tooling.
 
 ### Create providers directly
 
 ```ts
 import {
-  createLocalDropProvider,
-  createRemoteDropProvider,
-} from "src/lib/drop/provider";
+  createLocalVoidProvider,
+  createRemoteVoidProvider,
+} from "src/lib/void/provider";
 
-const local = createLocalDropProvider();
-const remote = createRemoteDropProvider();
+const local = createLocalVoidProvider();
+const remote = createRemoteVoidProvider();
 
 const localResult = await local.create({ content: "local note" });
 const remoteResult = await remote.create({ content: "remote note" });
 ```
 
-### Create a registry with shared crypto dependency
+### Create a registry with shared crypto
 
 ```ts
-import { createDropProviderRegistry } from "src/lib/drop/provider";
-import { createBrowserDropCrypto } from "src/lib/drop/browserDropCrypto";
+import { createBrowserVoidCrypto } from "src/lib/void/crypto/browserVoidCrypto";
+import { createVoidProviderRegistry } from "src/lib/void/provider";
 
-const crypto = createBrowserDropCrypto();
-const registry = createDropProviderRegistry({ crypto });
+const crypto = createBrowserVoidCrypto();
+const registry = createVoidProviderRegistry({ crypto });
 
 const provider = registry.forDropId(dropId);
 const payload = await provider.get(dropId);
 ```
 
-This mirrors production behavior where local and remote providers share one crypto port.
+This mirrors production behavior where local and remote providers share one browser crypto implementation.
 
 ## End-to-end flow diagrams
 
@@ -461,14 +136,15 @@ This mirrors production behavior where local and remote providers share one cryp
 flowchart LR
   UI[Editor and DropView]
   Store[dropStore]
-  Registry[DropProviderRegistry]
+  Registry[VoidProviderRegistry]
 
-  Local[Local Provider]
-  Remote[Remote Provider]
-  Crypto[BrowserDropCrypto]
-  LocalStorage[LocalDropStorage]
-  GraphLocal[LineageGraphPort local cache]
-  GraphRemote[LineageGraphPort remote cache]
+  Local[Local VoidProvider]
+  Remote[Remote VoidProvider]
+  Crypto[BrowserVoidCrypto]
+  LocalStorage[IndexedDbVoidStorage]
+  RemoteStorage[HttpVoidStorage]
+  GraphLocal[LineageVoidGraph local cache]
+  GraphRemote[LineageVoidGraph remote cache]
 
   IDB[(IndexedDB drops + kv)]
   StoreApi[/POST /api/store/]
@@ -485,21 +161,22 @@ flowchart LR
   Remote --> Crypto
 
   Local --> LocalStorage --> IDB
-  Remote --> StoreApi --> R2
-  Remote --> GetApi --> R2
+  Remote --> RemoteStorage --> StoreApi --> R2
+  RemoteStorage --> GetApi --> R2
 
   Local --> GraphLocal --> IDB
   Remote --> GraphRemote --> IDB
 ```
 
-### Online share (remote provider)
+### Online share
 
 ```mermaid
 sequenceDiagram
   participant UI
   participant Store as dropStore
-  participant Remote as RemoteProvider
-  participant Crypto as BrowserDropCrypto
+  participant Remote as RemoteVoidProvider
+  participant Crypto as BrowserVoidCrypto
+  participant Storage as HttpVoidStorage
   participant API as /api/store
   participant R2
 
@@ -507,29 +184,34 @@ sequenceDiagram
   Store->>Remote: create(payload)
   Remote->>Crypto: seal(payload)
   Crypto-->>Remote: DropEnvelopeV1
-  Remote->>API: POST encrypted envelope
+  Remote->>Storage: create(envelope)
+  Storage->>API: POST sealed envelope
   API->>API: optional provider signature
   API->>R2: put(id, envelope)
-  API-->>Remote: {id, url}
+  API-->>Storage: {id, url}
+  Storage-->>Remote: {id, url}
   Remote-->>Store: {id, url, scope:"remote"}
   Store-->>UI: share link
 ```
 
-### Offline share (local provider)
+### Offline share
 
 ```mermaid
 sequenceDiagram
   participant UI
   participant Store as dropStore
-  participant Local as LocalProvider
-  participant Crypto as BrowserDropCrypto
+  participant Local as LocalVoidProvider
+  participant Crypto as BrowserVoidCrypto
+  participant Storage as IndexedDbVoidStorage
   participant IDB as IndexedDB
 
   UI->>Store: createDrop(payload), offlineMode=true
   Store->>Local: create(payload)
   Local->>Crypto: seal(payload)
   Crypto-->>Local: DropEnvelopeV1
-  Local->>IDB: putOfflineDrop(record)
+  Local->>Storage: create(envelope)
+  Storage->>IDB: putOfflineDrop(record)
+  Storage-->>Local: {id, url}
   Local-->>Store: {id:"offline_*", url, scope:"local"}
   Store-->>UI: local-only share link
 ```
@@ -548,100 +230,68 @@ flowchart TD
 
 ## How the provider scales
 
-Scaling happens across four dimensions: traffic, compute, lineage, and codebase evolution.
+Scaling happens across traffic, compute, lineage, and codebase evolution.
 
-### 1) Traffic scaling
+### Traffic scaling
 
-- Offline traffic is absorbed by browser storage, so it does not hit server APIs.
+- Offline traffic is absorbed by browser storage and does not hit server APIs.
 - Remote traffic is stateless at the function layer and object-backed in R2.
 - Reads and writes split naturally by id prefix and mode without branching in UI code.
 
-### 2) Compute scaling
+### Compute scaling
 
-- Encryption/decryption happens in the browser (`BrowserDropCrypto`), which offloads server CPU.
-- Server-side remote provider path mainly validates, optionally signs, and stores bytes.
-- This keeps remote functions lightweight even as share volume grows.
+- Seal/open work happens in `BrowserVoidCrypto`, which keeps private payload crypto on the client.
+- Server-side remote storage mainly validates, optionally signs, and stores envelopes.
+- Backend route files stay thin HTTP adapters over services.
 
-### 3) Lineage scaling
+### Lineage scaling
 
-- First `resolveGraph(id)` call is proportional to lineage depth (walks ancestors).
-- Subsequent calls for same head id are cache-backed from IndexedDB.
+- The first `resolveGraph(id)` call is proportional to lineage depth.
+- Subsequent calls for the same head id are cache-backed from IndexedDB.
 - Local and remote graph caches use separate prefixes to avoid namespace collision.
 
-### 4) Product/code scaling
+### Product and code scaling
 
-- Provider internals are composed from ports (`storage`, `crypto`, `graph`).
+- Provider internals are composed from storage, crypto, and graph ports.
 - New backends can be added by implementing ports and extending registry routing.
-- UI and store call sites stay stable because the `DropProvider` interface does not change.
-
-### Provider growth pattern
-
-```mermaid
-flowchart LR
-  UI[Editor and dropStore call sites]
-  Registry[DropProviderRegistry]
-  Local[local]
-  Remote[remote]
-  NewScope[new scope]
-
-  UI --> Registry
-  Registry --> Local
-  Registry --> Remote
-  Registry -. add route .-> NewScope
-
-  NewScope --> StoragePort[custom storage port]
-  NewScope --> CryptoPort[crypto port]
-  NewScope --> GraphPort[graph port]
-```
-
-### Scaling topology diagram
-
-```mermaid
-flowchart TB
-  Traffic[Create/Get/Clone requests] --> Split{routing}
-  Split -->|offline mode or offline_ id| LocalPath[Local provider path]
-  Split -->|remote id| RemotePath[Remote provider path]
-
-  LocalPath --> LocalCrypto[client-side crypto]
-  LocalPath --> LocalStorage[IndexedDB persistence]
-
-  RemotePath --> RemoteCrypto[client-side crypto]
-  RemotePath --> EdgeFn[stateless Functions]
-  EdgeFn --> ObjectStore[R2 object storage]
-
-  LocalPath --> GraphCacheLocal[local graph cache]
-  RemotePath --> GraphCacheRemote[remote graph cache]
-```
+- UI and store call sites stay stable because the `VoidProvider` facade does not change.
 
 ## Operational boundaries and limits
 
-- Offline links are local to the browser profile/device that created them.
+- Offline links are local to the browser profile or device that created them.
 - Remote sealed envelopes can only be opened by the matching account vault.
-- Provider signature verification requires configured client verify key (`VITE_PROVIDER_SIGNING_PUBLIC_JWK`).
-- Graph cache currently has no TTL/version invalidation policy.
+- Provider signature verification requires configured client verify key `VITE_PROVIDER_SIGNING_PUBLIC_JWK`.
+- Graph cache currently has no TTL or version invalidation policy.
 
 ## Failure modes to expect
 
 - Local create fails if IndexedDB is unavailable.
-- Remote create/get fails on network/API errors.
-- Open fails when vault account does not match envelope account id.
+- Remote create or get fails on network or API errors.
+- Open fails when the vault account does not match the envelope account id.
 - Open fails if device signature or provider signature verification fails.
 
 ## Extension recipe: add another provider scope
 
-1. Implement storage semantics equivalent to `DropStoragePort`.
-2. Reuse `BrowserDropCrypto` or add another `DropCryptoPort` implementation.
-3. Reuse `LineageDropGraphPort` or provide a custom graph strategy.
-4. Add provider instance to registry and define routing rule.
+1. Implement `VoidStorage` semantics for sealed envelopes only.
+2. Reuse `BrowserVoidCrypto` or add another `VoidCrypto` implementation.
+3. Reuse `LineageVoidGraph` or provide a custom `VoidGraph` implementation.
+4. Add the provider instance to the registry and define a routing rule.
 5. Keep `dropStore` public methods unchanged so UI remains provider-agnostic.
 
 ## Key file map
 
-- `src/lib/drop/provider.ts` - provider contracts, implementations, registry
-- `src/lib/drop/browserDropCrypto.ts` - envelope seal/open and signature verification
-- `src/lib/drop/passkeyVault.ts` - vault keys, passkey gating, unlock cache
-- `src/stores/dropStore.ts` - app-facing provider routing
-- `src/pages/editor/hooks/useShareDrop.ts` - share payload composition
-- `functions/api/store.ts` - remote store write path and optional provider signing
-- `functions/api/get/[id].ts` - remote read path
-- `shared/drop/types.ts` - payload/envelope schema and canonical serialization
+- `src/lib/void/provider.ts`: stable public void provider import path.
+- `src/lib/void/provider/defaultVoidProvider.ts`: runtime composition of storage, crypto, and graph.
+- `src/lib/void/provider/registry.ts`: local/remote registry and factory helpers.
+- `src/lib/void/storage/types.ts`: sealed storage contracts.
+- `src/lib/void/storage/indexedDbVoidStorage.ts`: local sealed envelope storage.
+- `src/lib/void/storage/httpVoidStorage.ts`: remote HTTP sealed envelope storage.
+- `src/lib/void/crypto/browserVoidCrypto.ts`: browser seal/open/sign/verify behavior.
+- `src/lib/void/vault/passkeyVault.ts`: browser vault keys, passkey gating, and unlock cache.
+- `src/stores/dropStore.ts`: app-facing provider routing.
+- `src/pages/editor/hooks/useShareDrop.ts`: share payload composition.
+- `functions/api/store.ts`: remote store route adapter.
+- `functions/api/_lib/storeService.ts`: remote store service.
+- `functions/api/get/[id].ts`: remote read path.
+- `functions/api/_lib/void/serverVoidCrypto.ts`: server provider signing, escrow, promotion, unlock, and diff-auth key wrapping.
+- `shared/drop/types.ts`: payload and envelope schemas.
