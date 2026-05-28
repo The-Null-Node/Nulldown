@@ -8,10 +8,10 @@ Status: The first provider nullplug boundary is implemented as `POST /api/nullpl
 
 ## Core Split
 
-`DropProvider` stays narrow:
+`VoidProvider` remains the app-facing drop runtime. `DropProviderPort` stays narrow as a child local, remote, or server capability port:
 
 ```text
-DropProvider
+DropProviderPort
   create(payload)
   get(id)
   delete(id)
@@ -24,7 +24,7 @@ DropProvider
 
 ```text
 NullProvider
-  storage: DropProvider
+  storage: DropProviderPort
   nullplug: NullplugService
   policy: RuntimePolicyService
   inference: NullCallService
@@ -40,7 +40,7 @@ This preserves current provider guarantees while giving heavier runtime capabili
 
 | Layer | Responsibility |
 | --- | --- |
-| `DropProvider` | Drop CRUD, sealed envelope storage, plaintext payload access where allowed, sync, lineage graph. |
+| `DropProviderPort` | Child drop CRUD, sealed envelope storage, plaintext payload access where allowed, sync, lineage graph. |
 | `NullProvider` | Runtime orchestration across drops, nullplugs, streams, policy, inference, registry, and indexes. |
 | `NullplugService` | Parse, resolve, invoke, stream, normalize, and index nullplug calls. |
 | `RuntimePolicyService` | Evaluate root policy, conditional grants, callable handlers, and max-grant enforcement. |
@@ -87,7 +87,7 @@ Provider runtime shape:
 
 ```ts
 interface NullProvider {
-  storage: DropProvider;
+  storage: DropProviderPort;
   nullplug: NullplugService;
   policy: RuntimePolicyService;
   inference?: NullCallService;

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Nulldown now uses a **composed drop provider** model where each provider combines:
+Nulldown now uses a **void provider** model where each provider combines:
 
 - storage
 - crypto
@@ -57,15 +57,15 @@ Draft hooks are now async-safe and debounced:
 - `useLocalStorageLoad(...)` loads asynchronously on mount
 - `useDraftStorage(...)` keeps draft behavior intact with async storage APIs
 
-## Composed Drop Providers
+## Void Providers
 
-### Provider Interface (`src/lib/drop/provider.ts`)
+### Provider Interface (`src/lib/void/provider.ts`)
 
 The provider composes three ports:
 
-- `DropStoragePort`
-- `DropCryptoPort`
-- `DropGraphPort`
+- `VoidStorage`
+- `VoidCrypto`
+- `VoidGraph`
 
 Runtime providers:
 
@@ -82,7 +82,7 @@ Both frontend and functions use one canonical schema:
 
 ## Crypto + Vault Model
 
-### Browser Vault (`src/lib/drop/passkeyVault.ts`)
+### Browser Vault (`src/lib/void/vault/passkeyVault.ts`)
 
 - Creates a local account vault with:
   - RSA-OAEP keypair for per-drop key wrapping
@@ -90,7 +90,7 @@ Both frontend and functions use one canonical schema:
 - Gated by WebAuthn passkey checks before crypto operations
 - Keys are stored locally (IndexedDB-first, localStorage fallback)
 
-### Sealed Envelope (`src/lib/drop/browserDropCrypto.ts`)
+### Sealed Envelope (`src/lib/void/crypto/browserVoidCrypto.ts`)
 
 Each created drop is sealed as:
 
