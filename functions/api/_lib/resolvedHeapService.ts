@@ -220,8 +220,7 @@ const resolveBranchTarget = async (
   return { rootDropId, branchId, branch };
 };
 
-/** Queries a branch resolved heap, regenerating supported stale heaps on demand. */
-export const queryResolvedHeap = async (
+const queryResolvedHeapUnsafe = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
   request: Request,
@@ -383,6 +382,28 @@ export const queryResolvedHeap = async (
     nodeCount: state.documentNodes?.length ?? 0,
     nodes,
   });
+};
+
+/** Queries a branch resolved heap, regenerating supported stale heaps on demand. */
+export const queryResolvedHeap = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+  request: Request,
+): Promise<Response> => {
+  try {
+    return await queryResolvedHeapUnsafe(env, params, request);
+  } catch (error) {
+    if (isApiHttpError(error)) {
+      return apiHttpErrorResponse(error);
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonErrorResponse(
+      500,
+      "resolved_query_failed",
+      `Failed to query resolved heap: ${message}`,
+    );
+  }
 };
 
 /** Rebuilds and stores one or more resolved heaps for a branch snapshot. */

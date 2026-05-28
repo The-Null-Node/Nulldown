@@ -567,7 +567,9 @@ Implementation: `functions/api/diff/[id].ts`.
 
 ### POST /api/diff/:id
 
-Append diff events to the resolved branch.
+Append diff events to the resolved branch. Diff events are the normal edit
+primitive: accepted writes advance the branch snapshot, and branch query lazily
+materializes resolved heaps from that snapshot when needed.
 
 CLI examples:
 
@@ -618,7 +620,10 @@ Response:
 }
 ```
 
-`nd diff batch` posts the same `DropDiffEnvelope` shape as `nd diff event`, but requires an explicit `--branch` because it is intended for ordered branch mutations.
+`nd diff replace` can bootstrap a fresh branch by diffing from the root drop
+content when the requested branch does not exist yet. `nd diff batch` posts the
+same `DropDiffEnvelope` shape as `nd diff event`, but requires an explicit
+`--branch` because it is intended for ordered branch mutations.
 
 Limits:
 
@@ -821,7 +826,11 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/query.ts`.
 
 ### POST /api/branches/:rootId/:branchId/resolved/update
 
-Rebuild and store derived resolved heaps for a branch snapshot. This writes materialized views only; branch content remains authoritative.
+Repair or eagerly materialize derived resolved heaps for a branch snapshot. This
+writes materialized views only; branch content remains authoritative. Normal
+agentic edits should not call this endpoint: write diffs first, then use branch
+query, which lazily generates supported missing or stale heaps from the latest
+snapshot.
 
 Request:
 
@@ -840,6 +849,9 @@ CLI example:
 ```bash
 bun run nd -- branch heap-update <rootId> <branchId> --resolver all --json
 ```
+
+Use this command for repair/admin workflows, not as the primary memory write
+path.
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/update.ts`.
 

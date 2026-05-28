@@ -134,7 +134,7 @@ Branch commands:
   branch content <rootId> <branchId>
   branch snapshots <rootId> <branchId>
   branch query <rootId> <branchId> [--resolver <id>] [--query <text>] [--top <n>] [--kind <csv>] [--from-seq <n>] [--to-seq <n>]
-  branch heap-update <rootId> <branchId> [--resolver <id|all>] [--snapshot <n|latest>]
+  branch heap-update <rootId> <branchId> [--resolver <id|all>] [--snapshot <n|latest>]  Repair/materialize resolved heaps
   branch promote <rootId> <branchId>
 
 Diff commands:
@@ -404,6 +404,36 @@ const readDrop = async (
     body,
     text: response.text,
   };
+};
+
+const getDropContent = (drop: DropReadResult): string => {
+  if (drop.body && typeof drop.body === "object" && "content" in drop.body) {
+    return String((drop.body as { content: unknown }).content);
+  }
+
+  return drop.text;
+};
+
+const readBranchContentOrNull = async (
+  config: CliConfig,
+  dropId: string,
+  branchId: string,
+): Promise<{ rootDropId: string; content: string } | null> => {
+  try {
+    const response = await request<{
+      rootDropId: string;
+      content: string;
+    }>(
+      config,
+      `/api/branches/${encodeURIComponent(dropId)}/${encodeBranchPathSegment(branchId)}/content`,
+    );
+    return response.data ?? null;
+  } catch (error) {
+    if (error instanceof CliError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
 };
 
 const readInput = async (path: string | null): Promise<string> => {
@@ -1251,16 +1281,15 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
     if (!branchId)
       throw new CliError("nd diff replace requires --branch <branchId>.");
     const metadata = await parseDiffEventMetadata(args);
-    const contentResponse = await request<{
-      rootDropId: string;
-      content: string;
-    }>(
+    const existingBranchContent = await readBranchContentOrNull(
       config,
-      `/api/branches/${encodeURIComponent(dropId)}/${encodeBranchPathSegment(branchId)}/content`,
+      dropId,
+      branchId,
     );
+    const canonical = existingBranchContent ? null : await readDrop(config, dropId);
     const from = flagString(args, "from-file")
       ? await readInput(flagString(args, "from-file"))
-      : (contentResponse.data?.content ?? "");
+      : (existingBranchContent?.content ?? getDropContent(canonical!));
     const toFile = flagString(args, "to-file");
     if (!toFile)
       throw new CliError("nd diff replace requires --to-file <file|->.");
@@ -1272,21 +1301,22 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
     }
     const ops = diffs.map((diff) => diffToDropDiffOp(diff));
     const envelope = createEvent({
-      dropId:
-        contentResponse.data?.rootDropId ?? (await readDrop(config, dropId)).id,
+      dropId: existingBranchContent?.rootDropId ?? canonical!.id,
       clientId: config.clientId || "nd-cli",
       ops,
       metadata,
     });
     const posted = await postDiffEnvelope(config, dropId, branchId, envelope);
+    const postedBranchId =
+      (posted.data as { branchId?: string } | null)?.branchId ?? branchId;
     const verify = await request<{ content: string }>(
       config,
-      `/api/branches/${encodeURIComponent(dropId)}/${encodeBranchPathSegment(branchId)}/content`,
+      `/api/branches/${encodeURIComponent(dropId)}/${encodeBranchPathSegment(postedBranchId)}/content`,
     );
     print(
       config,
       { posted: posted.data, verified: verify.data?.content === to },
-      `updated branch ${branchId}`,
+      `updated branch ${postedBranchId}`,
     );
     return;
   }
