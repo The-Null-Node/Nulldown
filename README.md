@@ -94,18 +94,40 @@ Use a local or preview API base:
 bun run nd -- --base=http://127.0.0.1:8788 get <id> --json
 ```
 
+Serve the API locally with filesystem blob storage and SQLite metadata:
+
+```bash
+bun run nd -- serve --host 127.0.0.1 --port 8788 --data-dir .nulldown-data
+```
+
+The local server supports core drop, diff, branch, and resolved-query routes using filesystem blobs plus SQLite metadata. Generic functional snapshot data is still in-memory unless a future adapter is provided. Use `--migrations-dir` to override the migration path or `--no-sqlite` to run with blob fallback only.
+
+Run the same local server in Docker with `/data` as the persistent volume:
+
+```bash
+docker build -t nulldown .
+docker run --rm -p 8788:8788 -v nulldown-data:/data nulldown
+```
+
 Global installs store CLI state in `~/.config/nulldown` by default.
 
 ## Cloudflare
 
-The app is designed for Cloudflare Pages Functions with an R2 binding named `R2_BUCKET`.
+The app is designed for Cloudflare Pages Functions with R2 blob storage and a D1 metadata/index database.
 
 Required production configuration:
 
 - `PUBLIC_BASE_URL`
 - `R2_BUCKET` Pages Functions binding
+- `DB` D1 binding with migrations in `migrations/`
 - provider signing and escrow keys when provider-assisted unlock is enabled
 - branch/diff/admin tokens when using protected maintenance APIs
+
+Admin backfills:
+
+```bash
+bun run nd -- admin metadata-backfill --token <token> --json
+```
 
 Deploy:
 

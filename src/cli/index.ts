@@ -154,6 +154,8 @@ Auth and admin:
   auth session --account <id> --proof <file|->
   admin branch-backfill <rootId>
   admin index-backfill
+  admin metadata-backfill
+  serve [--host <host>] [--port <port>] [--data-dir <dir>] [--migrations-dir <dir>] [--no-sqlite]
   doctor
   smoke diff
 
@@ -1286,7 +1288,9 @@ const commandDiff = async (config: CliConfig, args: ParsedArgs) => {
       dropId,
       branchId,
     );
-    const canonical = existingBranchContent ? null : await readDrop(config, dropId);
+    const canonical = existingBranchContent
+      ? null
+      : await readDrop(config, dropId);
     const from = flagString(args, "from-file")
       ? await readInput(flagString(args, "from-file"))
       : (existingBranchContent?.content ?? getDropContent(canonical!));
@@ -1353,8 +1357,22 @@ const sleep = async (ms: number): Promise<void> => {
 
 const commandAdmin = async (config: CliConfig, args: ParsedArgs) => {
   const sub = args.positionals[1];
+  if (
+    sub !== "branch-backfill" &&
+    sub !== "index-backfill" &&
+    sub !== "metadata-backfill"
+  ) {
+    throw new CliError(
+      "Usage: nd admin <branch-backfill|index-backfill|metadata-backfill>",
+    );
+  }
   const limit =
-    flagString(args, "limit") || (sub === "index-backfill" ? "200" : "100");
+    flagString(args, "limit") ||
+    (sub === "metadata-backfill"
+      ? "500"
+      : sub === "index-backfill"
+        ? "200"
+        : "100");
   const maxBatches = Number.parseInt(
     flagString(args, "max-batches") || "1000",
     10,
@@ -1362,9 +1380,12 @@ const commandAdmin = async (config: CliConfig, args: ParsedArgs) => {
   let cursor = flagString(args, "cursor");
   const token =
     flagString(args, "token") ||
-    (sub === "index-backfill"
-      ? process.env.DROP_INDEX_BACKFILL_TOKEN
-      : process.env.BRANCH_HEAP_BACKFILL_TOKEN);
+    (sub === "metadata-backfill"
+      ? process.env.METADATA_BACKFILL_TOKEN ||
+        process.env.DROP_INDEX_BACKFILL_TOKEN
+      : sub === "index-backfill"
+        ? process.env.DROP_INDEX_BACKFILL_TOKEN
+        : process.env.BRANCH_HEAP_BACKFILL_TOKEN);
   if (!token)
     throw new CliError("Missing admin token. Use --token or relevant env var.");
   const rootId =
@@ -1373,12 +1394,14 @@ const commandAdmin = async (config: CliConfig, args: ParsedArgs) => {
   for (let batch = 0; batch < maxBatches; batch += 1) {
     const params = new URLSearchParams({ limit });
     if (cursor) params.set("cursor", cursor);
+    if (sub === "branch-backfill" && !rootId)
+      throw new CliError("Usage: nd admin branch-backfill <rootId>");
     const path =
       sub === "branch-backfill"
         ? `/api/branches/backfill/${encodeURIComponent(rootId || "")}?${params}`
-        : `/api/index/backfill?${params}`;
-    if (sub === "branch-backfill" && !rootId)
-      throw new CliError("Usage: nd admin branch-backfill <rootId>");
+        : sub === "metadata-backfill"
+          ? `/api/metadata/backfill?${params}`
+          : `/api/index/backfill?${params}`;
     const response = await request(config, path, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
@@ -1448,6 +1471,65 @@ const commandSmoke = async (config: CliConfig, args: ParsedArgs) => {
   );
 };
 
+const parseServePort = (value: string | null): number => {
+  const port = Number.parseInt(value || "8788", 10);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    throw new CliError("Serve port must be between 1 and 65535.");
+  }
+  return port;
+};
+
+const commandServe = async (config: CliConfig, args: ParsedArgs) => {
+  const host = flagString(args, "host") || process.env.ND_SERVE_HOST || "127.0.0.1";
+  const port = parseServePort(flagString(args, "port") || process.env.ND_SERVE_PORT || null);
+  const dataDir = resolve(
+    flagString(args, "data-dir") || process.env.ND_DATA_DIR || ".nulldown-data",
+  );
+  const logLevel = flagString(args, "log-level") || process.env.LOG_LEVEL || "warn";
+  const migrationsDir = resolve(
+    flagString(args, "migrations-dir") || process.env.ND_MIGRATIONS_DIR || "migrations",
+  );
+  const { createLocalNulldownServer, localNulldownServerBaseUrl } = await import(
+    "../server/local"
+  );
+  const sqliteEnabled = !hasFlag(args, "no-sqlite");
+  const sqlite = sqliteEnabled
+    ? await import("../server/bunSqliteStore").then(async (module) => {
+        const sql = await module.createBunSqliteStore({
+          databasePath: resolve(dataDir, "metadata.sqlite"),
+        });
+        const migrationsApplied = await module.applySqliteMigrations(sql, migrationsDir);
+        return { sql, migrationsApplied };
+      })
+    : null;
+  const publicBaseUrl =
+    flagString(args, "public-base-url") || localNulldownServerBaseUrl(host, port);
+  const server = createLocalNulldownServer({
+    dataDir,
+    publicBaseUrl,
+    logLevel,
+    sql: sqlite?.sql,
+  });
+
+  const listener = Bun.serve({
+    hostname: host,
+    port,
+    fetch: (request) => server.fetch(request),
+  });
+  const served = {
+    host,
+    port: listener.port,
+    dataDir,
+    baseUrl: publicBaseUrl,
+    sqlite: Boolean(sqlite),
+    databasePath: sqlite?.sql.databasePath ?? null,
+    migrationsApplied: sqlite?.migrationsApplied ?? [],
+  };
+  print(config, served, `nulldown serving ${publicBaseUrl} using ${dataDir}`);
+
+  await new Promise<void>(() => undefined);
+};
+
 const dispatch = async (config: CliConfig, args: ParsedArgs): Promise<void> => {
   const command = args.positionals[0];
   if (
@@ -1469,6 +1551,7 @@ const dispatch = async (config: CliConfig, args: ParsedArgs): Promise<void> => {
   if (command === "diff") return commandDiff(config, args);
   if (command === "auth") return commandAuth(config, args);
   if (command === "admin") return commandAdmin(config, args);
+  if (command === "serve") return commandServe(config, args);
   if (command === "doctor") return commandDoctor(config);
   if (command === "smoke") return commandSmoke(config, args);
   throw new CliError(`Unknown command: ${command}`);

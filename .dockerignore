@@ -1,0 +1,13 @@
+.DS_Store
+.dev.vars
+.diff-auth/
+.env
+.env.*
+.git/
+.nulldown-data/
+.opencode/
+.wrangler/
+dist/
+lib/.DS_Store
+node_modules/
+*.log
