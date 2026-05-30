@@ -1,11 +1,12 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import { isDropEnvelopeV1 } from "../../../shared/drop/types";
-import { resolveRemoteDropId } from "../_lib/dropId";
-import { createRequestLogger, serializeError, toLogRef } from "../_lib/logger";
-import { serverVoidCrypto } from "../_lib/void/serverVoidCrypto";
+import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createRequestLogger, serializeError, toLogRef } from "../_lib/core/logging/logger";
+import { serverVoidCrypto } from "../_lib/crypto/void/serverVoidCrypto";
 
 interface Env {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
 }
 
@@ -58,7 +59,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       });
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger);
+    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
     if (!id) {
       logger.warn("unlock.invalid_drop_id", {
         requestedDropRef: toLogRef(requestedId),

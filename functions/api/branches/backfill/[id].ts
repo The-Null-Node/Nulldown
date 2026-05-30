@@ -2,8 +2,8 @@ import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   backfillBranchesForDrop,
   type BranchRouteEnv,
-} from "../../_lib/branchRouteService";
-import { methodNotAllowedResponse } from "../../_lib/http";
+} from "../../_lib/branches/services/routeService";
+import { methodNotAllowedResponse } from "../../_lib/core/http/responses";
 
 interface Env extends BranchRouteEnv {
   R2_BUCKET: R2Bucket;

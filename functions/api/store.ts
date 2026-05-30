@@ -1,10 +1,21 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { createRequestLogger } from "./_lib/logger";
-import { storeDrop, type StoreServiceEnv } from "./_lib/storeService";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import { createRequestLogger } from "./_lib/core/logging/logger";
+import {
+  createCloudflareBlobStore,
+  createCloudflareSqlStore,
+} from "./_lib/core/platform/cloudflarePorts";
+import { storeDrop, type StoreServiceEnv } from "./_lib/drops/services/storeDrop";
 
-interface Env extends StoreServiceEnv {
+interface Env extends Omit<StoreServiceEnv, "blobs" | "sql"> {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
+
+const createStoreServiceEnv = (env: Env): StoreServiceEnv => ({
+  ...env,
+  blobs: createCloudflareBlobStore(env.R2_BUCKET),
+  sql: createCloudflareSqlStore(env.DB),
+});
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   const logger = createRequestLogger({
@@ -14,7 +25,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   });
   logger.logStart();
 
-  return storeDrop({ request, env, logger });
+  return storeDrop({ request, env: createStoreServiceEnv(env), logger });
 };
 
 export const onRequest: PagesFunction<Env> = async (context) => {

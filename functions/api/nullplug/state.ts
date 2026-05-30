@@ -3,26 +3,26 @@
  durable inputs for resolved runtime heaps; they do not directly mutate branch content.
 */
 
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   isNullplugUiStatePatchFact,
   isNullplugUiStateSnapshot,
-  nullplugUiStatePatchFactKey,
-  nullplugUiStateSnapshotKey,
   type NullplugUiStatePatchFact,
   type NullplugUiStateSnapshot,
 } from "../../../shared/nullplug/ui";
-import { resolveRemoteDropId } from "../_lib/dropId";
-import { createRequestLogger, toLogRef } from "../_lib/logger";
+import { putNullplugUiStateFact } from "../_lib/nullplug/facts/repository";
+import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import {
   jsonErrorResponse,
   jsonResponse,
   methodNotAllowedResponse,
   readRequestTextWithLimit,
-} from "../_lib/http";
+} from "../_lib/core/http/responses";
 
 interface Env {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
 type NullplugUiStateFact = NullplugUiStatePatchFact | NullplugUiStateSnapshot;
@@ -41,11 +41,6 @@ const parseStateFact = (rawBody: string): NullplugUiStateFact | null => {
   if (isNullplugUiStateSnapshot(parsed)) return parsed;
   return null;
 };
-
-const keyForFact = (fact: NullplugUiStateFact): string =>
-  fact.kind === "ui.state.patch"
-    ? nullplugUiStatePatchFactKey(fact)
-    : nullplugUiStateSnapshotKey(fact);
 
 const handlePost = async (env: Env, request: Request): Promise<Response> => {
   const logger = createRequestLogger({
@@ -79,6 +74,7 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
       env.R2_BUCKET,
       parsed.source.rootDropId,
       logger,
+      env.DB,
     );
     if (!canonicalRootDropId || !(await env.R2_BUCKET.get(canonicalRootDropId))) {
       logger.logEnd(404, {
@@ -95,11 +91,11 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
         rootDropId: canonicalRootDropId,
       },
     };
-    const key = keyForFact(fact);
-    const written = await env.R2_BUCKET.put(key, JSON.stringify(fact), {
-      httpMetadata: { contentType: "application/json" },
-      onlyIf: { etagDoesNotMatch: "*" },
-    });
+    const { key, written } = await putNullplugUiStateFact(
+      env.R2_BUCKET,
+      fact,
+      env.DB,
+    );
 
     if (!written) {
       logger.logEnd(409, {

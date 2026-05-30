@@ -6,10 +6,10 @@ import {
   isRemotePublicDropIndexKey,
   removePublicDropIndexEntry,
   upsertPublicDropIndexEntry,
-} from "../_lib/dropIndex";
-import { REMOTE_DROP_ALIAS_PREFIX, reserveRemoteAlias } from "../_lib/dropId";
-import { createRequestLogger } from "../_lib/logger";
-import { verifyBearerToken } from "../_lib/auth";
+} from "../_lib/drops/index/repository";
+import { REMOTE_DROP_ALIAS_PREFIX, reserveRemoteAlias } from "../_lib/drops/identity/id";
+import { createRequestLogger } from "../_lib/core/logging/logger";
+import { verifyBearerToken } from "../_lib/core/auth/bearer";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
@@ -18,7 +18,7 @@ import {
   methodNotAllowedResponse,
   parseWithSchema,
   type JsonValue,
-} from "../_lib/http";
+} from "../_lib/core/http/responses";
 
 interface Env {
   R2_BUCKET: R2Bucket;

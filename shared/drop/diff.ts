@@ -62,6 +62,25 @@ export interface DropDiffEvent {
   metadata?: DropDiffEventMetadata;
 }
 
+/** Renderable stable reference to a branch diff event. */
+export type DropDiffRenderableRef = `<diff:${string}>`;
+
+/** Stable reference to one immutable branch diff event. */
+export interface DropDiffRef {
+  /** Root drop id that owns the branch timeline. */
+  rootDropId: string;
+  /** Branch id that stores the diff event. */
+  branchId: string;
+  /** Durable event sequence within the branch. */
+  seq: number;
+  /** Event id supplied by the writer. */
+  eventId: string;
+  /** Markdown/renderable event ref form for docs and semantic heaps. */
+  ref: DropDiffRenderableRef;
+  /** Snapshot id that accepted the event, when known. */
+  snapshotId?: number;
+}
+
 export interface DropDiffEnvelope {
   version: 1;
   events: DropDiffEvent[];
@@ -104,6 +123,49 @@ const isDropDiffEventKind = (value: unknown): value is DropDiffEventKind =>
   value === "nullplug.result" ||
   value === "ui.response" ||
   value === "policy.decision";
+
+/** Formats an event id as a renderable diff reference. */
+export const createDropDiffRenderableRef = (
+  eventId: string,
+): DropDiffRenderableRef => `<diff:${eventId}>`;
+
+/** Creates a stable branch diff reference for snapshotters and semantic heaps. */
+export const createDropDiffRef = (input: {
+  rootDropId: string;
+  branchId: string;
+  seq: number;
+  eventId: string;
+  snapshotId?: number;
+}): DropDiffRef => ({
+  rootDropId: input.rootDropId,
+  branchId: input.branchId,
+  seq: input.seq,
+  eventId: input.eventId,
+  ref: createDropDiffRenderableRef(input.eventId),
+  ...(input.snapshotId !== undefined ? { snapshotId: input.snapshotId } : {}),
+});
+
+/** Checks whether a value is a renderable diff reference string. */
+export const isDropDiffRenderableRef = (
+  value: unknown,
+): value is DropDiffRenderableRef =>
+  typeof value === "string" && /^<diff:[^>]+>$/.test(value);
+
+/** Checks a serialized stable branch diff reference. */
+export const isDropDiffRef = (value: unknown): value is DropDiffRef => {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.rootDropId) &&
+    isString(value.branchId) &&
+    isNumber(value.seq) &&
+    Number.isInteger(value.seq) &&
+    value.seq >= 0 &&
+    isString(value.eventId) &&
+    isDropDiffRenderableRef(value.ref) &&
+    value.ref === createDropDiffRenderableRef(value.eventId) &&
+    (value.snapshotId === undefined || isNumber(value.snapshotId))
+  );
+};
 
 const dropDiffMetadataKeys = new Set([
   "kind",

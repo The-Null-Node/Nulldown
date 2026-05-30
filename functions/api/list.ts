@@ -1,12 +1,14 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   REMOTE_PUBLIC_DROP_INDEX_PREFIX,
+  listPublicDropIndexEntries,
   readPublicDropIndexEntryByKey,
-} from "./_lib/dropIndex";
-import { createRequestLogger } from "./_lib/logger";
+} from "./_lib/drops/index/repository";
+import { createRequestLogger } from "./_lib/core/logging/logger";
 
 interface Env {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
 const DEFAULT_LIMIT = 200;
@@ -47,6 +49,23 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
       ? Math.max(1, Math.min(MAX_LIMIT, limitParam))
       : DEFAULT_LIMIT;
     const cursor = url.searchParams.get("cursor") || undefined;
+
+    if (env.DB) {
+      const listed = await listPublicDropIndexEntries(env.DB, limit, cursor);
+      logger.logEnd(200, {
+        limit,
+        hasCursor: Boolean(cursor),
+        returned: listed.items.length,
+        source: "d1",
+      });
+
+      return new Response(JSON.stringify(listed), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
 
     const listed = await env.R2_BUCKET.list({
       prefix: REMOTE_PUBLIC_DROP_INDEX_PREFIX,

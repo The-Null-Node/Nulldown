@@ -3,23 +3,24 @@
  stay data until a separate policy grant accepts them into branch diffs.
 */
 
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   isNullplugUiResponseFact,
-  nullplugUiResponseFactKey,
   type NullplugUiResponseFact,
 } from "../../../shared/nullplug/ui";
-import { resolveRemoteDropId } from "../_lib/dropId";
-import { createRequestLogger, toLogRef } from "../_lib/logger";
+import { putNullplugUiResponseFact } from "../_lib/nullplug/facts/repository";
+import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import {
   jsonErrorResponse,
   jsonResponse,
   methodNotAllowedResponse,
   readRequestTextWithLimit,
-} from "../_lib/http";
+} from "../_lib/core/http/responses";
 
 interface Env {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
 const NULLPLUG_SUBMIT_BODY_MAX_BYTES = 512_000;
@@ -67,6 +68,7 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
       env.R2_BUCKET,
       parsed.source.rootDropId,
       logger,
+      env.DB,
     );
     if (!canonicalRootDropId) {
       logger.logEnd(404, {
@@ -91,11 +93,11 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
         rootDropId: canonicalRootDropId,
       },
     };
-    const key = nullplugUiResponseFactKey(fact);
-    const written = await env.R2_BUCKET.put(key, JSON.stringify(fact), {
-      httpMetadata: { contentType: "application/json" },
-      onlyIf: { etagDoesNotMatch: "*" },
-    });
+    const { key, written } = await putNullplugUiResponseFact(
+      env.R2_BUCKET,
+      fact,
+      env.DB,
+    );
 
     if (!written) {
       logger.logEnd(409, {

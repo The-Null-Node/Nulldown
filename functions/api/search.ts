@@ -1,6 +1,6 @@
 import type { PagesFunction } from "@cloudflare/workers-types";
 import { createSearchDatabase } from "../../src/lib/db/searchDatabase";
-import { createRequestLogger, toLogRef } from "./_lib/logger";
+import { createRequestLogger, toLogRef } from "./_lib/core/logging/logger";
 
 interface Env {
   DB: D1Database;

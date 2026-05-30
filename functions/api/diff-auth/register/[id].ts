@@ -1,25 +1,26 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   DIFF_AUTH_DEFAULT_TTL_MS,
   generateDiffSecret,
   putDiffAuthCredential,
   sanitizeDiffAuthToken,
-} from "../../_lib/diffAuth";
+} from "../../_lib/diffs/credentials/repository";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../_lib/accountAuth";
-import { resolveBranchForActor } from "../../_lib/branchLifecycleService";
-import { resolveRemoteDropId } from "../../_lib/dropId";
-import { createRequestLogger, serializeError, toLogRef } from "../../_lib/logger";
+} from "../../_lib/accounts/session/auth";
+import { resolveBranchForActor } from "../../_lib/branches/lifecycle/service";
+import { resolveRemoteDropId } from "../../_lib/drops/identity/id";
+import { createRequestLogger, serializeError, toLogRef } from "../../_lib/core/logging/logger";
 import type {
   DiffAuthRegisterRequest,
   DiffAuthRegisterResponse,
 } from "../../../../shared/drop/diffAuth";
-import { serverVoidCrypto } from "../../_lib/void/serverVoidCrypto";
+import { serverVoidCrypto } from "../../_lib/crypto/void/serverVoidCrypto";
 
 interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
   DIFF_AUTH_TTL_MS?: string;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
 }
@@ -63,7 +64,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("R2 bucket binding is required.", { status: 500 });
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger);
+    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
     if (!id) {
       logger.logEnd(400, { reason: "invalid_drop_id" });
       return new Response("Drop ID is required.", { status: 400 });
@@ -114,6 +115,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       accountId,
       clientId,
       env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
+      env.DB,
     );
     const kid =
       typeof crypto.randomUUID === "function"
@@ -140,16 +142,20 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("requesterPublicJwk is invalid.", { status: 400 });
     }
 
-    await putDiffAuthCredential(env.R2_BUCKET, {
-      version: 1,
-      dropId: id,
-      branchId: branch.branchId,
-      clientId,
-      kid,
-      secret,
-      createdAt,
-      expiresAt,
-    });
+    await putDiffAuthCredential(
+      env.R2_BUCKET,
+      {
+        version: 1,
+        dropId: id,
+        branchId: branch.branchId,
+        clientId,
+        kid,
+        secret,
+        createdAt,
+        expiresAt,
+      },
+      env.DB,
+    );
 
     const responseBody: DiffAuthRegisterResponse = {
       dropId: id,

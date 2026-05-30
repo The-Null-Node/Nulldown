@@ -130,7 +130,8 @@ const isNullplugCaller = (value: unknown): value is NullplugCaller => {
   if (!isRecord(value)) return false;
   if (value.dropId !== undefined && !isString(value.dropId)) return false;
   if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.snapshotId !== undefined && !isNumber(value.snapshotId)) return false;
+  if (value.snapshotId !== undefined && !isNumber(value.snapshotId))
+    return false;
   if (value.eventId !== undefined && !isString(value.eventId)) return false;
   return true;
 };
@@ -159,7 +160,8 @@ const isNullplugStreamDescriptor = (
     return false;
   }
   if (value.url !== undefined && !isString(value.url)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata)) return false;
+  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
+    return false;
   return true;
 };
 
@@ -206,7 +208,8 @@ const isNullplugYield = (value: unknown): value is NullplugYield => {
   if (!isNullplugYieldKind(value.kind)) return false;
   if (!isJsonValue(value.value)) return false;
   if (value.createdAt !== undefined && !isNumber(value.createdAt)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata)) return false;
+  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
+    return false;
   return true;
 };
 
@@ -236,11 +239,14 @@ export const isNullplugResult = (value: unknown): value is NullplugResult => {
     return false;
   }
   if (value.uiState !== undefined && !isJsonRecord(value.uiState)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata)) return false;
-  if (value.diffs !== undefined && !isDropDiffEnvelope(value.diffs)) return false;
+  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
+    return false;
+  if (value.diffs !== undefined && !isDropDiffEnvelope(value.diffs))
+    return false;
   if (
     value.mutations !== undefined &&
-    (!Array.isArray(value.mutations) || !value.mutations.every(isNullplugMutation))
+    (!Array.isArray(value.mutations) ||
+      !value.mutations.every(isNullplugMutation))
   ) {
     return false;
   }
@@ -275,7 +281,8 @@ export const isNullplugInvokeContext = (
     return false;
   }
   if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.snapshotId !== undefined && !isNumber(value.snapshotId)) return false;
+  if (value.snapshotId !== undefined && !isNumber(value.snapshotId))
+    return false;
   if (!isStringArray(value.capabilities)) return false;
   if (value.rootPolicyRef !== undefined && !isString(value.rootPolicyRef)) {
     return false;
@@ -290,7 +297,9 @@ export const isNullplugInvokeRequest = (
   return isNullplugCall(value.call) && isNullplugInvokeContext(value.context);
 };
 
-export const isNullplugDiagnostic = (value: unknown): value is NullplugDiagnostic => {
+export const isNullplugDiagnostic = (
+  value: unknown,
+): value is NullplugDiagnostic => {
   if (!isRecord(value)) return false;
   if (
     value.level !== "info" &&

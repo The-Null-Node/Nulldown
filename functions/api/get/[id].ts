@@ -4,12 +4,13 @@ drop object from R2. The read path stays deliberately thin so the browser can de
 how to interpret plaintext payloads versus sealed envelopes.
 */
 
-import { R2Bucket } from "@cloudflare/workers-types";
-import { resolveRemoteDropId } from "../_lib/dropId";
-import { createRequestLogger, toLogRef } from "../_lib/logger";
+import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
+import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 
 interface Env {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
 const READ_SUCCESS_SAMPLE_RATE = 0.1;
@@ -49,7 +50,7 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
   try {
     validateEnv(env);
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger);
+    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
 
     if (!id) {
       logger.warn("get.invalid_drop_id", {

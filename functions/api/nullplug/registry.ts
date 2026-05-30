@@ -19,15 +19,15 @@ import { normalizeAllowedHosts } from "../../../shared/nullplug/policy";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../_lib/accountAuth";
-import { timingSafeStringEqual } from "../_lib/auth";
-import { createRequestLogger } from "../_lib/logger";
+} from "../_lib/accounts/session/auth";
+import { timingSafeStringEqual } from "../_lib/core/auth/bearer";
+import { createRequestLogger } from "../_lib/core/logging/logger";
 import {
   jsonErrorResponse,
   jsonResponse,
   methodNotAllowedResponse,
   readRequestTextWithLimit,
-} from "../_lib/http";
+} from "../_lib/core/http/responses";
 
 interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;

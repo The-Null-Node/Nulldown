@@ -11,4 +11,12 @@ binding = "R2_BUCKET"
 bucket_name = "nulldown"
 preview_bucket_name = "nulldown-preview"
 
+# D1 binding for search plus runtime metadata/index tables.
+[[d1_databases]]
+binding = "DB"
+database_name = "nulldown-search"
+database_id = "f5ed3a68-61ca-403d-9eb8-6c5fdc0369a6"
+preview_database_id = "DB"
+migrations_dir = "migrations"
+
 # 272f4fd9d668c5b64f0fe15702351709

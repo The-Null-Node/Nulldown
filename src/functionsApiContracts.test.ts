@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { createRemoteAliasKey } from "../functions/api/_lib/dropId";
+import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import { onRequestDelete } from "../functions/api/delete/[id]";
 import { onRequestPost as onStorePost } from "../functions/api/store";
 import type { DropEnvelopeV1 } from "../shared/drop/types";

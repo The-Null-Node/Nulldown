@@ -1,13 +1,14 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   methodNotAllowedResponse,
-} from "../_lib/http";
-import { createRequestLogger } from "../_lib/logger";
+} from "../_lib/core/http/responses";
+import { createRequestLogger } from "../_lib/core/logging/logger";
+import { createCloudflareVoidProvider } from "../_lib/core/platform/cloudflareProvider";
 import {
   pollDiffEvents,
   postDiffEvents,
   type DiffTransportEnv,
-} from "../_lib/diffTransportService";
+} from "../_lib/diffs/transport/service";
 
 interface Env extends DiffTransportEnv {
   R2_BUCKET: R2Bucket;
@@ -19,7 +20,10 @@ export const onRequest: PagesFunction<Env, "id"> = async (context) => {
       context.env,
       context.params,
       context.request,
-      context.waitUntil?.bind(context),
+      {
+        voidProvider: createCloudflareVoidProvider(context.env),
+        waitUntil: context.waitUntil?.bind(context),
+      },
     );
   }
 

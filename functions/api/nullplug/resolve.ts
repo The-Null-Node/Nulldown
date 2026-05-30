@@ -4,7 +4,7 @@
  manifests and arbitrary imports are intentionally out of scope.
 */
 
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   isNullplugInvokeRequest,
   type NullplugInvokeRequest,
@@ -16,18 +16,19 @@ import {
   isDropPayload,
   type DropPayload,
 } from "../../../shared/drop/types";
-import { resolveRemoteDropId } from "../_lib/dropId";
-import { decryptProviderEscrowEnvelope } from "../_lib/providerEscrow";
-import { createRequestLogger, toLogRef } from "../_lib/logger";
+import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { decryptProviderEscrowEnvelope } from "../_lib/crypto/envelopes/providerEscrow";
+import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import {
   jsonErrorResponse,
   jsonResponse,
   methodNotAllowedResponse,
   readRequestTextWithLimit,
-} from "../_lib/http";
+} from "../_lib/core/http/responses";
 
 interface Env {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
 }
 
@@ -137,7 +138,7 @@ const resolveNd = async (
     );
   }
 
-  const resolvedDropId = await resolveRemoteDropId(env.R2_BUCKET, target);
+  const resolvedDropId = await resolveRemoteDropId(env.R2_BUCKET, target, undefined, env.DB);
   if (!resolvedDropId) {
     return jsonErrorResponse(404, "drop_not_found", "Drop not found.");
   }

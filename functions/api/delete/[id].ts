@@ -1,10 +1,11 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { removePublicDropIndexEntry } from "../_lib/dropIndex";
-import { removeRemoteAliasIfMatch, resolveRemoteDropId } from "../_lib/dropId";
-import { createRequestLogger, toLogRef } from "../_lib/logger";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import { removePublicDropIndexEntry } from "../_lib/drops/index/repository";
+import { removeRemoteAliasIfMatch, resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 
 interface Env {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
 const jsonErrorResponse = (
@@ -63,7 +64,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       );
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger);
+    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
 
     if (!id) {
       logger.warn("delete.invalid_drop_id", {
@@ -115,8 +116,11 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
 
     await env.R2_BUCKET.delete(id);
     await Promise.all([
-      removeRemoteAliasIfMatch(env.R2_BUCKET, id, logger),
-      removePublicDropIndexEntry(env.R2_BUCKET, id),
+      removeRemoteAliasIfMatch(env.R2_BUCKET, id, logger, env.DB),
+      removePublicDropIndexEntry(env.R2_BUCKET, id, env.DB),
+      env.DB
+        ? env.DB.prepare("DELETE FROM drops WHERE id = ?").bind(id).run()
+        : Promise.resolve(),
     ]);
 
     logger.logEnd(204, {

@@ -1,12 +1,21 @@
 import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
-import type { R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/diff/[id]";
+import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
+import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
+import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
 import {
-  appendEventsToBranch,
-  type BranchAppendObserver,
-} from "../functions/api/_lib/branchAppendService";
-import { resolveBranchForActor } from "../functions/api/_lib/branchLifecycleService";
+  createResolvedHeapDataKey,
+  type NulleditSnapshotDiffRefRecord,
+  type NulleditSnapshotFrameRecord,
+  type NulleditSnapshotter,
+} from "./server/nulledit";
+import {
+  RESOLVED_DOCUMENT_RESOLVER_ID,
+  type ResolvedDocumentNode,
+  type ResolvedNulldownState,
+} from "../shared/drop/resolved";
 
 interface StoredObject {
   value: string;
@@ -230,6 +239,100 @@ class MemoryR2Bucket {
     }
 
     return await new Response(value as BodyInit).text();
+  }
+}
+
+interface VoidDataRecordRow {
+  namespace: string;
+  collection: string;
+  scope_key: string;
+  id: string;
+  record_json: string;
+}
+
+class MemoryD1Statement {
+  private params: unknown[] = [];
+
+  constructor(
+    private readonly db: MemoryD1Database,
+    private readonly sql: string,
+  ) {}
+
+  bind(...params: unknown[]) {
+    this.params = params;
+    return this;
+  }
+
+  async run() {
+    this.db.run(this.sql, this.params);
+    return { success: true };
+  }
+
+  async first<T>() {
+    return this.db.first(this.sql, this.params) as T | null;
+  }
+
+  async all<T>() {
+    return { results: this.db.all(this.sql, this.params) as T[] };
+  }
+}
+
+class MemoryD1Database {
+  private readonly records = new Map<string, VoidDataRecordRow>();
+
+  prepare(sql: string) {
+    return new MemoryD1Statement(this, sql);
+  }
+
+  private recordKey(namespace: unknown, collection: unknown, scopeKey: unknown, id: unknown): string {
+    return `${String(namespace)}/${String(collection)}/${String(scopeKey)}/${String(id)}`;
+  }
+
+  run(sql: string, params: unknown[]): void {
+    if (sql.includes("INSERT INTO void_data_records")) {
+      this.records.set(this.recordKey(params[0], params[1], params[2], params[3]), {
+        namespace: String(params[0]),
+        collection: String(params[1]),
+        scope_key: String(params[2]),
+        id: String(params[3]),
+        record_json: String(params[5]),
+      });
+      return;
+    }
+
+    if (sql.includes("DELETE FROM void_data_records")) {
+      this.records.delete(this.recordKey(params[0], params[1], params[2], params[3]));
+    }
+  }
+
+  first(sql: string, params: unknown[]): Record<string, unknown> | null {
+    if (sql.includes("FROM void_data_records")) {
+      return this.records.get(this.recordKey(params[0], params[1], params[2], params[3])) ?? null;
+    }
+    return null;
+  }
+
+  all(sql: string, params: unknown[]): Record<string, unknown>[] {
+    if (!sql.includes("FROM void_data_records")) return [];
+    const namespace = String(params[0]);
+    const collection = sql.includes("collection = ?") ? String(params[1]) : null;
+    const idPrefixParam = sql.includes("id LIKE ?")
+      ? String(params[collection === null ? 1 : 2]).replace(/%$/, "")
+      : null;
+    const limit = Number(params[params.length - 2]);
+    const offset = Number(params[params.length - 1]);
+
+    return [...this.records.values()]
+      .filter((row) => row.namespace === namespace)
+      .filter((row) => (collection === null ? true : row.collection === collection))
+      .filter((row) => (idPrefixParam === null ? true : row.id.startsWith(idPrefixParam)))
+      .sort((left, right) =>
+        `${left.namespace}/${left.collection}/${left.scope_key}/${left.id}`.localeCompare(
+          `${right.namespace}/${right.collection}/${right.scope_key}/${right.id}`,
+        ),
+      )
+      .slice(offset, offset + limit)
+      .map((row) => ({ record_json: row.record_json }));
   }
 }
 
@@ -487,6 +590,137 @@ describe("functions api diff contracts", () => {
     });
   });
 
+  it("persists built-in Nulledit snapshot records through data.put", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const event = makeEvent({
+      eventId: "evt-data-put",
+      sourceClientId: "writer-data-put",
+      text: "Persist me",
+      createdAt: 106,
+      metadata: {
+        kind: "agent.edit",
+        intent: "Persist snapshot frame and diff ref.",
+        labels: ["data.put", "snapshotter"],
+        confidence: 0.8,
+      },
+    });
+    const waitUntilPromises: Promise<void>[] = [];
+
+    const response = await onRequest({
+      request: createPostRequest([event]),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+      },
+      params: { id: rootDropId },
+      waitUntil: (promise: Promise<void>) => {
+        waitUntilPromises.push(promise);
+      },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    const body = (await response.json()) as {
+      branchId: string;
+      snapshotId: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(waitUntilPromises).toHaveLength(1);
+    await Promise.all(waitUntilPromises);
+
+    const data = createCloudflareVoidDataStore({
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      DB: db as unknown as D1Database,
+    });
+    const frame = await data.get<NulleditSnapshotFrameRecord>({
+      namespace: "nulledit",
+      collection: "snapshot_frames",
+      scope: { rootDropId, branchId: body.branchId },
+      id: String(body.snapshotId),
+    });
+    const diffRef = await data.get<NulleditSnapshotDiffRefRecord>({
+      namespace: "nulledit",
+      collection: "snapshot_diff_refs",
+      scope: {
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+      },
+      id: event.eventId,
+    });
+
+    expect(frame).toEqual(
+      expect.objectContaining({
+        version: 1,
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        content: "Persist me",
+        textLength: "Persist me".length,
+      }),
+    );
+    expect(frame?.acceptedDiffRefs).toEqual([
+      {
+        rootDropId,
+        branchId: body.branchId,
+        eventId: event.eventId,
+        seq: 0,
+        ref: `<diff:${event.eventId}>`,
+        snapshotId: body.snapshotId,
+      },
+    ]);
+    expect(diffRef).toEqual(
+      expect.objectContaining({
+        version: 1,
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        sourceClientId: event.sourceClientId,
+        metadata: event.metadata,
+      }),
+    );
+    expect(diffRef?.ref).toEqual({
+      rootDropId,
+      branchId: body.branchId,
+      eventId: event.eventId,
+      seq: 0,
+      ref: `<diff:${event.eventId}>`,
+      snapshotId: body.snapshotId,
+    });
+
+    const resolvedHeap = await data.get<ResolvedNulldownState>(
+      createResolvedHeapDataKey({
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      }),
+    );
+    const resolvedNodes = await data.query<ResolvedDocumentNode>({
+      namespace: "resolved",
+      collection: "document_nodes",
+      scope: {
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      },
+      indexes: [{ name: "kind", value: "paragraph" }],
+      text: "Persist",
+    });
+    expect(resolvedHeap).toEqual(
+      expect.objectContaining({
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      }),
+    );
+    expect(resolvedHeap?.documentNodes?.length).toBeGreaterThan(0);
+    expect(resolvedNodes).toEqual([
+      expect.objectContaining({ kind: "paragraph", text: "Persist me" }),
+    ]);
+  });
+
   it("rejects invalid diff event metadata", async () => {
     const bucket = createSeededBucket();
     const event = makeEvent({
@@ -549,7 +783,7 @@ describe("functions api diff contracts", () => {
     expect(response.status).toBe(200);
   });
 
-  it("runs branch append observers after accepted writes", async () => {
+  it("runs Nulledit snapshotters after accepted writes", async () => {
     const bucket = createSeededBucket();
     const { branch } = await resolveBranchForActor(
       bucket as unknown as R2Bucket,
@@ -565,16 +799,16 @@ describe("functions api diff contracts", () => {
     });
     const calls: string[] = [];
     const waitUntilPromises: Promise<void>[] = [];
-    const observer: BranchAppendObserver = {
-      id: "observer-1",
-      onDiffAccepted(observedEvent, context) {
+    const snapshotter: NulleditSnapshotter = {
+      id: "snapshotter-1",
+      snapshot(context) {
+        for (const event of context.acceptedEvents) {
+          calls.push(
+            `event:${event.eventId}:${event.seq}:${context.branch.headSnapshotId}`,
+          );
+        }
         calls.push(
-          `event:${observedEvent.eventId}:${observedEvent.seq}:${context.branch.headSnapshotId}`,
-        );
-      },
-      onSnapshotCreated(snapshot, context) {
-        calls.push(
-          `snapshot:${snapshot.snapshotId}:${context.acceptedEvents.length}:${context.totalStored}`,
+          `snapshot:${context.snapshotId}:${context.acceptedEvents.length}:${context.totalStored}`,
         );
       },
     };
@@ -584,7 +818,7 @@ describe("functions api diff contracts", () => {
       branch,
       [event],
       {
-        observers: [observer],
+        snapshotters: [snapshotter],
         waitUntil: (promise) => {
           waitUntilPromises.push(promise);
         },
@@ -598,7 +832,7 @@ describe("functions api diff contracts", () => {
     expect(calls).toEqual(["event:evt-observed:0:1", "snapshot:1:1:1"]);
   });
 
-  it("isolates branch append observer failures", async () => {
+  it("isolates Nulledit snapshotter failures", async () => {
     const bucket = createSeededBucket();
     const { branch } = await resolveBranchForActor(
       bucket as unknown as R2Bucket,
@@ -620,25 +854,25 @@ describe("functions api diff contracts", () => {
       branch,
       [event],
       {
-        observers: [
+        snapshotters: [
           {
-            id: "bad-observer",
-            onDiffAccepted() {
-              throw new Error("observer failed");
+            id: "bad-snapshotter",
+            snapshot() {
+              throw new Error("snapshotter failed");
             },
           },
         ],
         waitUntil: (promise) => {
           waitUntilPromises.push(promise);
         },
-        onObserverError: (_error, observerId) => {
-          errors.push(observerId);
+        onSnapshotterError: (_error, snapshotterId) => {
+          errors.push(snapshotterId);
         },
       },
     );
 
     expect(appended.acceptedEvents).toHaveLength(1);
     await waitUntilPromises[0];
-    expect(errors).toEqual(["bad-observer"]);
+    expect(errors).toEqual(["bad-snapshotter"]);
   });
 });

@@ -2,8 +2,8 @@ import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   queryResolvedHeap,
   type ResolvedHeapEnv,
-} from "../../../../_lib/resolvedHeapService";
-import { methodNotAllowedResponse } from "../../../../_lib/http";
+} from "../../../../_lib/resolved/heap/service";
+import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
 
 interface Env extends ResolvedHeapEnv {
   R2_BUCKET: R2Bucket;

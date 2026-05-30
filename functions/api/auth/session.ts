@@ -1,4 +1,4 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   issueAccountSessionToken,
   putAccountRecord,
@@ -6,10 +6,11 @@ import {
   sanitizeAccountId,
   verifyAccountProof,
   type AccountAuthEnv,
-} from "../_lib/accountAuth";
+} from "../_lib/accounts/session/auth";
 
 interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
 interface AccountSessionRequest {
@@ -64,7 +65,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     );
   }
 
-  const existing = await readAccountRecord(env.R2_BUCKET, accountId);
+  const existing = await readAccountRecord(env.R2_BUCKET, accountId, env.DB);
   const expectedPublicJwk = existing?.signingPublicJwk ?? body.signingPublicJwk;
 
   const validProof = await verifyAccountProof({
@@ -79,13 +80,17 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   }
 
   const now = Date.now();
-  await putAccountRecord(env.R2_BUCKET, {
-    version: 1,
-    accountId,
-    signingPublicJwk: expectedPublicJwk,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  });
+  await putAccountRecord(
+    env.R2_BUCKET,
+    {
+      version: 1,
+      accountId,
+      signingPublicJwk: expectedPublicJwk,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    },
+    env.DB,
+  );
 
   const issued = await issueAccountSessionToken(accountId, env);
   return new Response(
