@@ -25,7 +25,7 @@ export interface DropBranchRecord {
   writerClientId: string | null;
   headSnapshotId: number;
   snapshotHeapVersion?: number;
-  headEventSeq?: number;
+  headEventSeq?: number | null;
   checkpointInterval?: number;
   createdAt: number;
   updatedAt: number;
@@ -112,7 +112,9 @@ export const isDropBranchRecord = (
     isNumber(value.headSnapshotId) &&
     (value.snapshotHeapVersion === undefined ||
       isNumber(value.snapshotHeapVersion)) &&
-    (value.headEventSeq === undefined || isNumber(value.headEventSeq)) &&
+    (value.headEventSeq === undefined ||
+      value.headEventSeq === null ||
+      isNumber(value.headEventSeq)) &&
     (value.checkpointInterval === undefined ||
       isNumber(value.checkpointInterval)) &&
     isNumber(value.createdAt) &&

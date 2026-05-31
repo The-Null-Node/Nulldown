@@ -4,9 +4,14 @@ import type { DropDiffEvent } from "../shared/drop/diff";
 import type { NullplugUiResponseFact } from "../shared/nullplug/ui";
 import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
 import { toShortDropId } from "../shared/drop/id";
+import { dropResolvedHeapKey } from "../shared/drop/sidecar";
 import { queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
+import {
+  RESOLVED_DOCUMENT_RESOLVER_ID,
+  type ResolvedPriorityFactRecord,
+} from "../shared/drop/resolved";
 import {
   readBranch,
   readSnapshot,
@@ -130,7 +135,11 @@ class MemoryD1Database {
   readonly events = new Map<string, { event_json: string; seq: number; event_id: string; source_client_id: string }>();
   readonly facts = new Map<string, { fact_json: string; fact_kind: string; root_drop_id: string; branch_id: string; created_at: number }>();
   readonly heaps = new Map<string, { state_json: string }>();
-  readonly nodes = new Map<string, { node_json: string; text: string }>();
+  readonly nodes = new Map<string, { node_id: string; node_json: string; text: string }>();
+  readonly heapDeltas = new Map<string, { heap_delta_json: string }>();
+  readonly nodeRefs = new Map<string, { ref_json: string; node_hash: string }>();
+  readonly nodePayloads = new Map<string, { node_json: string }>();
+  readonly priorityFacts = new Map<string, { fact_json: string; root_drop_id: string; branch_id: string; resolver_id: string; created_at: number }>();
   readonly aliases = new Map<string, { full_id: string }>();
   readonly drops = new Map<string, { id: string; visibility: string }>();
   readonly publicDrops = new Map<string, { id: string; created_at: number; updated_at: number }>();
@@ -228,6 +237,37 @@ class MemoryD1Database {
       return;
     }
 
+    if (sql.includes("INSERT INTO resolved_heap_deltas")) {
+      this.heapDeltas.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`, {
+        heap_delta_json: String(params[12]),
+      });
+      return;
+    }
+
+    if (sql.includes("INSERT OR IGNORE INTO resolved_node_payloads")) {
+      const key = String(params[0]);
+      if (!this.nodePayloads.has(key)) {
+        this.nodePayloads.set(key, { node_json: String(params[7]) });
+      }
+      return;
+    }
+
+    if (sql.includes("DELETE FROM resolved_node_refs")) {
+      const prefix = `${params[0]}/${params[1]}/${params[2]}/${params[3]}/`;
+      [...this.nodeRefs.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .forEach((key) => this.nodeRefs.delete(key));
+      return;
+    }
+
+    if (sql.includes("INSERT INTO resolved_node_refs")) {
+      this.nodeRefs.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/${params[4]}`, {
+        node_hash: String(params[6]),
+        ref_json: String(params[12]),
+      });
+      return;
+    }
+
     if (sql.includes("DELETE FROM resolved_nodes")) {
       const prefix = `${params[0]}/${params[1]}/${params[2]}/${params[3]}/`;
       [...this.nodes.keys()]
@@ -238,6 +278,7 @@ class MemoryD1Database {
 
     if (sql.includes("INSERT INTO resolved_nodes")) {
       this.nodes.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/${params[4]}`, {
+        node_id: String(params[4]),
         node_json: String(params[10]),
         text: String(params[8]),
       });
@@ -272,6 +313,14 @@ class MemoryD1Database {
 
     if (sql.includes("FROM resolved_heaps")) {
       return this.heaps.get(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`) ?? null;
+    }
+
+    if (sql.includes("FROM resolved_heap_deltas")) {
+      return this.heapDeltas.get(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`) ?? null;
+    }
+
+    if (sql.includes("FROM resolved_node_payloads")) {
+      return this.nodePayloads.get(String(params[0])) ?? null;
     }
 
     return null;
@@ -313,11 +362,34 @@ class MemoryD1Database {
         .sort((a, b) => a.created_at - b.created_at);
     }
 
+    if (sql.includes("FROM resolved_node_refs")) {
+      return [...this.nodeRefs.entries()]
+        .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/`))
+        .map(([, value]) => value);
+    }
+
+    if (sql.includes("FROM resolved_nodes")) {
+      return [...this.nodes.entries()]
+        .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/`))
+        .map(([, value]) => value);
+    }
+
+    if (sql.includes("FROM resolved_priority_facts")) {
+      return [...this.priorityFacts.values()]
+        .filter(
+          (fact) =>
+            fact.root_drop_id === params[0] &&
+            (fact.branch_id === "" || fact.branch_id === params[1]) &&
+            (fact.resolver_id === "" || fact.resolver_id === params[2]),
+        )
+        .sort((left, right) => right.created_at - left.created_at);
+    }
+
     return [];
   }
 }
 
-const createBranch = (): DropBranchRecord => ({
+const createBranch = (overrides: Partial<DropBranchRecord> = {}): DropBranchRecord => ({
   version: 1,
   branchId: "owner",
   rootDropId: "drop_123456789",
@@ -333,23 +405,28 @@ const createBranch = (): DropBranchRecord => ({
   checkpointInterval: 24,
   createdAt: 1000,
   updatedAt: 1000,
+  ...overrides,
 });
 
-const createSnapshot = (): DropSnapshotRecord => ({
-  version: 1,
-  snapshotId: 0,
-  rootDropId: "drop_123456789",
-  branchId: "owner",
-  parentSnapshotId: null,
-  seq: 0,
-  eventIds: [],
-  checkpointed: true,
-  patchStartSeq: null,
-  patchEndSeq: null,
-  checkpointKey: "__drop_checkpoint__/drop_123456789/owner/0.txt",
-  textLength: 26,
-  createdAt: 1000,
-});
+const createSnapshot = (overrides: Partial<DropSnapshotRecord> = {}): DropSnapshotRecord => {
+  const snapshotId = overrides.snapshotId ?? 0;
+  return {
+    version: 1,
+    snapshotId,
+    rootDropId: "drop_123456789",
+    branchId: "owner",
+    parentSnapshotId: snapshotId === 0 ? null : snapshotId - 1,
+    seq: snapshotId,
+    eventIds: [],
+    checkpointed: true,
+    patchStartSeq: null,
+    patchEndSeq: null,
+    checkpointKey: `__drop_checkpoint__/drop_123456789/owner/${snapshotId}.txt`,
+    textLength: 26,
+    createdAt: 1000 + snapshotId,
+    ...overrides,
+  };
+};
 
 const createEvent = (): DropDiffEvent => ({
   eventId: "evt_1",
@@ -461,6 +538,192 @@ describe("D1 metadata contracts", () => {
     expect(response.status).toBe(200);
     expect(db.heaps.size).toBe(1);
     expect(db.nodes.size).toBeGreaterThan(0);
+    expect(db.heapDeltas.size).toBe(1);
+    expect(db.nodeRefs.size).toBe(db.nodes.size);
+    expect(db.nodePayloads.size).toBe(db.nodes.size);
+    const delta = JSON.parse([...db.heapDeltas.values()][0].heap_delta_json) as {
+      version: number;
+      checkpointed: boolean;
+      nodeRefs: unknown[];
+    };
+    expect(delta).toEqual(expect.objectContaining({ version: 1, checkpointed: true }));
+    expect(delta.nodeRefs.length).toBe(db.nodeRefs.size);
+
+    await bucket.delete(
+      dropResolvedHeapKey(
+        snapshot.rootDropId,
+        snapshot.branchId,
+        RESOLVED_DOCUMENT_RESOLVER_ID,
+        snapshot.snapshotId,
+      ),
+    );
+    db.heaps.clear();
+
+    const projectedResponse = await queryResolvedHeap(
+      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
+      new Request("https://example.test/api/resolved/query?query=searchable"),
+    );
+    const projectedBody = (await projectedResponse.json()) as {
+      heapGenerated: boolean;
+      nodes: Array<{ node: { text: string } }>;
+    };
+
+    expect(projectedResponse.status).toBe(200);
+    expect(projectedBody.heapGenerated).toBe(false);
+    expect(projectedBody.nodes[0].node.text).toContain("searchable");
+    expect(db.heaps.size).toBe(0);
+
+    const prioritizedNode = [...db.nodes.values()]
+      .map((entry) => JSON.parse(entry.node_json) as { id: string; kind: string; text: string })
+      .find((node) => node.kind === "paragraph" && node.text.includes("searchable"));
+    if (!prioritizedNode) throw new Error("Expected a searchable paragraph node.");
+    const priorityFact: ResolvedPriorityFactRecord = {
+      version: 1,
+      factId: "priority_fact_1",
+      rootDropId: snapshot.rootDropId,
+      branchId: snapshot.branchId,
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      targetKind: "node",
+      targetId: prioritizedNode.id,
+      priority: 3,
+      createdAt: 2000,
+      reason: "Prioritize the paragraph for the agent.",
+    };
+    db.priorityFacts.set(priorityFact.factId, {
+      fact_json: JSON.stringify(priorityFact),
+      root_drop_id: snapshot.rootDropId,
+      branch_id: snapshot.branchId,
+      resolver_id: RESOLVED_DOCUMENT_RESOLVER_ID,
+      created_at: priorityFact.createdAt,
+    });
+
+    const priorityResponse = await queryResolvedHeap(
+      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
+      new Request("https://example.test/api/resolved/query?top=1"),
+    );
+    const priorityBody = (await priorityResponse.json()) as {
+      heapGenerated: boolean;
+      nodes: Array<{ node: { id: string }; reasons: string[] }>;
+    };
+
+    expect(priorityResponse.status).toBe(200);
+    expect(priorityBody.heapGenerated).toBe(false);
+    expect(priorityBody.nodes[0].node.id).toBe(prioritizedNode.id);
+    expect(priorityBody.nodes[0].reasons).toContain("priority-fact");
+  });
+
+  for (const headEventSeq of [null, -1] as const) {
+    it(`generates snapshot 0 resolved heaps when head event seq is ${headEventSeq}`, async () => {
+      const bucket = new MemoryR2Bucket();
+      const db = new MemoryD1Database();
+      const branch = createBranch({ headEventSeq });
+      const snapshot = createSnapshot();
+      const content = "# Empty Branch\n\nInitial content.";
+
+      await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+      await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+      await writeSnapshotCheckpoint(
+        bucket as unknown as R2Bucket,
+        snapshot.rootDropId,
+        snapshot.branchId,
+        snapshot.snapshotId,
+        content,
+        snapshot.checkpointKey,
+      );
+
+      const response = await queryResolvedHeap(
+        { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+        { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
+        new Request("https://example.test/api/resolved/query?snapshotId=0&query=initial"),
+      );
+      const body = (await response.json()) as {
+        heapGenerated: boolean;
+        sourceContentHash?: string;
+        nodes?: Array<{ node: { text: string } }>;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.heapGenerated).toBe(true);
+      expect(body.sourceContentHash).toMatch(/^sha256:/);
+      expect(body.nodes?.some((entry) => entry.node.text.includes("Initial"))).toBe(true);
+    });
+  }
+
+  it("materializes compact v2 resolved heaps by walking parent deltas", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const branch = createBranch({ headSnapshotId: 2, headEventSeq: 2 });
+    const snapshots = [
+      createSnapshot({ snapshotId: 0, textLength: 24 }),
+      createSnapshot({ snapshotId: 1, textLength: 28 }),
+      createSnapshot({ snapshotId: 2, textLength: 30 }),
+    ];
+    const contents = [
+      "# Chain\n\nAlpha paragraph.",
+      "# Chain\n\nBeta paragraph.",
+      "# Chain\n\nFinal compact paragraph.",
+    ];
+
+    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    for (const [index, snapshot] of snapshots.entries()) {
+      await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+      await writeSnapshotCheckpoint(
+        bucket as unknown as R2Bucket,
+        snapshot.rootDropId,
+        snapshot.branchId,
+        snapshot.snapshotId,
+        contents[index],
+        snapshot.checkpointKey,
+      );
+      const response = await queryResolvedHeap(
+        { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+        { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
+        new Request(`https://example.test/api/resolved/query?snapshotId=${snapshot.snapshotId}&query=Chain`),
+      );
+      expect(response.status).toBe(200);
+    }
+
+    const deltas = [...db.heapDeltas.values()]
+      .map((entry) => JSON.parse(entry.heap_delta_json) as {
+        snapshotId: number;
+        checkpointed: boolean;
+        nodeRefs?: unknown[];
+        nodeOps?: Array<{ op: string }>;
+      })
+      .sort((left, right) => left.snapshotId - right.snapshotId);
+    expect(deltas.map((delta) => delta.checkpointed)).toEqual([true, false, false]);
+    expect(deltas[1].nodeRefs).toBeUndefined();
+    expect(deltas[1].nodeOps?.some((op) => op.op === "upsert")).toBe(true);
+    expect(deltas[1].nodeOps?.some((op) => op.op === "delete")).toBe(true);
+
+    for (const snapshot of snapshots) {
+      await bucket.delete(
+        dropResolvedHeapKey(
+          snapshot.rootDropId,
+          snapshot.branchId,
+          RESOLVED_DOCUMENT_RESOLVER_ID,
+          snapshot.snapshotId,
+        ),
+      );
+    }
+    db.heaps.clear();
+
+    const compactResponse = await queryResolvedHeap(
+      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      { rootId: branch.rootDropId, branchId: branch.branchId },
+      new Request("https://example.test/api/resolved/query?snapshotId=2&query=final&top=10"),
+    );
+    const compactBody = (await compactResponse.json()) as {
+      heapGenerated: boolean;
+      nodes: Array<{ node: { text: string } }>;
+    };
+
+    expect(compactResponse.status).toBe(200);
+    expect(compactBody.heapGenerated).toBe(false);
+    expect(compactBody.nodes.some((entry) => entry.node.text.includes("Final compact"))).toBe(true);
+    expect(compactBody.nodes.some((entry) => entry.node.text.includes("Alpha"))).toBe(false);
   });
 
   it("backfills R2 drop and branch metadata into D1", async () => {

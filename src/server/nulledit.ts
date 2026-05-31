@@ -333,7 +333,7 @@ export const createNulleditResolvedDocumentSnapshotter = (): NulleditSnapshotter
       resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
       resolverVersion: RESOLVED_DOCUMENT_RESOLVER_VERSION,
       sourceSeqRange:
-        context.branch.headEventSeq === undefined
+        typeof context.branch.headEventSeq !== "number" || context.branch.headEventSeq < 0
           ? undefined
           : { from: 0, to: context.branch.headEventSeq },
       content: context.frame.content,

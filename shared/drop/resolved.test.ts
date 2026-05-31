@@ -1,10 +1,14 @@
 import { createHash } from "crypto";
 import {
   NULLDOWN_CONTEXT_TOKEN_PREFIX,
+  applyResolvedNodeDeltaOps,
   buildBranchSnapshotSourceHashKey,
   buildMarkdownSourceHashKey,
   changedRangesFromDropDiffEvents,
+  createResolvedHeapDeltaRecord,
+  createResolvedNodeRefRecords,
   decodeNulldownContextToken,
+  diffResolvedNodeRefs,
   encodeNulldownContextToken,
   getNextResolvedChecklistItem,
   heapifyResolvedDocument,
@@ -18,7 +22,16 @@ import {
   writeResolvedNulldownState,
   isNulldownContextToken,
   isNulldownSourceHash,
+  isResolvedHeapDeltaRecord,
+  isResolvedNodeDeltaOp,
+  isResolvedNodeRefRecord,
   isResolvedNulldownState,
+  isResolvedPriorityFactRecord,
+  RESOLVED_DOCUMENT_RESOLVER_ID,
+  RESOLVED_DOCUMENT_RESOLVER_VERSION,
+  RESOLVED_HEAP_DELTA_RECORD_VERSION,
+  RESOLVED_NODE_REF_RECORD_VERSION,
+  RESOLVED_PRIORITY_FACT_RECORD_VERSION,
   type NulldownContextToken,
 } from "./resolved";
 
@@ -362,6 +375,141 @@ describe("resolved drop helpers", () => {
     expect(results[0].eventRefs?.[0].metadata?.intent).toBe(
       "Explain mutation downgrade policy.",
     );
+  });
+
+  it("validates semantic heap delta, node ref, and priority fact records", async () => {
+    const nodeHash = await hashMarkdownSource("node payload");
+    const sourceHash = await hashMarkdownSource("# Runtime Plan");
+    const nodeRef = {
+      version: RESOLVED_NODE_REF_RECORD_VERSION,
+      nodeId: "heading:root:0:14",
+      kind: "heading",
+      nodeHash,
+      sourceHash,
+      sourceRange: { start: 0, end: 14 },
+      parentId: "document.title:root:0:14",
+      text: "Runtime Plan",
+      importance: 3.3,
+    };
+
+    expect(isResolvedNodeRefRecord(nodeRef)).toBe(true);
+    expect(isResolvedNodeRefRecord({ ...nodeRef, nodeHash: "sha1:bad" })).toBe(false);
+
+    const checkpointDelta = {
+      version: RESOLVED_HEAP_DELTA_RECORD_VERSION,
+      rootDropId: "root-1",
+      branchId: "clone_anonymous",
+      snapshotId: 2,
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      resolverVersion: RESOLVED_DOCUMENT_RESOLVER_VERSION,
+      parent: {
+        rootDropId: "root-1",
+        branchId: "clone_anonymous",
+        snapshotId: 1,
+        resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      },
+      sourceContentHash: sourceHash,
+      sourceSeqRange: { from: 0, to: 3 },
+      resolvedAt: 123,
+      checkpointed: true,
+      nodeRefs: [nodeRef],
+      diffRefs: [
+        {
+          seq: 3,
+          eventId: "evt-3",
+          sourceClientId: "agent",
+          createdAt: 122,
+          metadata: { kind: "agent.edit", labels: ["heap/ref-delta"] },
+          changedRanges: [{ start: 0, end: 14 }],
+        },
+      ],
+      priorityFactIds: ["fact-1"],
+      title: "Runtime Plan",
+      summary: "Delta for the runtime plan heading.",
+    };
+
+    const upsertOp = { op: "upsert", ref: nodeRef };
+    const deleteOp = {
+      op: "delete",
+      nodeId: "paragraph:root:20:40",
+      previousNodeHash: nodeHash,
+    };
+    expect(isResolvedNodeDeltaOp(upsertOp)).toBe(true);
+    expect(isResolvedNodeDeltaOp(deleteOp)).toBe(true);
+    expect(isResolvedNodeDeltaOp({ op: "delete" })).toBe(false);
+
+    const compactDelta = {
+      ...checkpointDelta,
+      checkpointed: false,
+      nodeRefs: undefined,
+      nodeOps: [upsertOp, deleteOp],
+    };
+
+    expect(isResolvedHeapDeltaRecord(checkpointDelta)).toBe(true);
+    expect(isResolvedHeapDeltaRecord(compactDelta)).toBe(true);
+    expect(isResolvedHeapDeltaRecord({ ...checkpointDelta, nodeRefs: [{ ...nodeRef, version: 2 }] })).toBe(false);
+    expect(isResolvedHeapDeltaRecord({ ...compactDelta, nodeOps: [{ op: "delete" }] })).toBe(false);
+
+    const priorityFact = {
+      version: RESOLVED_PRIORITY_FACT_RECORD_VERSION,
+      factId: "fact-1",
+      rootDropId: "root-1",
+      branchId: "clone_anonymous",
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      targetKind: "node",
+      targetId: nodeRef.nodeId,
+      priority: 0.9,
+      createdAt: 124,
+      sourceSeq: 3,
+      sourceEventId: "evt-3",
+      reason: "Important planning heading.",
+      labels: ["heap/priority-fact"],
+      metadata: { confidence: 0.95 },
+    };
+
+    expect(isResolvedPriorityFactRecord(priorityFact)).toBe(true);
+    expect(isResolvedPriorityFactRecord({ ...priorityFact, targetKind: "drop" })).toBe(false);
+    expect(isResolvedPriorityFactRecord({ ...priorityFact, metadata: { bad: undefined } })).toBe(false);
+  });
+
+  it("builds and applies compact semantic node ref deltas", async () => {
+    const parent = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      branchId: "clone_anonymous",
+      snapshotId: 1,
+      content: "# Plan\n\nOld paragraph",
+      resolvedAt: 123,
+    });
+    const current = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      branchId: "clone_anonymous",
+      snapshotId: 2,
+      content: "# Plan\n\nNew paragraph",
+      resolvedAt: 124,
+    });
+
+    const parentRefs = await createResolvedNodeRefRecords(parent);
+    const currentRefs = await createResolvedNodeRefRecords(current);
+    const ops = diffResolvedNodeRefs(parentRefs, currentRefs);
+    const compactDelta = await createResolvedHeapDeltaRecord({
+      state: current,
+      parent: {
+        rootDropId: "root-1",
+        branchId: "clone_anonymous",
+        snapshotId: 1,
+        resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      },
+      parentNodeRefs: parentRefs,
+      checkpointed: false,
+    });
+
+    expect(ops.some((op) => op.op === "upsert")).toBe(true);
+    expect(ops.some((op) => op.op === "delete")).toBe(true);
+    expect(compactDelta).toEqual(
+      expect.objectContaining({ checkpointed: false, nodeOps: ops }),
+    );
+    expect(compactDelta?.nodeRefs).toBeUndefined();
+    expect(applyResolvedNodeDeltaOps(parentRefs, ops)).toEqual(currentRefs);
   });
 
   it("reads and writes resolved heap records", async () => {

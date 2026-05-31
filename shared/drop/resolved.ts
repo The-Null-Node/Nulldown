@@ -2,8 +2,10 @@ import { serializeCanonicalJson } from "./types";
 import { dropResolvedHeapKey } from "./sidecar";
 import {
   dropDiffOpToDiff,
+  isDropDiffEventMetadata,
   type DropDiffEvent,
   type DropDiffEventMetadata,
+  type JsonValue,
 } from "./diff";
 import { decodeText } from "../nulledit/textDiff";
 import { DiffOp } from "../nulledit/types";
@@ -162,6 +164,10 @@ export interface ResolvedDocumentQuery {
   events?: ResolvedDiffEventRef[];
   changedOnly?: boolean;
   includeAncestors?: boolean;
+  /** Latest agent priority score by semantic node id. */
+  priorityByNodeId?: Record<string, number>;
+  /** Latest agent priority score for the whole semantic heap. */
+  heapPriority?: number;
 }
 
 export interface ResolvedDocumentNodeQueryResult {
@@ -178,6 +184,10 @@ export interface ResolvedRuntimeQuery {
   pluginId?: string;
   callId?: string;
   primitiveId?: string;
+  /** Latest agent priority score by runtime node id. */
+  priorityByNodeId?: Record<string, number>;
+  /** Latest agent priority score for the whole runtime heap. */
+  heapPriority?: number;
 }
 
 export interface ResolvedRuntimeNodeQueryResult {
@@ -207,6 +217,144 @@ export interface ResolvedNulldownState {
   documentNodes?: ResolvedDocumentNode[];
   runtimeNodes?: ResolvedRuntimeNode[];
   importance?: Record<string, number>;
+}
+
+/** Current wire version for persisted semantic/ref-delta heap records. */
+export const RESOLVED_HEAP_DELTA_RECORD_VERSION = 1;
+
+/** Current wire version for persisted semantic node ref records. */
+export const RESOLVED_NODE_REF_RECORD_VERSION = 1;
+
+/** Current wire version for persisted agent priority facts. */
+export const RESOLVED_PRIORITY_FACT_RECORD_VERSION = 1;
+
+/** Stable reference to one materialized semantic/resolved heap snapshot. */
+export interface ResolvedHeapRef {
+  /** Root drop id that owns the branch timeline. */
+  rootDropId: string;
+  /** Branch id that owns the resolved heap. */
+  branchId: string;
+  /** Branch snapshot id this heap describes. */
+  snapshotId: number;
+  /** Resolver that produced the heap. */
+  resolverId: string;
+}
+
+/** Compact change applied to semantic node refs between resolved heap snapshots. */
+export type ResolvedNodeDeltaOp =
+  | {
+      /** Inserts or replaces one semantic node ref. */
+      op: "upsert";
+      /** New semantic node ref for the target snapshot. */
+      ref: ResolvedNodeRefRecord;
+    }
+  | {
+      /** Removes a semantic node ref inherited from the parent heap. */
+      op: "delete";
+      /** Stable node id being removed. */
+      nodeId: string;
+      /** Previous node payload hash, when known, for diagnostics. */
+      previousNodeHash?: NulldownSourceHash;
+    };
+
+/** Compact persisted heap descriptor that points at parent heap and changed semantic records. */
+export interface ResolvedHeapDeltaRecord extends ResolvedHeapRef {
+  /** Record schema version. */
+  version: typeof RESOLVED_HEAP_DELTA_RECORD_VERSION;
+  /** Resolver implementation version that produced the record. */
+  resolverVersion: string;
+  /** Parent heap identity when this record is a delta over a previous snapshot. */
+  parent?: ResolvedHeapRef;
+  /** Source content hash for the materialized snapshot. */
+  sourceContentHash: NulldownSourceHash;
+  /** Source branch event sequence range covered by this record. */
+  sourceSeqRange?: ResolvedSourceSeqRange;
+  /** Timestamp in milliseconds when the heap record was resolved. */
+  resolvedAt: number;
+  /** True when the record is self-contained enough to start recursive resolution. */
+  checkpointed: boolean;
+  /** Full semantic node refs when this record is a checkpoint. */
+  nodeRefs?: ResolvedNodeRefRecord[];
+  /** Compact node ref changes when this record is a delta over its parent. */
+  nodeOps?: ResolvedNodeDeltaOp[];
+  /** Diff events that explain this heap delta. */
+  diffRefs?: ResolvedDiffEventRef[];
+  /** Priority fact ids consulted while scoring this heap. */
+  priorityFactIds?: string[];
+  /** Optional title copied from the materialized heap for fast listing. */
+  title?: string;
+  /** Optional summary copied from the materialized heap for fast listing. */
+  summary?: string;
+}
+
+/** Compact persisted semantic node reference used by heap delta records. */
+export interface ResolvedNodeRefRecord {
+  /** Record schema version. */
+  version: typeof RESOLVED_NODE_REF_RECORD_VERSION;
+  /** Stable node id within the resolver output. */
+  nodeId: string;
+  /** Node kind as emitted by the resolver. */
+  kind: ResolvedDocumentNodeKind | ResolvedRuntimeNodeKind;
+  /** Hash of the canonical node payload for de-duplicated storage. */
+  nodeHash: NulldownSourceHash;
+  /** Hash of the source content that produced this node. */
+  sourceHash: NulldownSourceHash;
+  /** Source byte range when the node comes from textual content. */
+  sourceRange?: ResolvedSourceRange;
+  /** Optional parent node id for recursive semantic traversal. */
+  parentId?: string;
+  /** Optional human-readable preview text for indexing and diagnostics. */
+  text?: string;
+  /** Importance score copied from the materialized node when available. */
+  importance?: number;
+}
+
+/** Persisted priority overlay that agents can attach to diffs, nodes, or heaps. */
+export interface ResolvedPriorityFactRecord {
+  /** Record schema version. */
+  version: typeof RESOLVED_PRIORITY_FACT_RECORD_VERSION;
+  /** Stable priority fact id. */
+  factId: string;
+  /** Root drop id the priority applies under. */
+  rootDropId: string;
+  /** Branch id the priority applies under. */
+  branchId?: string;
+  /** Resolver id when the target is resolver-specific. */
+  resolverId?: string;
+  /** Type of target being prioritized. */
+  targetKind: "diff" | "node" | "heap";
+  /** Stable target id, such as event id, node id, or heap key. */
+  targetId: string;
+  /** Agent-assigned priority score. Higher values should rank earlier. */
+  priority: number;
+  /** Timestamp in milliseconds when the fact was created. */
+  createdAt: number;
+  /** Optional branch event sequence that produced this priority fact. */
+  sourceSeq?: number;
+  /** Optional branch event id that produced this priority fact. */
+  sourceEventId?: string;
+  /** Optional explanation for later retrieval. */
+  reason?: string;
+  /** Optional retrieval labels attached by the writer. */
+  labels?: string[];
+  /** Optional extra JSON metadata for future agents. */
+  metadata?: Record<string, JsonValue>;
+}
+
+/** Input for deriving a v2 semantic heap delta record from an existing resolved state. */
+export interface CreateResolvedHeapDeltaRecordOptions {
+  /** Materialized v1 state to describe with v2 refs. */
+  state: ResolvedNulldownState;
+  /** Optional parent heap ref for recursive delta resolution. */
+  parent?: ResolvedHeapRef;
+  /** Optional parent node refs used to emit compact delta operations. */
+  parentNodeRefs?: readonly ResolvedNodeRefRecord[];
+  /** Optional diff refs that explain this heap delta. */
+  diffRefs?: ResolvedDiffEventRef[];
+  /** Optional priority fact ids consulted while scoring the heap. */
+  priorityFactIds?: string[];
+  /** Whether the record is self-contained enough to start resolution. Defaults to true. */
+  checkpointed?: boolean;
 }
 
 export interface BranchSnapshotSource {
@@ -266,6 +414,25 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every(isString);
+
+const isJsonValue = (value: unknown, depth = 0): value is JsonValue => {
+  if (depth > 24) return false;
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) {
+    return value.every((entry) => isJsonValue(entry, depth + 1));
+  }
+  if (isRecord(value)) {
+    return Object.values(value).every((entry) => isJsonValue(entry, depth + 1));
+  }
+  return false;
+};
+
+const isJsonRecord = (value: unknown): value is Record<string, JsonValue> =>
+  isRecord(value) &&
+  !Array.isArray(value) &&
+  Object.values(value).every((entry) => isJsonValue(entry));
 
 const isNulldownContextQueryKind = (
   value: unknown,
@@ -483,6 +650,145 @@ const isResolvedDocumentNode = (value: unknown): value is ResolvedDocumentNode =
   return true;
 };
 
+/** Returns true when a value is a valid semantic heap reference. */
+export const isResolvedHeapRef = (value: unknown): value is ResolvedHeapRef => {
+  if (!isRecord(value)) return false;
+  if (!isString(value.rootDropId) || !isString(value.branchId)) return false;
+  if (!isNonNegativeInteger(value.snapshotId)) return false;
+  return isString(value.resolverId);
+};
+
+/** Returns true when a value is a valid compact semantic node reference record. */
+export const isResolvedNodeRefRecord = (
+  value: unknown,
+): value is ResolvedNodeRefRecord => {
+  if (!isRecord(value)) return false;
+  if (value.version !== RESOLVED_NODE_REF_RECORD_VERSION) return false;
+  if (!isString(value.nodeId)) return false;
+  if (
+    !isResolvedDocumentNodeKind(value.kind) &&
+    !isResolvedRuntimeNodeKind(value.kind)
+  ) {
+    return false;
+  }
+  if (!isNulldownSourceHash(value.nodeHash)) return false;
+  if (!isNulldownSourceHash(value.sourceHash)) return false;
+  if (value.sourceRange !== undefined && !isResolvedSourceRange(value.sourceRange)) {
+    return false;
+  }
+  if (value.parentId !== undefined && !isString(value.parentId)) return false;
+  if (value.text !== undefined && !isString(value.text)) return false;
+  if (value.importance !== undefined && !isNumber(value.importance)) return false;
+  return true;
+};
+
+/** Returns true when a value is a valid compact semantic node delta operation. */
+export const isResolvedNodeDeltaOp = (
+  value: unknown,
+): value is ResolvedNodeDeltaOp => {
+  if (!isRecord(value)) return false;
+  if (value.op === "upsert") {
+    return isResolvedNodeRefRecord(value.ref);
+  }
+  if (value.op === "delete") {
+    if (!isString(value.nodeId)) return false;
+    return (
+      value.previousNodeHash === undefined ||
+      isNulldownSourceHash(value.previousNodeHash)
+    );
+  }
+  return false;
+};
+
+const isResolvedDiffEventRef = (value: unknown): value is ResolvedDiffEventRef => {
+  if (!isRecord(value)) return false;
+  if (!isNonNegativeInteger(value.seq) || !isString(value.eventId)) return false;
+  if (value.sourceClientId !== undefined && !isString(value.sourceClientId)) return false;
+  if (value.createdAt !== undefined && !isNumber(value.createdAt)) return false;
+  if (
+    value.metadata !== undefined &&
+    !isDropDiffEventMetadata(value.metadata)
+  ) {
+    return false;
+  }
+  return (
+    Array.isArray(value.changedRanges) &&
+    value.changedRanges.every(isResolvedSourceRange)
+  );
+};
+
+/** Returns true when a value is a valid semantic heap delta record. */
+export const isResolvedHeapDeltaRecord = (
+  value: unknown,
+): value is ResolvedHeapDeltaRecord => {
+  if (!isResolvedHeapRef(value)) return false;
+  const record = value as unknown as Record<string, unknown>;
+  if (record.version !== RESOLVED_HEAP_DELTA_RECORD_VERSION) return false;
+  if (!isString(record.resolverVersion)) return false;
+  if (record.parent !== undefined && !isResolvedHeapRef(record.parent)) return false;
+  if (!isNulldownSourceHash(record.sourceContentHash)) return false;
+  if (
+    record.sourceSeqRange !== undefined &&
+    !isResolvedSourceSeqRange(record.sourceSeqRange)
+  ) {
+    return false;
+  }
+  if (!isNumber(record.resolvedAt) || typeof record.checkpointed !== "boolean") {
+    return false;
+  }
+  const hasNodeRefs = Array.isArray(record.nodeRefs);
+  const hasNodeOps = Array.isArray(record.nodeOps);
+  if (record.checkpointed && !hasNodeRefs) return false;
+  if (!record.checkpointed && !hasNodeOps) return false;
+  if (
+    hasNodeRefs &&
+    !(record.nodeRefs as unknown[]).every(isResolvedNodeRefRecord)
+  ) {
+    return false;
+  }
+  if (hasNodeOps && !(record.nodeOps as unknown[]).every(isResolvedNodeDeltaOp)) {
+    return false;
+  }
+  if (record.diffRefs !== undefined) {
+    if (!Array.isArray(record.diffRefs) || !record.diffRefs.every(isResolvedDiffEventRef)) {
+      return false;
+    }
+  }
+  if (record.priorityFactIds !== undefined && !isStringArray(record.priorityFactIds)) {
+    return false;
+  }
+  if (record.title !== undefined && !isString(record.title)) return false;
+  if (record.summary !== undefined && !isString(record.summary)) return false;
+  return true;
+};
+
+const isResolvedPriorityTargetKind = (
+  value: unknown,
+): value is ResolvedPriorityFactRecord["targetKind"] =>
+  value === "diff" || value === "node" || value === "heap";
+
+/** Returns true when a value is a valid agent priority overlay fact record. */
+export const isResolvedPriorityFactRecord = (
+  value: unknown,
+): value is ResolvedPriorityFactRecord => {
+  if (!isRecord(value)) return false;
+  if (value.version !== RESOLVED_PRIORITY_FACT_RECORD_VERSION) return false;
+  if (!isString(value.factId) || !isString(value.rootDropId)) return false;
+  if (value.branchId !== undefined && !isString(value.branchId)) return false;
+  if (value.resolverId !== undefined && !isString(value.resolverId)) return false;
+  if (!isResolvedPriorityTargetKind(value.targetKind)) return false;
+  if (!isString(value.targetId) || !isNumber(value.priority)) return false;
+  if (!isNonNegativeInteger(value.createdAt)) return false;
+  if (value.sourceSeq !== undefined && !isNonNegativeInteger(value.sourceSeq)) {
+    return false;
+  }
+  if (value.sourceEventId !== undefined && !isString(value.sourceEventId)) return false;
+  if (value.reason !== undefined && !isString(value.reason)) return false;
+  if (value.labels !== undefined && !isStringArray(value.labels)) return false;
+  if (value.metadata !== undefined && !isJsonRecord(value.metadata)) return false;
+  return true;
+};
+
 const isImportanceRecord = (value: unknown): value is Record<string, number> =>
   isRecord(value) && Object.values(value).every(isNumber);
 
@@ -611,6 +917,111 @@ export const hashBranchSnapshotSource = ({
   content,
 }: BranchSnapshotSource): Promise<NulldownSourceHash> =>
   hashNulldownSourceContent(content);
+
+/** Builds v2 semantic node refs from the materialized nodes in a resolved state. */
+export const createResolvedNodeRefRecords = async (
+  state: ResolvedNulldownState,
+): Promise<ResolvedNodeRefRecord[]> => {
+  const nodes = [
+    ...(state.documentNodes ?? []),
+    ...(state.runtimeNodes ?? []),
+  ];
+  return Promise.all(
+    nodes.map(async (node) => ({
+      version: RESOLVED_NODE_REF_RECORD_VERSION,
+      nodeId: node.id,
+      kind: node.kind,
+      nodeHash: await hashNulldownSourceContent(serializeCanonicalJson(node)),
+      sourceHash: node.sourceHash,
+      sourceRange: node.sourceRange,
+      parentId: "parentId" in node ? node.parentId : undefined,
+      text: node.text,
+      importance: node.importance,
+    })),
+  );
+};
+
+/** Returns compact node ref operations required to transform parent refs into current refs. */
+export const diffResolvedNodeRefs = (
+  parentRefs: readonly ResolvedNodeRefRecord[],
+  currentRefs: readonly ResolvedNodeRefRecord[],
+): ResolvedNodeDeltaOp[] => {
+  const parentById = new Map(parentRefs.map((ref) => [ref.nodeId, ref]));
+  const currentById = new Map(currentRefs.map((ref) => [ref.nodeId, ref]));
+  const ops: ResolvedNodeDeltaOp[] = [];
+
+  for (const ref of currentRefs) {
+    const previous = parentById.get(ref.nodeId);
+    if (!previous || previous.nodeHash !== ref.nodeHash) {
+      ops.push({ op: "upsert", ref });
+    }
+  }
+
+  for (const ref of parentRefs) {
+    if (!currentById.has(ref.nodeId)) {
+      ops.push({
+        op: "delete",
+        nodeId: ref.nodeId,
+        previousNodeHash: ref.nodeHash,
+      });
+    }
+  }
+
+  return ops;
+};
+
+/** Applies compact node ref operations over a parent ref set. */
+export const applyResolvedNodeDeltaOps = (
+  parentRefs: readonly ResolvedNodeRefRecord[],
+  ops: readonly ResolvedNodeDeltaOp[],
+): ResolvedNodeRefRecord[] => {
+  const refsById = new Map(parentRefs.map((ref) => [ref.nodeId, ref]));
+
+  for (const op of ops) {
+    if (op.op === "upsert") {
+      refsById.set(op.ref.nodeId, op.ref);
+    } else {
+      refsById.delete(op.nodeId);
+    }
+  }
+
+  return [...refsById.values()];
+};
+
+/** Builds a v2 semantic heap delta record from a materialized resolved state. */
+export const createResolvedHeapDeltaRecord = async ({
+  state,
+  parent,
+  parentNodeRefs,
+  diffRefs,
+  priorityFactIds,
+  checkpointed,
+}: CreateResolvedHeapDeltaRecordOptions): Promise<ResolvedHeapDeltaRecord | null> => {
+  if (!state.branchId || state.snapshotId === undefined) return null;
+  const currentRefs = await createResolvedNodeRefRecords(state);
+  const shouldCheckpoint = checkpointed ?? (!parent || !parentNodeRefs);
+  return {
+    version: RESOLVED_HEAP_DELTA_RECORD_VERSION,
+    rootDropId: state.rootDropId,
+    branchId: state.branchId,
+    snapshotId: state.snapshotId,
+    resolverId: state.resolverId,
+    resolverVersion: state.resolverVersion,
+    parent,
+    sourceContentHash: state.sourceContentHash,
+    sourceSeqRange: state.sourceSeqRange,
+    resolvedAt: state.resolvedAt,
+    checkpointed: shouldCheckpoint,
+    nodeRefs: shouldCheckpoint ? currentRefs : undefined,
+    nodeOps: shouldCheckpoint
+      ? undefined
+      : diffResolvedNodeRefs(parentNodeRefs ?? [], currentRefs),
+    diffRefs,
+    priorityFactIds,
+    title: state.title,
+    summary: state.summary,
+  };
+};
 
 const headingPattern = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/;
 const checklistPattern = /^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])]\s+(.*)$/;
@@ -1446,6 +1857,7 @@ export const getNextResolvedChecklistItem = (
 };
 
 const tokenPattern = /[a-z0-9]+/g;
+const priorityFactScoreMultiplier = 4;
 
 const tokenizeQueryText = (value: string | undefined): string[] => {
   if (!value) return [];
@@ -1492,10 +1904,16 @@ const scoreDocumentNode = (
   node: ResolvedDocumentNode,
   queryTokens: readonly string[],
   changedRanges: readonly ResolvedSourceRange[],
+  priority: number,
 ): { score: number; reasons: string[]; changed: boolean } => {
   const reasons: string[] = [];
   let score = node.importance ?? state.importance?.[node.id] ?? importanceForNodeKind(node.kind, node.depth, node.checked);
   if (score > 0) reasons.push("importance");
+
+  if (priority !== 0) {
+    score += priority * priorityFactScoreMultiplier;
+    reasons.push("priority-fact");
+  }
 
   if (node.kind === "document.title" || node.kind === "heading") {
     score += 2;
@@ -1578,7 +1996,15 @@ export const queryResolvedDocumentNodes = (
   const scored = nodes
     .filter((node) => !kindSet || kindSet.has(node.kind))
     .map((node) => {
-      const scoredNode = scoreDocumentNode(state, node, queryTokens, changedRanges);
+      const priority =
+        (query.heapPriority ?? 0) + (query.priorityByNodeId?.[node.id] ?? 0);
+      const scoredNode = scoreDocumentNode(
+        state,
+        node,
+        queryTokens,
+        changedRanges,
+        priority,
+      );
       return {
         node,
         score: scoredNode.score,
@@ -1648,10 +2074,16 @@ const scoreRuntimeNode = (
   state: ResolvedNulldownState,
   node: ResolvedRuntimeNode,
   queryTokens: readonly string[],
+  priority: number,
 ): { score: number; reasons: string[] } => {
   const reasons: string[] = [];
   let score = node.importance ?? state.importance?.[node.id] ?? runtimeImportanceForKind(node.kind);
   if (score > 0) reasons.push("importance");
+
+  if (priority !== 0) {
+    score += priority * priorityFactScoreMultiplier;
+    reasons.push("priority-fact");
+  }
 
   if (node.kind === "ui.state") {
     score += 1.2;
@@ -1696,7 +2128,9 @@ export const queryResolvedRuntimeNodes = (
     .filter((node) => !query.callId || node.callId === query.callId)
     .filter((node) => !query.primitiveId || node.primitiveId === query.primitiveId)
     .map((node) => {
-      const scoredNode = scoreRuntimeNode(state, node, queryTokens);
+      const priority =
+        (query.heapPriority ?? 0) + (query.priorityByNodeId?.[node.id] ?? 0);
+      const scoredNode = scoreRuntimeNode(state, node, queryTokens, priority);
       return {
         node,
         score: scoredNode.score,
