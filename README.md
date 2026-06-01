@@ -102,6 +102,12 @@ bun run nd -- serve --host 127.0.0.1 --port 8788 --data-dir .nulldown-data
 
 The local server supports core drop, diff, branch, and resolved-query routes using filesystem blobs plus SQLite metadata. Generic functional snapshot data is still in-memory unless a future adapter is provided. Use `--migrations-dir` to override the migration path or `--no-sqlite` to run with blob fallback only.
 
+Attach an agent priority fact to a resolved node so future branch queries rank it earlier:
+
+```bash
+bun run nd -- --account <accountId> branch priority <rootId> <branchId> --node <nodeId> --priority 3 --reason "important for the next agent"
+```
+
 Run the same local server in Docker with `/data` as the persistent volume:
 
 ```bash

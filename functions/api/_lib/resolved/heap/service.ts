@@ -1,5 +1,9 @@
 import { readBranchContent, readBranchEventsBySeqRange } from "../../branches/content/replay";
 import { readBranch } from "../../branches/storage/repository";
+import {
+  resolveAuthenticatedAccountId,
+  type AccountAuthEnv,
+} from "../../accounts/session/auth";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { resolveRemoteDropId } from "../../drops/identity/id";
 import {
@@ -9,9 +13,11 @@ import {
   jsonResponse,
   readRequestTextWithLimit,
   resolveParam,
+  type JsonValue,
 } from "../../core/http/responses";
 import { listNullplugRuntimeFacts } from "../../nullplug/facts/repository";
 import {
+  RESOLVED_PRIORITY_FACT_RECORD_VERSION,
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
   applyResolvedNodeDeltaOps,
@@ -53,7 +59,7 @@ import { parseJsonColumn } from "../../core/d1/metadata";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 
 /** Environment required by resolved heap route services. */
-export interface ResolvedHeapEnv {
+export interface ResolvedHeapEnv extends AccountAuthEnv {
   R2_BUCKET: VoidBlobStore;
   DB?: VoidSqlStore;
 }
@@ -76,7 +82,21 @@ interface ResolvedUpdateRequest {
   uiStateSnapshots?: NullplugUiStateSnapshot[];
 }
 
+interface ResolvedPriorityFactRequest {
+  factId?: string;
+  resolverId?: string;
+  targetKind?: ResolvedPriorityFactRecord["targetKind"];
+  targetId?: string;
+  priority?: number;
+  sourceSeq?: number;
+  sourceEventId?: string;
+  reason?: string;
+  labels?: string[];
+  metadata?: Record<string, unknown>;
+}
+
 const RESOLVED_UPDATE_BODY_MAX_BYTES = 1_000_000;
+const RESOLVED_PRIORITY_FACT_BODY_MAX_BYTES = 100_000;
 const RESOLVED_HEAP_CHECKPOINT_INTERVAL = 24;
 const RESOLVED_HEAP_MAX_DELTA_DEPTH = 64;
 
@@ -110,6 +130,31 @@ const isNumber = (value: unknown): value is number =>
 
 const isNonNegativeInteger = (value: unknown): value is number =>
   isNumber(value) && Number.isInteger(value) && value >= 0;
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(isString);
+
+const isJsonValue = (value: unknown, depth = 0): boolean => {
+  if (depth > 24) return false;
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) {
+    return value.every((entry) => isJsonValue(entry, depth + 1));
+  }
+  if (isRecord(value)) {
+    return Object.values(value).every((entry) => isJsonValue(entry, depth + 1));
+  }
+  return false;
+};
+
+const isJsonRecord = (value: unknown): value is Record<string, unknown> =>
+  isRecord(value) && Object.values(value).every((entry) => isJsonValue(entry));
+
+const isPriorityTargetKind = (
+  value: unknown,
+): value is ResolvedPriorityFactRecord["targetKind"] =>
+  value === "diff" || value === "node" || value === "heap";
 
 const isResolvedSourceRangeProjection = (
   value: unknown,
@@ -386,6 +431,40 @@ const readResolvedPriorityFactsFromD1 = async (
   return results
     .map((row) => parseJsonColumn(row.fact_json, isResolvedPriorityFactRecord))
     .filter((fact): fact is ResolvedPriorityFactRecord => fact !== null);
+};
+
+const writeResolvedPriorityFactToD1 = async (
+  db: VoidSqlStore,
+  fact: ResolvedPriorityFactRecord,
+): Promise<void> => {
+  await db
+    .prepare(
+      `INSERT INTO resolved_priority_facts (
+         root_drop_id, branch_id, resolver_id, target_kind, target_id,
+         fact_id, priority, created_at, source_seq, source_event_id, fact_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(root_drop_id, branch_id, resolver_id, target_kind, target_id, fact_id)
+       DO UPDATE SET
+         priority = excluded.priority,
+         created_at = excluded.created_at,
+         source_seq = excluded.source_seq,
+         source_event_id = excluded.source_event_id,
+         fact_json = excluded.fact_json`,
+    )
+    .bind(
+      fact.rootDropId,
+      fact.branchId ?? "",
+      fact.resolverId ?? "",
+      fact.targetKind,
+      fact.targetId,
+      fact.factId,
+      fact.priority,
+      fact.createdAt,
+      fact.sourceSeq ?? null,
+      fact.sourceEventId ?? null,
+      JSON.stringify(fact),
+    )
+    .run();
 };
 
 const priorityScoringFromFacts = (
@@ -821,6 +900,45 @@ const parseUpdateBody = (rawBody: string): ResolvedUpdateRequest | null => {
   return parsed as ResolvedUpdateRequest;
 };
 
+const parsePriorityFactBody = (
+  rawBody: string,
+): ResolvedPriorityFactRequest | null => {
+  if (!rawBody.trim()) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody) as unknown;
+  } catch {
+    return null;
+  }
+
+  if (!isRecord(parsed)) return null;
+  if (parsed.factId !== undefined && !isString(parsed.factId)) return null;
+  if (parsed.resolverId !== undefined && !isString(parsed.resolverId)) return null;
+  if (!isPriorityTargetKind(parsed.targetKind)) return null;
+  if (parsed.targetId !== undefined && !isString(parsed.targetId)) return null;
+  if (!isNumber(parsed.priority)) return null;
+  if (parsed.sourceSeq !== undefined && !isNonNegativeInteger(parsed.sourceSeq)) {
+    return null;
+  }
+  if (parsed.sourceEventId !== undefined && !isString(parsed.sourceEventId)) {
+    return null;
+  }
+  if (parsed.reason !== undefined && !isString(parsed.reason)) return null;
+  if (parsed.labels !== undefined && !isStringArray(parsed.labels)) return null;
+  if (parsed.metadata !== undefined && !isJsonRecord(parsed.metadata)) return null;
+
+  return parsed as ResolvedPriorityFactRequest;
+};
+
+const defaultPriorityTargetId = (
+  rootDropId: string,
+  branchId: string,
+  resolverId: string | undefined,
+  targetKind: ResolvedPriorityFactRecord["targetKind"],
+): string =>
+  targetKind === "heap" ? `${rootDropId}/${branchId}/${resolverId ?? ""}` : "";
+
 const resolveBranchTarget = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
@@ -1054,6 +1172,118 @@ export const queryResolvedHeap = async (
       500,
       "resolved_query_failed",
       `Failed to query resolved heap: ${message}`,
+    );
+  }
+};
+
+const createResolvedPriorityFactUnsafe = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+  request: Request,
+): Promise<Response> => {
+  if (!env.DB) {
+    return jsonErrorResponse(
+      500,
+      "sql_store_required",
+      "SQL metadata store is required to create resolved priority facts.",
+    );
+  }
+
+  const target = await resolveBranchTarget(env, params);
+  if (target.error) return target.error;
+  const { rootDropId, branchId, branch } = target;
+
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  if (!accountId) {
+    return jsonErrorResponse(
+      401,
+      "account_required",
+      "Authenticated account session is required.",
+    );
+  }
+
+  const canWrite =
+    accountId === branch.ownerAccountId || accountId === branch.writerAccountId;
+  if (!canWrite) {
+    return jsonErrorResponse(
+      403,
+      "forbidden",
+      "You are not allowed to create priority facts for this branch.",
+    );
+  }
+
+  const rawBody = await readRequestTextWithLimit(
+    request,
+    RESOLVED_PRIORITY_FACT_BODY_MAX_BYTES,
+  );
+  const parsed = parsePriorityFactBody(rawBody);
+  if (!parsed || parsed.priority === undefined || !parsed.targetKind) {
+    return jsonErrorResponse(
+      400,
+      "validation_failed",
+      "Priority fact payload must include targetKind and priority.",
+    );
+  }
+
+  const resolverId = parsed.resolverId ??
+    (parsed.targetKind === "node" ? RESOLVED_DOCUMENT_RESOLVER_ID : undefined);
+  const targetId = parsed.targetId ??
+    defaultPriorityTargetId(rootDropId, branchId, resolverId, parsed.targetKind);
+  if (!targetId) {
+    return jsonErrorResponse(
+      400,
+      "validation_failed",
+      "targetId is required for node and diff priority facts.",
+    );
+  }
+
+  const fact: ResolvedPriorityFactRecord = {
+    version: RESOLVED_PRIORITY_FACT_RECORD_VERSION,
+    factId: parsed.factId ?? `priority:${crypto.randomUUID()}`,
+    rootDropId,
+    branchId,
+    resolverId,
+    targetKind: parsed.targetKind,
+    targetId,
+    priority: parsed.priority,
+    createdAt: Date.now(),
+    sourceSeq: parsed.sourceSeq,
+    sourceEventId: parsed.sourceEventId,
+    reason: parsed.reason,
+    labels: parsed.labels,
+    metadata: parsed.metadata as Record<string, JsonValue> | undefined,
+  };
+
+  if (!isResolvedPriorityFactRecord(fact)) {
+    return jsonErrorResponse(
+      400,
+      "validation_failed",
+      "Priority fact payload is invalid.",
+    );
+  }
+
+  await writeResolvedPriorityFactToD1(env.DB, fact);
+  return jsonResponse({ rootDropId, branchId, fact }, 201);
+};
+
+/** Creates a branch-scoped resolved priority fact used by future heap queries. */
+export const createResolvedPriorityFact = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+  request: Request,
+): Promise<Response> => {
+  try {
+    return await createResolvedPriorityFactUnsafe(env, params, request);
+  } catch (error) {
+    if (isApiHttpError(error)) {
+      return apiHttpErrorResponse(error);
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonErrorResponse(
+      500,
+      "resolved_priority_fact_failed",
+      `Failed to create resolved priority fact: ${message}`,
     );
   }
 };

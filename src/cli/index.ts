@@ -21,6 +21,7 @@ import {
   type DiffAuthRegisterResponse,
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
+import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved";
 
 type JsonValue =
   | null
@@ -135,6 +136,7 @@ Branch commands:
   branch snapshots <rootId> <branchId>
   branch query <rootId> <branchId> [--resolver <id>] [--query <text>] [--top <n>] [--kind <csv>] [--from-seq <n>] [--to-seq <n>]
   branch heap-update <rootId> <branchId> [--resolver <id|all>] [--snapshot <n|latest>]  Repair/materialize resolved heaps
+  branch priority <rootId> <branchId> --priority <n> [--node <id>|--heap|--diff <eventId>] [--reason <text>]
   branch promote <rootId> <branchId>
 
 Diff commands:
@@ -971,6 +973,69 @@ const commandBranch = async (config: CliConfig, args: ParsedArgs) => {
     const response = await request(
       config,
       `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/resolved/update`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    print(config, response.data);
+    return;
+  }
+  if (sub === "priority" || sub === "prioritize") {
+    const rootId =
+      args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
+    const branchId = args.positionals[3] || flagString(args, "branch");
+    if (!rootId || !branchId) {
+      throw new CliError("Usage: nd branch priority <rootId> <branchId> --priority <n>");
+    }
+
+    const rawPriority = flagString(args, "priority") || flagString(args, "score");
+    const priority = Number.parseFloat(rawPriority || "");
+    if (!Number.isFinite(priority)) {
+      throw new CliError("nd branch priority requires --priority <number>.");
+    }
+
+    const nodeTarget = flagString(args, "node") || flagString(args, "nodeId");
+    const diffTarget = flagString(args, "diff") || flagString(args, "event") || flagString(args, "eventId");
+    const explicitTarget = flagString(args, "target") || flagString(args, "targetId");
+    const targetKind = hasFlag(args, "heap")
+      ? "heap"
+      : nodeTarget
+        ? "node"
+        : diffTarget
+          ? "diff"
+          : (flagString(args, "target-kind") || flagString(args, "targetKind") || "node");
+    if (targetKind !== "node" && targetKind !== "heap" && targetKind !== "diff") {
+      throw new CliError("Priority target kind must be node, heap, or diff.");
+    }
+
+    const metadata = await parseMetadata(args);
+    const labels = flagString(args, "labels")
+      ?.split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const body: Record<string, unknown> = {
+      targetKind,
+      priority,
+    };
+    const targetId = nodeTarget || diffTarget || explicitTarget;
+    if (targetId) body.targetId = targetId;
+    body.resolverId =
+      flagString(args, "resolver") || flagString(args, "resolverId") ||
+      (targetKind === "node" ? RESOLVED_DOCUMENT_RESOLVER_ID : undefined);
+    const reason = flagString(args, "reason");
+    if (reason) body.reason = reason;
+    if (labels?.length) body.labels = labels;
+    if (metadata) body.metadata = metadata;
+    const sourceSeq = flagString(args, "source-seq") || flagString(args, "sourceSeq");
+    if (sourceSeq) body.sourceSeq = Number.parseInt(sourceSeq, 10);
+    const sourceEventId = flagString(args, "source-event") || flagString(args, "sourceEventId");
+    if (sourceEventId) body.sourceEventId = sourceEventId;
+
+    const response = await request(
+      config,
+      `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/resolved/priority`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

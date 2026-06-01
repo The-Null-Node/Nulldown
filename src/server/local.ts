@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { isDropIdToken, toShortDropId } from "../../shared/drop/id";
 import { createRequestLogger, toLogRef } from "../../functions/api/_lib/core/logging/logger";
 import { getBranchContent, listBranchesForDrop, listBranchSnapshots, resolveBranchForRequest } from "../../functions/api/_lib/branches/services/routeService";
-import { queryResolvedHeap, updateResolvedHeap } from "../../functions/api/_lib/resolved/heap/service";
+import { createResolvedPriorityFact, queryResolvedHeap, updateResolvedHeap } from "../../functions/api/_lib/resolved/heap/service";
 import { pollDiffEvents, postDiffEvents } from "../../functions/api/_lib/diffs/transport/service";
 import { resolveRemoteDropId, removeRemoteAliasIfMatch } from "../../functions/api/_lib/drops/identity/id";
 import { REMOTE_PUBLIC_DROP_INDEX_PREFIX, readPublicDropIndexEntryByKey, removePublicDropIndexEntry } from "../../functions/api/_lib/drops/index/repository";
@@ -193,6 +193,7 @@ export const createLocalNulldownServer = ({
     { method: "GET", path: "/api/branches/:rootId/:branchId/snapshots", handler: ({ params }) => listBranchSnapshots(env, routeParams(params)) },
     { method: "GET", path: "/api/branches/:rootId/:branchId/resolved/query", handler: ({ request, params }) => queryResolvedHeap(env, routeParams(params), request) },
     { method: "POST", path: "/api/branches/:rootId/:branchId/resolved/update", handler: ({ request, params }) => updateResolvedHeap(env, routeParams(params), request) },
+    { method: "POST", path: "/api/branches/:rootId/:branchId/resolved/priority", handler: ({ request, params }) => createResolvedPriorityFact(env, routeParams(params), request) },
   ];
 
   return createNulldownServer({ routes });

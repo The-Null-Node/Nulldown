@@ -1,16 +1,15 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import type { DropBranchRecord, DropSnapshotRecord } from "../shared/drop/branch";
+import { NULLDOWN_ACCOUNT_ID_HEADER, type DropBranchRecord, type DropSnapshotRecord } from "../shared/drop/branch";
 import type { DropDiffEvent } from "../shared/drop/diff";
 import type { NullplugUiResponseFact } from "../shared/nullplug/ui";
 import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
-import { queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
+import { createResolvedPriorityFact, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
-  type ResolvedPriorityFactRecord,
 } from "../shared/drop/resolved";
 import {
   readBranch,
@@ -264,6 +263,17 @@ class MemoryD1Database {
       this.nodeRefs.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/${params[4]}`, {
         node_hash: String(params[6]),
         ref_json: String(params[12]),
+      });
+      return;
+    }
+
+    if (sql.includes("INSERT INTO resolved_priority_facts")) {
+      this.priorityFacts.set(String(params[5]), {
+        root_drop_id: String(params[0]),
+        branch_id: String(params[1]),
+        resolver_id: String(params[2]),
+        fact_json: String(params[10]),
+        created_at: Number(params[7]),
       });
       return;
     }
@@ -578,25 +588,25 @@ describe("D1 metadata contracts", () => {
       .map((entry) => JSON.parse(entry.node_json) as { id: string; kind: string; text: string })
       .find((node) => node.kind === "paragraph" && node.text.includes("searchable"));
     if (!prioritizedNode) throw new Error("Expected a searchable paragraph node.");
-    const priorityFact: ResolvedPriorityFactRecord = {
-      version: 1,
-      factId: "priority_fact_1",
-      rootDropId: snapshot.rootDropId,
-      branchId: snapshot.branchId,
-      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
-      targetKind: "node",
-      targetId: prioritizedNode.id,
-      priority: 3,
-      createdAt: 2000,
-      reason: "Prioritize the paragraph for the agent.",
-    };
-    db.priorityFacts.set(priorityFact.factId, {
-      fact_json: JSON.stringify(priorityFact),
-      root_drop_id: snapshot.rootDropId,
-      branch_id: snapshot.branchId,
-      resolver_id: RESOLVED_DOCUMENT_RESOLVER_ID,
-      created_at: priorityFact.createdAt,
-    });
+    const factResponse = await createResolvedPriorityFact(
+      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
+      new Request("https://example.test/api/resolved/priority", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+        },
+        body: JSON.stringify({
+          targetKind: "node",
+          targetId: prioritizedNode.id,
+          priority: 3,
+          reason: "Prioritize the paragraph for the agent.",
+        }),
+      }),
+    );
+    expect(factResponse.status).toBe(201);
+    expect(db.priorityFacts.size).toBe(1);
 
     const priorityResponse = await queryResolvedHeap(
       { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },

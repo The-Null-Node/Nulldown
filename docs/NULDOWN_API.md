@@ -824,6 +824,58 @@ Response excerpt:
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/query.ts`.
 
+### POST /api/branches/:rootId/:branchId/resolved/priority
+
+Create a branch-scoped priority overlay fact. Priority facts do not mutate branch
+markdown or rewrite heap deltas; they are D1-backed overlays read by
+`resolved/query`. Node and heap facts affect current query scoring. Diff facts
+are persisted for future diff-target scoring and retrieval. Node facts should
+include a resolver id when the node id is resolver-specific; the CLI defaults
+node facts to the document resolver.
+
+Request:
+
+```json
+{
+  "targetKind": "node",
+  "targetId": "paragraph:sha256:...:42:120",
+  "resolverId": "nulldown.resolved.document",
+  "priority": 3,
+  "reason": "Important for the next agent",
+  "labels": ["agent-memory", "next-step"],
+  "metadata": { "source": "manual" }
+}
+```
+
+`targetKind` can be `node`, `heap`, or `diff`. `node` and `diff` facts require
+`targetId`; `heap` facts can omit it and the server will derive a branch/resolver
+target id. The authenticated account must own or write the branch.
+
+CLI example:
+
+```bash
+bun run nd -- --account <accountId> branch priority <rootId> <branchId> --node <nodeId> --priority 3 --reason "important for the next agent" --json
+bun run nd -- --account <accountId> branch priority <rootId> <branchId> --heap --priority 1.5 --labels agent-memory,next-step --json
+```
+
+Response excerpt:
+
+```json
+{
+  "rootDropId": "canonical-root-id",
+  "branchId": "branch-id",
+  "fact": {
+    "version": 1,
+    "factId": "priority:...",
+    "targetKind": "node",
+    "targetId": "paragraph:...",
+    "priority": 3
+  }
+}
+```
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority.ts`.
+
 ### POST /api/branches/:rootId/:branchId/resolved/update
 
 Repair or eagerly materialize derived resolved heaps for a branch snapshot. This
