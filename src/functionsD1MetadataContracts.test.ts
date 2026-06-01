@@ -696,7 +696,7 @@ describe("D1 metadata contracts", () => {
       {
         rootId: snapshot.rootDropId,
         branchId: snapshot.branchId,
-        factId: factBody.fact.factId,
+        factId: encodeURIComponent(factBody.fact.factId),
       },
       new Request(
         `https://example.test/api/resolved/priority/${encodeURIComponent(factBody.fact.factId)}`,

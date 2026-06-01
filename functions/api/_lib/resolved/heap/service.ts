@@ -1036,6 +1036,14 @@ const defaultPriorityTargetId = (
 ): string =>
   targetKind === "heap" ? `${rootDropId}/${branchId}/${resolverId ?? ""}` : "";
 
+const decodeRouteParam = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
 const resolveBranchTarget = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
@@ -1451,7 +1459,7 @@ const deleteResolvedPriorityFactUnsafe = async (
   );
   if (authError) return authError;
 
-  const factId = resolveParam(params.factId);
+  const factId = decodeRouteParam(resolveParam(params.factId));
   if (!factId) {
     return jsonErrorResponse(400, "validation_failed", "factId is required.");
   }
