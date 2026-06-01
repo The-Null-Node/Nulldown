@@ -5,7 +5,7 @@ import type { NullplugUiResponseFact } from "../shared/nullplug/ui";
 import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
-import { createResolvedPriorityFact, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
+import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
 import {
@@ -278,6 +278,14 @@ class MemoryD1Database {
       return;
     }
 
+    if (sql.includes("DELETE FROM resolved_priority_facts")) {
+      const fact = this.priorityFacts.get(String(params[2]));
+      if (fact?.root_drop_id === params[0] && fact.branch_id === params[1]) {
+        this.priorityFacts.delete(String(params[2]));
+      }
+      return;
+    }
+
     if (sql.includes("DELETE FROM resolved_nodes")) {
       const prefix = `${params[0]}/${params[1]}/${params[2]}/${params[3]}/`;
       [...this.nodes.keys()]
@@ -327,6 +335,14 @@ class MemoryD1Database {
 
     if (sql.includes("FROM resolved_heap_deltas")) {
       return this.heapDeltas.get(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`) ?? null;
+    }
+
+    if (sql.includes("FROM resolved_priority_facts")) {
+      const fact = this.priorityFacts.get(String(params[2]));
+      if (fact?.root_drop_id === params[0] && fact.branch_id === params[1]) {
+        return fact;
+      }
+      return null;
     }
 
     if (sql.includes("FROM resolved_node_payloads")) {
@@ -385,6 +401,39 @@ class MemoryD1Database {
     }
 
     if (sql.includes("FROM resolved_priority_facts")) {
+      if (sql.includes("branch_id = ?") && !sql.includes("branch_id = ''")) {
+        let bindingIndex = 2;
+        const resolverId = sql.includes("resolver_id = ?")
+          ? String(params[bindingIndex++])
+          : null;
+        const targetKind = sql.includes("target_kind = ?")
+          ? String(params[bindingIndex++])
+          : null;
+        const targetId = sql.includes("target_id = ?")
+          ? String(params[bindingIndex++])
+          : null;
+        const factId = sql.includes("fact_id = ?")
+          ? String(params[bindingIndex++])
+          : null;
+        const limit = Number(params[bindingIndex]);
+        return [...this.priorityFacts.entries()]
+          .filter(([id]) => !factId || id === factId)
+          .map(([, fact]) => ({
+            fact,
+            parsed: JSON.parse(fact.fact_json) as {
+              targetKind?: string;
+              targetId?: string;
+            },
+          }))
+          .filter(({ fact }) => fact.root_drop_id === params[0] && fact.branch_id === params[1])
+          .filter(({ fact }) => !resolverId || fact.resolver_id === resolverId)
+          .filter(({ parsed }) => !targetKind || parsed.targetKind === targetKind)
+          .filter(({ parsed }) => !targetId || parsed.targetId === targetId)
+          .map(({ fact }) => fact)
+          .sort((left, right) => right.created_at - left.created_at)
+          .slice(0, limit);
+      }
+
       return [...this.priorityFacts.values()]
         .filter(
           (fact) =>
@@ -606,7 +655,26 @@ describe("D1 metadata contracts", () => {
       }),
     );
     expect(factResponse.status).toBe(201);
+    const factBody = (await factResponse.json()) as {
+      fact: { factId: string; targetId: string };
+    };
+    expect(factBody.fact.targetId).toBe(prioritizedNode.id);
     expect(db.priorityFacts.size).toBe(1);
+
+    const listResponse = await listResolvedPriorityFacts(
+      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
+      new Request("https://example.test/api/resolved/priority?targetKind=node", {
+        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+      }),
+    );
+    const listBody = (await listResponse.json()) as {
+      facts: Array<{ factId: string }>;
+    };
+    expect(listResponse.status).toBe(200);
+    expect(listBody.facts.map((fact) => fact.factId)).toEqual([
+      factBody.fact.factId,
+    ]);
 
     const priorityResponse = await queryResolvedHeap(
       { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
@@ -622,6 +690,26 @@ describe("D1 metadata contracts", () => {
     expect(priorityBody.heapGenerated).toBe(false);
     expect(priorityBody.nodes[0].node.id).toBe(prioritizedNode.id);
     expect(priorityBody.nodes[0].reasons).toContain("priority-fact");
+
+    const deleteResponse = await deleteResolvedPriorityFact(
+      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        rootId: snapshot.rootDropId,
+        branchId: snapshot.branchId,
+        factId: factBody.fact.factId,
+      },
+      new Request(
+        `https://example.test/api/resolved/priority/${encodeURIComponent(factBody.fact.factId)}`,
+        {
+          method: "DELETE",
+          headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+        },
+      ),
+    );
+    const deleteBody = (await deleteResponse.json()) as { deleted: boolean };
+    expect(deleteResponse.status).toBe(200);
+    expect(deleteBody.deleted).toBe(true);
+    expect(db.priorityFacts.size).toBe(0);
   });
 
   for (const headEventSeq of [null, -1] as const) {

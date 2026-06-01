@@ -824,6 +824,44 @@ Response excerpt:
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/query.ts`.
 
+### GET /api/branches/:rootId/:branchId/resolved/priority
+
+List branch-scoped priority overlay facts. The authenticated account must own or
+write the branch.
+
+Optional query parameters:
+
+- `resolverId`: Filter by resolver id.
+- `targetKind`: Filter to `node`, `heap`, or `diff`.
+- `targetId`: Filter by target id.
+- `factId`: Filter by fact id.
+- `limit`: Maximum number of facts to return, up to 250.
+
+CLI example:
+
+```bash
+bun run nd -- --account <accountId> branch priority list <rootId> <branchId> --target-kind node --json
+```
+
+Response excerpt:
+
+```json
+{
+  "rootDropId": "canonical-root-id",
+  "branchId": "branch-id",
+  "facts": [
+    {
+      "factId": "priority:...",
+      "targetKind": "node",
+      "targetId": "paragraph:...",
+      "priority": 3
+    }
+  ]
+}
+```
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority.ts`.
+
 ### POST /api/branches/:rootId/:branchId/resolved/priority
 
 Create a branch-scoped priority overlay fact. Priority facts do not mutate branch
@@ -856,6 +894,7 @@ CLI example:
 ```bash
 bun run nd -- --account <accountId> branch priority <rootId> <branchId> --node <nodeId> --priority 3 --reason "important for the next agent" --json
 bun run nd -- --account <accountId> branch priority <rootId> <branchId> --heap --priority 1.5 --labels agent-memory,next-step --json
+bun run nd -- --account <accountId> branch priority <rootId> <branchId> --diff <eventId> --priority 2 --json
 ```
 
 Response excerpt:
@@ -875,6 +914,30 @@ Response excerpt:
 ```
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority.ts`.
+
+### DELETE /api/branches/:rootId/:branchId/resolved/priority/:factId
+
+Delete one branch-scoped priority overlay fact. The authenticated account must
+own or write the branch.
+
+CLI example:
+
+```bash
+bun run nd -- --account <accountId> branch priority delete <rootId> <branchId> <factId> --json
+```
+
+Response excerpt:
+
+```json
+{
+  "rootDropId": "canonical-root-id",
+  "branchId": "branch-id",
+  "factId": "priority:...",
+  "deleted": true
+}
+```
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority/[factId].ts`.
 
 ### POST /api/branches/:rootId/:branchId/resolved/update
 

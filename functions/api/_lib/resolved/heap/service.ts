@@ -405,7 +405,20 @@ const readResolvedStateFromD1Delta = async (
 
 interface ResolvedPriorityScoring {
   priorityByNodeId?: Record<string, number>;
+  priorityByDiffEventId?: Record<string, number>;
   heapPriority?: number;
+}
+
+interface ResolvedPriorityFactListOptions {
+  resolverId?: string;
+  targetKind?: ResolvedPriorityFactRecord["targetKind"];
+  targetId?: string;
+  factId?: string;
+  limit?: number;
+}
+
+interface ResolvedPriorityFactDeleteParams extends ResolvedHeapParams {
+  factId: string | string[];
 }
 
 const readResolvedPriorityFactsFromD1 = async (
@@ -467,16 +480,97 @@ const writeResolvedPriorityFactToD1 = async (
     .run();
 };
 
+const listBranchResolvedPriorityFactsFromD1 = async (
+  db: VoidSqlStore,
+  rootDropId: string,
+  branchId: string,
+  options: ResolvedPriorityFactListOptions = {},
+): Promise<ResolvedPriorityFactRecord[]> => {
+  const limit = Math.max(1, Math.min(250, Math.floor(options.limit ?? 100)));
+  const conditions = ["root_drop_id = ?", "branch_id = ?"];
+  const bindings: (string | number)[] = [rootDropId, branchId];
+  if (options.resolverId) {
+    conditions.push("resolver_id = ?");
+    bindings.push(options.resolverId);
+  }
+  if (options.targetKind) {
+    conditions.push("target_kind = ?");
+    bindings.push(options.targetKind);
+  }
+  if (options.targetId) {
+    conditions.push("target_id = ?");
+    bindings.push(options.targetId);
+  }
+  if (options.factId) {
+    conditions.push("fact_id = ?");
+    bindings.push(options.factId);
+  }
+  bindings.push(limit);
+
+  const { results = [] } = await db
+    .prepare(
+      `SELECT fact_json
+       FROM resolved_priority_facts
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    )
+    .bind(...bindings)
+    .all<{ fact_json: string }>();
+
+  return results
+    .map((row) => parseJsonColumn(row.fact_json, isResolvedPriorityFactRecord))
+    .filter((fact): fact is ResolvedPriorityFactRecord => fact !== null);
+};
+
+const readBranchResolvedPriorityFactFromD1 = async (
+  db: VoidSqlStore,
+  rootDropId: string,
+  branchId: string,
+  factId: string,
+): Promise<ResolvedPriorityFactRecord | null> => {
+  const row = await db
+    .prepare(
+      `SELECT fact_json
+       FROM resolved_priority_facts
+       WHERE root_drop_id = ? AND branch_id = ? AND fact_id = ?
+       LIMIT 1`,
+    )
+    .bind(rootDropId, branchId, factId)
+    .first<{ fact_json: string }>();
+  return row ? parseJsonColumn(row.fact_json, isResolvedPriorityFactRecord) : null;
+};
+
+const deleteBranchResolvedPriorityFactFromD1 = async (
+  db: VoidSqlStore,
+  rootDropId: string,
+  branchId: string,
+  factId: string,
+): Promise<void> => {
+  await db
+    .prepare(
+      `DELETE FROM resolved_priority_facts
+       WHERE root_drop_id = ? AND branch_id = ? AND fact_id = ?`,
+    )
+    .bind(rootDropId, branchId, factId)
+    .run();
+};
+
 const priorityScoringFromFacts = (
   facts: readonly ResolvedPriorityFactRecord[],
 ): ResolvedPriorityScoring => {
   const priorityByNodeId: Record<string, number> = {};
+  const priorityByDiffEventId: Record<string, number> = {};
   let heapPriority: number | undefined;
 
   for (const fact of facts) {
     if (fact.targetKind === "node") {
       if (!Object.prototype.hasOwnProperty.call(priorityByNodeId, fact.targetId)) {
         priorityByNodeId[fact.targetId] = fact.priority;
+      }
+    } else if (fact.targetKind === "diff") {
+      if (!Object.prototype.hasOwnProperty.call(priorityByDiffEventId, fact.targetId)) {
+        priorityByDiffEventId[fact.targetId] = fact.priority;
       }
     } else if (fact.targetKind === "heap" && heapPriority === undefined) {
       heapPriority = fact.priority;
@@ -486,6 +580,9 @@ const priorityScoringFromFacts = (
   return {
     priorityByNodeId: Object.keys(priorityByNodeId).length
       ? priorityByNodeId
+      : undefined,
+    priorityByDiffEventId: Object.keys(priorityByDiffEventId).length
+      ? priorityByDiffEventId
       : undefined,
     heapPriority,
   };
@@ -976,6 +1073,34 @@ const resolveBranchTarget = async (
   return { rootDropId, branchId, branch };
 };
 
+const authorizeResolvedPriorityFactWrite = async (
+  request: Request,
+  env: ResolvedHeapEnv,
+  branch: { ownerAccountId?: string | null; writerAccountId?: string | null },
+  action: "create" | "list" | "delete",
+): Promise<Response | null> => {
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  if (!accountId) {
+    return jsonErrorResponse(
+      401,
+      "account_required",
+      "Authenticated account session is required.",
+    );
+  }
+
+  const canWrite =
+    accountId === branch.ownerAccountId || accountId === branch.writerAccountId;
+  if (!canWrite) {
+    return jsonErrorResponse(
+      403,
+      "forbidden",
+      `You are not allowed to ${action} priority facts for this branch.`,
+    );
+  }
+
+  return null;
+};
+
 const queryResolvedHeapUnsafe = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
@@ -1137,6 +1262,7 @@ const queryResolvedHeapUnsafe = async (
     changedOnly: parseBoolean(url.searchParams.get("changedOnly")),
     includeAncestors: parseBoolean(url.searchParams.get("includeAncestors")),
     priorityByNodeId: priorityScoring.priorityByNodeId,
+    priorityByDiffEventId: priorityScoring.priorityByDiffEventId,
     heapPriority: priorityScoring.heapPriority,
   });
 
@@ -1193,24 +1319,13 @@ const createResolvedPriorityFactUnsafe = async (
   if (target.error) return target.error;
   const { rootDropId, branchId, branch } = target;
 
-  const accountId = await resolveAuthenticatedAccountId(request, env);
-  if (!accountId) {
-    return jsonErrorResponse(
-      401,
-      "account_required",
-      "Authenticated account session is required.",
-    );
-  }
-
-  const canWrite =
-    accountId === branch.ownerAccountId || accountId === branch.writerAccountId;
-  if (!canWrite) {
-    return jsonErrorResponse(
-      403,
-      "forbidden",
-      "You are not allowed to create priority facts for this branch.",
-    );
-  }
+  const authError = await authorizeResolvedPriorityFactWrite(
+    request,
+    env,
+    branch,
+    "create",
+  );
+  if (authError) return authError;
 
   const rawBody = await readRequestTextWithLimit(
     request,
@@ -1266,6 +1381,95 @@ const createResolvedPriorityFactUnsafe = async (
   return jsonResponse({ rootDropId, branchId, fact }, 201);
 };
 
+const listResolvedPriorityFactsUnsafe = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+  request: Request,
+): Promise<Response> => {
+  if (!env.DB) {
+    return jsonErrorResponse(
+      500,
+      "sql_store_required",
+      "SQL metadata store is required to list resolved priority facts.",
+    );
+  }
+
+  const target = await resolveBranchTarget(env, params);
+  if (target.error) return target.error;
+  const { rootDropId, branchId, branch } = target;
+  const authError = await authorizeResolvedPriorityFactWrite(
+    request,
+    env,
+    branch,
+    "list",
+  );
+  if (authError) return authError;
+
+  const url = new URL(request.url);
+  const targetKindParam = url.searchParams.get("targetKind") ?? url.searchParams.get("target-kind");
+  if (targetKindParam !== null && !isPriorityTargetKind(targetKindParam)) {
+    return jsonErrorResponse(400, "validation_failed", "Invalid targetKind.");
+  }
+
+  const facts = await listBranchResolvedPriorityFactsFromD1(
+    env.DB,
+    rootDropId,
+    branchId,
+    {
+      resolverId: url.searchParams.get("resolverId") ?? url.searchParams.get("resolver") ?? undefined,
+      targetKind: targetKindParam ?? undefined,
+      targetId: url.searchParams.get("targetId") ?? url.searchParams.get("target") ?? undefined,
+      factId: url.searchParams.get("factId") ?? url.searchParams.get("fact") ?? undefined,
+      limit: parsePositiveInteger(url.searchParams.get("limit"), 100),
+    },
+  );
+
+  return jsonResponse({ rootDropId, branchId, facts });
+};
+
+const deleteResolvedPriorityFactUnsafe = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedPriorityFactDeleteParams,
+  request: Request,
+): Promise<Response> => {
+  if (!env.DB) {
+    return jsonErrorResponse(
+      500,
+      "sql_store_required",
+      "SQL metadata store is required to delete resolved priority facts.",
+    );
+  }
+
+  const target = await resolveBranchTarget(env, params);
+  if (target.error) return target.error;
+  const { rootDropId, branchId, branch } = target;
+  const authError = await authorizeResolvedPriorityFactWrite(
+    request,
+    env,
+    branch,
+    "delete",
+  );
+  if (authError) return authError;
+
+  const factId = resolveParam(params.factId);
+  if (!factId) {
+    return jsonErrorResponse(400, "validation_failed", "factId is required.");
+  }
+
+  const existing = await readBranchResolvedPriorityFactFromD1(
+    env.DB,
+    rootDropId,
+    branchId,
+    factId,
+  );
+  if (!existing) {
+    return jsonErrorResponse(404, "priority_fact_not_found", "Priority fact not found.");
+  }
+
+  await deleteBranchResolvedPriorityFactFromD1(env.DB, rootDropId, branchId, factId);
+  return jsonResponse({ rootDropId, branchId, factId, deleted: true });
+};
+
 /** Creates a branch-scoped resolved priority fact used by future heap queries. */
 export const createResolvedPriorityFact = async (
   env: ResolvedHeapEnv,
@@ -1284,6 +1488,50 @@ export const createResolvedPriorityFact = async (
       500,
       "resolved_priority_fact_failed",
       `Failed to create resolved priority fact: ${message}`,
+    );
+  }
+};
+
+/** Lists branch-scoped resolved priority facts for branch writers. */
+export const listResolvedPriorityFacts = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+  request: Request,
+): Promise<Response> => {
+  try {
+    return await listResolvedPriorityFactsUnsafe(env, params, request);
+  } catch (error) {
+    if (isApiHttpError(error)) {
+      return apiHttpErrorResponse(error);
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonErrorResponse(
+      500,
+      "resolved_priority_fact_list_failed",
+      `Failed to list resolved priority facts: ${message}`,
+    );
+  }
+};
+
+/** Deletes one branch-scoped resolved priority fact for branch writers. */
+export const deleteResolvedPriorityFact = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedPriorityFactDeleteParams,
+  request: Request,
+): Promise<Response> => {
+  try {
+    return await deleteResolvedPriorityFactUnsafe(env, params, request);
+  } catch (error) {
+    if (isApiHttpError(error)) {
+      return apiHttpErrorResponse(error);
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonErrorResponse(
+      500,
+      "resolved_priority_fact_delete_failed",
+      `Failed to delete resolved priority fact: ${message}`,
     );
   }
 };

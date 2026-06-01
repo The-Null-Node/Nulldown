@@ -106,6 +106,8 @@ Attach an agent priority fact to a resolved node so future branch queries rank i
 
 ```bash
 bun run nd -- --account <accountId> branch priority <rootId> <branchId> --node <nodeId> --priority 3 --reason "important for the next agent"
+bun run nd -- --account <accountId> branch priority list <rootId> <branchId>
+bun run nd -- --account <accountId> branch priority delete <rootId> <branchId> <factId>
 ```
 
 Run the same local server in Docker with `/data` as the persistent volume:

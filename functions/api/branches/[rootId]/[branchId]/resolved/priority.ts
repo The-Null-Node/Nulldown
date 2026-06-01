@@ -1,6 +1,7 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   createResolvedPriorityFact,
+  listResolvedPriorityFacts,
   type ResolvedHeapEnv,
 } from "../../../../_lib/resolved/heap/service";
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
@@ -15,7 +16,16 @@ export const onRequestPost: PagesFunction<Env, "rootId" | "branchId"> = ({
   request,
 }) => createResolvedPriorityFact(env, params, request);
 
+export const onRequestGet: PagesFunction<Env, "rootId" | "branchId"> = ({
+  env,
+  params,
+  request,
+}) => listResolvedPriorityFacts(env, params, request);
+
 export const onRequest: PagesFunction<Env, "rootId" | "branchId"> = async (context) => {
+  if (context.request.method === "GET") {
+    return onRequestGet(context);
+  }
   if (context.request.method === "POST") {
     return onRequestPost(context);
   }

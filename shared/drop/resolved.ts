@@ -166,6 +166,8 @@ export interface ResolvedDocumentQuery {
   includeAncestors?: boolean;
   /** Latest agent priority score by semantic node id. */
   priorityByNodeId?: Record<string, number>;
+  /** Latest agent priority score by branch diff event id. */
+  priorityByDiffEventId?: Record<string, number>;
   /** Latest agent priority score for the whole semantic heap. */
   heapPriority?: number;
 }
@@ -1899,6 +1901,17 @@ const eventRefsForNode = (
     event.changedRanges.some((range) => sourceRangesOverlap(node.sourceRange, range)),
   );
 
+const priorityFromDiffRefs = (
+  refs: readonly ResolvedDiffEventRef[],
+  priorityByDiffEventId: Record<string, number> | undefined,
+): number => {
+  if (!priorityByDiffEventId) return 0;
+  return refs.reduce(
+    (total, ref) => total + (priorityByDiffEventId[ref.eventId] ?? 0),
+    0,
+  );
+};
+
 const scoreDocumentNode = (
   state: ResolvedNulldownState,
   node: ResolvedDocumentNode,
@@ -1996,8 +2009,11 @@ export const queryResolvedDocumentNodes = (
   const scored = nodes
     .filter((node) => !kindSet || kindSet.has(node.kind))
     .map((node) => {
+      const nodeEventRefs = eventRefsForNode(node, eventRefs);
       const priority =
-        (query.heapPriority ?? 0) + (query.priorityByNodeId?.[node.id] ?? 0);
+        (query.heapPriority ?? 0) +
+        (query.priorityByNodeId?.[node.id] ?? 0) +
+        priorityFromDiffRefs(nodeEventRefs, query.priorityByDiffEventId);
       const scoredNode = scoreDocumentNode(
         state,
         node,
@@ -2010,7 +2026,7 @@ export const queryResolvedDocumentNodes = (
         score: scoredNode.score,
         reasons: scoredNode.reasons,
         changed: scoredNode.changed,
-        eventRefs: eventRefsForNode(node, eventRefs),
+        eventRefs: nodeEventRefs,
       };
     })
     .filter((entry) => !query.changedOnly || entry.changed)

@@ -137,6 +137,8 @@ Branch commands:
   branch query <rootId> <branchId> [--resolver <id>] [--query <text>] [--top <n>] [--kind <csv>] [--from-seq <n>] [--to-seq <n>]
   branch heap-update <rootId> <branchId> [--resolver <id|all>] [--snapshot <n|latest>]  Repair/materialize resolved heaps
   branch priority <rootId> <branchId> --priority <n> [--node <id>|--heap|--diff <eventId>] [--reason <text>]
+  branch priority list <rootId> <branchId> [--target-kind <kind>] [--target <id>]
+  branch priority delete <rootId> <branchId> <factId>
   branch promote <rootId> <branchId>
 
 Diff commands:
@@ -983,6 +985,56 @@ const commandBranch = async (config: CliConfig, args: ParsedArgs) => {
     return;
   }
   if (sub === "priority" || sub === "prioritize") {
+    const action = args.positionals[2];
+    if (action === "list" || action === "ls") {
+      const rootId =
+        args.positionals[3] || flagString(args, "drop") || flagString(args, "id");
+      const branchId = args.positionals[4] || flagString(args, "branch");
+      if (!rootId || !branchId) {
+        throw new CliError("Usage: nd branch priority list <rootId> <branchId>");
+      }
+
+      const params = new URLSearchParams();
+      const resolverId = flagString(args, "resolver") || flagString(args, "resolverId");
+      const targetKind = flagString(args, "target-kind") || flagString(args, "targetKind");
+      const targetId = flagString(args, "target") || flagString(args, "targetId");
+      const factId = flagString(args, "fact") || flagString(args, "factId");
+      const limit = flagString(args, "limit");
+      if (resolverId) params.set("resolverId", resolverId);
+      if (targetKind) params.set("targetKind", targetKind);
+      if (targetId) params.set("targetId", targetId);
+      if (factId) params.set("factId", factId);
+      if (limit) params.set("limit", limit);
+      const suffix = params.size ? `?${params}` : "";
+      const response = await request(
+        config,
+        `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/resolved/priority${suffix}`,
+      );
+      print(config, response.data);
+      return;
+    }
+
+    if (action === "delete" || action === "del" || action === "rm") {
+      const rootId =
+        args.positionals[3] || flagString(args, "drop") || flagString(args, "id");
+      const branchId = args.positionals[4] || flagString(args, "branch");
+      const factId =
+        args.positionals[5] || flagString(args, "fact") || flagString(args, "factId");
+      if (!rootId || !branchId || !factId) {
+        throw new CliError(
+          "Usage: nd branch priority delete <rootId> <branchId> <factId>",
+        );
+      }
+
+      const response = await request(
+        config,
+        `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/resolved/priority/${encodeURIComponent(factId)}`,
+        { method: "DELETE" },
+      );
+      print(config, response.data);
+      return;
+    }
+
     const rootId =
       args.positionals[2] || flagString(args, "drop") || flagString(args, "id");
     const branchId = args.positionals[3] || flagString(args, "branch");
@@ -1066,7 +1118,7 @@ const commandBranch = async (config: CliConfig, args: ParsedArgs) => {
     return;
   }
   throw new CliError(
-    "Usage: nd branch <list|resolve|content|snapshots|query|heap-update|promote> ...",
+    "Usage: nd branch <list|resolve|content|snapshots|query|heap-update|priority|promote> ...",
   );
 };
 

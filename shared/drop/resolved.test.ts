@@ -377,6 +377,51 @@ describe("resolved drop helpers", () => {
     );
   });
 
+  it("uses diff priority facts when scoring nodes with matching diff refs", async () => {
+    const content = [
+      "# Plan",
+      "",
+      "Common priority candidate alpha.",
+      "",
+      "Common priority candidate beta.",
+    ].join("\n");
+    const state = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      branchId: "clone_anonymous",
+      snapshotId: 7,
+      content,
+    });
+    const betaStart = content.indexOf("Common priority candidate beta");
+    const [eventRef] = changedRangesFromDropDiffEvents([
+      {
+        eventId: "evt-beta",
+        seq: 13,
+        dropId: "root-1",
+        sourceClientId: "agent",
+        createdAt: 457,
+        ops: [
+          {
+            type: "insert",
+            start: betaStart,
+            end: betaStart,
+            text: "Common ",
+          },
+        ],
+      },
+    ]);
+
+    const results = queryResolvedDocumentNodes(state, {
+      q: "common priority candidate",
+      events: [eventRef],
+      priorityByDiffEventId: { "evt-beta": 5 },
+      limit: 2,
+    });
+
+    expect(results[0].node.text).toContain("beta");
+    expect(results[0].reasons).toContain("priority-fact");
+    expect(results[0].eventRefs?.[0].eventId).toBe("evt-beta");
+  });
+
   it("validates semantic heap delta, node ref, and priority fact records", async () => {
     const nodeHash = await hashMarkdownSource("node payload");
     const sourceHash = await hashMarkdownSource("# Runtime Plan");
