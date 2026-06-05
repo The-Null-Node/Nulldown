@@ -7,6 +7,14 @@
 # Production: https://your-app.pages.dev (set in Cloudflare Dashboard)
 PUBLIC_BASE_URL=http://localhost:8788
 
+# Public RSA-OAEP key used by the browser build to create provider-escrow drops.
+# Also expose this as VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK when running `bun run build`.
+VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK={"kty":"RSA","kid":"provider","alg":"RSA-OAEP-256","key_ops":["encrypt"],"n":"...","e":"AQAB"}
+
+# Private matching provider key for Pages Functions unlock/diff/provider flows.
+# Set the real value as an encrypted Pages secret, not in committed config.
+PROVIDER_ENCRYPTION_PRIVATE_JWK={"kty":"RSA","kid":"provider","alg":"RSA-OAEP-256","key_ops":["decrypt"],"n":"...","e":"AQAB","d":"..."}
+
 # R2 bucket binding is configured in wrangler.toml, not here
 # For secrets like API keys, add them below:
 # MY_SECRET_KEY=your-secret-here
