@@ -110,6 +110,14 @@ bun run nd -- --account <accountId> branch priority list <rootId> <branchId>
 bun run nd -- --account <accountId> branch priority delete <rootId> <branchId> <factId>
 ```
 
+Store and query optional NullMem records for agent-facing facts, procedures, and capability memory:
+
+```bash
+bun run nd -- --account <accountId> branch memory fact <rootId> <branchId> --text "Use approval nullplugs for explicit user confirmation" --labels nullplug,capability-memory
+bun run nd -- --account <accountId> branch memory procedure <rootId> <branchId> --goal "Build approval widget" --summary "Query memory, choose a nullplug, write state facts, verify runtime refs"
+bun run nd -- --account <accountId> branch memory query <rootId> <branchId> --query "approval nullplug" --json
+```
+
 Run the same local server in Docker with `/data` as the persistent volume:
 
 ```bash

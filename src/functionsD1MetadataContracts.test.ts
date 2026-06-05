@@ -6,6 +6,7 @@ import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
 import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
+import { createNullMemFact, createNullMemProcedure, queryNullMem } from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
 import {
@@ -139,6 +140,7 @@ class MemoryD1Database {
   readonly nodeRefs = new Map<string, { ref_json: string; node_hash: string }>();
   readonly nodePayloads = new Map<string, { node_json: string }>();
   readonly priorityFacts = new Map<string, { fact_json: string; root_drop_id: string; branch_id: string; resolver_id: string; created_at: number }>();
+  readonly nullmemRecords = new Map<string, { record_json: string; root_drop_id: string; branch_id: string; record_kind: string; created_at: number; priority: number }>();
   readonly aliases = new Map<string, { full_id: string }>();
   readonly drops = new Map<string, { id: string; visibility: string }>();
   readonly publicDrops = new Map<string, { id: string; created_at: number; updated_at: number }>();
@@ -283,6 +285,18 @@ class MemoryD1Database {
       if (fact?.root_drop_id === params[0] && fact.branch_id === params[1]) {
         this.priorityFacts.delete(String(params[2]));
       }
+      return;
+    }
+
+    if (sql.includes("INSERT INTO nullmem_records")) {
+      this.nullmemRecords.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`, {
+        root_drop_id: String(params[0]),
+        branch_id: String(params[1]),
+        record_kind: String(params[2]),
+        record_json: String(params[12]),
+        priority: Number(params[8] ?? 0),
+        created_at: Number(params[10]),
+      });
       return;
     }
 
@@ -442,6 +456,26 @@ class MemoryD1Database {
             (fact.resolver_id === "" || fact.resolver_id === params[2]),
         )
         .sort((left, right) => right.created_at - left.created_at);
+    }
+
+    if (sql.includes("FROM nullmem_records")) {
+      let bindingIndex = 2;
+      const kind = sql.includes("record_kind = ?")
+        ? String(params[bindingIndex++])
+        : null;
+      const limit = Number(params[bindingIndex]);
+      return [...this.nullmemRecords.values()]
+        .filter(
+          (record) =>
+            (record.root_drop_id === "" && record.branch_id === "") ||
+            (record.root_drop_id === params[0] && record.branch_id === params[1]),
+        )
+        .filter((record) => !kind || record.record_kind === kind)
+        .sort((left, right) => {
+          if (right.priority !== left.priority) return right.priority - left.priority;
+          return right.created_at - left.created_at;
+        })
+        .slice(0, limit);
     }
 
     return [];
@@ -710,6 +744,101 @@ describe("D1 metadata contracts", () => {
     expect(deleteResponse.status).toBe(200);
     expect(deleteBody.deleted).toBe(true);
     expect(db.priorityFacts.size).toBe(0);
+  });
+
+  it("stores and queries branch-scoped NullMem facts and procedures", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const branch = createBranch();
+
+    await bucket.put(branch.rootDropId, JSON.stringify({ content: "# Memory Root" }));
+    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+
+    const headers = {
+      "Content-Type": "application/json",
+      [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+    };
+    const env = { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database };
+    const params = { rootId: branch.rootDropId, branchId: branch.branchId };
+
+    const factResponse = await createNullMemFact(
+      env,
+      params,
+      new Request("https://example.test/api/memory/facts", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          title: "Approval nullplug guidance",
+          text: "Use the approval action nullplug when an agent needs explicit user confirmation.",
+          labels: ["capability-memory", "nullplug"],
+          priority: 2,
+        }),
+      }),
+    );
+    expect(factResponse.status).toBe(201);
+
+    const procedureResponse = await createNullMemProcedure(
+      env,
+      params,
+      new Request("https://example.test/api/memory/procedures", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          goal: "Build a stateful approval widget",
+          summary: "Query memory, choose the approval nullplug, write UI state facts, then verify runtime refs.",
+          steps: [
+            {
+              index: 0,
+              kind: "query",
+              name: "nd branch memory query",
+              status: "success",
+              resultSummary: "Found approval nullplug guidance.",
+            },
+          ],
+          outcome: "success",
+          labels: ["procedure-memory", "nullplug"],
+        }),
+      }),
+    );
+    expect(procedureResponse.status).toBe(201);
+    expect(db.nullmemRecords.size).toBe(2);
+
+    const queryResponse = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=approval%20nullplug&limit=5", {
+        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+      }),
+    );
+    const queryBody = (await queryResponse.json()) as {
+      capsules: Array<{ kind: string; summary: string }>;
+    };
+
+    expect(queryResponse.status).toBe(200);
+    expect(queryBody.capsules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "fact", summary: expect.stringContaining("approval action") }),
+        expect.objectContaining({ kind: "procedure", summary: expect.stringContaining("runtime refs") }),
+      ]),
+    );
+
+    const capabilityResponse = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=branch%20memory%20query&kind=capability", {
+        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+      }),
+    );
+    const capabilityBody = (await capabilityResponse.json()) as {
+      capsules: Array<{ recordId: string }>;
+    };
+
+    expect(capabilityResponse.status).toBe(200);
+    expect(capabilityBody.capsules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ recordId: "capability:tool:nd-branch-memory-query" }),
+      ]),
+    );
   });
 
   for (const headEventSeq of [null, -1] as const) {

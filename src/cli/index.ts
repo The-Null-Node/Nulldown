@@ -136,6 +136,9 @@ Branch commands:
   branch snapshots <rootId> <branchId>
   branch query <rootId> <branchId> [--resolver <id>] [--query <text>] [--top <n>] [--kind <csv>] [--from-seq <n>] [--to-seq <n>]
   branch heap-update <rootId> <branchId> [--resolver <id|all>] [--snapshot <n|latest>]  Repair/materialize resolved heaps
+  branch memory query <rootId> <branchId> [--query <text>] [--kind <kind>] [--labels <a,b>]
+  branch memory fact <rootId> <branchId> --text <text> [--title <text>] [--labels <a,b>]
+  branch memory procedure <rootId> <branchId> --goal <text> --summary <text> [--steps <json>]
   branch priority <rootId> <branchId> --priority <n> [--node <id>|--heap|--diff <eventId>] [--reason <text>]
   branch priority list <rootId> <branchId> [--target-kind <kind>] [--target <id>]
   branch priority delete <rootId> <branchId> <factId>
@@ -983,6 +986,116 @@ const commandBranch = async (config: CliConfig, args: ParsedArgs) => {
     );
     print(config, response.data);
     return;
+  }
+  if (sub === "memory" || sub === "mem") {
+    const action = args.positionals[2];
+    const rootId =
+      args.positionals[3] || flagString(args, "drop") || flagString(args, "id");
+    const branchId = args.positionals[4] || flagString(args, "branch");
+    if (!rootId || !branchId) {
+      throw new CliError(
+        "Usage: nd branch memory <query|fact|procedure> <rootId> <branchId>",
+      );
+    }
+
+    const labels = flagString(args, "labels")
+      ?.split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    if (action === "query" || action === "search" || action === "q") {
+      const params = new URLSearchParams();
+      const query = flagString(args, "query") || flagString(args, "q");
+      const kind = flagString(args, "kind");
+      const limit = flagString(args, "limit");
+      if (query) params.set("query", query);
+      if (kind) params.set("kind", kind);
+      if (labels?.length) params.set("labels", labels.join(","));
+      if (limit) params.set("limit", limit);
+      const suffix = params.size ? `?${params}` : "";
+      const response = await request(
+        config,
+        `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/memory/query${suffix}`,
+      );
+      print(config, response.data);
+      return;
+    }
+
+    if (action === "fact" || action === "note") {
+      const text = flagString(args, "text") || flagString(args, "body");
+      if (!text) {
+        throw new CliError("Usage: nd branch memory fact <rootId> <branchId> --text <text>");
+      }
+      const metadata = await parseMetadata(args);
+      const body: Record<string, unknown> = { text };
+      const title = flagString(args, "title");
+      const targetKind = flagString(args, "target-kind") || flagString(args, "targetKind");
+      const targetId = flagString(args, "target") || flagString(args, "targetId");
+      const priority = flagString(args, "priority");
+      const confidence = flagString(args, "confidence");
+      if (title) body.title = title;
+      if (targetKind) body.targetKind = targetKind;
+      if (targetId) body.targetId = targetId;
+      if (labels?.length) body.labels = labels;
+      if (priority) body.priority = Number.parseFloat(priority);
+      if (confidence) body.confidence = Number.parseFloat(confidence);
+      if (metadata) body.metadata = metadata;
+
+      const response = await request(
+        config,
+        `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/memory/facts`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      print(config, response.data);
+      return;
+    }
+
+    if (action === "procedure" || action === "proc") {
+      const goal = flagString(args, "goal");
+      const summary = flagString(args, "summary");
+      if (!goal || !summary) {
+        throw new CliError(
+          "Usage: nd branch memory procedure <rootId> <branchId> --goal <text> --summary <text>",
+        );
+      }
+      const metadata = await parseMetadata(args);
+      const stepsRaw =
+        flagString(args, "steps") ||
+        flagString(args, "steps-json") ||
+        flagString(args, "stepsJson");
+      const body: Record<string, unknown> = { goal, summary };
+      const outcome = flagString(args, "outcome");
+      const reusableAs = flagString(args, "reusable-as") || flagString(args, "reusableAs");
+      const priority = flagString(args, "priority");
+      const confidence = flagString(args, "confidence");
+      if (stepsRaw) body.steps = parseJsonLoose(stepsRaw);
+      if (outcome) body.outcome = outcome;
+      if (reusableAs) body.reusableAs = reusableAs;
+      if (labels?.length) body.labels = labels;
+      if (priority) body.priority = Number.parseFloat(priority);
+      if (confidence) body.confidence = Number.parseFloat(confidence);
+      if (metadata) body.metadata = metadata;
+
+      const response = await request(
+        config,
+        `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/memory/procedures`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      print(config, response.data);
+      return;
+    }
+
+    throw new CliError(
+      "Usage: nd branch memory <query|fact|procedure> <rootId> <branchId>",
+    );
   }
   if (sub === "priority" || sub === "prioritize") {
     const action = args.positionals[2];

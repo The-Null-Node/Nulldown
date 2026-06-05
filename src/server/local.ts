@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { isDropIdToken, toShortDropId } from "../../shared/drop/id";
 import { createRequestLogger, toLogRef } from "../../functions/api/_lib/core/logging/logger";
 import { getBranchContent, listBranchesForDrop, listBranchSnapshots, resolveBranchForRequest } from "../../functions/api/_lib/branches/services/routeService";
+import { createNullMemFact, createNullMemProcedure, queryNullMem } from "../../functions/api/_lib/nullmem/service";
 import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap, updateResolvedHeap } from "../../functions/api/_lib/resolved/heap/service";
 import { pollDiffEvents, postDiffEvents } from "../../functions/api/_lib/diffs/transport/service";
 import { resolveRemoteDropId, removeRemoteAliasIfMatch } from "../../functions/api/_lib/drops/identity/id";
@@ -196,6 +197,9 @@ export const createLocalNulldownServer = ({
     { method: "GET", path: "/api/branches/:rootId/:branchId/resolved/priority", handler: ({ request, params }) => listResolvedPriorityFacts(env, routeParams(params), request) },
     { method: "POST", path: "/api/branches/:rootId/:branchId/resolved/priority", handler: ({ request, params }) => createResolvedPriorityFact(env, routeParams(params), request) },
     { method: "DELETE", path: "/api/branches/:rootId/:branchId/resolved/priority/:factId", handler: ({ request, params }) => deleteResolvedPriorityFact(env, routeParams(params), request) },
+    { method: "GET", path: "/api/branches/:rootId/:branchId/memory/query", handler: ({ request, params }) => queryNullMem(env, routeParams(params), request) },
+    { method: "POST", path: "/api/branches/:rootId/:branchId/memory/facts", handler: ({ request, params }) => createNullMemFact(env, routeParams(params), request) },
+    { method: "POST", path: "/api/branches/:rootId/:branchId/memory/procedures", handler: ({ request, params }) => createNullMemProcedure(env, routeParams(params), request) },
   ];
 
   return createNulldownServer({ routes });

@@ -939,6 +939,106 @@ Response excerpt:
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority/[factId].ts`.
 
+### GET /api/branches/:rootId/:branchId/memory/query
+
+Query branch-scoped NullMem capsules. NullMem is optional memory over facts,
+procedures, capabilities, themes, tools, nullplugs, and future MCP calls. It is
+not authoritative for branch replay. The authenticated account must own or write
+the branch.
+
+Optional query parameters:
+
+- `q` / `query`: Lexical query text.
+- `kind`: Filter to `fact`, `procedure`, or `capability`.
+- `labels`: Comma-separated labels that all returned records must include.
+- `limit`: Maximum capsules to return, up to 100.
+
+CLI example:
+
+```bash
+bun run nd -- --account <accountId> branch memory query <rootId> <branchId> --query "approval nullplug" --json
+```
+
+Response excerpt:
+
+```json
+{
+  "rootDropId": "canonical-root-id",
+  "branchId": "branch-id",
+  "capsules": [
+    {
+      "recordId": "memfact:...",
+      "kind": "fact",
+      "summary": "Use approval nullplugs for explicit user confirmation.",
+      "labels": ["nullplug", "capability-memory"]
+    }
+  ]
+}
+```
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/memory/query.ts`.
+
+### POST /api/branches/:rootId/:branchId/memory/facts
+
+Create a branch-scoped NullMem fact. Facts are D1/SQLite-backed annotations and
+do not mutate markdown or branch diffs. The authenticated account must own or
+write the branch.
+
+Request:
+
+```json
+{
+  "title": "Approval nullplug guidance",
+  "text": "Use approval nullplugs for explicit user confirmation.",
+  "labels": ["nullplug", "capability-memory"],
+  "priority": 2,
+  "targetKind": "nullplug",
+  "targetId": "approval"
+}
+```
+
+CLI example:
+
+```bash
+bun run nd -- --account <accountId> branch memory fact <rootId> <branchId> --text "Use approval nullplugs for explicit user confirmation" --labels nullplug,capability-memory --json
+```
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/memory/facts.ts`.
+
+### POST /api/branches/:rootId/:branchId/memory/procedures
+
+Create a branch-scoped NullMem procedure. Procedures record reusable call or tool
+sequences, outcomes, and source refs so agents can reuse prior reasoning without
+replaying whole sessions.
+
+Request:
+
+```json
+{
+  "goal": "Build a stateful approval widget",
+  "summary": "Query memory, choose approval nullplug, write state facts, verify runtime refs.",
+  "steps": [
+    {
+      "index": 0,
+      "kind": "query",
+      "name": "nd branch memory query",
+      "status": "success",
+      "resultSummary": "Found approval guidance."
+    }
+  ],
+  "outcome": "success",
+  "labels": ["procedure-memory", "nullplug"]
+}
+```
+
+CLI example:
+
+```bash
+bun run nd -- --account <accountId> branch memory procedure <rootId> <branchId> --goal "Build approval widget" --summary "Query memory, choose a nullplug, write state facts" --json
+```
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/memory/procedures.ts`.
+
 ### POST /api/branches/:rootId/:branchId/resolved/update
 
 Repair or eagerly materialize derived resolved heaps for a branch snapshot. This
