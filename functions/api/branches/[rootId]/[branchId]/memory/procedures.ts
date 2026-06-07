@@ -1,4 +1,5 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import { createCloudflareVoidProvider } from "../../../../_lib/core/platform/cloudflareProvider";
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
 import {
   createNullMemProcedure,
@@ -13,7 +14,9 @@ export const onRequestPost: PagesFunction<Env, "rootId" | "branchId"> = ({
   env,
   params,
   request,
-}) => createNullMemProcedure(env, params, request);
+}) => createNullMemProcedure(env, params, request, {
+  memory: createCloudflareVoidProvider(env).memory,
+});
 
 export const onRequest: PagesFunction<Env, "rootId" | "branchId"> = async (context) => {
   if (context.request.method === "POST") {

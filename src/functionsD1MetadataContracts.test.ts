@@ -9,6 +9,7 @@ import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPri
 import { createNullMemFact, createNullMemProcedure, queryNullMem } from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
+import { writeRemoteNullplugManifest } from "../shared/nullplug/registry";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
 } from "../shared/drop/resolved";
@@ -761,6 +762,30 @@ describe("D1 metadata contracts", () => {
     const env = { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database };
     const params = { rootId: branch.rootDropId, branchId: branch.branchId };
 
+    await writeRemoteNullplugManifest(
+      bucket as unknown as R2Bucket,
+      {
+        version: 1,
+        status: "active",
+        createdAt: 123,
+        updatedAt: 456,
+        registeredBy: "acct_1",
+        manifest: {
+          id: "remote.summary",
+          version: "1.0.0",
+          endpoint: "https://plugins.nulldown.test/summary",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+          permissions: [
+            { kind: "drop.read", scope: "caller" },
+            { kind: "network", hosts: ["api.nulldown.test"] },
+          ],
+          description: "Summarizes a linked drop.",
+        },
+      },
+      ["plugins.nulldown.test", "api.nulldown.test"],
+    );
+
     const factResponse = await createNullMemFact(
       env,
       params,
@@ -837,6 +862,27 @@ describe("D1 metadata contracts", () => {
     expect(capabilityBody.capsules).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ recordId: "capability:tool:nd-branch-memory-query" }),
+      ]),
+    );
+
+    const remoteCapabilityResponse = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=summarizes%20linked%20drop&kind=capability&labels=remote-nullplug", {
+        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+      }),
+    );
+    const remoteCapabilityBody = (await remoteCapabilityResponse.json()) as {
+      capsules: Array<{ recordId: string; title?: string }>;
+    };
+
+    expect(remoteCapabilityResponse.status).toBe(200);
+    expect(remoteCapabilityBody.capsules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recordId: "capability:nullplug:remote.summary:1.0.0",
+          title: "Remote nullplug: remote.summary",
+        }),
       ]),
     );
   });

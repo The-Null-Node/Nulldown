@@ -1,6 +1,7 @@
 import {
   NULLMEM_RECORD_VERSION,
   createBuiltInNullMemCapabilities,
+  createRemoteNullplugCapabilityRecord,
   isNullMemCapabilityRecord,
   isNullMemFactRecord,
   isNullMemProcedureRecord,
@@ -70,5 +71,43 @@ describe("NullMem contracts", () => {
         title: "Query branch memory",
       }),
     );
+  });
+
+  it("converts remote nullplug registry records into capability memory", () => {
+    const capability = createRemoteNullplugCapabilityRecord({
+      version: 1,
+      status: "active",
+      createdAt: 200,
+      updatedAt: 250,
+      registeredBy: "acct_1",
+      manifest: {
+        id: "remote.summary",
+        version: "1.0.0",
+        endpoint: "https://plugins.nulldown.test/summary",
+        inputSchema: { type: "object" },
+        outputSchema: { type: "object" },
+        permissions: [
+          { kind: "drop.read", scope: "caller" },
+          { kind: "network", hosts: ["api.nulldown.test"] },
+        ],
+        description: "Summarizes a linked drop.",
+      },
+    });
+
+    expect(isNullMemCapabilityRecord(capability)).toBe(true);
+    expect(capability).toEqual(
+      expect.objectContaining({
+        recordId: "capability:nullplug:remote.summary:1.0.0",
+        capabilityKind: "nullplug",
+        capabilityId: "remote.summary",
+        capabilityVersion: "1.0.0",
+        labels: expect.arrayContaining(["remote-nullplug", "permission:network"]),
+        metadata: expect.objectContaining({
+          endpoint: "https://plugins.nulldown.test/summary",
+          registeredBy: "acct_1",
+        }),
+      }),
+    );
+    expect(nullMemRecordText(capability)).toContain("Summarizes a linked drop");
   });
 });

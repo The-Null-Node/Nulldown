@@ -13,6 +13,7 @@ import { parseJsonColumn } from "../core/d1/metadata";
 import { resolveRemoteDropId } from "../drops/identity/id";
 import {
   NULLMEM_RECORD_VERSION,
+  createRemoteNullplugCapabilityRecord,
   createBuiltInNullMemCapabilities,
   isNullMemFactRecord,
   isNullMemProcedureRecord,
@@ -25,8 +26,17 @@ import {
   type NullMemRecord,
   type NullMemSourceRef,
 } from "../../../../shared/nullmem";
+import {
+  NULLPLUG_REGISTRY_LATEST_KEY_PREFIX,
+  isRemoteNullplugRegistryRecord,
+} from "../../../../shared/nullplug/registry";
 import type { JsonValue } from "../../../../shared/nullplug/types";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../src/server/ports";
+import type {
+  VoidMemory,
+  VoidMemoryFactInput,
+  VoidMemoryProcedureInput,
+} from "../../../../src/server/provider";
 
 /** Environment required by branch-scoped NullMem services. */
 export interface NullMemEnv extends AccountAuthEnv {
@@ -71,6 +81,18 @@ interface NullMemProcedureRequest {
   confidence?: number;
   sourceRefs?: NullMemSourceRef[];
   metadata?: Record<string, JsonValue>;
+}
+
+/** Dependencies required to compose the NullMem service. */
+export interface CreateNullMemServiceOptions {
+  /** Blob store used to read optional capability source catalogs. */
+  blobs: VoidBlobStore;
+  /** SQL metadata store used to read and write memory records. */
+  sql?: VoidSqlStore;
+}
+
+interface NullMemHttpServices {
+  memory: VoidMemory;
 }
 
 const NULLMEM_BODY_MAX_BYTES = 256_000;
@@ -305,15 +327,168 @@ const sortRecords = (records: NullMemRecord[], tokens: readonly string[]): NullM
     return left.recordId.localeCompare(right.recordId);
   });
 
+const readRemoteNullplugCapabilityRecords = async (
+  store: VoidBlobStore,
+): Promise<NullMemRecord[]> => {
+  const records: NullMemRecord[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const listed = await store.list({
+      prefix: NULLPLUG_REGISTRY_LATEST_KEY_PREFIX,
+      cursor,
+      limit: 200,
+    });
+
+    const pageRecords = await Promise.all(
+      listed.objects.map(async (entry) => {
+        const object = await store.get(entry.key);
+        if (!object) return null;
+        try {
+          const parsed = await object.json();
+          if (!isRemoteNullplugRegistryRecord(parsed) || parsed.status !== "active") {
+            return null;
+          }
+          return createRemoteNullplugCapabilityRecord(parsed);
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    records.push(...pageRecords.filter((record): record is NullMemRecord => record !== null));
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+
+  return records;
+};
+
+/** Creates the composed VoidProvider memory facade backed by NullMem records. */
+export const createNullMemService = ({
+  blobs,
+  sql,
+}: CreateNullMemServiceOptions): VoidMemory => ({
+  query: async ({ rootDropId, branchId, q, kind, labels = [], limit = 20 }) => {
+    if (!sql) throw new Error("SQL metadata store is required to query memory.");
+    const tokens = queryTokens(q);
+    const normalizedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const stored = await readNullMemRecordsFromD1(
+      sql,
+      rootDropId,
+      branchId,
+      kind,
+      500,
+    );
+    const builtIns = kind && kind !== "capability"
+      ? []
+      : createBuiltInNullMemCapabilities(0);
+    const remoteNullplugCapabilities = kind && kind !== "capability"
+      ? []
+      : await readRemoteNullplugCapabilityRecords(blobs).catch(() => []);
+    const records = sortRecords(
+      [...builtIns, ...remoteNullplugCapabilities, ...stored],
+      tokens,
+    )
+      .filter((record) => recordMatches(record, tokens, labels))
+      .slice(0, normalizedLimit);
+    const capsules: NullMemCapsule[] = records.map(nullMemRecordToCapsule);
+
+    return {
+      rootDropId,
+      branchId,
+      query: { q, kind, labels, limit: normalizedLimit },
+      capsules,
+      records,
+    };
+  },
+  createFact: async ({ rootDropId, branchId, fact }) => {
+    if (!sql) throw new Error("SQL metadata store is required to create memory facts.");
+    const now = Date.now();
+    const record: NullMemFactRecord = {
+      version: NULLMEM_RECORD_VERSION,
+      kind: "fact",
+      recordId: fact.recordId ?? `memfact:${crypto.randomUUID()}`,
+      rootDropId,
+      branchId,
+      targetKind: fact.targetKind,
+      targetId: fact.targetId,
+      title: fact.title,
+      text: fact.text,
+      labels: fact.labels,
+      priority: fact.priority,
+      confidence: fact.confidence,
+      sourceRefs: fact.sourceRefs ?? [{ kind: "branch", rootDropId, branchId }],
+      createdAt: now,
+      metadata: fact.metadata,
+    };
+
+    if (!isNullMemFactRecord(record)) {
+      throw new Error("Memory fact payload is invalid.");
+    }
+
+    await writeNullMemRecordToD1(sql, record);
+    return { rootDropId, branchId, record };
+  },
+  createProcedure: async ({ rootDropId, branchId, procedure }) => {
+    if (!sql) throw new Error("SQL metadata store is required to create memory procedures.");
+    const now = Date.now();
+    const record: NullMemProcedureRecord = {
+      version: NULLMEM_RECORD_VERSION,
+      kind: "procedure",
+      recordId: procedure.recordId ?? `memproc:${crypto.randomUUID()}`,
+      rootDropId,
+      branchId,
+      goal: procedure.goal,
+      summary: procedure.summary,
+      steps: procedure.steps ?? [],
+      outcome: procedure.outcome ?? "success",
+      reusableAs: procedure.reusableAs,
+      labels: procedure.labels,
+      priority: procedure.priority,
+      confidence: procedure.confidence,
+      sourceRefs: procedure.sourceRefs ?? [{ kind: "branch", rootDropId, branchId }],
+      createdAt: now,
+      metadata: procedure.metadata,
+    };
+
+    if (!isNullMemProcedureRecord(record)) {
+      throw new Error("Memory procedure payload is invalid.");
+    }
+
+    await writeNullMemRecordToD1(sql, record);
+    return { rootDropId, branchId, record };
+  },
+});
+
+const createNullMemHttpServices = (
+  env: NullMemEnv,
+  services?: Partial<NullMemHttpServices>,
+): NullMemHttpServices | { error: Response } => {
+  if (!env.DB) {
+    return {
+      error: jsonErrorResponse(
+        500,
+        "sql_store_required",
+        "SQL metadata store is required to use memory.",
+      ),
+    };
+  }
+  if (services?.memory) return { memory: services.memory };
+
+  return {
+    memory: createNullMemService({ blobs: env.R2_BUCKET, sql: env.DB }),
+  };
+};
+
 /** Queries branch-scoped NullMem records and built-in capability memory. */
 export const queryNullMem = async (
   env: NullMemEnv,
   params: NullMemParams,
   request: Request,
+  services?: Partial<NullMemHttpServices>,
 ): Promise<Response> => {
-  if (!env.DB) {
-    return jsonErrorResponse(500, "sql_store_required", "SQL metadata store is required to query memory.");
-  }
+  const memoryServices = createNullMemHttpServices(env, services);
+  if ("error" in memoryServices) return memoryServices.error;
 
   try {
     const target = await resolveNullMemTarget(env, params);
@@ -329,22 +504,17 @@ export const queryNullMem = async (
     const q = url.searchParams.get("q") ?? url.searchParams.get("query") ?? undefined;
     const labels = parseLabelsParam(url.searchParams.get("labels") ?? url.searchParams.get("label"));
     const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
-    const tokens = queryTokens(q);
 
-    const stored = await readNullMemRecordsFromD1(env.DB, target.rootDropId, target.branchId, kind ?? undefined, 500);
-    const builtIns = kind && kind !== "capability" ? [] : createBuiltInNullMemCapabilities(0);
-    const records = sortRecords([...builtIns, ...stored], tokens)
-      .filter((record) => recordMatches(record, tokens, labels))
-      .slice(0, limit);
-    const capsules: NullMemCapsule[] = records.map(nullMemRecordToCapsule);
-
-    return jsonResponse({
+    const result = await memoryServices.memory.query({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
-      query: { q, kind, labels, limit },
-      capsules,
-      records,
+      q,
+      kind: kind ?? undefined,
+      labels,
+      limit,
     });
+
+    return jsonResponse({ ...result, query: { q, kind, labels, limit } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return jsonErrorResponse(500, "nullmem_query_failed", `Failed to query memory: ${message}`);
@@ -356,10 +526,10 @@ export const createNullMemFact = async (
   env: NullMemEnv,
   params: NullMemParams,
   request: Request,
+  services?: Partial<NullMemHttpServices>,
 ): Promise<Response> => {
-  if (!env.DB) {
-    return jsonErrorResponse(500, "sql_store_required", "SQL metadata store is required to create memory facts.");
-  }
+  const memoryServices = createNullMemHttpServices(env, services);
+  if ("error" in memoryServices) return memoryServices.error;
 
   try {
     const target = await resolveNullMemTarget(env, params);
@@ -372,35 +542,17 @@ export const createNullMemFact = async (
       return jsonErrorResponse(400, "validation_failed", "Memory fact payload must include text.");
     }
 
-    const now = Date.now();
-    const record: NullMemFactRecord = {
-      version: NULLMEM_RECORD_VERSION,
-      kind: "fact",
-      recordId: parsed.recordId ?? `memfact:${crypto.randomUUID()}`,
+    const result = await memoryServices.memory.createFact({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
-      targetKind: parsed.targetKind,
-      targetId: parsed.targetId,
-      title: parsed.title,
-      text: parsed.text,
-      labels: parsed.labels,
-      priority: parsed.priority,
-      confidence: parsed.confidence,
-      sourceRefs: parsed.sourceRefs ?? [
-        { kind: "branch", rootDropId: target.rootDropId, branchId: target.branchId },
-      ],
-      createdAt: now,
-      metadata: parsed.metadata,
-    };
-
-    if (!isNullMemFactRecord(record)) {
-      return jsonErrorResponse(400, "validation_failed", "Memory fact payload is invalid.");
-    }
-
-    await writeNullMemRecordToD1(env.DB, record);
-    return jsonResponse({ rootDropId: target.rootDropId, branchId: target.branchId, record }, 201);
+      fact: parsed as VoidMemoryFactInput,
+    });
+    return jsonResponse(result, 201);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === "Memory fact payload is invalid.") {
+      return jsonErrorResponse(400, "validation_failed", message);
+    }
     return jsonErrorResponse(500, "nullmem_fact_failed", `Failed to create memory fact: ${message}`);
   }
 };
@@ -410,10 +562,10 @@ export const createNullMemProcedure = async (
   env: NullMemEnv,
   params: NullMemParams,
   request: Request,
+  services?: Partial<NullMemHttpServices>,
 ): Promise<Response> => {
-  if (!env.DB) {
-    return jsonErrorResponse(500, "sql_store_required", "SQL metadata store is required to create memory procedures.");
-  }
+  const memoryServices = createNullMemHttpServices(env, services);
+  if ("error" in memoryServices) return memoryServices.error;
 
   try {
     const target = await resolveNullMemTarget(env, params);
@@ -430,36 +582,17 @@ export const createNullMemProcedure = async (
       );
     }
 
-    const now = Date.now();
-    const record: NullMemProcedureRecord = {
-      version: NULLMEM_RECORD_VERSION,
-      kind: "procedure",
-      recordId: parsed.recordId ?? `memproc:${crypto.randomUUID()}`,
+    const result = await memoryServices.memory.createProcedure({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
-      goal: parsed.goal,
-      summary: parsed.summary,
-      steps: parsed.steps ?? [],
-      outcome: parsed.outcome ?? "success",
-      reusableAs: parsed.reusableAs,
-      labels: parsed.labels,
-      priority: parsed.priority,
-      confidence: parsed.confidence,
-      sourceRefs: parsed.sourceRefs ?? [
-        { kind: "branch", rootDropId: target.rootDropId, branchId: target.branchId },
-      ],
-      createdAt: now,
-      metadata: parsed.metadata,
-    };
-
-    if (!isNullMemProcedureRecord(record)) {
-      return jsonErrorResponse(400, "validation_failed", "Memory procedure payload is invalid.");
-    }
-
-    await writeNullMemRecordToD1(env.DB, record);
-    return jsonResponse({ rootDropId: target.rootDropId, branchId: target.branchId, record }, 201);
+      procedure: parsed as VoidMemoryProcedureInput,
+    });
+    return jsonResponse(result, 201);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === "Memory procedure payload is invalid.") {
+      return jsonErrorResponse(400, "validation_failed", message);
+    }
     return jsonErrorResponse(
       500,
       "nullmem_procedure_failed",

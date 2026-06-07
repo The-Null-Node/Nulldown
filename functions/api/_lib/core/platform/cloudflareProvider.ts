@@ -6,6 +6,7 @@ import {
 import { createBuiltInNulleditSnapshotters } from "../../../../../src/server/nulledit";
 import { appendEventsToBranch } from "../../nulledit/service";
 import { createCloudflareVoidDataStore } from "./cloudflarePorts";
+import { createNullMemService } from "../../nullmem/service";
 
 /** Cloudflare bindings required to compose the app-facing VoidProvider. */
 export interface CloudflareVoidProviderBindings {
@@ -39,5 +40,6 @@ export const createCloudflareVoidProvider = (
           bindings.DB,
         ),
     },
+    memory: createNullMemService({ blobs: bindings.R2_BUCKET, sql: bindings.DB }),
   });
 };
