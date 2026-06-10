@@ -1,9 +1,12 @@
 # Nulldown API Agent Skill Prompt
 
-Use this prompt when an agent needs to read, create, edit, clone, promote, or document Nulldown drops. Prefer the Bun-native `nd` CLI. Use raw HTTP only as a fallback or when implementing a new client.
+Use this prompt when an agent needs to read, create, edit, clone, promote, or document Nulldown drops. Prefer the Bun-native `nd` CLI and the low-token MCP tools when available. Use raw HTTP only as a fallback or when implementing a new client.
+
+For strategy or onboarding work, fetch the public Strategy Index first: https://nulldown.app/d/zyLn4c. Strategy drops are canonical; this skill is only a bootstrap wrapper.
 
 Published Nulldown docs:
 
+- [Strategy Index](https://nulldown.app/d/zyLn4c)
 - [Docs index](https://nulldown.app/d/r1Belg)
 - [Agent skill prompt](https://nulldown.app/d/6p6ytx)
 - [API reference](https://nulldown.app/d/q7RRSk)
@@ -46,7 +49,7 @@ bun run nd -- doctor --json
 For global installs:
 
 ```bash
-bun install -g .
+bun install -g @thenullnode/nulldown
 nd --help
 ```
 

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { JsonValue } from "./nullplug/types";
 import type { RemoteNullplugRegistryRecord } from "./nullplug/registry";
 
@@ -159,243 +160,222 @@ export interface NullMemCapsule {
   record: NullMemRecord;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const finiteNumberSchema = z.number().finite();
 
-const isString = (value: unknown): value is string => typeof value === "string";
+/** Canonical JSON value schema used by NullMem metadata and capability schemas. */
+export const NullMemJsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    finiteNumberSchema,
+    z.string(),
+    z.array(NullMemJsonValueSchema),
+    z.record(z.string(), NullMemJsonValueSchema),
+  ]),
+);
 
-const isNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
+/** Canonical JSON object schema used by NullMem records. */
+export const NullMemJsonRecordSchema = z.record(
+  z.string(),
+  NullMemJsonValueSchema,
+);
 
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every(isString);
+/** Canonical schema for source references attached to NullMem records. */
+export const NullMemSourceRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("drop"), rootDropId: z.string() }),
+  z.object({
+    kind: z.literal("branch"),
+    rootDropId: z.string(),
+    branchId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("snapshot"),
+    rootDropId: z.string(),
+    branchId: z.string(),
+    snapshotId: finiteNumberSchema,
+  }),
+  z.object({
+    kind: z.literal("diff"),
+    rootDropId: z.string(),
+    branchId: z.string(),
+    eventId: z.string(),
+    seq: finiteNumberSchema.optional(),
+  }),
+  z.object({
+    kind: z.literal("node"),
+    rootDropId: z.string(),
+    branchId: z.string(),
+    resolverId: z.string(),
+    nodeId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("heap"),
+    rootDropId: z.string(),
+    branchId: z.string(),
+    resolverId: z.string(),
+    snapshotId: finiteNumberSchema,
+  }),
+  z.object({
+    kind: z.literal("nullplug"),
+    pluginId: z.string(),
+    version: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("tool"), toolId: z.string() }),
+  z.object({ kind: z.literal("theme"), themeId: z.string() }),
+  z.object({ kind: z.literal("mcp"), toolId: z.string() }),
+]) satisfies z.ZodType<NullMemSourceRef>;
 
-const isJsonValue = (value: unknown, depth = 0): value is JsonValue => {
-  if (depth > 24) return false;
-  if (value === null) return true;
-  if (typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value))
-    return value.every((entry) => isJsonValue(entry, depth + 1));
-  if (isRecord(value))
-    return Object.values(value).every((entry) => isJsonValue(entry, depth + 1));
-  return false;
-};
-
-const isJsonRecord = (value: unknown): value is Record<string, JsonValue> =>
-  isRecord(value) && Object.values(value).every((entry) => isJsonValue(entry));
+const NullMemSourceRefsSchema = z.array(NullMemSourceRefSchema).optional();
 
 /** Returns true when a value is a valid NullMem source reference. */
 export const isNullMemSourceRef = (
   value: unknown,
-): value is NullMemSourceRef => {
-  if (!isRecord(value) || !isString(value.kind)) return false;
-  if (value.kind === "drop") return isString(value.rootDropId);
-  if (value.kind === "branch")
-    return isString(value.rootDropId) && isString(value.branchId);
-  if (value.kind === "snapshot") {
-    return (
-      isString(value.rootDropId) &&
-      isString(value.branchId) &&
-      isNumber(value.snapshotId)
-    );
-  }
-  if (value.kind === "diff") {
-    return (
-      isString(value.rootDropId) &&
-      isString(value.branchId) &&
-      isString(value.eventId) &&
-      (value.seq === undefined || isNumber(value.seq))
-    );
-  }
-  if (value.kind === "node") {
-    return (
-      isString(value.rootDropId) &&
-      isString(value.branchId) &&
-      isString(value.resolverId) &&
-      isString(value.nodeId)
-    );
-  }
-  if (value.kind === "heap") {
-    return (
-      isString(value.rootDropId) &&
-      isString(value.branchId) &&
-      isString(value.resolverId) &&
-      isNumber(value.snapshotId)
-    );
-  }
-  if (value.kind === "nullplug") {
-    return (
-      isString(value.pluginId) &&
-      (value.version === undefined || isString(value.version))
-    );
-  }
-  if (value.kind === "tool" || value.kind === "mcp")
-    return isString(value.toolId);
-  if (value.kind === "theme") return isString(value.themeId);
-  return false;
-};
+): value is NullMemSourceRef => NullMemSourceRefSchema.safeParse(value).success;
 
-const isSourceRefs = (value: unknown): value is NullMemSourceRef[] =>
-  value === undefined ||
-  (Array.isArray(value) && value.every(isNullMemSourceRef));
+/** Canonical schema for capability usage examples. */
+export const NullMemCapabilityExampleSchema = z.object({
+  title: z.string().optional(),
+  input: NullMemJsonValueSchema.optional(),
+  output: NullMemJsonValueSchema.optional(),
+  summary: z.string().optional(),
+}) satisfies z.ZodType<NullMemCapabilityExample>;
 
-const isCapabilityExample = (
-  value: unknown,
-): value is NullMemCapabilityExample =>
-  isRecord(value) &&
-  (value.title === undefined || isString(value.title)) &&
-  (value.input === undefined || isJsonValue(value.input)) &&
-  (value.output === undefined || isJsonValue(value.output)) &&
-  (value.summary === undefined || isString(value.summary));
+/** Canonical schema for capability memory records. */
+export const NullMemCapabilityRecordSchema = z.object({
+  version: z.literal(NULLMEM_RECORD_VERSION),
+  kind: z.literal("capability"),
+  recordId: z.string(),
+  capabilityKind: z.enum(["nullplug", "tool", "theme", "mcp"]),
+  capabilityId: z.string(),
+  capabilityVersion: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string(),
+  inputSchema: NullMemJsonValueSchema.optional(),
+  outputSchema: NullMemJsonValueSchema.optional(),
+  permissions: z.array(NullMemJsonValueSchema).optional(),
+  whenToUse: z.array(z.string()).optional(),
+  whenNotToUse: z.array(z.string()).optional(),
+  examples: z.array(NullMemCapabilityExampleSchema).optional(),
+  labels: z.array(z.string()).optional(),
+  priority: finiteNumberSchema.optional(),
+  confidence: finiteNumberSchema.optional(),
+  sourceRefs: NullMemSourceRefsSchema,
+  createdAt: finiteNumberSchema,
+  updatedAt: finiteNumberSchema.optional(),
+  metadata: NullMemJsonRecordSchema.optional(),
+}) satisfies z.ZodType<NullMemCapabilityRecord>;
 
 /** Returns true when a value is a valid NullMem capability record. */
 export const isNullMemCapabilityRecord = (
   value: unknown,
-): value is NullMemCapabilityRecord => {
-  if (!isRecord(value)) return false;
-  if (value.version !== NULLMEM_RECORD_VERSION || value.kind !== "capability")
-    return false;
-  if (!isString(value.recordId) || !isString(value.capabilityId)) return false;
-  if (
-    !["nullplug", "tool", "theme", "mcp"].includes(String(value.capabilityKind))
-  )
-    return false;
-  if (!isString(value.description) || !isNumber(value.createdAt)) return false;
-  if (
-    value.capabilityVersion !== undefined &&
-    !isString(value.capabilityVersion)
-  )
-    return false;
-  if (value.title !== undefined && !isString(value.title)) return false;
-  if (value.inputSchema !== undefined && !isJsonValue(value.inputSchema))
-    return false;
-  if (value.outputSchema !== undefined && !isJsonValue(value.outputSchema))
-    return false;
-  if (
-    value.permissions !== undefined &&
-    (!Array.isArray(value.permissions) || !value.permissions.every(isJsonValue))
-  )
-    return false;
-  if (value.whenToUse !== undefined && !isStringArray(value.whenToUse))
-    return false;
-  if (value.whenNotToUse !== undefined && !isStringArray(value.whenNotToUse))
-    return false;
-  if (
-    value.examples !== undefined &&
-    (!Array.isArray(value.examples) ||
-      !value.examples.every(isCapabilityExample))
-  )
-    return false;
-  if (value.labels !== undefined && !isStringArray(value.labels)) return false;
-  if (value.priority !== undefined && !isNumber(value.priority)) return false;
-  if (value.confidence !== undefined && !isNumber(value.confidence))
-    return false;
-  if (!isSourceRefs(value.sourceRefs)) return false;
-  if (value.updatedAt !== undefined && !isNumber(value.updatedAt)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
-    return false;
-  return true;
-};
+): value is NullMemCapabilityRecord =>
+  NullMemCapabilityRecordSchema.safeParse(value).success;
 
-const isProcedureStep = (value: unknown): value is NullMemProcedureStep => {
-  if (!isRecord(value)) return false;
-  if (!isNumber(value.index) || !isString(value.kind) || !isString(value.name))
-    return false;
-  if (
-    ![
-      "tool.call",
-      "nullplug.call",
-      "mcp.call",
-      "diff.apply",
-      "query",
-      "deploy",
-      "test",
-      "note",
-    ].includes(value.kind)
-  )
-    return false;
-  if (
-    !["success", "failed", "skipped", "partial"].includes(String(value.status))
-  )
-    return false;
-  if (value.argsSummary !== undefined && !isString(value.argsSummary))
-    return false;
-  if (value.resultSummary !== undefined && !isString(value.resultSummary))
-    return false;
-  return isSourceRefs(value.refs);
-};
+/** Canonical schema for reusable procedure steps. */
+export const NullMemProcedureStepSchema = z.object({
+  index: finiteNumberSchema,
+  kind: z.enum([
+    "tool.call",
+    "nullplug.call",
+    "mcp.call",
+    "diff.apply",
+    "query",
+    "deploy",
+    "test",
+    "note",
+  ]),
+  name: z.string(),
+  argsSummary: z.string().optional(),
+  resultSummary: z.string().optional(),
+  status: z.enum(["success", "failed", "skipped", "partial"]),
+  refs: NullMemSourceRefsSchema,
+}) satisfies z.ZodType<NullMemProcedureStep>;
+
+/** Canonical schema for reusable procedure memory records. */
+export const NullMemProcedureRecordSchema = z.object({
+  version: z.literal(NULLMEM_RECORD_VERSION),
+  kind: z.literal("procedure"),
+  recordId: z.string(),
+  rootDropId: z.string().optional(),
+  branchId: z.string().optional(),
+  goal: z.string(),
+  summary: z.string(),
+  steps: z.array(NullMemProcedureStepSchema),
+  outcome: z.enum(["success", "partial", "failed"]),
+  reusableAs: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  priority: finiteNumberSchema.optional(),
+  confidence: finiteNumberSchema.optional(),
+  sourceRefs: NullMemSourceRefsSchema,
+  createdAt: finiteNumberSchema,
+  updatedAt: finiteNumberSchema.optional(),
+  metadata: NullMemJsonRecordSchema.optional(),
+}) satisfies z.ZodType<NullMemProcedureRecord>;
 
 /** Returns true when a value is a valid NullMem procedure record. */
 export const isNullMemProcedureRecord = (
   value: unknown,
-): value is NullMemProcedureRecord => {
-  if (!isRecord(value)) return false;
-  if (value.version !== NULLMEM_RECORD_VERSION || value.kind !== "procedure")
-    return false;
-  if (
-    !isString(value.recordId) ||
-    !isString(value.goal) ||
-    !isString(value.summary)
-  )
-    return false;
-  if (!Array.isArray(value.steps) || !value.steps.every(isProcedureStep))
-    return false;
-  if (!["success", "partial", "failed"].includes(String(value.outcome)))
-    return false;
-  if (value.rootDropId !== undefined && !isString(value.rootDropId))
-    return false;
-  if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.reusableAs !== undefined && !isString(value.reusableAs))
-    return false;
-  if (value.labels !== undefined && !isStringArray(value.labels)) return false;
-  if (value.priority !== undefined && !isNumber(value.priority)) return false;
-  if (value.confidence !== undefined && !isNumber(value.confidence))
-    return false;
-  if (!isSourceRefs(value.sourceRefs)) return false;
-  if (!isNumber(value.createdAt)) return false;
-  if (value.updatedAt !== undefined && !isNumber(value.updatedAt)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
-    return false;
-  return true;
-};
+): value is NullMemProcedureRecord =>
+  NullMemProcedureRecordSchema.safeParse(value).success;
+
+/** Canonical schema for branch-scoped fact memory records. */
+export const NullMemFactRecordSchema = z.object({
+  version: z.literal(NULLMEM_RECORD_VERSION),
+  kind: z.literal("fact"),
+  recordId: z.string(),
+  rootDropId: z.string().optional(),
+  branchId: z.string().optional(),
+  targetKind: z
+    .enum([
+      "drop",
+      "branch",
+      "snapshot",
+      "diff",
+      "node",
+      "heap",
+      "nullplug",
+      "tool",
+      "theme",
+      "mcp",
+      "custom",
+    ])
+    .optional(),
+  targetId: z.string().optional(),
+  title: z.string().optional(),
+  text: z.string(),
+  labels: z.array(z.string()).optional(),
+  priority: finiteNumberSchema.optional(),
+  confidence: finiteNumberSchema.optional(),
+  sourceRefs: NullMemSourceRefsSchema,
+  createdAt: finiteNumberSchema,
+  updatedAt: finiteNumberSchema.optional(),
+  metadata: NullMemJsonRecordSchema.optional(),
+}) satisfies z.ZodType<NullMemFactRecord>;
 
 /** Returns true when a value is a valid NullMem fact record. */
 export const isNullMemFactRecord = (
   value: unknown,
-): value is NullMemFactRecord => {
-  if (!isRecord(value)) return false;
-  if (value.version !== NULLMEM_RECORD_VERSION || value.kind !== "fact")
-    return false;
-  if (
-    !isString(value.recordId) ||
-    !isString(value.text) ||
-    !isNumber(value.createdAt)
-  )
-    return false;
-  if (value.rootDropId !== undefined && !isString(value.rootDropId))
-    return false;
-  if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.targetKind !== undefined && !isString(value.targetKind))
-    return false;
-  if (value.targetId !== undefined && !isString(value.targetId)) return false;
-  if (value.title !== undefined && !isString(value.title)) return false;
-  if (value.labels !== undefined && !isStringArray(value.labels)) return false;
-  if (value.priority !== undefined && !isNumber(value.priority)) return false;
-  if (value.confidence !== undefined && !isNumber(value.confidence))
-    return false;
-  if (!isSourceRefs(value.sourceRefs)) return false;
-  if (value.updatedAt !== undefined && !isNumber(value.updatedAt)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
-    return false;
-  return true;
-};
+): value is NullMemFactRecord =>
+  NullMemFactRecordSchema.safeParse(value).success;
+
+/** Canonical schema for any persisted or built-in NullMem record. */
+export const NullMemRecordSchema = z.discriminatedUnion("kind", [
+  NullMemCapabilityRecordSchema,
+  NullMemProcedureRecordSchema,
+  NullMemFactRecordSchema,
+]) satisfies z.ZodType<NullMemRecord>;
+
+/** Canonical schema for querying NullMem capsules. */
+export const NullMemQuerySchema = z.object({
+  q: z.string().optional(),
+  kind: z.enum(["capability", "procedure", "fact"]).optional(),
+  labels: z.array(z.string()).optional(),
+  limit: finiteNumberSchema.optional(),
+}) satisfies z.ZodType<NullMemQuery>;
 
 /** Returns true when a value is any valid NullMem record. */
 export const isNullMemRecord = (value: unknown): value is NullMemRecord =>
-  isNullMemCapabilityRecord(value) ||
-  isNullMemProcedureRecord(value) ||
-  isNullMemFactRecord(value);
+  NullMemRecordSchema.safeParse(value).success;
 
 /** Builds searchable text for a NullMem record without copying full source content. */
 export const nullMemRecordText = (record: NullMemRecord): string => {

@@ -88,6 +88,13 @@ Fetch a drop:
 bun run nd -- get <id> --json
 ```
 
+Install the package globally with Bun when using the published package:
+
+```bash
+bun install -g @thenullnode/nulldown
+nd --help
+```
+
 Use a local or preview API base:
 
 ```bash
@@ -126,6 +133,16 @@ docker run --rm -p 8788:8788 -v nulldown-data:/data nulldown
 ```
 
 Global installs store CLI state in `~/.config/nulldown` by default.
+
+## MCP
+
+Nulldown ships a stdio MCP server for direct API access without shelling out to `nd`:
+
+```bash
+bun run mcp
+```
+
+Installed package binaries expose the same server as `nd-mcp` and `nulldown-mcp`. Configure it with `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment. For protected diff writes, export an `ND_DIFF_AUTH_TOKEN` from `nd diff token export`; `DIFF_WEBHOOK_SECRET` is also supported for webhook-style signing. The server writes protocol messages only to stdout; diagnostics use stderr.
 
 ## Cloudflare
 

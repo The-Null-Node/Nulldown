@@ -1,8 +1,14 @@
 import type { JsonValue } from "./types";
 import { serializeCanonicalJson } from "../drop/types";
+import {
+  RemoteNullplugManifestSchema,
+  RemoteNullplugRegistryRecordSchema,
+} from "./registrySchemas";
 
-export const NULLPLUG_REGISTRY_MANIFEST_KEY_PREFIX = "__nullplug_registry__/manifests/";
-export const NULLPLUG_REGISTRY_LATEST_KEY_PREFIX = "__nullplug_registry__/latest/";
+export const NULLPLUG_REGISTRY_MANIFEST_KEY_PREFIX =
+  "__nullplug_registry__/manifests/";
+export const NULLPLUG_REGISTRY_LATEST_KEY_PREFIX =
+  "__nullplug_registry__/latest/";
 export const NULLPLUG_MANIFEST_SIGNATURE_PREFIX = "sha256=";
 
 export type NullplugPermission =
@@ -48,38 +54,13 @@ export interface NullplugRegistryJsonStore {
   ): Promise<unknown>;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isString = (value: unknown): value is string => typeof value === "string";
-
-const isNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
-
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every(isString);
-
-const isJsonValue = (value: unknown, depth = 0): value is JsonValue => {
-  if (depth > 24) return false;
-  if (value === null) return true;
-  if (typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) {
-    return value.every((entry) => isJsonValue(entry, depth + 1));
-  }
-  if (isRecord(value)) {
-    return Object.values(value).every((entry) => isJsonValue(entry, depth + 1));
-  }
-  return false;
-};
-
-const isJsonRecord = (value: unknown): value is Record<string, JsonValue> =>
-  isRecord(value) && Object.values(value).every((entry) => isJsonValue(entry));
-
 export const sanitizeNullplugRegistryKeyPart = (value: string): string =>
   value.replace(/[^A-Za-z0-9._:-]/g, "_");
 
-export const remoteNullplugManifestKey = (id: string, version: string): string =>
+export const remoteNullplugManifestKey = (
+  id: string,
+  version: string,
+): string =>
   `${NULLPLUG_REGISTRY_MANIFEST_KEY_PREFIX}${sanitizeNullplugRegistryKeyPart(
     id,
   )}/${sanitizeNullplugRegistryKeyPart(version)}.json`;
@@ -87,56 +68,15 @@ export const remoteNullplugManifestKey = (id: string, version: string): string =
 export const remoteNullplugLatestKey = (id: string): string =>
   `${NULLPLUG_REGISTRY_LATEST_KEY_PREFIX}${sanitizeNullplugRegistryKeyPart(id)}.json`;
 
-const isNullplugPermission = (value: unknown): value is NullplugPermission => {
-  if (!isRecord(value)) return false;
-  if (value.kind === "network") return isStringArray(value.hosts);
-  if (value.kind === "drop.read") {
-    return value.scope === "caller" || value.scope === "explicit";
-  }
-  return (
-    value.kind === "drop.diff.propose" ||
-    value.kind === "stream.create" ||
-    value.kind === "null.call" ||
-    value.kind === "policy.evaluate"
-  );
-};
-
 export const isRemoteNullplugManifest = (
   value: unknown,
-): value is RemoteNullplugManifest => {
-  if (!isRecord(value)) return false;
-  if (!isString(value.id) || !isString(value.version) || !isString(value.endpoint)) {
-    return false;
-  }
-  if (!isJsonRecord(value.inputSchema) || !isJsonRecord(value.outputSchema)) {
-    return false;
-  }
-  if (
-    !Array.isArray(value.permissions) ||
-    !value.permissions.every(isNullplugPermission)
-  ) {
-    return false;
-  }
-  if (value.signature !== undefined && !isString(value.signature)) return false;
-  if (value.author !== undefined && !isString(value.author)) return false;
-  if (value.repository !== undefined && !isString(value.repository)) return false;
-  if (value.description !== undefined && !isString(value.description)) return false;
-  return true;
-};
+): value is RemoteNullplugManifest =>
+  RemoteNullplugManifestSchema.safeParse(value).success;
 
 export const isRemoteNullplugRegistryRecord = (
   value: unknown,
-): value is RemoteNullplugRegistryRecord => {
-  if (!isRecord(value)) return false;
-  if (value.version !== 1) return false;
-  if (!isRemoteNullplugManifest(value.manifest)) return false;
-  if (value.status !== "active" && value.status !== "disabled") return false;
-  if (!isNumber(value.createdAt) || !isNumber(value.updatedAt)) return false;
-  if (value.registeredBy !== undefined && !isString(value.registeredBy)) {
-    return false;
-  }
-  return true;
-};
+): value is RemoteNullplugRegistryRecord =>
+  RemoteNullplugRegistryRecordSchema.safeParse(value).success;
 
 const endpointHost = (endpoint: string): string | null => {
   try {
@@ -193,7 +133,9 @@ export const writeRemoteNullplugManifest = async (
     throw new Error("Invalid remote nullplug registry record.");
   }
   if (!isRemoteNullplugManifestAllowed(record.manifest, allowedHosts)) {
-    throw new Error("Remote nullplug manifest is not allowed by registry host policy.");
+    throw new Error(
+      "Remote nullplug manifest is not allowed by registry host policy.",
+    );
   }
 
   const body = JSON.stringify(record);
