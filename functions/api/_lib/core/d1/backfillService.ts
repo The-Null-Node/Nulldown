@@ -59,6 +59,7 @@ import { verifyBearerToken } from "../auth/bearer";
 import { jsonErrorResponse, jsonResponse } from "../http/responses";
 import { type RequestLogger, toLogRef } from "../logging/logger";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
 
 /** Environment required by D1 metadata backfill. */
 export interface MetadataBackfillEnv {
@@ -86,6 +87,7 @@ export interface MetadataBackfillStats {
   diffCredentialsUpserted: number;
   nullplugFactsUpserted: number;
   resolvedHeapsUpserted: number;
+  searchIndexUpserted: number;
 }
 
 const DEFAULT_LIMIT = 500;
@@ -108,6 +110,7 @@ const createStats = (): MetadataBackfillStats => ({
   diffCredentialsUpserted: 0,
   nullplugFactsUpserted: 0,
   resolvedHeapsUpserted: 0,
+  searchIndexUpserted: 0,
 });
 
 const parseLimit = (value: string | null): number => {
@@ -237,6 +240,17 @@ const upsertWriterPointer = async (
     .bind(rootDropId, writerKey, branchId, now, now)
     .run();
   return true;
+};
+
+const extractTitleFromContent = (content: string): string | null => {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("# ")) {
+      return trimmed.slice(2).trim() || null;
+    }
+  }
+  return null;
 };
 
 const handleBackfillObject = async (
@@ -449,6 +463,48 @@ const handleBackfillObject = async (
   } else {
     await removePublicDropIndexEntry(env.R2_BUCKET, key, env.DB);
     stats.publicIndexRemoved += 1;
+  }
+
+  try {
+    const contentType = object.httpMetadata?.contentType || "";
+    let indexContent: string | null = null;
+
+    if (!contentType.includes("application/json")) {
+      const rawContent = (await object.text()).trim();
+      if (rawContent) {
+        indexContent = rawContent;
+      }
+    } else {
+      try {
+        const parsed = await object.json<unknown>();
+        if (isDropPayload(parsed) && typeof parsed.content === "string" && parsed.content.trim()) {
+          indexContent = parsed.content;
+        }
+      } catch {
+        // Non-JSON or malformed: skip indexing
+      }
+    }
+
+    if (indexContent) {
+      const title = extractTitleFromContent(indexContent);
+      const contentPreview = indexContent.slice(0, 1000);
+      const searchDb = createSearchDatabase(env.DB);
+      await searchDb.index({
+        id: key,
+        dropId: key,
+        title,
+        contentPreview,
+        contentHash: null,
+        ownerAccountId: null,
+        visibility: visibility === "public" ? "public" : "unlisted",
+        createdAt: object.uploaded?.getTime() ?? Date.now(),
+        updatedAt: object.uploaded?.getTime() ?? Date.now(),
+        metadata: null,
+      });
+      stats.searchIndexUpserted += 1;
+    }
+  } catch {
+    // Search indexing failure is non-fatal for backfill.
   }
 };
 

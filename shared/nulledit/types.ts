@@ -36,6 +36,23 @@ export interface SnapshotDiff {
 
 export type SnapshotStatus = "pending" | "rendered";
 
+export type DiffAlgorithm = "prefix-suffix" | "lcs-dp";
+
+export interface DiffOptions {
+  algorithm?: DiffAlgorithm;
+
+  /**
+   * Max changed-middle length squared before LCS-DP falls back to prefix/suffix.
+   * Defaults to 40,000 cells. Prevents O(n*m) blowups on large documents.
+   */
+  maxDpCells?: number;
+}
+
+export interface Differ {
+  readonly algorithm: DiffAlgorithm;
+  compute(previous: string, next: string, options?: DiffOptions): Diff[];
+}
+
 export interface Snapshot {
   id: SnapshotId;
   createdAt: number;

@@ -24,6 +24,7 @@ import {
   type PutDropObjectResult,
 } from "../storage/objectRepository";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
+import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
 
 /** Environment required by the store route service. */
 export interface StoreServiceEnv extends ProviderSigningEnv {
@@ -174,6 +175,54 @@ const upsertDropMetadata = async (input: {
     .run();
 };
 
+const extractTitleFromContent = (content: string): string | null => {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("# ")) {
+      return trimmed.slice(2).trim() || null;
+    }
+  }
+  return null;
+};
+
+const indexDropForSearch = async (
+  db: VoidSqlStore | undefined | null,
+  id: string,
+  content: string,
+  envelope: DropEnvelopeV1 | null,
+  updatedAt: number,
+  logger: { warn: (msg: string, data?: Record<string, unknown>) => void },
+): Promise<void> => {
+  if (!db) return;
+
+  try {
+    const searchDb = createSearchDatabase(db);
+    const title = extractTitleFromContent(content);
+    const contentPreview = content.slice(0, 1000);
+    const indexId = id;
+    const visibility = envelope?.visibility ?? "unlisted";
+
+    await searchDb.index({
+      id: indexId,
+      dropId: id,
+      title,
+      contentPreview,
+      contentHash: null,
+      ownerAccountId: envelope?.accountId ?? null,
+      visibility,
+      createdAt: updatedAt,
+      updatedAt,
+      metadata: envelope?.metadata ?? null,
+    });
+  } catch (error) {
+    logger.warn("store.search_index_failed", {
+      dropRef: id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
 /** Stores a plaintext payload or sealed envelope and returns the HTTP response body. */
 export const storeDrop = async ({
   request,
@@ -197,6 +246,7 @@ export const storeDrop = async ({
     let allocationAttempts = 0;
     let aliasConflictCount = 0;
     let objectConflictCount = 0;
+    let parsedDropPayload: unknown = null;
     const dropRepository = new BlobDropObjectRepository(env.blobs);
 
     if (isJson) {
@@ -231,6 +281,7 @@ export const storeDrop = async ({
         storedPayload = JSON.stringify(signedEnvelope);
       } else if (isDropPayload(parsedRequest.payload)) {
         payloadKind = "drop_payload";
+        parsedDropPayload = parsedRequest.payload;
 
         if (!parsedRequest.payload.content.trim()) {
           logger.warn("store.empty_payload_content", {
@@ -451,6 +502,22 @@ export const storeDrop = async ({
       envelope: storedEnvelope,
       updatedAt,
     });
+
+    if (payloadKind !== "drop_envelope") {
+      const indexContent = payloadKind === "plain_text"
+        ? rawBody
+        : (parsedDropPayload && typeof (parsedDropPayload as Record<string, unknown>).content === "string"
+            ? String((parsedDropPayload as Record<string, unknown>).content)
+            : storedPayload);
+      await indexDropForSearch(
+        env.sql,
+        id,
+        indexContent,
+        storedEnvelope,
+        updatedAt,
+        logger,
+      );
+    }
 
     const baseUrl = resolvePublicBaseUrl(env, request);
     const dropUrl = `${baseUrl}/d/${toShortDropId(id)}`;

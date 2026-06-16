@@ -29,6 +29,7 @@ This repository is the Nulldown codebase. Work as a careful, minimal-change engi
 
 ## Documentation Rules
 
+- Before any Nulldown-hosted plan or document work, load the `nulldown-atomic-diffs` skill. The skill defines the atomic diff protocol, metadata requirements, query-first retrieval workflow, semantic memory writes, and common anti-patterns. Agents that skip this will silently violate the Nulldown editing model.
 - Do not create new `.nmdn` docs on disk for refactor planning. Publish refactor plans as real Nulldown drops with `nd create`.
 - Keep `AGENTS.md` short and prompt-like; do not turn it into the full architecture plan.
 - Update `README.md` when public docs, commands, or architecture entry points change.

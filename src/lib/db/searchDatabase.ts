@@ -1,4 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import type { VoidSqlStore } from "../../server/ports";
+
+export type SearchDatabaseStore = D1Database | VoidSqlStore;
 
 export interface SearchIndexRecord {
   id: string;
@@ -27,9 +30,9 @@ export interface SearchResult {
 }
 
 export class SearchDatabase {
-  private db: D1Database;
+  private db: SearchDatabaseStore;
 
-  constructor(db: D1Database) {
+  constructor(db: SearchDatabaseStore) {
     this.db = db;
   }
 
@@ -86,19 +89,21 @@ export class SearchDatabase {
       return this.listAll({ ownerAccountId, visibility, limit, offset });
     }
 
-    // Use FTS5 for full-text search
-    const ftsQuery = query
+    const terms = query
       .split(/\s+/)
-      .filter((term) => term.length > 0)
-      .map((term) => `${term}*`)
-      .join(" ");
+      .filter((term) => term.length > 0);
 
-    let sql = `
-      SELECT si.* FROM search_index si
-      INNER JOIN search_fts fts ON fts.rowid = si.id
-      WHERE search_fts MATCH ?
-    `;
-    const params: (string | number)[] = [ftsQuery];
+    const likeClauses = terms.map(() =>
+      "(si.title LIKE ? OR si.content_preview LIKE ?)",
+    );
+    const params: (string | number)[] = [];
+    for (const term of terms) {
+      const pattern = `%${term}%`;
+      params.push(pattern, pattern);
+    }
+
+    let sql = `SELECT si.* FROM search_index si WHERE (${likeClauses.join(" AND ")})`;
+    const countParams: (string | number)[] = [...params];
 
     if (ownerAccountId !== undefined && ownerAccountId !== null) {
       sql += " AND si.owner_account_id = ?";
@@ -118,13 +123,7 @@ export class SearchDatabase {
       .bind(...params)
       .all();
 
-    // Get total count
-    let countSql = `
-      SELECT COUNT(*) as total FROM search_index si
-      INNER JOIN search_fts fts ON fts.rowid = si.id
-      WHERE search_fts MATCH ?
-    `;
-    const countParams: (string | number)[] = [ftsQuery];
+    let countSql = `SELECT COUNT(*) as total FROM search_index si WHERE (${likeClauses.join(" AND ")})`;
 
     if (ownerAccountId !== undefined && ownerAccountId !== null) {
       countSql += " AND si.owner_account_id = ?";
@@ -230,6 +229,6 @@ export class SearchDatabase {
   }
 }
 
-export function createSearchDatabase(db: D1Database): SearchDatabase {
+export function createSearchDatabase(db: SearchDatabaseStore): SearchDatabase {
   return new SearchDatabase(db);
 }
