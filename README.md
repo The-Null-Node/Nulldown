@@ -82,6 +82,18 @@ Create a drop:
 bun run nd -- create README.md --json
 ```
 
+Create a tiny semantic seed, then build the real document with branch diffs and memory facts:
+
+```bash
+bun run nd -- create --seed "Branching Guide" --intent "Explain branch editing incrementally" --labels branching,semantic-seed --json
+bun run nd -- --account <accountId> branch resolve <rootId> --json
+bun run nd -- diff apply <rootId> --branch <branchId> --insert '0:
+## First Section
+
+Focused text.
+' --metadata '{"kind":"agent.edit","intent":"Add first section","labels":["semantic-seed"],"args":{"summary":"Adds one focused section.","priority":0.5},"confidence":0.9}' --json
+```
+
 Fetch a drop:
 
 ```bash
