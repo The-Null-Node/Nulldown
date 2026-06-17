@@ -257,6 +257,17 @@ export const buildSeedNextCommands = (
   };
 };
 
+/** Returns true for both `--seed` and `--seed "Title"`. */
+export const isSeedCreateArgs = (args: ParsedArgs): boolean =>
+  hasFlag(args, "seed") || flagString(args, "seed") !== null;
+
+/** Resolves the seed title from explicit title, seed flag value, or positional title. */
+export const resolveSeedTitle = (args: ParsedArgs): string =>
+  flagString(args, "title") ||
+  flagString(args, "seed") ||
+  args.positionals[1] ||
+  "Untitled Nulldown Seed";
+
 const buildSeedCreateOutput = (input: SeedCreateOutputInput) => {
   const branchId = branchIdFromResponse(input.branch);
   return {
@@ -847,13 +858,13 @@ const createEvent = (input: {
 });
 
 const commandCreate = async (config: CliConfig, args: ParsedArgs) => {
-  const seed = hasFlag(args, "seed");
+  const seed = isSeedCreateArgs(args);
   const source = args.positionals[1] ?? "-";
   const metadataOverride = await parseMetadata(args);
   const labels = normalizeCsv(flagString(args, "labels"));
   const content = seed
     ? buildSeedDropContent({
-        title: flagString(args, "title") || args.positionals[1] || "Untitled Nulldown Seed",
+        title: resolveSeedTitle(args),
         intent: flagString(args, "intent"),
         labels,
       })
