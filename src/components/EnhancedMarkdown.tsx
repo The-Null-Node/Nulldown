@@ -14,6 +14,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeKatex from "rehype-katex";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import MermaidRenderer from "./MermaidRenderer";
+import NullplugGraph from "./NullplugGraph";
 import "katex/dist/katex.min.css";
 import { useTheme } from "../theme/themeContext";
 import { syntaxThemeStyles } from "../theme/syntaxThemes";
@@ -95,7 +96,7 @@ const sanitizeSchema = {
       "sandbox",
       "frameborder",
     ],
-    div: ["className", "dataHost"],
+    div: ["className", "dataHost", "dataGraph"],
     span: unique([...asList(defaultSchema.attributes?.span), "className"]),
     u: [...asList(defaultSchema.attributes?.u)],
     ins: [...asList(defaultSchema.attributes?.ins)],
@@ -259,7 +260,25 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
             }}
           />
         ),
-        div: ({ node, className: divClass, dataHost, children, ...props }) => {
+        div: ({
+          node,
+          className: divClass,
+          dataHost,
+          dataGraph,
+          children,
+          ...props
+        }) => {
+          const classes = typeof divClass === "string" ? divClass.split(/\s+/) : [];
+          const graphData =
+            typeof dataGraph === "string"
+              ? dataGraph
+              : typeof (props as Record<string, unknown>)["data-graph"] === "string"
+                ? ((props as Record<string, unknown>)["data-graph"] as string)
+                : null;
+          if (classes.includes("nulldown-graph") && graphData) {
+            return <NullplugGraph encodedGraph={graphData} />;
+          }
+
           if (divClass === "blocked-embed" && typeof dataHost === "string") {
             return (
               <BlockedEmbed
