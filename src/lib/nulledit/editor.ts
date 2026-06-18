@@ -192,16 +192,15 @@ export default function createEditor(): IEditor {
       const snapshotId = snapshotter.requestSnapshotId();
       snapshotter.updateSnapshot(snapshotId, {
         content,
-        renderedMarkdown: content,
-        status: "rendered",
+        renderedMarkdown: "",
+        status: "pending",
       });
-      snapshotter.registerSnapshot(snapshotId);
-      lastRenderedSnapshotId = snapshotId;
       setCurrentSnapshotId(snapshotId);
       useEditorStore.getState().setTextContent(content);
-      useEditorStore.getState().setRenderedMarkdown(content);
-      useEditorStore.getState().setRenderStatus("idle");
-      useEditorStore.getState().setRenderProgress(1);
+      useEditorStore.getState().setRenderedMarkdown("");
+      useEditorStore.getState().setRenderStatus("rendering");
+      useEditorStore.getState().setRenderProgress(0);
+      queueRender();
       return snapshotId;
     },
 
