@@ -21,12 +21,14 @@ export function useShareDrop(
     existingDropId?: string | null;
     snapshotId?: number | null;
     buildDraftPack?: () => DropDraftPackV1 | undefined;
+    publishBranch?: () => Promise<{ url: string; offline?: boolean }>;
   },
 ) {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successUrl, setSuccessUrl] = useState<string | null>(null);
   const [successOffline, setSuccessOffline] = useState(false);
+  const [successKind, setSuccessKind] = useState<"share" | "branch">("share");
   const { themeId } = useTheme();
   const createDrop = useDropStore((state) => state.createDrop);
   const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
@@ -39,6 +41,7 @@ export function useShareDrop(
   const resetShare = useCallback(() => {
     setSuccessUrl(null);
     setSuccessOffline(false);
+    setSuccessKind("share");
     setError(null);
   }, []);
 
@@ -56,6 +59,15 @@ export function useShareDrop(
     try {
       await hydrateOfflineMode();
       await hydrateSharePreferences();
+
+      if (snapshotMeta?.publishBranch) {
+        const result = await snapshotMeta.publishBranch();
+        setSuccessUrl(result.url);
+        setSuccessOffline(Boolean(result.offline));
+        setSuccessKind("branch");
+        await Promise.resolve(clearDraft());
+        return;
+      }
 
       const payload: DropPayload = {
         content: markdown,
@@ -91,6 +103,7 @@ export function useShareDrop(
       );
       setSuccessUrl(result.url);
       setSuccessOffline(result.scope === "local");
+      setSuccessKind("share");
       await Promise.resolve(clearDraft());
     } catch (err: unknown) {
       console.error("Share error:", err);
@@ -115,6 +128,7 @@ export function useShareDrop(
     snapshotMeta?.baseDropId,
     snapshotMeta?.rootDropId,
     snapshotMeta?.buildDraftPack,
+    snapshotMeta?.publishBranch,
     snapshotMeta?.snapshotId,
     themeId,
   ]);
@@ -127,5 +141,6 @@ export function useShareDrop(
     sharing,
     successUrl,
     successOffline,
+    successKind,
   };
 }
