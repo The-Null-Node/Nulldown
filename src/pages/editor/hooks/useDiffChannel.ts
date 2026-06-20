@@ -47,6 +47,7 @@ export function useDiffChannel({
   enabled = true,
 }: UseDiffChannelOptions) {
   const channelRef = useRef<DiffChannel | null>(null);
+  const pendingPublishesRef = useRef(new Set<Promise<void>>());
   const editorRef = useRef(editor);
   editorRef.current = editor;
 
@@ -95,20 +96,42 @@ export function useDiffChannel({
 
   // Publish local diffs to channel
   const publishDiffs = useCallback(
-    (diffs: Diff[], metadata?: DropDiffEventMetadata) => {
+    (diffs: Diff[], metadata?: DropDiffEventMetadata): Promise<void> => {
       const channel = channelRef.current;
-      if (!channel) return;
+      if (!channel) return Promise.resolve();
 
       const ops = editorDiffToDropDiffOps(diffs);
       if (ops.length > 0) {
-        void channel.publish(ops, { metadata });
+        let trackedPublish: Promise<void>;
+        trackedPublish = channel.publish(ops, { metadata }).finally(() => {
+          pendingPublishesRef.current.delete(trackedPublish);
+        });
+        pendingPublishesRef.current.add(trackedPublish);
+        void trackedPublish.catch(() => undefined);
+        return trackedPublish;
       }
+
+      return Promise.resolve();
     },
     [],
   );
 
+  const flushPendingDiffs = useCallback(async (): Promise<void> => {
+    const pendingPublishes = Array.from(pendingPublishesRef.current);
+    if (!pendingPublishes.length) return;
+
+    const results = await Promise.allSettled(pendingPublishes);
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failed) {
+      throw failed.reason;
+    }
+  }, []);
+
   return {
     publishDiffs,
+    flushPendingDiffs,
     clientId: channelRef.current?.clientId ?? null,
   };
 }

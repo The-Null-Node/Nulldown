@@ -15,6 +15,8 @@ interface EditorToolbarProps {
   isTransitioning: boolean;
   offlineMode: boolean;
   shareVisibility: "private" | "unlisted" | "public";
+  shareLabel?: string;
+  sharingLabel?: string;
   sharing: boolean;
   modeSwitching: boolean;
   onToggleMode: () => void;
@@ -29,6 +31,8 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
   isTransitioning,
   offlineMode,
   shareVisibility,
+  shareLabel = "Share to the Void",
+  sharingLabel = "Sharing...",
   sharing,
   modeSwitching,
   onToggleMode,
@@ -138,7 +142,7 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           {sharing && (
             <span className="inline-block w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin mr-2"></span>
           )}
-          {sharing ? "Sharing..." : "Share to the Void"}
+          {sharing ? sharingLabel : shareLabel}
         </Button>
       </div>
     </div>
