@@ -311,6 +311,117 @@ export interface ResolvedNodeRefRecord {
   importance?: number;
 }
 
+/** Resolution-plan item kind for deferred materialization consumers. */
+export type NulldownResolutionPlanItemKind =
+  | "text"
+  | "block"
+  | "snapshot"
+  | "asset"
+  | "semantic-node"
+  | "runtime-ref"
+  | "diff-event";
+
+/** Dedupe strategy used while building a resolution plan. */
+export type NulldownResolutionPlanDedupeKey = "hash" | "ref" | "none";
+
+/** Input item used to build a deferred materialization plan. */
+export interface CreateNulldownResolutionPlanItemInput {
+  /** Stable reference understood by the resolver or materializer. */
+  ref: string;
+  /** Content-addressed hash for the payload behind the ref. */
+  hash: NulldownSourceHash;
+  /** Consumer-facing item category. */
+  kind: NulldownResolutionPlanItemKind;
+  /** Stable order in the resolved output. */
+  order: number;
+  /** Payload size in bytes or UTF-8 text length, depending on kind. */
+  size: number;
+  /** Hash of the source content that produced this item, when distinct. */
+  sourceHash?: NulldownSourceHash;
+  /** Optional JSON metadata for future materializers. */
+  metadata?: Record<string, JsonValue>;
+  /** Optional inline payload for the single-small-item fast path. */
+  inlineContent?: string;
+}
+
+/** Stable item returned in a deferred materialization plan. */
+export interface NulldownResolutionPlanItem {
+  /** Stable reference understood by the resolver or materializer. */
+  ref: string;
+  /** Content-addressed hash for the payload behind the ref. */
+  hash: NulldownSourceHash;
+  /** Consumer-facing item category. */
+  kind: NulldownResolutionPlanItemKind;
+  /** Stable order in the resolved output. */
+  order: number;
+  /** Payload size in bytes or UTF-8 text length, depending on kind. */
+  size: number;
+  /** Hash of the source content that produced this item, when distinct. */
+  sourceHash?: NulldownSourceHash;
+  /** Optional JSON metadata for future materializers. */
+  metadata?: Record<string, JsonValue>;
+}
+
+/** Options for turning refs into a render/query/export resolution plan. */
+export interface CreateNulldownResolutionPlanOptions {
+  /** Root drop id that owns the source timeline. */
+  rootDropId: string;
+  /** Branch id that owns the source timeline, when branch-scoped. */
+  branchId?: string;
+  /** Snapshot id that produced this plan, when branch-scoped. */
+  snapshotId?: number;
+  /** Source content hash for the resolved snapshot or source object. */
+  sourceContentHash: NulldownSourceHash;
+  /** Resolver that produced this plan. */
+  resolverId: string;
+  /** Resolver implementation version that produced this plan. */
+  resolverVersion?: string;
+  /** Candidate refs before ordering and dedupe. */
+  items: readonly CreateNulldownResolutionPlanItemInput[];
+  /** Maximum size eligible for inline mode. Defaults to 4096. */
+  inlineLimit?: number;
+  /** Dedupe strategy. Defaults to hash to match content-addressed storage. */
+  dedupeBy?: NulldownResolutionPlanDedupeKey;
+}
+
+/** Deferred materialization plan produced from stored refs. */
+export interface NulldownSequenceResolutionPlan {
+  /** Plan wire version. */
+  version: 1;
+  /** Materialization mode for larger or multi-item outputs. */
+  mode: "sequence";
+  /** Root drop id that owns the source timeline. */
+  rootDropId: string;
+  /** Branch id that owns the source timeline, when branch-scoped. */
+  branchId?: string;
+  /** Snapshot id that produced this plan, when branch-scoped. */
+  snapshotId?: number;
+  /** Source content hash for the resolved snapshot or source object. */
+  sourceContentHash: NulldownSourceHash;
+  /** Resolver that produced this plan. */
+  resolverId: string;
+  /** Resolver implementation version that produced this plan. */
+  resolverVersion?: string;
+  /** Number of refs in the sequence. */
+  count: number;
+  /** Ordered refs to materialize at the endpoint or client boundary. */
+  sequence: NulldownResolutionPlanItem[];
+}
+
+/** Inline materialization plan for a single small resolved item. */
+export interface NulldownInlineResolutionPlan
+  extends Omit<NulldownSequenceResolutionPlan, "mode"> {
+  /** Materialization mode for exactly one small item. */
+  mode: "inline";
+  /** Inline payload supplied by the resolver for the single-small-item fast path. */
+  content: string;
+}
+
+/** Resolution output: inline only for one small item, otherwise an ordered sequence. */
+export type NulldownResolutionPlan =
+  | NulldownInlineResolutionPlan
+  | NulldownSequenceResolutionPlan;
+
 /** Persisted priority overlay that agents can attach to diffs, nodes, or heaps. */
 export interface ResolvedPriorityFactRecord {
   /** Record schema version. */
@@ -988,6 +1099,87 @@ export const applyResolvedNodeDeltaOps = (
   }
 
   return [...refsById.values()];
+};
+
+const DEFAULT_RESOLUTION_PLAN_INLINE_LIMIT = 4096;
+
+/**
+ * Builds a deterministic deferred materialization plan from stored refs.
+ *
+ * The builder is intentionally pure: it orders refs, applies request-local
+ * dedupe, and chooses inline mode only when the selected output is one small
+ * item whose payload was already supplied by the caller.
+ */
+export const createNulldownResolutionPlan = ({
+  rootDropId,
+  branchId,
+  snapshotId,
+  sourceContentHash,
+  resolverId,
+  resolverVersion,
+  items,
+  inlineLimit = DEFAULT_RESOLUTION_PLAN_INLINE_LIMIT,
+  dedupeBy = "hash",
+}: CreateNulldownResolutionPlanOptions): NulldownResolutionPlan => {
+  const selected: Array<{
+    input: CreateNulldownResolutionPlanItemInput;
+    output: NulldownResolutionPlanItem;
+  }> = [];
+  const seen = new Set<string>();
+  const ordered = items
+    .map((item, index) => ({ item, index }))
+    .sort(
+      (left, right) => left.item.order - right.item.order || left.index - right.index,
+    );
+
+  for (const { item } of ordered) {
+    const dedupeKey =
+      dedupeBy === "none" ? null : dedupeBy === "hash" ? item.hash : item.ref;
+    if (dedupeKey) {
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+    }
+
+    const output: NulldownResolutionPlanItem = {
+      ref: item.ref,
+      hash: item.hash,
+      kind: item.kind,
+      order: item.order,
+      size: item.size,
+      ...(item.sourceHash ? { sourceHash: item.sourceHash } : {}),
+      ...(item.metadata ? { metadata: item.metadata } : {}),
+    };
+    selected.push({ input: item, output });
+  }
+
+  const sequence = selected.map(({ output }) => output);
+  const base = {
+    version: 1 as const,
+    rootDropId,
+    branchId,
+    snapshotId,
+    sourceContentHash,
+    resolverId,
+    resolverVersion,
+    count: sequence.length,
+    sequence,
+  };
+
+  if (selected.length === 1) {
+    const [{ input, output }] = selected;
+    if (output.size <= inlineLimit && input.inlineContent !== undefined) {
+      return {
+        ...base,
+        mode: "inline",
+        content: input.inlineContent,
+      };
+    }
+  }
+
+  return {
+    ...base,
+    mode: "sequence",
+  };
 };
 
 /** Builds a v2 semantic heap delta record from a materialized resolved state. */
