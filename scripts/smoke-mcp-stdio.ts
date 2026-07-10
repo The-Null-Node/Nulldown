@@ -124,8 +124,33 @@ const main = async () => {
     );
     const snapText = readTextContent(snapResult);
     const snapLen = snapText.length;
+    const snapParsed = JSON.parse(snapText) as {
+      items?: Array<{
+        id?: unknown;
+        kind?: unknown;
+        score?: unknown;
+        text?: unknown;
+        sourceRange?: { start?: unknown; end?: unknown };
+      }>;
+      nodes?: unknown[];
+    };
     if (snapLen > 4000) {
       fail("snapshotterId compact response too large", { snapLen });
+    }
+    const firstCompactItem = snapParsed.items?.[0];
+    if (
+      !firstCompactItem ||
+      snapParsed.nodes !== undefined ||
+      typeof firstCompactItem.id !== "string" ||
+      typeof firstCompactItem.kind !== "string" ||
+      typeof firstCompactItem.score !== "number" ||
+      typeof firstCompactItem.text !== "string" ||
+      typeof firstCompactItem.sourceRange?.start !== "number" ||
+      typeof firstCompactItem.sourceRange?.end !== "number"
+    ) {
+      fail("snapshotterId did not return compact resolved-document items", {
+        snapParsed,
+      });
     }
 
     // Force small response via maxTokens cap
@@ -157,6 +182,7 @@ const main = async () => {
           checkedTools: expectedTools,
           branchQueryNodes: parsed.nodes.length,
           fullQueryLen: fullLen,
+          snapshotterCompactItems: snapParsed.items?.length ?? 0,
           snapshotterCompactLen: snapLen,
           maxTokensLen: tinyText.length,
           stderr: Buffer.concat(stderrChunks).toString("utf8"),
