@@ -23,6 +23,7 @@ export const createPromotedEnvelope = async (
   const encryptionPrivateJwk = JSON.parse(
     input.providerEncryptionPrivateJwk,
   ) as JsonWebKey;
+
   const signingPrivateJwk = JSON.parse(
     input.providerSigningPrivateJwk,
   ) as JsonWebKey;

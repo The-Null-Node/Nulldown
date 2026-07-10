@@ -2,7 +2,7 @@ import type {
   DropBranchRecord,
   DropSnapshotRecord,
 } from "../../../../shared/drop/branch";
-import { createDropDiffRef, type DropDiffEvent } from "../../../../shared/drop/diff";
+import type { DropDiffEvent } from "../../../../shared/drop/diff";
 import type {
   VoidBlobStore,
   VoidDataKey,
@@ -13,7 +13,11 @@ import type {
   VoidSqlStore,
 } from "../../../../src/server/ports";
 import {
-  dispatchNulleditSnapshotters,
+  dispatchNulleditSnapshottersForCommit,
+  flushBranchCommitBufferSnapshotters,
+  type BranchAcceptedCommit,
+  type BranchCommitBuffer,
+  type BranchCommitBufferDecision,
   type NulleditSnapshotter,
   type NulleditSnapshotterDispatchOptions,
 } from "../../../../src/server/nulledit";
@@ -21,19 +25,16 @@ import {
   DEFAULT_CHECKPOINT_INTERVAL,
   createBranchDiffEventIdKey,
 } from "../branches/storage/keys";
-import { applyBranchDiffEvents, readBranchContent } from "../branches/content/replay";
+import {
+  applyBranchDiffEvents,
+  readBranchContent,
+} from "../branches/content/replay";
 import { ensureBranchHeapV2 } from "../branches/lifecycle/service";
 import { withBranchMutationLock } from "../branches/storage/mutationLock";
+import { createBranchDiffRepository } from "../branches/storage/diffLogRepository";
 import {
-  hasBranchDiffEventId,
-  writeBranchDiffEvent,
-} from "../branches/storage/diffLogRepository";
-import {
-  readBranch,
+  createBranchRepository,
   resolveSnapshotCheckpointKey,
-  writeBranch,
-  writeSnapshot,
-  writeSnapshotCheckpoint,
 } from "../branches/storage/repository";
 
 /** Options controlling Nulledit snapshotter dispatch for a branch append operation. */
@@ -42,6 +43,8 @@ export interface BranchAppendOptions extends NulleditSnapshotterDispatchOptions 
   data?: VoidDataStore;
   /** Snapshotters fired after diff events are accepted and snapshotted. */
   snapshotters?: NulleditSnapshotter[];
+  /** Optional policy that can buffer or skip derived snapshotter work. */
+  commitBuffer?: BranchCommitBuffer;
 }
 
 /** Result returned after appending and snapshotting accepted branch diff events. */
@@ -65,10 +68,12 @@ const unavailableDataStore = (): VoidDataStore => {
       _value: T,
       _options?: VoidDataPutOptions,
     ): Promise<void> => fail(),
+    putMany: async (): Promise<void> => fail(),
     delete: async (_key: VoidDataKey): Promise<void> => fail(),
     list: async (_query: VoidDataListQuery) => fail(),
     query: async <T = unknown>(_query: VoidDataQuery): Promise<T[]> => fail(),
-    tx: async <T>(_work: (data: VoidDataStore) => Promise<T>): Promise<T> => fail(),
+    tx: async <T>(_work: (data: VoidDataStore) => Promise<T>): Promise<T> =>
+      fail(),
     lock: async <T>(
       _key: VoidDataKey,
       _work: (data: VoidDataStore) => Promise<T>,
@@ -76,36 +81,99 @@ const unavailableDataStore = (): VoidDataStore => {
   };
 };
 
-const dispatchBranchAppendSnapshotters = (
+const createAcceptedCommit = (
   result: BranchAppendResult,
-  options?: BranchAppendOptions,
-): void => {
-  if (!result.snapshot || result.acceptedEvents.length === 0) {
-    return;
-  }
-
-  dispatchNulleditSnapshotters({
-    data: options?.data ?? unavailableDataStore(),
+): BranchAcceptedCommit | null => {
+  if (!result.snapshot || result.acceptedEvents.length === 0) return null;
+  return {
     rootDropId: result.branch.rootDropId,
     branchId: result.branch.branchId,
     snapshotId: result.snapshot.snapshotId,
     parentSnapshotId: result.snapshot.parentSnapshotId,
     branch: result.branch,
     snapshot: result.snapshot,
-    frame: { content: result.content },
+    content: result.content,
     acceptedEvents: result.acceptedEvents,
-    acceptedDiffRefs: result.acceptedEvents.map((event) =>
-      createDropDiffRef({
-        rootDropId: result.branch.rootDropId,
-        branchId: result.branch.branchId,
-        seq: event.seq,
-        eventId: event.eventId,
-        snapshotId: event.snapshotId,
-      }),
-    ),
     deduplicatedCount: result.deduplicatedCount,
     totalStored: result.totalStored,
-  }, options);
+  };
+};
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const scheduleBufferedCommitFlush = (
+  commit: BranchAcceptedCommit,
+  decision: Extract<BranchCommitBufferDecision, { mode: "buffer" }>,
+  options: BranchAppendOptions,
+): void => {
+  const { commitBuffer } = options;
+  if (!commitBuffer?.flush) {
+    return;
+  }
+
+  const flushAfterMs = decision.flushReason
+    ? 0
+    : Math.max(0, Math.floor(decision.flushAfterMs));
+  const reason = decision.flushReason ?? "branch-idle";
+  const data = options.data ?? unavailableDataStore();
+  const task = (async () => {
+    try {
+      if (flushAfterMs > 0) {
+        await delay(flushAfterMs);
+      }
+      await flushBranchCommitBufferSnapshotters({
+        ...options,
+        data,
+        commitBuffer,
+        rootDropId: commit.rootDropId,
+        branchId: commit.branchId,
+        reason,
+      });
+    } catch (error) {
+      options.onSnapshotterError?.(error, "branch.commit-buffer.flush");
+    }
+  })();
+
+  if (options.waitUntil) {
+    try {
+      options.waitUntil(task);
+      return;
+    } catch (error) {
+      options.onSnapshotterError?.(error, "waitUntil");
+    }
+  }
+
+  void task;
+};
+
+const dispatchBranchAppendSnapshotters = async (
+  result: BranchAppendResult,
+  options?: BranchAppendOptions,
+): Promise<void> => {
+  const commit = createAcceptedCommit(result);
+  if (!commit) {
+    return;
+  }
+
+  if (options?.commitBuffer) {
+    try {
+      const decision = await options.commitBuffer.appendAcceptedCommit(commit);
+      if (decision.mode !== "write-through") {
+        if (decision.mode === "buffer") {
+          scheduleBufferedCommitFlush(commit, decision, options);
+        }
+        return;
+      }
+    } catch (error) {
+      options.onSnapshotterError?.(error, "branch.commit-buffer");
+    }
+  }
+
+  dispatchNulleditSnapshottersForCommit(commit, {
+    ...options,
+    data: options?.data ?? unavailableDataStore(),
+  });
 };
 
 /** Appends deduplicated events to a branch and creates the next branch snapshot. */
@@ -116,16 +184,19 @@ export const appendEventsToBranch = async (
   options?: BranchAppendOptions,
   db?: VoidSqlStore,
 ): Promise<BranchAppendResult> => {
+  const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
+  const branchDiffRepository = createBranchDiffRepository({
+    blobs: bucket,
+    sql: db,
+  });
   const result = await withBranchMutationLock(
     bucket,
     branch.rootDropId,
     branch.branchId,
     async () => {
-      const latestBranch = await readBranch(
-        bucket,
+      const latestBranch = await branchRepository.readBranch(
         branch.rootDropId,
         branch.branchId,
-        db,
       );
       if (!latestBranch) {
         throw new Error("Branch not found.");
@@ -144,12 +215,14 @@ export const appendEventsToBranch = async (
       }
 
       const seenEventIds = new Set<string>();
-      const acceptedInput: Array<{ event: DropDiffEvent; dedupeKey: string }> = [];
+      const acceptedInput: Array<{ event: DropDiffEvent; dedupeKey: string }> =
+        [];
 
       for (const event of events) {
         if (seenEventIds.has(event.eventId)) {
           continue;
         }
+
         seenEventIds.add(event.eventId);
 
         const dedupeKey = createBranchDiffEventIdKey(
@@ -157,13 +230,13 @@ export const appendEventsToBranch = async (
           upgradedBranch.branchId,
           event.eventId,
         );
-        const alreadyStored = await hasBranchDiffEventId(
-          bucket,
+
+        const alreadyStored = await branchDiffRepository.hasBranchDiffEventId(
           upgradedBranch.rootDropId,
           upgradedBranch.branchId,
           event.eventId,
-          db,
         );
+
         if (alreadyStored) {
           continue;
         }
@@ -244,21 +317,18 @@ export const appendEventsToBranch = async (
 
       await Promise.all(
         acceptedEvents.map((event) =>
-          writeBranchDiffEvent(
-            bucket,
+          branchDiffRepository.writeBranchDiffEvent(
             upgradedBranch.rootDropId,
             upgradedBranch.branchId,
             event,
-            db,
           ),
         ),
       );
 
-      await writeSnapshot(bucket, snapshot, db);
+      await branchRepository.writeSnapshot(snapshot);
 
       if (shouldCheckpoint) {
-        await writeSnapshotCheckpoint(
-          bucket,
+        await branchRepository.writeSnapshotCheckpoint(
           upgradedBranch.rootDropId,
           upgradedBranch.branchId,
           nextSnapshotId,
@@ -267,7 +337,7 @@ export const appendEventsToBranch = async (
         );
       }
 
-      await writeBranch(bucket, nextBranch, db);
+      await branchRepository.writeBranch(nextBranch);
 
       await Promise.all(
         acceptedInput.map(({ dedupeKey }, index) =>
@@ -288,6 +358,6 @@ export const appendEventsToBranch = async (
     },
   );
 
-  dispatchBranchAppendSnapshotters(result, options);
+  await dispatchBranchAppendSnapshotters(result, options);
   return result;
 };

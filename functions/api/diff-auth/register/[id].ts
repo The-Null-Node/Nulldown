@@ -1,8 +1,8 @@
 import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
+  createDiffCredentialRepository,
   DIFF_AUTH_DEFAULT_TTL_MS,
   generateDiffSecret,
-  putDiffAuthCredential,
   sanitizeDiffAuthToken,
 } from "../../_lib/diffs/credentials/repository";
 import {
@@ -10,7 +10,7 @@ import {
   type AccountAuthEnv,
 } from "../../_lib/accounts/session/auth";
 import { resolveBranchForActor } from "../../_lib/branches/lifecycle/service";
-import { resolveRemoteDropId } from "../../_lib/drops/identity/id";
+import { createDropIdentityRepository } from "../../_lib/drops/identity/id";
 import { createRequestLogger, serializeError, toLogRef } from "../../_lib/core/logging/logger";
 import type {
   DiffAuthRegisterRequest,
@@ -64,7 +64,14 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("R2 bucket binding is required.", { status: 500 });
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const id = await dropIdentityRepository.resolveRemoteDropId(
+      requestedId,
+      logger,
+    );
     if (!id) {
       logger.logEnd(400, { reason: "invalid_drop_id" });
       return new Response("Drop ID is required.", { status: 400 });
@@ -142,20 +149,20 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("requesterPublicJwk is invalid.", { status: 400 });
     }
 
-    await putDiffAuthCredential(
-      env.R2_BUCKET,
-      {
-        version: 1,
-        dropId: id,
-        branchId: branch.branchId,
-        clientId,
-        kid,
-        secret,
-        createdAt,
-        expiresAt,
-      },
-      env.DB,
-    );
+    const diffCredentialRepository = createDiffCredentialRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    await diffCredentialRepository.putDiffAuthCredential({
+      version: 1,
+      dropId: id,
+      branchId: branch.branchId,
+      clientId,
+      kid,
+      secret,
+      createdAt,
+      expiresAt,
+    });
 
     const responseBody: DiffAuthRegisterResponse = {
       dropId: id,

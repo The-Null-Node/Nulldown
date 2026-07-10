@@ -5,6 +5,7 @@ import {
   buildBranchSnapshotSourceHashKey,
   buildMarkdownSourceHashKey,
   changedRangesFromDropDiffEvents,
+  createNulldownResolutionPlan,
   createResolvedHeapDeltaRecord,
   createResolvedNodeRefRecords,
   decodeNulldownContextToken,
@@ -555,6 +556,165 @@ describe("resolved drop helpers", () => {
     );
     expect(compactDelta?.nodeRefs).toBeUndefined();
     expect(applyResolvedNodeDeltaOps(parentRefs, ops)).toEqual(currentRefs);
+  });
+
+  it("builds ordered sequence resolution plans with request-local dedupe", async () => {
+    const sourceHash = await hashMarkdownSource("# Resolution Plan");
+    const lateHash = await hashMarkdownSource("late node");
+    const duplicateHash = await hashMarkdownSource("duplicate node");
+
+    const plan = createNulldownResolutionPlan({
+      rootDropId: "root-1",
+      branchId: "clone_anonymous",
+      snapshotId: 2,
+      sourceContentHash: sourceHash,
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      resolverVersion: RESOLVED_DOCUMENT_RESOLVER_VERSION,
+      items: [
+        {
+          ref: "node:late",
+          hash: lateHash,
+          kind: "semantic-node",
+          order: 20,
+          size: 9,
+        },
+        {
+          ref: "node:duplicate-late",
+          hash: duplicateHash,
+          kind: "semantic-node",
+          order: 12,
+          size: 14,
+        },
+        {
+          ref: "node:duplicate-early",
+          hash: duplicateHash,
+          kind: "semantic-node",
+          order: 5,
+          size: 14,
+          metadata: { selected: true },
+        },
+      ],
+    });
+
+    expect(plan).toEqual(
+      expect.objectContaining({
+        version: 1,
+        mode: "sequence",
+        rootDropId: "root-1",
+        branchId: "clone_anonymous",
+        snapshotId: 2,
+        sourceContentHash: sourceHash,
+        resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+        resolverVersion: RESOLVED_DOCUMENT_RESOLVER_VERSION,
+        count: 2,
+      }),
+    );
+    expect(plan.sequence.map((item) => item.ref)).toEqual([
+      "node:duplicate-early",
+      "node:late",
+    ]);
+    expect(plan.sequence[0]).not.toHaveProperty("inlineContent");
+
+    const repeatedPlan = createNulldownResolutionPlan({
+      rootDropId: "root-1",
+      sourceContentHash: sourceHash,
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      dedupeBy: "none",
+      items: [
+        {
+          ref: "chunk:a",
+          hash: duplicateHash,
+          kind: "text",
+          order: 0,
+          size: 14,
+        },
+        {
+          ref: "chunk:b",
+          hash: duplicateHash,
+          kind: "text",
+          order: 1,
+          size: 14,
+        },
+      ],
+    });
+
+    expect(repeatedPlan.mode).toBe("sequence");
+    expect(repeatedPlan.sequence.map((item) => item.ref)).toEqual([
+      "chunk:a",
+      "chunk:b",
+    ]);
+  });
+
+  it("inlines only a single small resolved item with supplied content", async () => {
+    const sourceHash = await hashMarkdownSource("# Inline");
+    const chunkHash = await hashMarkdownSource("hello");
+
+    const inlinePlan = createNulldownResolutionPlan({
+      rootDropId: "root-1",
+      sourceContentHash: sourceHash,
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      inlineLimit: 10,
+      items: [
+        {
+          ref: "chunk:hello",
+          hash: chunkHash,
+          kind: "text",
+          order: 0,
+          size: 5,
+          inlineContent: "hello",
+        },
+      ],
+    });
+
+    expect(inlinePlan.mode).toBe("inline");
+    if (inlinePlan.mode !== "inline") {
+      throw new Error("Expected inline resolution plan.");
+    }
+    expect(inlinePlan.content).toBe("hello");
+    expect(inlinePlan.sequence).toEqual([
+      {
+        ref: "chunk:hello",
+        hash: chunkHash,
+        kind: "text",
+        order: 0,
+        size: 5,
+      },
+    ]);
+
+    const tooLargePlan = createNulldownResolutionPlan({
+      rootDropId: "root-1",
+      sourceContentHash: sourceHash,
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      inlineLimit: 4,
+      items: [
+        {
+          ref: "chunk:hello",
+          hash: chunkHash,
+          kind: "text",
+          order: 0,
+          size: 5,
+          inlineContent: "hello",
+        },
+      ],
+    });
+    expect(tooLargePlan.mode).toBe("sequence");
+
+    const missingContentPlan = createNulldownResolutionPlan({
+      rootDropId: "root-1",
+      sourceContentHash: sourceHash,
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      inlineLimit: 10,
+      items: [
+        {
+          ref: "chunk:hello",
+          hash: chunkHash,
+          kind: "text",
+          order: 0,
+          size: 5,
+        },
+      ],
+    });
+    expect(missingContentPlan.mode).toBe("sequence");
   });
 
   it("reads and writes resolved heap records", async () => {

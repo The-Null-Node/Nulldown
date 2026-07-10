@@ -13,7 +13,10 @@
     "moduleResolution": "bundler",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@thenullnode/nulldown/client": ["./src/client/nulldownClient.ts"],
+      "@thenullnode/nulldown/drop/diff": ["./shared/drop/diff.ts"],
+      "@thenullnode/nulldown/nulledit/types": ["./shared/nulledit/types.ts"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,

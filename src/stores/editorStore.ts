@@ -1,9 +1,28 @@
 import { create, StateCreator } from "zustand";
+import type {
+  DropRuntimeNullplugRenderState,
+  DropRuntimeRenderFrame,
+} from "../../shared/drop/runtime";
 
 export enum EditorMode {
   Preview,
   Edit,
 }
+
+/** Structured nullplug runtime state produced by the latest winning render. */
+export type EditorNullplugRenderState = DropRuntimeNullplugRenderState;
+
+/** Render-frame provenance for the latest winning editor render. */
+export type EditorRenderFrame = DropRuntimeRenderFrame;
+
+const createEmptyNullplugRenderState = (): EditorNullplugRenderState => ({
+  uiPrimitives: [],
+  uiState: {},
+  mutations: [],
+  yields: [],
+  diagnostics: [],
+  callIds: [],
+});
 
 export interface EditorState {
   textContent: string;
@@ -15,6 +34,11 @@ export interface EditorState {
   setRenderStatus: (status: "idle" | "rendering") => void;
   renderProgress: number;
   setRenderProgress: (progress: number) => void;
+  renderFrame: EditorRenderFrame | null;
+  setRenderFrame: (frame: EditorRenderFrame | null) => void;
+  nullplugRenderState: EditorNullplugRenderState;
+  setNullplugRenderState: (state: EditorNullplugRenderState) => void;
+  clearStructuredRenderState: () => void;
   currentSnapshotId: number | null;
   setCurrentSnapshotId: (snapshotId: number | null) => void;
   baseDropId: string | null;
@@ -45,6 +69,20 @@ const editorStoreCreator: StateCreator<EditorState> = (set) => ({
   renderProgress: 1,
   setRenderProgress: (progress: number) =>
     set({ renderProgress: Math.max(0, Math.min(progress, 1)) }),
+
+  renderFrame: null,
+  setRenderFrame: (frame: EditorRenderFrame | null) =>
+    set({ renderFrame: frame }),
+
+  nullplugRenderState: createEmptyNullplugRenderState(),
+  setNullplugRenderState: (state: EditorNullplugRenderState) =>
+    set({ nullplugRenderState: state }),
+
+  clearStructuredRenderState: () =>
+    set({
+      renderFrame: null,
+      nullplugRenderState: createEmptyNullplugRenderState(),
+    }),
 
   currentSnapshotId: null,
 

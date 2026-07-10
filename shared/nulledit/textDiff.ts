@@ -12,6 +12,7 @@ import { DiffOp, type Diff, type DiffAlgorithm, type DiffOptions, type Differ } 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/** UTF-8 encodes text for the binary-safe `Diff.data` payload. */
 export function encodeText(value: string): ArrayBuffer {
   const encoded = encoder.encode(value);
   const out = new Uint8Array(encoded.byteLength);
@@ -19,10 +20,18 @@ export function encodeText(value: string): ArrayBuffer {
   return out.buffer;
 }
 
+/** UTF-8 decodes a `Diff.data` payload back into text. */
 export function decodeText(buffer: ArrayBuffer): string {
   return decoder.decode(buffer);
 }
 
+/**
+ * Cheap deterministic differ that models one changed middle span.
+ *
+ * This is the default because it is fast enough for per-keystroke snapshotting
+ * and produces stable branch-transport operations. Multiple separated edits are
+ * represented as one larger delete/insert hunk.
+ */
 export const prefixSuffixDiffer: Differ = {
   algorithm: "prefix-suffix",
   compute(previous: string, next: string): Diff[] {
@@ -121,6 +130,13 @@ const commonBounds = (
   };
 };
 
+/**
+ * Dynamic-programming LCS differ for compact multi-region edits.
+ *
+ * The algorithm first trims common prefix/suffix spans, then computes the LCS
+ * only for the changed middle. It falls back to `prefixSuffixDiffer` when the
+ * configured cell budget would be exceeded.
+ */
 export const lcsDpDiffer: Differ = {
   algorithm: "lcs-dp",
   compute(previous: string, next: string, options?: DiffOptions): Diff[] {
@@ -235,6 +251,7 @@ export const lcsDpDiffer: Differ = {
   },
 };
 
+/** Resolves a stable algorithm id to its differ implementation. */
 export function getDiffer(algorithm: DiffAlgorithm = "prefix-suffix"): Differ {
   if (algorithm === "prefix-suffix") return prefixSuffixDiffer;
   if (algorithm === "lcs-dp") return lcsDpDiffer;
@@ -243,6 +260,7 @@ export function getDiffer(algorithm: DiffAlgorithm = "prefix-suffix"): Differ {
   throw new Error(`Unsupported diff algorithm: ${exhaustive}`);
 }
 
+/** Computes text diff operations using the requested algorithm. */
 export function computeDiffOps(
   previous: string,
   next: string,
@@ -251,6 +269,12 @@ export function computeDiffOps(
   return getDiffer(options.algorithm).compute(previous, next, options);
 }
 
+/**
+ * Applies one diff operation to text, clamping ranges instead of throwing.
+ *
+ * Stale or replayed diffs can arrive during async render/diff transport races;
+ * clamping keeps replay best-effort and leaves unsupported operations unchanged.
+ */
 export function applyDiff(previous: string, diff: Diff): string {
   const range = diff.range ?? { start: 0, end: 0 };
   const start = Math.max(0, Math.min(range.start, previous.length));

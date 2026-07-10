@@ -8,8 +8,14 @@ import {
   DIFF_TIMESTAMP_HEADER,
   isTimestampFresh,
 } from "../../../../../shared/drop/diffAuth";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
-import { readDiffAuthCredential, sanitizeDiffAuthToken } from "./repository";
+import type {
+  VoidBlobStore,
+  VoidSqlStore,
+} from "../../../../../src/server/ports";
+import {
+  createDiffCredentialRepository,
+  sanitizeDiffAuthToken,
+} from "./repository";
 
 /** Environment required to verify `/api/diff/:id` request authentication. */
 export interface DiffRequestAuthEnv {
@@ -141,12 +147,14 @@ export const verifyDiffRequestAuth = async (
       };
     }
 
-    const credential = await readDiffAuthCredential(
-      env.R2_BUCKET,
+    const diffCredentialRepository = createDiffCredentialRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const credential = await diffCredentialRepository.readDiffAuthCredential(
       dropId,
       clientId,
       kid,
-      env.DB,
     );
     if (!credential) {
       return {

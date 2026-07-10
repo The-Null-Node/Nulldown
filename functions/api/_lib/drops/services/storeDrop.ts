@@ -18,9 +18,9 @@ import {
 } from "../../../../../shared/drop/types";
 import { signProviderEnvelope, type ProviderSigningEnv } from "../../crypto/envelopes/signing";
 import { syncPublicDropIndexForEnvelope } from "../index/repository";
-import { removeRemoteAliasIfMatch, reserveRemoteAlias } from "../identity/id";
+import { createDropIdentityRepository } from "../identity/id";
 import {
-  BlobDropObjectRepository,
+  createDropObjectRepository,
   type PutDropObjectResult,
 } from "../storage/objectRepository";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
@@ -247,7 +247,14 @@ export const storeDrop = async ({
     let aliasConflictCount = 0;
     let objectConflictCount = 0;
     let parsedDropPayload: unknown = null;
-    const dropRepository = new BlobDropObjectRepository(env.blobs);
+    const dropRepository = createDropObjectRepository({
+      blobs: env.blobs,
+      sql: env.sql,
+    });
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.blobs,
+      sql: env.sql,
+    });
 
     if (isJson) {
       let parsed: unknown;
@@ -336,11 +343,9 @@ export const storeDrop = async ({
 
     if (requestedId) {
       allocationAttempts = 1;
-      const aliasState = await reserveRemoteAlias(
-        env.blobs,
+      const aliasState = await dropIdentityRepository.reserveRemoteAlias(
         requestedId,
         logger,
-        env.sql,
       );
       if (aliasState === "conflict") {
         aliasConflictCount += 1;
@@ -371,7 +376,10 @@ export const storeDrop = async ({
         });
       } catch (error) {
         if (aliasState === "reserved") {
-          await removeRemoteAliasIfMatch(env.blobs, requestedId, logger, env.sql);
+          await dropIdentityRepository.removeRemoteAliasIfMatch(
+            requestedId,
+            logger,
+          );
         }
 
         throw error;
@@ -426,11 +434,9 @@ export const storeDrop = async ({
       ) {
         allocationAttempts = attempt + 1;
         const candidateId = generateDropId(DROP_ID_LENGTH);
-        const aliasState = await reserveRemoteAlias(
-          env.blobs,
+        const aliasState = await dropIdentityRepository.reserveRemoteAlias(
           candidateId,
           logger,
-          env.sql,
         );
         if (aliasState === "conflict") {
           aliasConflictCount += 1;
@@ -445,7 +451,10 @@ export const storeDrop = async ({
           });
         } catch (error) {
           if (aliasState === "reserved") {
-            await removeRemoteAliasIfMatch(env.blobs, candidateId, logger, env.sql);
+            await dropIdentityRepository.removeRemoteAliasIfMatch(
+              candidateId,
+              logger,
+            );
           }
 
           throw error;
@@ -458,7 +467,10 @@ export const storeDrop = async ({
 
         objectConflictCount += 1;
         if (aliasState === "reserved") {
-          await removeRemoteAliasIfMatch(env.blobs, candidateId, logger, env.sql);
+          await dropIdentityRepository.removeRemoteAliasIfMatch(
+            candidateId,
+            logger,
+          );
         }
       }
     }

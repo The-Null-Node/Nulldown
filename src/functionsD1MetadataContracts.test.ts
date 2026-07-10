@@ -6,13 +6,16 @@ import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
 import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
-import { createNullMemFact, createNullMemProcedure, queryNullMem } from "../functions/api/_lib/nullmem/service";
+import { createNullMemFact, createNullMemProcedure, createNullMemService, deleteNullMemRecord, queryNullMem } from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
 import { writeRemoteNullplugManifest } from "../shared/nullplug/registry";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
-} from "../shared/drop/resolved";
+} from "../shared/drop/resolved/constants";
+import type {
+  ResolvedNulldownState,
+} from "../shared/drop/resolved/types";
 import {
   readBranch,
   readSnapshot,
@@ -25,6 +28,8 @@ import {
   readBranchDiffEventBySeq,
   writeBranchDiffEvent,
 } from "../functions/api/_lib/branches/storage/diffLogRepository";
+import { createMemoryVoidDataStore } from "./server/memoryDataStore";
+import { createNullMemFreshnessWatermarkKey } from "./server/nulledit";
 
 interface MemoryR2Object {
   key: string;
@@ -131,6 +136,7 @@ class MemoryD1Statement {
 }
 
 class MemoryD1Database {
+  readonly sqlLog: string[] = [];
   readonly branches = new Map<string, { record_json: string; created_at: number }>();
   readonly snapshots = new Map<string, { record_json: string; snapshot_id: number; created_at: number }>();
   readonly events = new Map<string, { event_json: string; seq: number; event_id: string; source_client_id: string }>();
@@ -156,6 +162,8 @@ class MemoryD1Database {
   }
 
   run(sql: string, params: unknown[]): void {
+    this.sqlLog.push(sql);
+
     if (sql.includes("INSERT INTO branches")) {
       this.branches.set(`${params[0]}/${params[1]}`, {
         record_json: String(params[14]),
@@ -298,6 +306,13 @@ class MemoryD1Database {
         priority: Number(params[8] ?? 0),
         created_at: Number(params[10]),
       });
+      return;
+    }
+
+    if (sql.includes("DELETE FROM nullmem_records")) {
+      [...this.nullmemRecords.keys()]
+        .filter((key) => key === `${params[0]}/${params[1]}/fact/${params[2]}` || key === `${params[0]}/${params[1]}/procedure/${params[2]}`)
+        .forEach((key) => this.nullmemRecords.delete(key));
       return;
     }
 
@@ -630,7 +645,7 @@ describe("D1 metadata contracts", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(db.heaps.size).toBe(1);
+    expect(db.heaps.size).toBe(0);
     expect(db.nodes.size).toBeGreaterThan(0);
     expect(db.heapDeltas.size).toBe(1);
     expect(db.nodeRefs.size).toBe(db.nodes.size);
@@ -651,8 +666,6 @@ describe("D1 metadata contracts", () => {
         snapshot.snapshotId,
       ),
     );
-    db.heaps.clear();
-
     const projectedResponse = await queryResolvedHeap(
       { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
       { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
@@ -747,6 +760,54 @@ describe("D1 metadata contracts", () => {
     expect(db.priorityFacts.size).toBe(0);
   });
 
+  it("runs explicit resolved query repair before reading branch content", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const branch = createBranch();
+    const snapshot = createSnapshot({ textLength: 45 });
+    const repairs: Array<{ rootDropId: string; branchId: string; snapshotId: number }> = [];
+
+    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+
+    const response = await queryResolvedHeap(
+      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
+      new Request("https://example.test/api/resolved/query?query=repair"),
+      {
+        repairBufferedCommits: async (target) => {
+          repairs.push(target);
+          await writeSnapshotCheckpoint(
+            bucket as unknown as R2Bucket,
+            target.rootDropId,
+            target.branchId,
+            target.snapshotId,
+            "# Query Repair\n\nRepair materialized this content.",
+            snapshot.checkpointKey,
+          );
+        },
+      },
+    );
+    const body = (await response.json()) as {
+      heapGenerated: boolean;
+      nodes: Array<{ node: { text: string } }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(repairs).toEqual([
+      {
+        rootDropId: snapshot.rootDropId,
+        branchId: snapshot.branchId,
+        snapshotId: snapshot.snapshotId,
+        resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      },
+    ]);
+    expect(body.heapGenerated).toBe(true);
+    expect(body.nodes.some((entry) => entry.node.text.includes("Repair"))).toBe(
+      true,
+    );
+  });
+
   it("stores and queries branch-scoped NullMem facts and procedures", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
@@ -816,8 +877,24 @@ describe("D1 metadata contracts", () => {
               index: 0,
               kind: "query",
               name: "nd branch memory query",
+              description: "Find prior capability guidance before selecting a nullplug.",
+              callHint: {
+                target: "cli",
+                name: "nd branch memory query",
+                argsSummary: "Query the current branch for approval nullplug guidance.",
+              },
+              exitCondition: "Approval nullplug guidance is found.",
+              minStep: true,
               status: "success",
               resultSummary: "Found approval nullplug guidance.",
+            },
+            {
+              index: 1,
+              kind: "mcp.call",
+              name: "branch_query",
+              description: "Verify runtime refs for the branch after choosing the nullplug.",
+              status: "partial",
+              resultSummary: "Runtime refs still need verification.",
             },
           ],
           outcome: "success",
@@ -826,6 +903,9 @@ describe("D1 metadata contracts", () => {
       }),
     );
     expect(procedureResponse.status).toBe(201);
+    const procedureBody = (await procedureResponse.json()) as {
+      record: { recordId: string };
+    };
     expect(db.nullmemRecords.size).toBe(2);
 
     const queryResponse = await queryNullMem(
@@ -847,6 +927,41 @@ describe("D1 metadata contracts", () => {
       ]),
     );
 
+    const stepResponse = await queryNullMem(
+      env,
+      params,
+      new Request(
+        `https://example.test/api/memory/query?procedureId=${encodeURIComponent(procedureBody.record.recordId)}&afterStep=-1&stepLimit=1&includeRecords=false`,
+        {
+          headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+        },
+      ),
+    );
+    const stepBody = (await stepResponse.json()) as {
+      records: unknown[];
+      procedureSteps: Array<{
+        procedureId: string;
+        step: { index: number; description?: string; exitCondition?: string };
+        nextCursor?: number;
+        remainingSteps: number;
+      }>;
+    };
+
+    expect(stepResponse.status).toBe(200);
+    expect(stepBody.records).toEqual([]);
+    expect(stepBody.procedureSteps).toEqual([
+      expect.objectContaining({
+        procedureId: procedureBody.record.recordId,
+        step: expect.objectContaining({
+          index: 0,
+          description: expect.stringContaining("Find prior capability guidance"),
+          exitCondition: "Approval nullplug guidance is found.",
+        }),
+        nextCursor: 0,
+        remainingSteps: 1,
+      }),
+    ]);
+
     const capabilityResponse = await queryNullMem(
       env,
       params,
@@ -862,6 +977,48 @@ describe("D1 metadata contracts", () => {
     expect(capabilityBody.capsules).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ recordId: "capability:tool:nd-branch-memory-query" }),
+      ]),
+    );
+
+    const cliCapabilityResponse = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=atomic%20branch%20diff&kind=capability&labels=nd-cli", {
+        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+      }),
+    );
+    const cliCapabilityBody = (await cliCapabilityResponse.json()) as {
+      capsules: Array<{ recordId: string; title?: string }>;
+    };
+
+    expect(cliCapabilityResponse.status).toBe(200);
+    expect(cliCapabilityBody.capsules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recordId: "capability:tool:nd-diff-apply",
+          title: "Apply atomic branch diff",
+        }),
+      ]),
+    );
+
+    const mcpCapabilityResponse = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=semantic%20branch%20heap&kind=capability&labels=mcp-catalog", {
+        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+      }),
+    );
+    const mcpCapabilityBody = (await mcpCapabilityResponse.json()) as {
+      capsules: Array<{ recordId: string; title?: string }>;
+    };
+
+    expect(mcpCapabilityResponse.status).toBe(200);
+    expect(mcpCapabilityBody.capsules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recordId: "capability:mcp:nulldown:branch_query",
+          title: "Nulldown MCP: Query Branch Heap",
+        }),
       ]),
     );
 
@@ -885,6 +1042,116 @@ describe("D1 metadata contracts", () => {
         }),
       ]),
     );
+
+    const themeCapabilityResponse = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=warm%20parchment&kind=capability&labels=theme-catalog", {
+        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+      }),
+    );
+    const themeCapabilityBody = (await themeCapabilityResponse.json()) as {
+      capsules: Array<{ recordId: string; title?: string }>;
+    };
+
+    expect(themeCapabilityResponse.status).toBe(200);
+    expect(themeCapabilityBody.capsules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recordId: "capability:theme:gruvbox-light",
+          title: "Theme: Gruvbox Light",
+        }),
+      ]),
+    );
+
+    const createdFact = (await factResponse.json()) as {
+      record: { recordId: string };
+    };
+    const deleteResponse = await deleteNullMemRecord(
+      env,
+      { ...params, recordId: createdFact.record.recordId },
+      new Request(`https://example.test/api/memory/${encodeURIComponent(createdFact.record.recordId)}`, {
+        method: "DELETE",
+        headers,
+      }),
+    );
+    expect(deleteResponse.status).toBe(200);
+
+    const afterDeleteResponse = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=approval%20action&kind=fact", {
+        headers,
+      }),
+    );
+    const afterDeleteBody = (await afterDeleteResponse.json()) as {
+      capsules: Array<{ recordId: string }>;
+    };
+    expect(afterDeleteBody.capsules).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ recordId: createdFact.record.recordId }),
+      ]),
+    );
+  });
+
+  it("uses freshness watermarks before falling back to branch heads", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const data = createMemoryVoidDataStore();
+    const branch = createBranch({ headSnapshotId: 3 });
+
+    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    await data.put(
+      createNullMemFreshnessWatermarkKey(branch.rootDropId, branch.branchId),
+      {
+        version: 1,
+        rootDropId: branch.rootDropId,
+        branchId: branch.branchId,
+        headSnapshotId: 7,
+        previousSnapshotId: 6,
+        updatedAt: 1_700_000_000_000,
+        acceptedEventCount: 1,
+      },
+    );
+
+    const memory = createNullMemService({
+      blobs: bucket as unknown as R2Bucket,
+      sql: db as unknown as D1Database,
+      data,
+    });
+
+    await memory.createFact({
+      rootDropId: branch.rootDropId,
+      branchId: branch.branchId,
+      fact: {
+        title: "Watermark-backed freshness",
+        text: "This cites snapshot 5.",
+        sourceRefs: [
+          {
+            kind: "snapshot",
+            rootDropId: branch.rootDropId,
+            branchId: branch.branchId,
+            snapshotId: 5,
+          },
+        ],
+      },
+    });
+
+    const result = await memory.query({
+      rootDropId: branch.rootDropId,
+      branchId: branch.branchId,
+      q: "Watermark-backed freshness",
+      kind: "fact",
+      includeFreshness: true,
+    });
+
+    expect(result.freshness).toEqual([
+      expect.objectContaining({
+        status: "snapshot-outdated",
+        currentSnapshotId: 7,
+        outdatedSnapshotRefs: [5],
+      }),
+    ]);
   });
 
   for (const headEventSeq of [null, -1] as const) {
@@ -970,6 +1237,20 @@ describe("D1 metadata contracts", () => {
     expect(deltas[1].nodeRefs).toBeUndefined();
     expect(deltas[1].nodeOps?.some((op) => op.op === "upsert")).toBe(true);
     expect(deltas[1].nodeOps?.some((op) => op.op === "delete")).toBe(true);
+    expect(
+      db.sqlLog.some(
+        (sql) =>
+          sql.includes("INSERT INTO resolved_nodes") &&
+          sql.includes("ON CONFLICT(root_drop_id, branch_id, snapshot_id, resolver_id, node_id)"),
+      ),
+    ).toBe(true);
+    expect(
+      db.sqlLog.some(
+        (sql) =>
+          sql.includes("INSERT INTO resolved_node_refs") &&
+          sql.includes("ON CONFLICT(root_drop_id, branch_id, snapshot_id, resolver_id, node_id)"),
+      ),
+    ).toBe(true);
 
     for (const snapshot of snapshots) {
       await bucket.delete(
@@ -1057,5 +1338,80 @@ describe("D1 metadata contracts", () => {
     expect(db.writers.get(`${rootDropId}/account:acct_1`)?.branch_id).toBe(
       branch.branchId,
     );
+  });
+
+  it("backfills R2 resolved heap sidecars into compact v2 D1 rows", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const branch = createBranch();
+    const state: ResolvedNulldownState = {
+      version: 1,
+      id: `resolved:${branch.rootDropId}:${branch.branchId}:0:${RESOLVED_DOCUMENT_RESOLVER_ID}`,
+      rootDropId: branch.rootDropId,
+      branchId: branch.branchId,
+      snapshotId: 0,
+      sourceContentHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+      resolverVersion: "1",
+      resolvedAt: 1_700_000_010_000,
+      title: "Backfill Heap",
+      documentNodes: [
+        {
+          id: "heading:backfill:0:14",
+          kind: "heading",
+          text: "Backfill Heap",
+          sourceRange: { start: 0, end: 14 },
+          sourceHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          importance: 3.3,
+        },
+        {
+          id: "paragraph:backfill:16:46",
+          kind: "paragraph",
+          text: "Compact v2 backfill paragraph.",
+          sourceRange: { start: 16, end: 46 },
+          sourceHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+      ],
+    };
+
+    await bucket.put(
+      dropResolvedHeapKey(
+        branch.rootDropId,
+        branch.branchId,
+        RESOLVED_DOCUMENT_RESOLVER_ID,
+        0,
+      ),
+      JSON.stringify(state),
+      { httpMetadata: { contentType: "application/json" } },
+    );
+
+    const response = await backfillD1Metadata(
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        METADATA_BACKFILL_TOKEN: "secret",
+      },
+      new Request("https://example.test/api/metadata/backfill?limit=20", {
+        method: "POST",
+        headers: { Authorization: "Bearer secret" },
+      }),
+    );
+    const body = (await response.json()) as { stats: Record<string, number> };
+
+    expect(response.status).toBe(200);
+    expect(body.stats.resolvedHeapsUpserted).toBe(1);
+    const deltaRow = db.heapDeltas.get(
+      `${branch.rootDropId}/${branch.branchId}/0/${RESOLVED_DOCUMENT_RESOLVER_ID}`,
+    );
+    const delta = JSON.parse(deltaRow?.heap_delta_json ?? "null") as {
+      checkpointed: boolean;
+      nodeRefs?: unknown[];
+    };
+
+    expect(delta.checkpointed).toBe(true);
+    expect(delta.nodeRefs).toHaveLength(2);
+    expect(db.nodes.size).toBe(2);
+    expect(db.nodeRefs.size).toBe(2);
+    expect(db.nodePayloads.size).toBe(2);
   });
 });

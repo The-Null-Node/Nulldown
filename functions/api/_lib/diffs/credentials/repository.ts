@@ -1,4 +1,7 @@
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type {
+  VoidBlobStore,
+  VoidSqlStore,
+} from "../../../../../src/server/ports";
 
 /** R2 prefix for branch diff credential records. */
 export const DIFF_AUTH_KEY_PREFIX = "__diff_auth__/";
@@ -19,6 +22,26 @@ export interface DiffAuthCredentialRecord {
   secret: string;
   createdAt: number;
   expiresAt: number | null;
+}
+
+/** Ports used by diff credential repositories. */
+export interface DiffCredentialRepositoryPorts {
+  /** Blob store containing branch diff credential fallback records. */
+  blobs: VoidBlobStore;
+  /** Optional SQL store containing queryable diff credential records. */
+  sql?: VoidSqlStore;
+}
+
+/** Repository for branch diff credential records. */
+export interface DiffCredentialRepository {
+  /** Reads a persisted branch diff credential. */
+  readDiffAuthCredential(
+    dropId: string,
+    clientId: string,
+    kid: string,
+  ): Promise<DiffAuthCredentialRecord | null>;
+  /** Stores a branch diff credential record. */
+  putDiffAuthCredential(record: DiffAuthCredentialRecord): Promise<void>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -164,6 +187,16 @@ export const putDiffAuthCredential = async (
     },
   );
 };
+
+/** Creates a diff credential repository bound to composed blob and SQL ports. */
+export const createDiffCredentialRepository = ({
+  blobs,
+  sql,
+}: DiffCredentialRepositoryPorts): DiffCredentialRepository => ({
+  readDiffAuthCredential: (dropId, clientId, kid) =>
+    readDiffAuthCredential(blobs, dropId, clientId, kid, sql),
+  putDiffAuthCredential: (record) => putDiffAuthCredential(blobs, record, sql),
+});
 
 /** Type guard for persisted branch diff credential records. */
 export const isDiffAuthCredentialRecord = (

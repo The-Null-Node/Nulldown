@@ -1,4 +1,7 @@
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type {
+  VoidBlobStore,
+  VoidSqlStore,
+} from "../../../../../src/server/ports";
 import {
   DROP_LINK_ID_LENGTH,
   isDropIdToken,
@@ -20,6 +23,34 @@ interface AliasCacheEntry {
 const aliasCache = new Map<string, AliasCacheEntry>();
 
 type DropIdLogger = Pick<RequestLogger, "debug" | "info" | "warn">;
+
+/** Ports used by drop identity repositories. */
+export interface DropIdentityRepositoryPorts {
+  /** Blob store containing drop alias fallback records. */
+  blobs: VoidBlobStore;
+  /** Optional SQL store containing queryable drop alias rows. */
+  sql?: VoidSqlStore;
+}
+
+/** Repository for resolving and maintaining canonical remote drop ids. */
+export interface DropIdentityRepository {
+  /** Writes a short-link alias row into D1 metadata storage. */
+  writeRemoteAliasToD1(shortId: string, fullId: string): Promise<void>;
+  /** Reads a short-link alias from memory, D1, or R2 fallback. */
+  readRemoteAlias(shortId: string): Promise<string | null>;
+  /** Reserves the short-link alias for a full drop id if it is still available. */
+  reserveRemoteAlias(
+    fullId: string,
+    logger?: DropIdLogger,
+  ): Promise<"reserved" | "already-registered" | "conflict">;
+  /** Removes a short-link alias only when it still points to the expected drop id. */
+  removeRemoteAliasIfMatch(
+    fullId: string,
+    logger?: DropIdLogger,
+  ): Promise<void>;
+  /** Resolves a user-supplied full or short drop id to a canonical remote drop id. */
+  resolveRemoteDropId(id: string, logger?: DropIdLogger): Promise<string | null>;
+}
 
 const readAliasCache = (shortId: string): string | null => {
   const cached = aliasCache.get(shortId);
@@ -260,3 +291,19 @@ export const resolveRemoteDropId = async (
   });
   return candidate;
 };
+
+/** Creates a drop identity repository bound to composed blob and SQL ports. */
+export const createDropIdentityRepository = ({
+  blobs,
+  sql,
+}: DropIdentityRepositoryPorts): DropIdentityRepository => ({
+  writeRemoteAliasToD1: (shortId, fullId) =>
+    writeRemoteAliasToD1(sql, shortId, fullId),
+  readRemoteAlias: (shortId) => readRemoteAlias(blobs, shortId, sql),
+  reserveRemoteAlias: (fullId, logger) =>
+    reserveRemoteAlias(blobs, fullId, logger, sql),
+  removeRemoteAliasIfMatch: (fullId, logger) =>
+    removeRemoteAliasIfMatch(blobs, fullId, logger, sql),
+  resolveRemoteDropId: (id, logger) =>
+    resolveRemoteDropId(blobs, id, logger, sql),
+});

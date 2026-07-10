@@ -121,9 +121,15 @@ class MemoryD1Database {
   readonly records = new Map<string, DataRecordRow>();
   readonly indexes: DataIndexRow[] = [];
   readonly fts: Array<{ namespace: string; collection: string; scope_key: string; id: string; text: string }> = [];
+  readonly batchCalls: number[] = [];
 
   prepare(sql: string) {
     return new MemoryD1Statement(this, sql);
+  }
+
+  async batch(statements: MemoryD1Statement[]) {
+    this.batchCalls.push(statements.length);
+    return Promise.all(statements.map((statement) => statement.run()));
   }
 
   private recordKey(namespace: unknown, collection: unknown, scopeKey: unknown, id: unknown): string {
@@ -330,6 +336,56 @@ describe("Cloudflare VoidDataStore contracts", () => {
         truncated: false,
       }),
     );
+  });
+
+  it("batches putMany records through D1 batch", async () => {
+    const db = new MemoryD1Database();
+    const data = createCloudflareVoidDataStore({
+      R2_BUCKET: new MemoryR2Bucket() as unknown as R2Bucket,
+      DB: db as unknown as D1Database,
+    });
+
+    await data.putMany([
+      {
+        key: {
+          namespace: "resolved",
+          collection: "document_nodes",
+          scope: { rootDropId: "root-1", branchId: "owner", snapshotId: 1 },
+          id: "node-a",
+        },
+        value: { kind: "paragraph", text: "Alpha batched node" },
+        options: {
+          indexes: [
+            { name: "kind", value: "paragraph" },
+            { name: "text", value: "Alpha batched node", mode: "fulltext" },
+          ],
+        },
+      },
+      {
+        key: {
+          namespace: "resolved",
+          collection: "document_nodes",
+          scope: { rootDropId: "root-1", branchId: "owner", snapshotId: 1 },
+          id: "node-b",
+        },
+        value: { kind: "heading", text: "Beta batched node" },
+        options: {
+          indexes: [{ name: "kind", value: "heading" }],
+        },
+      },
+    ]);
+
+    expect(db.batchCalls).toHaveLength(1);
+    expect(db.batchCalls[0]).toBeGreaterThan(2);
+    await expect(
+      data.query({
+        namespace: "resolved",
+        collection: "document_nodes",
+        scope: { rootDropId: "root-1", branchId: "owner", snapshotId: 1 },
+        indexes: [{ name: "kind", value: "paragraph" }],
+        text: "alpha",
+      }),
+    ).resolves.toEqual([{ kind: "paragraph", text: "Alpha batched node" }]);
   });
 
   it("fails generic data operations clearly without D1", async () => {

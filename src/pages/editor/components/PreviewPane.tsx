@@ -1,6 +1,10 @@
 import React, { Suspense, lazy, useCallback, useRef } from "react";
 import LoadingFallback from "./LoadingFallback";
 import { mapPlainTextOffsetToMarkdownIndex } from "../../../lib/markdownText";
+import {
+  NullplugPrimitivePanel,
+  NullplugProvider,
+} from "../../../lib/nullplug/react";
 
 const EnhancedMarkdown = lazy(
   () => import("../../../components/EnhancedMarkdown"),
@@ -111,6 +115,9 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
           {markdown || "*Click to edit*"}
         </EnhancedMarkdown>
       </Suspense>
+      <NullplugProvider>
+        <NullplugPrimitivePanel className="mt-4 rounded-xl border border-border bg-muted/30 p-3" />
+      </NullplugProvider>
     </div>
   );
 };

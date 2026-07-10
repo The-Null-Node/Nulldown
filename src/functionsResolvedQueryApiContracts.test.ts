@@ -6,7 +6,7 @@ import { onRequest as onResolvedUpdateRequest } from "../functions/api/branches/
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
 import type { DropDiffEvent } from "../shared/drop/diff";
-import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved";
+import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved/constants";
 import {
   nullplugUiResponseFactKey,
   nullplugUiStatePatchFactKey,
@@ -292,6 +292,64 @@ describe("functions api branch resolved query contracts", () => {
       "Add policy section and nullplug reference.",
     );
     expect(body.nodes.some((entry) => entry.node.pluginId === "nd")).toBe(true);
+  });
+
+  it("returns compact resolved document items for the snapshotterId projection", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const content = [
+      "# Compact Projection Plan",
+      "",
+      "## Policy",
+      "Compact projection policy content should be available without full node payloads.",
+      "This extra sentence makes the source section long enough to prove text trimming stays bounded.",
+    ].join("\n");
+    await appendEventsToBranch(bucket as unknown as R2Bucket, branch, [makeEvent(content)]);
+
+    const response = await onResolvedQueryRequest({
+      request: new Request(
+        `https://nulldown.test/api/branches/${rootDropId}/${branch.branchId}/resolved/query?snapshotterId=nulledit.resolved-document&q=projection&k=2`,
+      ),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { rootId: rootDropId, branchId: branch.branchId },
+    } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+
+    const body = (await response.json()) as {
+      items: Array<{
+        id: string;
+        kind: string;
+        score: number;
+        text: string;
+        sourceRange: { start: number; end: number };
+        node?: unknown;
+      }>;
+      nodes?: unknown[];
+      snapshotterId?: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.snapshotterId).toBe("nulledit.resolved-document");
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items[0]).toEqual(
+      expect.objectContaining({
+        id: expect.any(String),
+        kind: expect.any(String),
+        score: expect.any(Number),
+        text: expect.stringMatching(/projection/i),
+        sourceRange: expect.objectContaining({
+          start: expect.any(Number),
+          end: expect.any(Number),
+        }),
+      }),
+    );
+    expect(body.items[0].node).toBeUndefined();
+    expect(body.nodes).toBeUndefined();
+    expect(JSON.stringify(body).length).toBeLessThan(2_000);
   });
 
   it("updates and queries runtime resolved heap nodes from durable UI facts", async () => {

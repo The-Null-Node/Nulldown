@@ -89,6 +89,7 @@ export interface GrantEvaluationRequest {
   grantId: string;
   rootDropId: string;
   branchId?: string;
+
   snapshotId?: number;
   requested: RuntimeGrant;
   trigger: GrantTrigger;
@@ -210,7 +211,8 @@ const isRuntimeGrantScope = (value: unknown): value is RuntimeGrantScope =>
 export const isRuntimeGrant = (value: unknown): value is RuntimeGrant => {
   if (!isRecord(value)) return false;
   if (!isRuntimeGrantKind(value.kind)) return false;
-  if (value.scope !== undefined && !isRuntimeGrantScope(value.scope)) return false;
+  if (value.scope !== undefined && !isRuntimeGrantScope(value.scope))
+    return false;
   if (value.target !== undefined && !isString(value.target)) return false;
   if (value.capabilities !== undefined && !isStringArray(value.capabilities)) {
     return false;
@@ -241,16 +243,21 @@ const isGrantTrigger = (value: unknown): value is GrantTrigger => {
   ) {
     return false;
   }
-  if (value.responseOf !== undefined && !isString(value.responseOf)) return false;
+  if (value.responseOf !== undefined && !isString(value.responseOf))
+    return false;
   if (value.field !== undefined && !isString(value.field)) return false;
   if (value.eventKind !== undefined && !isString(value.eventKind)) return false;
   return true;
 };
 
-const isPolicyInputSelector = (value: unknown): value is PolicyInputSelector => {
+const isPolicyInputSelector = (
+  value: unknown,
+): value is PolicyInputSelector => {
   if (!isRecord(value)) return false;
-  if (value.responses !== undefined && !isStringArray(value.responses)) return false;
-  if (value.metadata !== undefined && !isStringArray(value.metadata)) return false;
+  if (value.responses !== undefined && !isStringArray(value.responses))
+    return false;
+  if (value.metadata !== undefined && !isStringArray(value.metadata))
+    return false;
   if (
     value.resolvedHeapRefs !== undefined &&
     !isStringArray(value.resolvedHeapRefs)
@@ -260,7 +267,9 @@ const isPolicyInputSelector = (value: unknown): value is PolicyInputSelector => 
   return true;
 };
 
-export const isConditionalGrant = (value: unknown): value is ConditionalGrant => {
+export const isConditionalGrant = (
+  value: unknown,
+): value is ConditionalGrant => {
   if (!isRecord(value)) return false;
   if (!isString(value.id)) return false;
   if (!isGrantTrigger(value.trigger)) return false;
@@ -269,7 +278,11 @@ export const isConditionalGrant = (value: unknown): value is ConditionalGrant =>
   if (value.input !== undefined && !isPolicyInputSelector(value.input)) {
     return false;
   }
-  if (value.onError !== undefined && value.onError !== "deny" && value.onError !== "defer") {
+  if (
+    value.onError !== undefined &&
+    value.onError !== "deny" &&
+    value.onError !== "defer"
+  ) {
     return false;
   }
   return true;
@@ -313,7 +326,10 @@ export const isRootRuntimePolicy = (
     if (value.drops.read !== undefined && !isDropReadPolicy(value.drops.read)) {
       return false;
     }
-    if (value.drops.write !== undefined && !isDropWritePolicy(value.drops.write)) {
+    if (
+      value.drops.write !== undefined &&
+      !isDropWritePolicy(value.drops.write)
+    ) {
       return false;
     }
   }
@@ -346,7 +362,10 @@ const normalizeRootRuntimePolicyCandidate = (
 };
 
 export const resolveRootRuntimePolicy = (
-  metadata: { runtimePolicy?: unknown; allowedUrls?: unknown } | null | undefined,
+  metadata:
+    | { runtimePolicy?: unknown; allowedUrls?: unknown }
+    | null
+    | undefined,
   fallbackAllowedHosts: readonly string[] = DEFAULT_RUNTIME_NETWORK_ALLOWLIST,
 ): RootRuntimePolicy => {
   const fromRuntimePolicy = normalizeRootRuntimePolicyCandidate(
@@ -354,7 +373,9 @@ export const resolveRootRuntimePolicy = (
   );
   const legacyAllowedHosts = Array.isArray(metadata?.allowedUrls)
     ? normalizeAllowedHosts(
-        metadata.allowedUrls.filter((entry): entry is string => isString(entry)),
+        metadata.allowedUrls.filter((entry): entry is string =>
+          isString(entry),
+        ),
       )
     : normalizeAllowedHosts(fallbackAllowedHosts);
 
@@ -375,7 +396,10 @@ export const resolveRootRuntimePolicy = (
   };
 };
 
-const includesAll = (requested: readonly string[], allowed: readonly string[]) => {
+const includesAll = (
+  requested: readonly string[],
+  allowed: readonly string[],
+) => {
   const allowedSet = new Set(allowed);
   return requested.every((entry) => allowedSet.has(entry));
 };
@@ -418,6 +442,7 @@ export const isPolicyDecisionValue = (
   if (value.grant !== undefined && !isRuntimeGrant(value.grant)) return false;
   if (value.reason !== undefined && !isString(value.reason)) return false;
   if (value.expiresAt !== undefined && !isNumber(value.expiresAt)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata)) return false;
+  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
+    return false;
   return true;
 };

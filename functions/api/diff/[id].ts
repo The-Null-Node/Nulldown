@@ -3,7 +3,7 @@ import {
   methodNotAllowedResponse,
 } from "../_lib/core/http/responses";
 import { createRequestLogger } from "../_lib/core/logging/logger";
-import { createCloudflareVoidProvider } from "../_lib/core/platform/cloudflareProvider";
+import { createCloudflareBackendRuntime } from "../_lib/core/platform/cloudflareBackendRuntime";
 import {
   pollDiffEvents,
   postDiffEvents,
@@ -16,12 +16,13 @@ interface Env extends DiffTransportEnv {
 
 export const onRequest: PagesFunction<Env, "id"> = async (context) => {
   if (context.request.method === "POST") {
+    const runtime = createCloudflareBackendRuntime(context.env);
     return postDiffEvents(
       context.env,
       context.params,
       context.request,
       {
-        voidProvider: createCloudflareVoidProvider(context.env),
+        voidProvider: runtime.voidProvider,
         waitUntil: context.waitUntil?.bind(context),
       },
     );

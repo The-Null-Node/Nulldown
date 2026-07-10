@@ -7,6 +7,7 @@ import type {
   VoidDataListResult,
   VoidDataPrimitive,
   VoidDataPutOptions,
+  VoidDataPutRecord,
   VoidDataQuery,
   VoidDataScope,
   VoidDataStore,
@@ -20,7 +21,9 @@ interface MemoryRecord<T = unknown> {
 }
 
 const scopeEntries = (scope: VoidDataScope | undefined) =>
-  Object.entries(scope ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  Object.entries(scope ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
 
 const scopeSegment = ([key, value]: [string, VoidDataPrimitive]): string =>
   `${encodeURIComponent(key)}=${encodeURIComponent(JSON.stringify(value))}`;
@@ -38,7 +41,10 @@ const matchesListQuery = <T>(
   query: VoidDataListQuery,
 ): boolean => {
   if (item.key.namespace !== query.namespace) return false;
-  if (query.collection !== undefined && item.key.collection !== query.collection) {
+  if (
+    query.collection !== undefined &&
+    item.key.collection !== query.collection
+  ) {
     return false;
   }
   if (query.idPrefix && !item.key.id.startsWith(query.idPrefix)) return false;
@@ -56,7 +62,9 @@ const indexValueMatches = (
 ): boolean => {
   const actualValues = Array.isArray(actual) ? actual : [actual];
   const expectedValues = Array.isArray(expected) ? expected : [expected];
-  return expectedValues.some((expectedValue) => actualValues.includes(expectedValue));
+  return expectedValues.some((expectedValue) =>
+    actualValues.includes(expectedValue),
+  );
 };
 
 const matchesIndexFilter = (
@@ -66,7 +74,9 @@ const matchesIndexFilter = (
   const matches = indexes?.filter((entry) => entry.name === filter.name) ?? [];
   if (!matches.length) return false;
   if (filter.value !== undefined) {
-    return matches.some((entry) => indexValueMatches(entry.value, filter.value));
+    return matches.some((entry) =>
+      indexValueMatches(entry.value, filter.value),
+    );
   }
   if (filter.values !== undefined) {
     return matches.some((entry) =>
@@ -123,6 +133,12 @@ export const createMemoryVoidDataStore = (): VoidDataStore => {
       });
     },
 
+    putMany: async (items: VoidDataPutRecord[]): Promise<void> => {
+      for (const item of items) {
+        await dataStore.put(item.key, item.value, item.options);
+      }
+    },
+
     delete: async (key: VoidDataKey): Promise<void> => {
       records.delete(storeKey(key));
     },
@@ -131,7 +147,9 @@ export const createMemoryVoidDataStore = (): VoidDataStore => {
       query: VoidDataListQuery,
     ): Promise<VoidDataListResult<T>> => {
       const limit = Math.max(1, Math.min(1000, query.limit ?? 1000));
-      const offset = query.cursor ? Math.max(0, Number.parseInt(query.cursor, 10) || 0) : 0;
+      const offset = query.cursor
+        ? Math.max(0, Number.parseInt(query.cursor, 10) || 0)
+        : 0;
       const items = [...records.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([, record]) => toListItem(record as MemoryRecord<T>))
@@ -170,7 +188,10 @@ export const createMemoryVoidDataStore = (): VoidDataStore => {
       const current = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const marker = previous.then(() => current, () => current);
+      const marker = previous.then(
+        () => current,
+        () => current,
+      );
       locks.set(id, marker);
       await previous.catch(() => undefined);
       try {

@@ -1,45 +1,23 @@
-import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
+import type { VoidProvider } from "../../../../../src/server/provider";
 import {
-  createVoidProvider,
-  type VoidProvider,
-} from "../../../../../src/server/provider";
-import { createBuiltInNulleditSnapshotters } from "../../../../../src/server/nulledit";
-import { appendEventsToBranch } from "../../nulledit/service";
-import { createCloudflareVoidDataStore } from "./cloudflarePorts";
-import { createNullMemService } from "../../nullmem/service";
+  createCloudflareBackendRuntime,
+  type CloudflareVoidProviderBindings,
+} from "./cloudflareBackendRuntime";
 
-/** Cloudflare bindings required to compose the app-facing VoidProvider. */
-export interface CloudflareVoidProviderBindings {
-  R2_BUCKET: R2Bucket;
-  DB?: D1Database;
-}
+export type { CloudflareVoidProviderBindings } from "./cloudflareBackendRuntime";
+
+/** Flushes any buffered Cloudflare branch commits before an explicit query read. */
+export const repairCloudflareBranchCommitBufferForQuery = async (
+  bindings: CloudflareVoidProviderBindings,
+  rootDropId: string,
+  branchId: string,
+): Promise<void> =>
+  createCloudflareBackendRuntime(bindings).repairBufferedCommitsForQuery({
+    rootDropId,
+    branchId,
+  });
 
 /** Creates the Cloudflare-backed VoidProvider facade for Pages routes. */
 export const createCloudflareVoidProvider = (
   bindings: CloudflareVoidProviderBindings,
-): VoidProvider => {
-  const data = createCloudflareVoidDataStore(bindings);
-  const builtInSnapshotters = bindings.DB ? createBuiltInNulleditSnapshotters() : [];
-
-  return createVoidProvider({
-    data,
-    nulledit: {
-      appendDiffEvents: ({ branch, events, ...options }) =>
-        appendEventsToBranch(
-          bindings.R2_BUCKET,
-          branch,
-          events,
-          {
-            ...options,
-            data,
-            snapshotters: [
-              ...builtInSnapshotters,
-              ...(options.snapshotters ?? []),
-            ],
-          },
-          bindings.DB,
-        ),
-    },
-    memory: createNullMemService({ blobs: bindings.R2_BUCKET, sql: bindings.DB }),
-  });
-};
+): VoidProvider => createCloudflareBackendRuntime(bindings).voidProvider;

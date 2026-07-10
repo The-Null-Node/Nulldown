@@ -1,6 +1,7 @@
 import type { JsonValue } from "./diff";
 
-export const DROP_DIFF_EVENT_METADATA_KEY_PREFIX = "__drop_diff_event_metadata__/";
+export const DROP_DIFF_EVENT_METADATA_KEY_PREFIX =
+  "__drop_diff_event_metadata__/";
 export const DROP_SNAPSHOT_METADATA_KEY_PREFIX = "__drop_snapshot_metadata__/";
 export const DROP_RESOLVED_HEAP_KEY_PREFIX = "__drop_resolved_heap__/";
 

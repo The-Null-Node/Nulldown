@@ -1,5 +1,11 @@
-import { toShortDropId, isDropIdToken } from "../../../../shared/drop/id";
-import type { DropMetadata, DropPayload } from "../../../../shared/drop/types";
+import {
+  toShortDropId,
+  isDropIdToken,
+} from "../../../../shared/drop/id";
+import type {
+  DropMetadata,
+  DropPayload,
+} from "../../../../shared/drop/types";
 import { getMarkdownTitle } from "../../markdownText";
 import { nullplug } from "../registry";
 import type { NullplugContext, NullplugHandler, PluginBlock } from "../types";
@@ -90,7 +96,8 @@ const parseNdInvocation = (
   argsValue: string | null,
 ): NdInvocation | null => {
   const args = parseArgumentMap(argsValue);
-  const rawId = args.id || args.drop || args.src || firstMeaningfulBodyValue(blockContent);
+  const rawId =
+    args.id || args.drop || args.src || firstMeaningfulBodyValue(blockContent);
   const id = extractDropId(rawId);
 
   if (!id || !isDropIdToken(id)) {
@@ -155,10 +162,7 @@ const getMetadataHints = (metadata: DropMetadata | undefined): string[] => {
   return hints.slice(0, 3);
 };
 
-const buildCardHtml = (input: {
-  id: string;
-  payload: DropPayload;
-}): string => {
+const buildCardHtml = (input: { id: string; payload: DropPayload }): string => {
   const { id, payload } = input;
   const shortId = linkIdForDrop(id);
   const href = `/d/${encodeURIComponent(shortId)}`;
@@ -195,7 +199,7 @@ const nd: NullplugHandler & { pluginId: string } = Object.assign(
       return {
         text: buildStatusCardHtml(
           "Invalid nd block",
-          "Add id=\"dropId\" in the fence args or put a drop id on the first line.",
+          'Add id="dropId" in the fence args or put a drop id on the first line.',
         ),
       };
     }

@@ -5,9 +5,9 @@ import {
   type AccountAuthEnv,
 } from "../../accounts/session/auth";
 import { readBranchContent } from "../content/replay";
-import { readBranch } from "../storage/repository";
+import { createBranchRepository } from "../storage/repository";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
-import { resolveRemoteDropId } from "../../drops/identity/id";
+import { createDropIdentityRepository } from "../../drops/identity/id";
 import { resolveParam } from "../../core/http/responses";
 import { createPromotedEnvelope } from "../../crypto/envelopes/promotion";
 import { createRemoteJsonDrop } from "../../drops/storage/remoteCreate";
@@ -42,11 +42,12 @@ export const promoteBranchSnapshot = async (
     });
   }
 
-  const rootDropId = await resolveRemoteDropId(
-    env.R2_BUCKET,
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const rootDropId = await dropIdentityRepository.resolveRemoteDropId(
     resolveParam(params.rootId),
-    undefined,
-    env.DB,
   );
   const branchId = sanitizeDiffAuthToken(resolveParam(params.branchId));
   const accountId = await resolveAuthenticatedAccountId(request, env);
@@ -59,7 +60,11 @@ export const promoteBranchSnapshot = async (
     return new Response("Account ID is required.", { status: 401 });
   }
 
-  const branch = await readBranch(env.R2_BUCKET, rootDropId, branchId, env.DB);
+  const branchRepository = createBranchRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const branch = await branchRepository.readBranch(rootDropId, branchId);
   if (!branch) {
     return new Response("Branch not found.", { status: 404 });
   }
