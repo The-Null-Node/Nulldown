@@ -58,7 +58,7 @@
     },
     "packages/nulldown-mcp": {
       "name": "@thenullnode/nulldown-mcp",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "bin": {
         "nd-mcp": "bin/nulldown-mcp",
         "nulldown-mcp": "bin/nulldown-mcp",

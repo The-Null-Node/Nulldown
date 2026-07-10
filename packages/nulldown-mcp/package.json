@@ -1,6 +1,6 @@
 {
   "name": "@thenullnode/nulldown-mcp",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": false,
   "description": "A stdio MCP server for Nulldown API, branch, diff, and NullMem tools",
   "type": "module",
