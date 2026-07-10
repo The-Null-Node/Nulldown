@@ -1,5 +1,11 @@
-import { type DropDiffEvent, isDropDiffEvent } from "../../../../../shared/drop/diff";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import {
+  type DropDiffEvent,
+  isDropDiffEvent,
+} from "../../../../../shared/drop/diff";
+import type {
+  VoidBlobStore,
+  VoidSqlStore,
+} from "../../../../../src/server/ports";
 import { parseJsonColumn } from "../../core/d1/metadata";
 import {
   createBranchDiffEventIdKey,
@@ -8,6 +14,65 @@ import {
   createBranchDiffLogKey,
 } from "./keys";
 import { readBranch, readR2Json, writeR2Json } from "./repository";
+
+/** Ports used by branch diff-event repositories. */
+export interface BranchDiffRepositoryPorts {
+  /** Blob store containing branch diff logs and fallback event objects. */
+  blobs: VoidBlobStore;
+  /** Optional SQL store containing queryable branch event metadata. */
+  sql?: VoidSqlStore;
+}
+
+/** Repository for branch diff logs, event records, and polling cursors. */
+export interface BranchDiffRepository {
+  /** Reads the legacy single-object branch diff log. */
+  readLegacyBranchDiffLog(
+    rootDropId: string,
+    branchId: string,
+  ): Promise<DropDiffEvent[]>;
+  /** Reads heap-v2 per-sequence branch diff events. */
+  readHeapBranchDiffLog(
+    rootDropId: string,
+    branchId: string,
+  ): Promise<DropDiffEvent[]>;
+  /** Reads branch diff events, preferring heap-v2 storage with legacy fallback. */
+  readBranchDiffLog(
+    rootDropId: string,
+    branchId: string,
+  ): Promise<DropDiffEvent[]>;
+  /** Resolves the highest stored branch diff event sequence. */
+  readBranchHeadEventSeq(rootDropId: string, branchId: string): Promise<number>;
+  /** Reads one heap-v2 branch diff event by sequence with D1-primary/R2 fallback. */
+  readBranchDiffEventBySeq(
+    rootDropId: string,
+    branchId: string,
+    seq: number,
+  ): Promise<DropDiffEvent | null>;
+  /** Checks whether a branch diff event id has already been stored. */
+  hasBranchDiffEventId(
+    rootDropId: string,
+    branchId: string,
+    eventId: string,
+  ): Promise<boolean>;
+  /** Writes one heap-v2 branch diff event to D1 and R2 fallback storage. */
+  writeBranchDiffEvent(
+    rootDropId: string,
+    branchId: string,
+    event: DropDiffEvent,
+  ): Promise<void>;
+  /** Polls branch diff events after a sequence cursor with heap-v2 and legacy fallback. */
+  pollBranchDiffEventsSince(
+    rootDropId: string,
+    branchId: string,
+    afterSeq: number,
+    limit: number,
+    excludeClient?: string,
+  ): Promise<{
+    events: DropDiffEvent[];
+    nextCursor: number | null;
+    headSeq: number;
+  }>;
+}
 
 const isDropDiffEventList = (value: unknown): value is DropDiffEvent[] =>
   Array.isArray(value) && value.every((entry) => isDropDiffEvent(entry));
@@ -87,7 +152,12 @@ export const readBranchDiffLog = async (
   branchId: string,
   db?: VoidSqlStore,
 ): Promise<DropDiffEvent[]> => {
-  const heapEvents = await readHeapBranchDiffLog(bucket, rootDropId, branchId, db);
+  const heapEvents = await readHeapBranchDiffLog(
+    bucket,
+    rootDropId,
+    branchId,
+    db,
+  );
   if (heapEvents.length > 0) {
     return heapEvents;
   }
@@ -218,7 +288,11 @@ export const pollBranchDiffEventsSince = async (
     : -1;
   const normalizedLimit = Math.max(1, Math.min(200, Math.floor(limit)));
   if (db) {
-    const params: Array<string | number> = [rootDropId, branchId, normalizedAfter];
+    const params: Array<string | number> = [
+      rootDropId,
+      branchId,
+      normalizedAfter,
+    ];
     let filter = "root_drop_id = ? AND branch_id = ? AND seq > ?";
     if (excludeClient) {
       filter += " AND source_client_id != ?";
@@ -240,7 +314,12 @@ export const pollBranchDiffEventsSince = async (
       .map((row) => parseJsonColumn(row.event_json, isDropDiffEvent))
       .filter((entry): entry is DropDiffEvent => Boolean(entry));
     if (events.length > 0) {
-      const headSeq = await readBranchHeadEventSeq(bucket, rootDropId, branchId, db);
+      const headSeq = await readBranchHeadEventSeq(
+        bucket,
+        rootDropId,
+        branchId,
+        db,
+      );
       const lastSeq = events[events.length - 1]?.seq ?? normalizedAfter;
       return {
         events,
@@ -342,3 +421,40 @@ export const pollBranchDiffEventsSince = async (
     headSeq: observedHeadSeq,
   };
 };
+
+/** Creates a branch diff-event repository bound to composed blob and SQL ports. */
+export const createBranchDiffRepository = ({
+  blobs,
+  sql,
+}: BranchDiffRepositoryPorts): BranchDiffRepository => ({
+  readLegacyBranchDiffLog: (rootDropId, branchId) =>
+    readLegacyBranchDiffLog(blobs, rootDropId, branchId),
+  readHeapBranchDiffLog: (rootDropId, branchId) =>
+    readHeapBranchDiffLog(blobs, rootDropId, branchId, sql),
+  readBranchDiffLog: (rootDropId, branchId) =>
+    readBranchDiffLog(blobs, rootDropId, branchId, sql),
+  readBranchHeadEventSeq: (rootDropId, branchId) =>
+    readBranchHeadEventSeq(blobs, rootDropId, branchId, sql),
+  readBranchDiffEventBySeq: (rootDropId, branchId, seq) =>
+    readBranchDiffEventBySeq(blobs, rootDropId, branchId, seq, sql),
+  hasBranchDiffEventId: (rootDropId, branchId, eventId) =>
+    hasBranchDiffEventId(blobs, rootDropId, branchId, eventId, sql),
+  writeBranchDiffEvent: (rootDropId, branchId, event) =>
+    writeBranchDiffEvent(blobs, rootDropId, branchId, event, sql),
+  pollBranchDiffEventsSince: (
+    rootDropId,
+    branchId,
+    afterSeq,
+    limit,
+    excludeClient,
+  ) =>
+    pollBranchDiffEventsSince(
+      blobs,
+      rootDropId,
+      branchId,
+      afterSeq,
+      limit,
+      excludeClient,
+      sql,
+    ),
+});

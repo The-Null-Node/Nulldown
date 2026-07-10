@@ -89,7 +89,9 @@ describe("remote nullplug registry helpers", () => {
       ]),
     ).toBe(true);
     expect(
-      isRemoteNullplugManifestAllowed(record.manifest, ["plugins.nulldown.test"]),
+      isRemoteNullplugManifestAllowed(record.manifest, [
+        "plugins.nulldown.test",
+      ]),
     ).toBe(false);
     expect(
       isRemoteNullplugManifestAllowed(
@@ -118,7 +120,9 @@ describe("remote nullplug registry helpers", () => {
         record.manifest.version,
       ),
     ).resolves.toEqual(record);
-    expect(store.values.has(remoteNullplugLatestKey(record.manifest.id))).toBe(true);
+    expect(store.values.has(remoteNullplugLatestKey(record.manifest.id))).toBe(
+      true,
+    );
   });
 
   it("rejects disallowed registry records before writing", async () => {

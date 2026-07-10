@@ -85,4 +85,118 @@ describe("NulldownClient", () => {
       }),
     );
   });
+
+  it("calls typed nullplug provider runtime routes", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      accountId: "acct-1",
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), init });
+        const requestUrl = String(url);
+        if (requestUrl.endsWith("/api/nullplug/resolve")) {
+          return Response.json({ result: { content: "resolved" } });
+        }
+        if (requestUrl.endsWith("/api/nullplug/submit")) {
+          return Response.json({ stored: true, key: "response-key", fact: {} });
+        }
+        if (requestUrl.endsWith("/api/nullplug/state")) {
+          return Response.json({ stored: true, key: "state-key", fact: {} });
+        }
+        if (
+          requestUrl.endsWith("/api/nullplug/registry") &&
+          init?.method === "POST"
+        ) {
+          return Response.json({ registered: true, record: {} });
+        }
+        if (requestUrl.endsWith("/api/nullplug/registry")) {
+          return Response.json({ items: [], cursor: null });
+        }
+        return Response.json({});
+      },
+    });
+
+    await client.resolveNullplug({
+      call: {
+        pluginId: "nd",
+        args: { id: "drop-1" },
+        caller: { dropId: "root-1", branchId: "branch-1" },
+      },
+      context: {
+        providerId: "remote",
+        baseUrl: "https://nulldown.test",
+        capabilities: ["render"],
+      },
+    });
+    await client.submitNullplugResponse({
+      version: 1,
+      kind: "ui.response",
+      id: "response-1",
+      primitiveId: "approve",
+      createdAt: 1,
+      source: { rootDropId: "root-1", branchId: "branch-1" },
+      data: { accepted: true },
+    });
+    await client.storeNullplugState({
+      version: 1,
+      kind: "ui.state.patch",
+      id: "patch-1",
+      callId: "call-1",
+      createdAt: 2,
+      source: { rootDropId: "root-1", branchId: "branch-1", callId: "call-1" },
+      patch: [{ op: "set", path: ["accepted"], value: true }],
+    });
+    await client.listNullplugRegistry();
+    await client.registerNullplugManifest({
+      id: "remote.summary",
+      version: "1.0.0",
+      endpoint: "https://plugins.nulldown.test/summary",
+      inputSchema: { type: "object" },
+      outputSchema: { type: "object" },
+      permissions: [{ kind: "drop.read", scope: "caller" }],
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://nulldown.test/api/nullplug/resolve",
+      "https://nulldown.test/api/nullplug/submit",
+      "https://nulldown.test/api/nullplug/state",
+      "https://nulldown.test/api/nullplug/registry",
+      "https://nulldown.test/api/nullplug/registry",
+    ]);
+    calls.forEach((call) => {
+      const headers = new Headers(call.init?.headers);
+      expect(headers.get("x-nulldown-account-id")).toBe("acct-1");
+    });
+    expect(calls.map((call) => call.init?.method ?? "GET")).toEqual([
+      "POST",
+      "POST",
+      "POST",
+      "GET",
+      "POST",
+    ]);
+  });
+
+  it("serializes compact procedure step memory query params", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), init });
+        return Response.json({ capsules: [], records: [], procedureSteps: [] });
+      },
+    });
+
+    await client.queryMemory({
+      rootId: "root-1",
+      branchId: "branch:1",
+      procedureId: "memproc:1",
+      afterStep: 0,
+      stepLimit: 1,
+      includeRecords: false,
+    });
+
+    expect(calls[0]?.url).toBe(
+      "https://nulldown.test/api/branches/root-1/branch:1/memory/query?procedureId=memproc%3A1&afterStep=0&stepLimit=1&includeRecords=false",
+    );
+  });
 });

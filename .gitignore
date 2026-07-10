@@ -10,3 +10,5 @@ dist
 !.env.example
 macos/
 .diff-auth/
+.nulldown-data/
+output.txt

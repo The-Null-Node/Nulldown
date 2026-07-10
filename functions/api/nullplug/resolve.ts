@@ -16,7 +16,7 @@ import {
   isDropPayload,
   type DropPayload,
 } from "../../../shared/drop/types";
-import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { decryptProviderEscrowEnvelope } from "../_lib/crypto/envelopes/providerEscrow";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import {
@@ -138,7 +138,11 @@ const resolveNd = async (
     );
   }
 
-  const resolvedDropId = await resolveRemoteDropId(env.R2_BUCKET, target, undefined, env.DB);
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const resolvedDropId = await dropIdentityRepository.resolveRemoteDropId(target);
   if (!resolvedDropId) {
     return jsonErrorResponse(404, "drop_not_found", "Drop not found.");
   }

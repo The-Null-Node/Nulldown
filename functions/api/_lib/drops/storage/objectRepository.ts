@@ -1,4 +1,4 @@
-import type { VoidBlobStore } from "../../../../../src/server/ports";
+import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 
 /** Result of attempting to write a drop object to durable storage. */
 export type PutDropObjectResult = "stored" | "conflict" | "precondition_failed";
@@ -8,6 +8,14 @@ export interface PutDropObjectOptions {
   contentType: string;
   upsert?: boolean;
   expectedRevision?: string | null;
+}
+
+/** Ports used by drop object repositories. */
+export interface DropObjectRepositoryPorts {
+  /** Blob store containing canonical serialized drop objects. */
+  blobs: VoidBlobStore;
+  /** Optional SQL metadata store reserved for future object metadata writes. */
+  sql?: VoidSqlStore;
 }
 
 /** Minimal persistence port for writing serialized drop objects. */
@@ -60,3 +68,9 @@ export class BlobDropObjectRepository implements DropObjectRepository {
     return created ? "stored" : "conflict";
   }
 }
+
+/** Creates a drop object repository bound to composed blob and SQL ports. */
+export const createDropObjectRepository = ({
+  blobs,
+}: DropObjectRepositoryPorts): DropObjectRepository =>
+  new BlobDropObjectRepository(blobs);

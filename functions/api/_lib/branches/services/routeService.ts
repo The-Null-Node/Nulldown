@@ -10,14 +10,9 @@ import {
   resolveBranchForActor,
 } from "../lifecycle/service";
 import { readBranchContent } from "../content/replay";
-import {
-  listBranchesForRoot,
-  listBranchesForRootPage,
-  listSnapshotsForBranch,
-  readBranch,
-} from "../storage/repository";
+import { createBranchRepository } from "../storage/repository";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
-import { resolveRemoteDropId } from "../../drops/identity/id";
+import { createDropIdentityRepository } from "../../drops/identity/id";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
@@ -88,7 +83,13 @@ const parseBranchBackfillQuery = (request: Request): BranchBackfillQuery => {
 const resolveRootDropId = async (
   env: Pick<BranchRouteEnv, "R2_BUCKET" | "DB">,
   idParam: string | string[] | undefined,
-): Promise<string | null> => resolveRemoteDropId(env.R2_BUCKET, resolveParam(idParam), undefined, env.DB);
+): Promise<string | null> => {
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  return dropIdentityRepository.resolveRemoteDropId(resolveParam(idParam));
+};
 
 const resolveBranchTarget = async (
   env: Pick<BranchRouteEnv, "R2_BUCKET" | "DB">,
@@ -97,11 +98,12 @@ const resolveBranchTarget = async (
   | { rootDropId: string; branchId: string }
   | { error: Response }
 > => {
-  const rootDropId = await resolveRemoteDropId(
-    env.R2_BUCKET,
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const rootDropId = await dropIdentityRepository.resolveRemoteDropId(
     resolveParam(params.rootId),
-    undefined,
-    env.DB,
   );
   const branchId = sanitizeDiffAuthToken(resolveParam(params.branchId));
   if (!rootDropId || !branchId) {
@@ -114,6 +116,9 @@ const resolveBranchTarget = async (
 
   return { rootDropId, branchId };
 };
+
+const createBranchRouteRepository = (env: BranchRouteEnv) =>
+  createBranchRepository({ blobs: env.R2_BUCKET, sql: env.DB });
 
 /** Lists branches for a root drop. */
 export const listBranchesForDrop = async (
@@ -129,7 +134,8 @@ export const listBranchesForDrop = async (
     return new Response("Drop ID is required.", { status: 400 });
   }
 
-  const branches = await listBranchesForRoot(env.R2_BUCKET, id, env.DB);
+  const branchRepository = createBranchRouteRepository(env);
+  const branches = await branchRepository.listBranchesForRoot(id);
   return new Response(JSON.stringify({ rootDropId: id, branches }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -206,7 +212,8 @@ export const getBranchContent = async (
   if ("error" in target) return target.error;
   const { rootDropId, branchId } = target;
 
-  const branch = await readBranch(env.R2_BUCKET, rootDropId, branchId, env.DB);
+  const branchRepository = createBranchRouteRepository(env);
+  const branch = await branchRepository.readBranch(rootDropId, branchId);
   if (!branch) {
     return new Response("Branch not found.", { status: 404 });
   }
@@ -249,16 +256,15 @@ export const listBranchSnapshots = async (
   if ("error" in target) return target.error;
   const { rootDropId, branchId } = target;
 
-  const branch = await readBranch(env.R2_BUCKET, rootDropId, branchId, env.DB);
+  const branchRepository = createBranchRouteRepository(env);
+  const branch = await branchRepository.readBranch(rootDropId, branchId);
   if (!branch) {
     return new Response("Branch not found.", { status: 404 });
   }
 
-  const snapshots = await listSnapshotsForBranch(
-    env.R2_BUCKET,
+  const snapshots = await branchRepository.listSnapshotsForBranch(
     rootDropId,
     branchId,
-    env.DB,
   );
   return new Response(JSON.stringify({ rootDropId, branchId, snapshots }), {
     status: 200,
@@ -305,7 +311,13 @@ export const backfillBranchesForDrop = async (
       return jsonErrorResponse(401, "unauthorized", "Unauthorized");
     }
 
-    const rootDropId = await resolveRemoteDropId(env.R2_BUCKET, requestedRootId, undefined, env.DB);
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const rootDropId = await dropIdentityRepository.resolveRemoteDropId(
+      requestedRootId,
+    );
     if (!rootDropId) {
       logger.logEnd(400, { reason: "invalid_drop_id" });
       return jsonErrorResponse(
@@ -319,12 +331,11 @@ export const backfillBranchesForDrop = async (
     const inputCursor = query.cursor;
     const limit = query.limit ?? DEFAULT_BACKFILL_LIMIT;
 
-    const page = await listBranchesForRootPage(
-      env.R2_BUCKET,
+    const branchRepository = createBranchRouteRepository(env);
+    const page = await branchRepository.listBranchesForRootPage(
       rootDropId,
       limit,
       inputCursor,
-      env.DB,
     );
 
     const stats = {

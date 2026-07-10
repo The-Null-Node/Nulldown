@@ -3,19 +3,41 @@ import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/diff/[id]";
 import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
+import { createCloudflareVoidProvider } from "../functions/api/_lib/core/platform/cloudflareProvider";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
 import {
+  readBranch,
+  readSnapshot,
+} from "../functions/api/_lib/branches/storage/repository";
+import {
+  createNulleditNullMemObserverSnapshotter,
+  createNulleditPolicyDecisionFactDataKey,
+  createNulleditPolicyObserverSnapshotter,
   createResolvedHeapDataKey,
+  createInMemoryBranchCommitBuffer,
+  type BranchCommitBuffer,
+  type NulleditPolicyDecisionFactRecord,
   type NulleditSnapshotDiffRefRecord,
   type NulleditSnapshotFrameRecord,
   type NulleditSnapshotter,
 } from "./server/nulledit";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
-  type ResolvedDocumentNode,
-  type ResolvedNulldownState,
-} from "../shared/drop/resolved";
+  RESOLVED_RUNTIME_REFS_RESOLVER_ID,
+} from "../shared/drop/resolved/constants";
+import type {
+  ResolvedDocumentNode,
+  ResolvedNulldownState,
+  ResolvedPriorityFactRecord,
+  ResolvedRuntimeNode,
+} from "../shared/drop/resolved/types";
+import {
+  nullplugUiResponseFactKey,
+  type NullplugUiResponseFact,
+} from "../shared/nullplug/ui";
+import type { DropDiffEvent } from "../shared/drop/diff";
+import type { NullMemFactRecord } from "../shared/nullmem/types";
 
 interface StoredObject {
   value: string;
@@ -279,9 +301,17 @@ class MemoryD1Statement {
 
 class MemoryD1Database {
   private readonly records = new Map<string, VoidDataRecordRow>();
+  readonly priorityFacts = new Map<string, string>();
+  readonly nullmemRecords = new Map<string, string>();
+  readonly batchCalls: number[] = [];
 
   prepare(sql: string) {
     return new MemoryD1Statement(this, sql);
+  }
+
+  async batch(statements: MemoryD1Statement[]) {
+    this.batchCalls.push(statements.length);
+    return Promise.all(statements.map((statement) => statement.run()));
   }
 
   private recordKey(namespace: unknown, collection: unknown, scopeKey: unknown, id: unknown): string {
@@ -297,6 +327,19 @@ class MemoryD1Database {
         id: String(params[3]),
         record_json: String(params[5]),
       });
+      return;
+    }
+
+    if (sql.includes("INSERT INTO resolved_priority_facts")) {
+      this.priorityFacts.set(String(params[5]), String(params[10]));
+      return;
+    }
+
+    if (sql.includes("INSERT INTO nullmem_records")) {
+      this.nullmemRecords.set(
+        `${params[0]}/${params[1]}/${params[2]}/${params[3]}`,
+        String(params[12]),
+      );
       return;
     }
 
@@ -444,6 +487,87 @@ describe("functions api diff contracts", () => {
     return bucket;
   };
 
+  it("creates idempotent NullMem observer facts for accepted appends", async () => {
+    const event = {
+      ...makeEvent({
+        eventId: "evt-nullmem-repeat",
+        sourceClientId: "writer-nullmem-repeat",
+        text: "M",
+        createdAt: 115,
+      }),
+      seq: 7,
+      snapshotId: 3,
+    } as DropDiffEvent;
+    const facts: Array<{ recordId: string }> = [];
+    const byRecordId = new Map<string, string>();
+    const snapshotter = createNulleditNullMemObserverSnapshotter({
+      writeFact(fact) {
+        facts.push(fact);
+        byRecordId.set(fact.recordId, fact.text);
+      },
+    });
+    const context = {
+      data: {} as never,
+      rootDropId,
+      branchId: "branch-nullmem-repeat",
+      snapshotId: 3,
+      parentSnapshotId: 2,
+      branch: {} as never,
+      snapshot: {} as never,
+      frame: { content: "M" },
+      acceptedEvents: [event],
+      acceptedDiffRefs: [],
+      deduplicatedCount: 0,
+      totalStored: 8,
+    };
+
+    await snapshotter.snapshot(context);
+    await snapshotter.snapshot(context);
+
+    expect(facts).toHaveLength(2);
+    expect(facts[0]?.recordId).toBe(
+      "memfact:observed-branch-append:AaBbCc112233:branch-nullmem-repeat:3:evt-nullmem-repeat:evt-nullmem-repeat",
+    );
+    expect(facts[1]?.recordId).toBe(facts[0]?.recordId);
+    expect(byRecordId.size).toBe(1);
+  });
+
+  it("skips policy observer facts without accepted policy metadata", async () => {
+    const event = {
+      ...makeEvent({
+        eventId: "evt-policy-skip",
+        sourceClientId: "writer-policy-skip",
+        text: "P",
+        createdAt: 116,
+      }),
+      seq: 8,
+      snapshotId: 4,
+    } as DropDiffEvent;
+    const writes: unknown[] = [];
+    const snapshotter = createNulleditPolicyObserverSnapshotter();
+
+    await snapshotter.snapshot({
+      data: {
+        putMany(records: unknown[]) {
+          writes.push(...records);
+        },
+      } as never,
+      rootDropId,
+      branchId: "branch-policy-skip",
+      snapshotId: 4,
+      parentSnapshotId: 3,
+      branch: {} as never,
+      snapshot: {} as never,
+      frame: { content: "P" },
+      acceptedEvents: [event],
+      acceptedDiffRefs: [],
+      deduplicatedCount: 0,
+      totalStored: 9,
+    });
+
+    expect(writes).toHaveLength(0);
+  });
+
   it("deduplicates repeat event ids across writes", async () => {
     const bucket = createSeededBucket();
     const event = makeEvent({
@@ -590,9 +714,30 @@ describe("functions api diff contracts", () => {
     });
   });
 
-  it("persists built-in Nulledit snapshot records through data.put", async () => {
+  it("persists built-in Nulledit snapshot records through the data store", async () => {
     const bucket = createSeededBucket();
     const db = new MemoryD1Database();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const responseFact: NullplugUiResponseFact = {
+      version: 1,
+      kind: "ui.response",
+      id: "response-persist",
+      primitiveId: "persist-action",
+      createdAt: 105,
+      source: {
+        rootDropId,
+        branchId: branch.branchId,
+        snapshotId: 1,
+        callId: "call-persist",
+      },
+      data: { persisted: true },
+    };
+    bucket.seed(nullplugUiResponseFactKey(responseFact), JSON.stringify(responseFact));
     const event = makeEvent({
       eventId: "evt-data-put",
       sourceClientId: "writer-data-put",
@@ -601,8 +746,10 @@ describe("functions api diff contracts", () => {
       metadata: {
         kind: "agent.edit",
         intent: "Persist snapshot frame and diff ref.",
+        args: { priority: 4 },
         labels: ["data.put", "snapshotter"],
         confidence: 0.8,
+        policyDecisionRef: "policy-decision-persist",
       },
     });
     const waitUntilPromises: Promise<void>[] = [];
@@ -626,6 +773,7 @@ describe("functions api diff contracts", () => {
     expect(response.status).toBe(200);
     expect(waitUntilPromises).toHaveLength(1);
     await Promise.all(waitUntilPromises);
+    expect(db.batchCalls.some((count) => count > 8)).toBe(true);
 
     const data = createCloudflareVoidDataStore({
       R2_BUCKET: bucket as unknown as R2Bucket,
@@ -719,6 +867,148 @@ describe("functions api diff contracts", () => {
     expect(resolvedNodes).toEqual([
       expect.objectContaining({ kind: "paragraph", text: "Persist me" }),
     ]);
+
+    const runtimeHeap = await data.get<ResolvedNulldownState>(
+      createResolvedHeapDataKey({
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID,
+      }),
+    );
+    const runtimeNodes = await data.query<ResolvedRuntimeNode>({
+      namespace: "resolved",
+      collection: "runtime_nodes",
+      scope: {
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID,
+      },
+      indexes: [{ name: "kind", value: "ui.response" }],
+      text: "persist-action",
+    });
+    expect(runtimeHeap).toEqual(
+      expect.objectContaining({
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID,
+      }),
+    );
+    expect(runtimeHeap?.runtimeNodes).toEqual([
+      expect.objectContaining({
+        kind: "ui.response",
+        primitiveId: "persist-action",
+      }),
+    ]);
+    expect(runtimeNodes).toEqual([
+      expect.objectContaining({
+        kind: "ui.response",
+        primitiveId: "persist-action",
+      }),
+    ]);
+
+    const priorityFacts = [...db.priorityFacts.values()].map(
+      (entry) => JSON.parse(entry) as ResolvedPriorityFactRecord,
+    );
+    expect(priorityFacts).toEqual([
+      expect.objectContaining({
+        factId: `priority:diff:${rootDropId}:${body.branchId}:${event.eventId}`,
+        rootDropId,
+        branchId: body.branchId,
+        targetKind: "diff",
+        targetId: event.eventId,
+        priority: 4,
+        sourceSeq: 0,
+        sourceEventId: event.eventId,
+        reason: "Persist snapshot frame and diff ref.",
+        labels: ["data.put", "snapshotter"],
+      }),
+    ]);
+
+    const policyFact = await data.get<NulleditPolicyDecisionFactRecord>(
+      createNulleditPolicyDecisionFactDataKey({
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        factId: `policy:diff:${rootDropId}:${body.branchId}:${event.eventId}`,
+      }),
+    );
+    const policyFacts = await data.query<NulleditPolicyDecisionFactRecord>({
+      namespace: "nulledit",
+      collection: "policy_decision_facts",
+      scope: {
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+      },
+    });
+    expect(policyFact).toEqual(
+      expect.objectContaining({
+        version: 1,
+        factId: `policy:diff:${rootDropId}:${body.branchId}:${event.eventId}`,
+        rootDropId,
+        branchId: body.branchId,
+        snapshotId: body.snapshotId,
+        sourceEventId: event.eventId,
+        sourceSeq: 0,
+        sourceClientId: event.sourceClientId,
+        policyDecisionRef: "policy-decision-persist",
+        metadataKind: "agent.edit",
+        intent: "Persist snapshot frame and diff ref.",
+        labels: ["data.put", "snapshotter"],
+        confidence: 0.8,
+        args: { priority: 4 },
+        text: expect.stringContaining("policy-decision-persist"),
+      }),
+    );
+    expect(policyFacts).toEqual([policyFact]);
+
+    const nullmemFacts = [...db.nullmemRecords.values()].map(
+      (entry) => JSON.parse(entry) as NullMemFactRecord,
+    );
+    expect(nullmemFacts).toEqual([
+      expect.objectContaining({
+        recordId: `memfact:observed-branch-append:${rootDropId}:${body.branchId}:${body.snapshotId}:${event.eventId}:${event.eventId}`,
+        rootDropId,
+        branchId: body.branchId,
+        targetKind: "snapshot",
+        targetId: String(body.snapshotId),
+        labels: [
+          "snapshotter/observable-chain",
+          "nullmem/observed-append",
+          "branch-append",
+        ],
+        metadata: expect.objectContaining({
+          eventIds: [event.eventId],
+          eventCount: 1,
+          snapshotId: body.snapshotId,
+          parentSnapshotId: 0,
+          totalStored: 1,
+          deduplicatedCount: 0,
+          seqRange: { from: 0, to: 0 },
+        }),
+      }),
+    ]);
+    expect(nullmemFacts[0]?.sourceRefs).toEqual(
+      expect.arrayContaining([
+        { kind: "branch", rootDropId, branchId: body.branchId },
+        {
+          kind: "snapshot",
+          rootDropId,
+          branchId: body.branchId,
+          snapshotId: body.snapshotId,
+        },
+        {
+          kind: "diff",
+          rootDropId,
+          branchId: body.branchId,
+          eventId: event.eventId,
+          seq: 0,
+        },
+      ]),
+    );
   });
 
   it("rejects invalid diff event metadata", async () => {
@@ -799,6 +1089,15 @@ describe("functions api diff contracts", () => {
     });
     const calls: string[] = [];
     const waitUntilPromises: Promise<void>[] = [];
+    const bufferedCommits: string[] = [];
+    const commitBuffer: BranchCommitBuffer = {
+      appendAcceptedCommit(commit) {
+        bufferedCommits.push(
+          `${commit.branchId}:${commit.snapshotId}:${commit.acceptedEvents.length}`,
+        );
+        return { mode: "write-through", reason: "cold-branch" };
+      },
+    };
     const snapshotter: NulleditSnapshotter = {
       id: "snapshotter-1",
       snapshot(context) {
@@ -819,6 +1118,229 @@ describe("functions api diff contracts", () => {
       [event],
       {
         snapshotters: [snapshotter],
+        commitBuffer,
+        waitUntil: (promise) => {
+          waitUntilPromises.push(promise);
+        },
+      },
+    );
+
+    expect(appended.acceptedEvents).toHaveLength(1);
+    expect(appended.snapshot?.snapshotId).toBe(1);
+    expect(bufferedCommits).toEqual([`${branch.branchId}:1:1`]);
+    expect(waitUntilPromises).toHaveLength(1);
+    await waitUntilPromises[0];
+    expect(calls).toEqual(["event:evt-observed:0:1", "snapshot:1:1:1"]);
+  });
+
+  it("runs Nulledit snapshotter phases in order", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-phase-order",
+      sourceClientId: "writer-phase-order",
+      text: "P",
+      createdAt: 111,
+    });
+    const calls: string[] = [];
+    const waitUntilPromises: Promise<void>[] = [];
+    const snapshotters: NulleditSnapshotter[] = [
+      {
+        id: "secondary-snapshotter",
+        phase: "secondary",
+        snapshot() {
+          calls.push(`secondary:${calls.includes("primary:end")}`);
+        },
+      },
+      {
+        id: "extended-snapshotter",
+        snapshot() {
+          calls.push(`extended:${calls.includes("secondary:true")}`);
+        },
+      },
+      {
+        id: "primary-snapshotter",
+        phase: "primary",
+        async snapshot() {
+          calls.push("primary:start");
+          await Promise.resolve();
+          calls.push("primary:end");
+        },
+      },
+    ];
+
+    const appended = await appendEventsToBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      [event],
+      {
+        snapshotters,
+        waitUntil: (promise) => {
+          waitUntilPromises.push(promise);
+        },
+      },
+    );
+
+    expect(appended.acceptedEvents).toHaveLength(1);
+    await waitUntilPromises[0];
+    expect(calls).toEqual([
+      "primary:start",
+      "primary:end",
+      "secondary:true",
+      "extended:true",
+    ]);
+  });
+
+  it("runs provider-registered snapshotters on future appends", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const provider = createCloudflareVoidProvider({
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      DB: db as unknown as D1Database,
+    });
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-provider-registered",
+      sourceClientId: "writer-provider-registered",
+      text: "R",
+      createdAt: 112,
+    });
+    const calls: string[] = [];
+    const waitUntilPromises: Promise<void>[] = [];
+    const unsubscribe = provider.nulledit.registerSnapshotter({
+      id: "provider-registered-snapshotter",
+      phase: "secondary",
+      snapshot(context) {
+        calls.push(
+          `${context.snapshotId}:${context.acceptedEvents[0]?.eventId}`,
+        );
+      },
+    });
+
+    try {
+      const appended = await provider.nulledit.appendDiffEvents({
+        branch,
+        events: [event],
+        waitUntil: (promise) => {
+          waitUntilPromises.push(promise);
+        },
+      });
+
+      expect(appended.acceptedEvents).toHaveLength(1);
+      expect(waitUntilPromises).toHaveLength(1);
+      await waitUntilPromises[0];
+      expect(calls).toEqual(["1:evt-provider-registered"]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("buffers derived snapshotters after primary branch writes", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-buffered",
+      sourceClientId: "writer-buffered",
+      text: "B",
+      createdAt: 109,
+    });
+    const waitUntilPromises: Promise<void>[] = [];
+    const calls: string[] = [];
+    const commitBuffer: BranchCommitBuffer = {
+      appendAcceptedCommit(commit) {
+        calls.push(`buffer:${commit.snapshotId}:${commit.acceptedEvents.length}`);
+        return {
+          mode: "buffer",
+          reason: "hot-branch",
+          flushAfterMs: 100,
+          bufferedEventCount: commit.acceptedEvents.length,
+        };
+      },
+    };
+
+    const appended = await appendEventsToBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      [event],
+      {
+        snapshotters: [
+          {
+            id: "must-not-run",
+            snapshot() {
+              calls.push("snapshotter-ran");
+            },
+          },
+        ],
+        commitBuffer,
+        waitUntil: (promise) => {
+          waitUntilPromises.push(promise);
+        },
+      },
+    );
+
+    expect(appended.acceptedEvents).toHaveLength(1);
+    expect(appended.snapshot?.snapshotId).toBe(1);
+    expect(waitUntilPromises).toHaveLength(0);
+    expect(calls).toEqual(["buffer:1:1"]);
+    await expect(
+      readBranch(bucket as unknown as R2Bucket, rootDropId, branch.branchId),
+    ).resolves.toEqual(expect.objectContaining({ headSnapshotId: 1 }));
+    await expect(
+      readSnapshot(bucket as unknown as R2Bucket, rootDropId, branch.branchId, 1),
+    ).resolves.toEqual(expect.objectContaining({ snapshotId: 1 }));
+  });
+
+  it("schedules buffered snapshotters when a flush threshold is reached", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-threshold-flush",
+      sourceClientId: "writer-threshold-flush",
+      text: "F",
+      createdAt: 110,
+    });
+    const commitBuffer = createInMemoryBranchCommitBuffer({
+      thresholds: { hotBranchEventCount: 1, maxBufferedEventCount: 1 },
+    });
+    const waitUntilPromises: Promise<void>[] = [];
+    const calls: string[] = [];
+
+    const appended = await appendEventsToBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      [event],
+      {
+        snapshotters: [
+          {
+            id: "threshold-snapshotter",
+            snapshot(context) {
+              calls.push(
+                `${context.snapshotId}:${context.acceptedEvents[0]?.eventId}`,
+              );
+            },
+          },
+        ],
+        commitBuffer,
         waitUntil: (promise) => {
           waitUntilPromises.push(promise);
         },
@@ -829,7 +1351,14 @@ describe("functions api diff contracts", () => {
     expect(appended.snapshot?.snapshotId).toBe(1);
     expect(waitUntilPromises).toHaveLength(1);
     await waitUntilPromises[0];
-    expect(calls).toEqual(["event:evt-observed:0:1", "snapshot:1:1:1"]);
+    expect(calls).toEqual(["1:evt-threshold-flush"]);
+    expect(
+      commitBuffer.flush?.({
+        rootDropId,
+        branchId: branch.branchId,
+        reason: "manual",
+      }),
+    ).toEqual(expect.objectContaining({ commits: [], bufferedEventCount: 0 }));
   });
 
   it("isolates Nulledit snapshotter failures", async () => {

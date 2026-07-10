@@ -19,6 +19,71 @@ import {
   createSnapshotKey,
 } from "./keys";
 
+/** Ports used by branch storage repositories. */
+export interface BranchRepositoryPorts {
+  /** Blob store containing canonical branch records and fallback objects. */
+  blobs: VoidBlobStore;
+  /** Optional SQL store containing queryable branch metadata. */
+  sql?: VoidSqlStore;
+}
+
+/** Repository for branch records, snapshots, checkpoints, and listings. */
+export interface BranchRepository {
+  /** Reads a branch record by root and branch id. */
+  readBranch(
+    rootDropId: string,
+    branchId: string,
+  ): Promise<DropBranchRecord | null>;
+  /** Writes a branch record to durable storage. */
+  writeBranch(branch: DropBranchRecord): Promise<void>;
+  /** Reads a snapshot record by root, branch, and snapshot id. */
+  readSnapshot(
+    rootDropId: string,
+    branchId: string,
+    snapshotId: number,
+  ): Promise<DropSnapshotRecord | null>;
+  /** Writes a snapshot record to durable storage. */
+  writeSnapshot(snapshot: DropSnapshotRecord): Promise<void>;
+  /** Reads a branch snapshot checkpoint body. */
+  readSnapshotCheckpoint(
+    rootDropId: string,
+    branchId: string,
+    snapshotId: number,
+    explicitKey?: string,
+  ): Promise<string | null>;
+  /** Writes a branch snapshot checkpoint body. */
+  writeSnapshotCheckpoint(
+    rootDropId: string,
+    branchId: string,
+    snapshotId: number,
+    content: string,
+    explicitKey?: string,
+  ): Promise<void>;
+  /** Writes the legacy full branch diff log. */
+  writeBranchDiffLog(
+    rootDropId: string,
+    branchId: string,
+    events: DropDiffEvent[],
+  ): Promise<void>;
+  /** Lists snapshot records for a branch, sorted by snapshot id. */
+  listSnapshotsForBranch(
+    rootDropId: string,
+    branchId: string,
+  ): Promise<DropSnapshotRecord[]>;
+  /** Lists branch records for a root drop, sorted by creation time. */
+  listBranchesForRoot(rootDropId: string): Promise<DropBranchRecord[]>;
+  /** Paged branch-record listing for root-level maintenance jobs. */
+  listBranchesForRootPage(
+    rootDropId: string,
+    limit: number,
+    cursor?: string,
+  ): Promise<{
+    branches: DropBranchRecord[];
+    cursor: string | null;
+    truncated: boolean;
+  }>;
+}
+
 /** Reads a blob object body as text, returning null for missing or unreadable bodies. */
 export const readR2Text = async (
   object: { text: () => Promise<string> } | null,
@@ -438,3 +503,41 @@ export const listBranchesForRootPage = async (
     truncated: listed.truncated,
   };
 };
+
+/** Creates a branch repository bound to composed blob and SQL ports. */
+export const createBranchRepository = ({
+  blobs,
+  sql,
+}: BranchRepositoryPorts): BranchRepository => ({
+  readBranch: (rootDropId, branchId) =>
+    readBranch(blobs, rootDropId, branchId, sql),
+  writeBranch: (branch) => writeBranch(blobs, branch, sql),
+  readSnapshot: (rootDropId, branchId, snapshotId) =>
+    readSnapshot(blobs, rootDropId, branchId, snapshotId, sql),
+  writeSnapshot: (snapshot) => writeSnapshot(blobs, snapshot, sql),
+  readSnapshotCheckpoint: (rootDropId, branchId, snapshotId, explicitKey) =>
+    readSnapshotCheckpoint(blobs, rootDropId, branchId, snapshotId, explicitKey),
+  writeSnapshotCheckpoint: (
+    rootDropId,
+    branchId,
+    snapshotId,
+    content,
+    explicitKey,
+  ) =>
+    writeSnapshotCheckpoint(
+      blobs,
+      rootDropId,
+      branchId,
+      snapshotId,
+      content,
+      explicitKey,
+    ),
+  writeBranchDiffLog: (rootDropId, branchId, events) =>
+    writeBranchDiffLog(blobs, rootDropId, branchId, events),
+  listSnapshotsForBranch: (rootDropId, branchId) =>
+    listSnapshotsForBranch(blobs, rootDropId, branchId, sql),
+  listBranchesForRoot: (rootDropId) =>
+    listBranchesForRoot(blobs, rootDropId, sql),
+  listBranchesForRootPage: (rootDropId, limit, cursor) =>
+    listBranchesForRootPage(blobs, rootDropId, limit, cursor, sql),
+});

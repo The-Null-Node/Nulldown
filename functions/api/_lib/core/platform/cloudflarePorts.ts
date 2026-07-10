@@ -9,6 +9,7 @@ import type {
   VoidDataListResult,
   VoidDataPrimitive,
   VoidDataPutOptions,
+  VoidDataPutRecord,
   VoidDataQuery,
   VoidDataScope,
   VoidDataStore,
@@ -31,6 +32,8 @@ interface CloudflareVoidDataEnvelope<T = unknown> {
 interface VoidDataRecordRow {
   record_json: string;
 }
+
+type CloudflareSqlStatement = ReturnType<D1Database["prepare"]>;
 
 const DATA_LOCK_PREFIX = "void-data-locks";
 const DATA_LOCK_MAX_ATTEMPTS = 120;
@@ -276,39 +279,38 @@ const requireVoidDataD1 = (db: D1Database | undefined): D1Database => {
   return db;
 };
 
-/** Creates the Cloudflare implementation of the generic Nulldown data-store port. */
-export const createCloudflareVoidDataStore = ({
-  R2_BUCKET,
-  DB,
-}: CloudflareStorageBindings): VoidDataStore => {
-  const blobs = createCloudflareBlobStore(R2_BUCKET);
+const executeD1Statements = async (
+  db: D1Database,
+  statements: CloudflareSqlStatement[],
+): Promise<void> => {
+  if (!statements.length) return;
+  if (typeof db.batch === "function") {
+    await db.batch(statements);
+    return;
+  }
 
-  const get = async <T = unknown>(key: VoidDataKey): Promise<T | null> => {
-    const envelope = await readEnvelopeFromD1<T>(requireVoidDataD1(DB), key);
-    return envelope?.value ?? null;
+  for (const statement of statements) {
+    await statement.run();
+  }
+};
+
+const createPutStatements = <T>(
+  db: D1Database,
+  key: VoidDataKey,
+  value: T,
+  options: VoidDataPutOptions | undefined,
+  updatedAt: number,
+): CloudflareSqlStatement[] => {
+  const envelope: CloudflareVoidDataEnvelope<T> = {
+    key,
+    value,
+    indexes: options?.indexes,
+    updatedAt,
   };
-
-  const put = async <T = unknown>(
-    key: VoidDataKey,
-    value: T,
-    options?: VoidDataPutOptions,
-  ): Promise<void> => {
-    const envelope: CloudflareVoidDataEnvelope<T> = {
-      key,
-      value,
-      indexes: options?.indexes,
-      updatedAt: Date.now(),
-    };
-    const db = requireVoidDataD1(DB);
-    const scopeKey = resolveScopeKey(key.scope);
-    const collection = normalizeCollection(key.collection);
-
-    if (options?.ifAbsent) {
-      const existing = await readEnvelopeFromD1(db, key);
-      if (existing) throw new Error("void_data_put_conflict");
-    }
-
-    await db
+  const scopeKey = resolveScopeKey(key.scope);
+  const collection = normalizeCollection(key.collection);
+  const statements: CloudflareSqlStatement[] = [
+    db
       .prepare(
         `INSERT INTO void_data_records (
            namespace, collection, scope_key, id, key_json, record_json,
@@ -329,29 +331,27 @@ export const createCloudflareVoidDataStore = ({
         JSON.stringify(envelope),
         options?.contentType ?? "application/json",
         envelope.updatedAt,
-      )
-      .run();
-
-    await db
+      ),
+    db
       .prepare(
         `DELETE FROM void_data_indexes
          WHERE namespace = ? AND collection = ? AND scope_key = ? AND id = ?`,
       )
-      .bind(key.namespace, collection, scopeKey, key.id)
-      .run();
-    await db
+      .bind(key.namespace, collection, scopeKey, key.id),
+    db
       .prepare(
         `DELETE FROM void_data_fts
          WHERE namespace = ? AND collection = ? AND scope_key = ? AND id = ?`,
       )
-      .bind(key.namespace, collection, scopeKey, key.id)
-      .run();
+      .bind(key.namespace, collection, scopeKey, key.id),
+  ];
 
-    for (const index of options?.indexes ?? []) {
-      const mode = index.mode ?? "exact";
-      for (const value of d1ScalarValues(index)) {
-        const { valueText, valueNumber, valueBool } = d1IndexValueParams(value);
-        await db
+  for (const index of options?.indexes ?? []) {
+    const mode = index.mode ?? "exact";
+    for (const value of d1ScalarValues(index)) {
+      const { valueText, valueNumber, valueBool } = d1IndexValueParams(value);
+      statements.push(
+        db
           .prepare(
             `INSERT INTO void_data_indexes (
                namespace, collection, scope_key, id, name, mode,
@@ -369,12 +369,13 @@ export const createCloudflareVoidDataStore = ({
             valueNumber,
             valueBool,
             envelope.updatedAt,
-          )
-          .run();
-      }
+          ),
+      );
+    }
 
-      if (mode === "fulltext" || index.name === "text") {
-        await db
+    if (mode === "fulltext" || index.name === "text") {
+      statements.push(
+        db
           .prepare(
             `INSERT INTO void_data_fts (text, namespace, collection, scope_key, id)
              VALUES (?, ?, ?, ?, ?)`,
@@ -385,10 +386,56 @@ export const createCloudflareVoidDataStore = ({
             collection,
             scopeKey,
             key.id,
-          )
-          .run();
-      }
+          ),
+      );
     }
+  }
+
+  return statements;
+};
+
+/** Creates the Cloudflare implementation of the generic Nulldown data-store port. */
+export const createCloudflareVoidDataStore = ({
+  R2_BUCKET,
+  DB,
+}: CloudflareStorageBindings): VoidDataStore => {
+  const blobs = createCloudflareBlobStore(R2_BUCKET);
+
+  const get = async <T = unknown>(key: VoidDataKey): Promise<T | null> => {
+    const envelope = await readEnvelopeFromD1<T>(requireVoidDataD1(DB), key);
+    return envelope?.value ?? null;
+  };
+
+  const put = async <T = unknown>(
+    key: VoidDataKey,
+    value: T,
+    options?: VoidDataPutOptions,
+  ): Promise<void> => {
+    await putMany([{ key, value, options }]);
+  };
+
+  const putMany = async (records: VoidDataPutRecord[]): Promise<void> => {
+    if (!records.length) return;
+    const db = requireVoidDataD1(DB);
+    const statements: CloudflareSqlStatement[] = [];
+
+    for (const record of records) {
+      if (record.options?.ifAbsent) {
+        const existing = await readEnvelopeFromD1(db, record.key);
+        if (existing) throw new Error("void_data_put_conflict");
+      }
+      statements.push(
+        ...createPutStatements(
+          db,
+          record.key,
+          record.value,
+          record.options,
+          Date.now(),
+        ),
+      );
+    }
+
+    await executeD1Statements(db, statements);
   };
 
   const deleteValue = async (key: VoidDataKey): Promise<void> => {
@@ -427,6 +474,7 @@ export const createCloudflareVoidDataStore = ({
   const dataStore: VoidDataStore = {
     get,
     put,
+    putMany,
     delete: deleteValue,
     list,
     query: async <T = unknown>(query: VoidDataQuery): Promise<T[]> => {

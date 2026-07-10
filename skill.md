@@ -82,12 +82,12 @@ bun run nd -- get <id> --json
 
 Record:
 
-| Value | Source |
-| --- | --- |
-| Canonical ID | `id` in CLI output or `X-Drop-Canonical-Id` over HTTP |
-| Revision | `revision` in CLI output or `X-Drop-Revision`/`ETag` over HTTP |
-| Payload type | `contentType` plus body shape |
-| Metadata | `body.metadata` for plaintext drops |
+| Value        | Source                                                         |
+| ------------ | -------------------------------------------------------------- |
+| Canonical ID | `id` in CLI output or `X-Drop-Canonical-Id` over HTTP          |
+| Revision     | `revision` in CLI output or `X-Drop-Revision`/`ETag` over HTTP |
+| Payload type | `contentType` plus body shape                                  |
+| Metadata     | `body.metadata` for plaintext drops                            |
 
 For plaintext content only:
 
@@ -245,6 +245,7 @@ Fence-argument syntax:
 
 ````markdown
 ```nd(id="H2oXJR")
+
 ```
 ````
 

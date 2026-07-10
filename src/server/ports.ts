@@ -162,6 +162,16 @@ export interface VoidDataPutOptions {
   ifAbsent?: boolean;
 }
 
+/** One record accepted by batched portable data-store writes. */
+export interface VoidDataPutRecord<T = unknown> {
+  /** Portable key for the value being stored. */
+  key: VoidDataKey;
+  /** Value to store for the key. */
+  value: T;
+  /** Optional index, cache, and write-condition hints for this record. */
+  options?: VoidDataPutOptions;
+}
+
 /** Record returned by portable list operations. */
 export interface VoidDataListItem<T = unknown> {
   /** Portable key for the returned value. */
@@ -230,6 +240,8 @@ export interface VoidDataStore {
     value: T,
     options?: VoidDataPutOptions,
   ): Promise<void>;
+  /** Writes multiple values, allowing adapters to batch secondary indexes and projections. */
+  putMany(records: VoidDataPutRecord[]): Promise<void>;
   /** Deletes a value by portable key. */
   delete(key: VoidDataKey): Promise<void>;
   /** Lists records by namespace, collection, scope, or id prefix. */

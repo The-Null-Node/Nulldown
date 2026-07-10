@@ -171,11 +171,7 @@ const buildLineageGraph = async (
 };
 
 const graph: NullplugHandler & { pluginId: string } = Object.assign(
-  async (
-    ctx: NullplugContext,
-    blockContent: string,
-    _block: PluginBlock,
-  ) => {
+  async (ctx: NullplugContext, blockContent: string, _block: PluginBlock) => {
     const staticGraph = parseGraphData(blockContent);
     if (staticGraph) {
       return { text: graphContainer(staticGraph) };

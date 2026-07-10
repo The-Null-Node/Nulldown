@@ -1,38 +1,52 @@
+/** Comparator that returns a positive value when `a` has higher priority than `b`. */
 export type CompareFn<T> = (a: T, b: T) => number;
 
+/**
+ * Bounded max-priority queue used to retain the newest/highest-priority items.
+ *
+ * `push` and `setMaxSize` return items evicted by the size cap so callers can
+ * keep auxiliary indexes in sync with the bounded heap.
+ */
 export default class MaxPriorityQueue<T> {
   private items: T[] = [];
   private maxSize: number;
   private compare: CompareFn<T>;
 
+  /** Creates a queue with a caller-provided comparator and positive size cap. */
   constructor(compare: CompareFn<T>, maxSize = 3) {
     this.compare = compare;
     this.maxSize = Math.max(1, maxSize);
   }
 
+  /** Returns the number of items currently retained. */
   size(): number {
     return this.items.length;
   }
 
+  /** Returns the highest-priority item without removing it. */
   peek(): T | null {
     return this.items[0] ?? null;
   }
 
+  /** Returns a shallow copy of retained items in heap order. */
   toArray(): T[] {
     return [...this.items];
   }
 
+  /** Updates the size cap and returns any items evicted by trimming. */
   setMaxSize(maxSize: number): T[] {
     this.maxSize = Math.max(1, maxSize);
     return this.trim();
   }
 
+  /** Adds an item and returns any lower-priority items evicted by the cap. */
   push(item: T): T[] {
     this.items.push(item);
     this.heapifyUp(this.items.length - 1);
     return this.trim();
   }
 
+  /** Removes and returns the highest-priority item. */
   pop(): T | null {
     if (!this.items.length) return null;
     if (this.items.length === 1) return this.items.pop() ?? null;

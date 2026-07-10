@@ -7,7 +7,6 @@ import {
   type DiffClientKeysRecord,
   upsertCredential,
 } from "./diffAuthUtil";
-
 const main = async () => {
   const dropId = getArgValue("drop") || getArgValue("id");
   if (!dropId) {
@@ -16,6 +15,7 @@ const main = async () => {
 
   const keysPath = keysFilePath();
   const keys = await readJsonFile<DiffClientKeysRecord>(keysPath);
+
   if (!keys) {
     throw new Error(
       `Missing keypair file at ${keysPath}. Run bun run diff:keygen first.`,

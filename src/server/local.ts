@@ -1,23 +1,68 @@
 import { join } from "node:path";
 import { isDropIdToken, toShortDropId } from "../../shared/drop/id";
-import { createRequestLogger, toLogRef } from "../../functions/api/_lib/core/logging/logger";
-import { getBranchContent, listBranchesForDrop, listBranchSnapshots, resolveBranchForRequest } from "../../functions/api/_lib/branches/services/routeService";
-import { createNullMemFact, createNullMemProcedure, createNullMemService, queryNullMem } from "../../functions/api/_lib/nullmem/service";
-import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap, updateResolvedHeap } from "../../functions/api/_lib/resolved/heap/service";
-import { pollDiffEvents, postDiffEvents } from "../../functions/api/_lib/diffs/transport/service";
-import { resolveRemoteDropId, removeRemoteAliasIfMatch } from "../../functions/api/_lib/drops/identity/id";
-import { REMOTE_PUBLIC_DROP_INDEX_PREFIX, readPublicDropIndexEntryByKey, removePublicDropIndexEntry } from "../../functions/api/_lib/drops/index/repository";
-import { storeDrop, type StoreServiceEnv } from "../../functions/api/_lib/drops/services/storeDrop";
+import {
+  createRequestLogger,
+  toLogRef,
+} from "../../functions/api/_lib/core/logging/logger";
+import {
+  getBranchContent,
+  listBranchesForDrop,
+  listBranchSnapshots,
+  resolveBranchForRequest,
+} from "../../functions/api/_lib/branches/services/routeService";
+import {
+  createNullMemFact,
+  createNullMemProcedure,
+  createNullMemService,
+  deleteNullMemRecord,
+  queryNullMem,
+} from "../../functions/api/_lib/nullmem/service";
+import {
+  createResolvedPriorityFact,
+  deleteResolvedPriorityFact,
+  listResolvedPriorityFacts,
+  queryResolvedHeap,
+  updateResolvedHeap,
+} from "../../functions/api/_lib/resolved/heap/service";
+import {
+  pollDiffEvents,
+  postDiffEvents,
+} from "../../functions/api/_lib/diffs/transport/service";
+import { createDropIdentityRepository } from "../../functions/api/_lib/drops/identity/id";
+import {
+  REMOTE_PUBLIC_DROP_INDEX_PREFIX,
+  readPublicDropIndexEntryByKey,
+  removePublicDropIndexEntry,
+} from "../../functions/api/_lib/drops/index/repository";
+import {
+  storeDrop,
+  type StoreServiceEnv,
+} from "../../functions/api/_lib/drops/services/storeDrop";
 import { appendEventsToBranch } from "../../functions/api/_lib/nulledit/service";
-import { createBuiltInNulleditSnapshotters } from "./nulledit";
+import {
+  createBuiltInNulleditSnapshotters,
+  createInMemoryBranchCommitBuffer,
+  createNullMemFreshnessWatermarkKey,
+  createNulleditNullMemFreshnessSnapshotter,
+  createNulleditNullMemObserverSnapshotter,
+  createNulleditSnapshotterRegistry,
+  flushBranchCommitBufferSnapshotters,
+} from "./nulledit";
 import { createVoidProvider } from "./provider";
 import { createMemoryVoidDataStore } from "./memoryDataStore";
 import { createFilesystemBlobStore } from "./filesystemBlobStore";
-import { createNulldownServer, type NulldownServer, type NulldownServerRoute } from "./http";
+import {
+  createNulldownServer,
+  type NulldownServer,
+  type NulldownServerRoute,
+} from "./http";
 import type { VoidBlobStore, VoidDataStore, VoidSqlStore } from "./ports";
 
 /** Environment variables and ports used by the local Nulldown server adapter. */
-export interface LocalNulldownServerEnv extends Omit<StoreServiceEnv, "blobs" | "sql"> {
+export interface LocalNulldownServerEnv extends Omit<
+  StoreServiceEnv,
+  "blobs" | "sql"
+> {
   /** Blob storage used by existing backend services through the R2-shaped keyspace. */
   R2_BUCKET: VoidBlobStore;
   /** Optional SQL metadata store. `nd serve` supplies a Bun SQLite implementation by default. */
@@ -70,7 +115,9 @@ const listPublicDrops = async (
 ): Promise<Response> => {
   const url = new URL(request.url);
   const limitParam = Number.parseInt(url.searchParams.get("limit") || "", 10);
-  const limit = Number.isFinite(limitParam) ? Math.max(1, Math.min(1000, limitParam)) : 200;
+  const limit = Number.isFinite(limitParam)
+    ? Math.max(1, Math.min(1000, limitParam))
+    : 200;
   const cursor = url.searchParams.get("cursor") || undefined;
   const listed = await env.R2_BUCKET.list({
     prefix: REMOTE_PUBLIC_DROP_INDEX_PREFIX,
@@ -78,11 +125,17 @@ const listPublicDrops = async (
     cursor,
   });
   const entries = await Promise.all(
-    listed.objects.map((entry) => readPublicDropIndexEntryByKey(env.R2_BUCKET, entry.key)),
+    listed.objects.map((entry) =>
+      readPublicDropIndexEntryByKey(env.R2_BUCKET, entry.key),
+    ),
   );
   const items = entries
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .map((entry) => ({ id: entry.id, createdAt: entry.createdAt, updatedAt: entry.updatedAt }))
+    .map((entry) => ({
+      id: entry.id,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    }))
     .sort((left, right) => right.updatedAt - left.updatedAt);
   return json({ items, cursor: listed.truncated ? listed.cursor : null });
 };
@@ -92,9 +145,21 @@ const getDrop = async (
   request: Request,
   requestedId: string,
 ): Promise<Response> => {
-  const logger = createRequestLogger({ request, env, route: "/api/get/:id", successSampleRate: 0.1 });
+  const logger = createRequestLogger({
+    request,
+    env,
+    route: "/api/get/:id",
+    successSampleRate: 0.1,
+  });
   logger.logStart({ requestedDropRef: toLogRef(requestedId) });
-  const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const id = await dropIdentityRepository.resolveRemoteDropId(
+    requestedId,
+    logger,
+  );
   if (!id) return new Response("Drop ID is required.", { status: 400 });
   const object = await env.R2_BUCKET.get(id);
   if (!object) return new Response("Drop not found.", { status: 404 });
@@ -107,7 +172,10 @@ const getDrop = async (
     headers.set("X-Drop-Revision", object.httpEtag);
   }
   logger.logEnd(200, { canonicalDropRef: toLogRef(id) });
-  return new Response(object.body ?? await object.text(), { status: 200, headers });
+  return new Response(object.body ?? (await object.text()), {
+    status: 200,
+    headers,
+  });
 };
 
 const deleteDrop = async (
@@ -115,23 +183,48 @@ const deleteDrop = async (
   request: Request,
   requestedId: string,
 ): Promise<Response> => {
-  const logger = createRequestLogger({ request, env, route: "/api/delete/:id" });
+  const logger = createRequestLogger({
+    request,
+    env,
+    route: "/api/delete/:id",
+  });
   logger.logStart({ requestedDropRef: toLogRef(requestedId) });
-  const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
-  if (!id || !isDropIdToken(id)) return json({ error: "Drop ID is required.", code: "invalid_drop_id" }, { status: 400 });
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const id = await dropIdentityRepository.resolveRemoteDropId(
+    requestedId,
+    logger,
+  );
+  if (!id || !isDropIdToken(id))
+    return json(
+      { error: "Drop ID is required.", code: "invalid_drop_id" },
+      { status: 400 },
+    );
 
   const expectedRevision = request.headers.get("If-Match")?.trim();
   if (expectedRevision) {
     const object = await env.R2_BUCKET.get(id);
-    if (!object) return json({ error: "Drop not found.", code: "drop_not_found" }, { status: 404 });
+    if (!object)
+      return json(
+        { error: "Drop not found.", code: "drop_not_found" },
+        { status: 404 },
+      );
     if (object.httpEtag !== expectedRevision) {
-      return json({ error: "Drop revision precondition failed.", code: "revision_precondition_failed" }, { status: 412 });
+      return json(
+        {
+          error: "Drop revision precondition failed.",
+          code: "revision_precondition_failed",
+        },
+        { status: 412 },
+      );
     }
   }
 
   await Promise.all([
     env.R2_BUCKET.delete(id),
-    removeRemoteAliasIfMatch(env.R2_BUCKET, id, logger, env.DB),
+    dropIdentityRepository.removeRemoteAliasIfMatch(id, logger),
     removePublicDropIndexEntry(env.R2_BUCKET, id, env.DB),
   ]);
   logger.logEnd(204, { canonicalDropRef: toLogRef(id) });
@@ -147,7 +240,10 @@ export const createLocalNulldownServer = ({
   logLevel,
 }: CreateLocalNulldownServerOptions): NulldownServer => {
   const blobs = createFilesystemBlobStore({ rootDir: join(dataDir, "blobs") });
-  const builtInSnapshotters = createBuiltInNulleditSnapshotters();
+  const snapshotterRegistry = createNulleditSnapshotterRegistry(
+    createBuiltInNulleditSnapshotters(),
+  );
+  const branchCommitBuffer = createInMemoryBranchCommitBuffer();
   const env: LocalNulldownServerEnv = {
     R2_BUCKET: blobs,
     DB: sql,
@@ -155,9 +251,55 @@ export const createLocalNulldownServer = ({
     ALLOW_INSECURE_ACCOUNT_HEADER: "1",
     LOG_LEVEL: logLevel,
   };
+  const memory = createNullMemService({ blobs, sql, data });
+  if (sql) {
+    snapshotterRegistry.register(
+      createNulleditNullMemObserverSnapshotter({
+        writeFact: (fact, context) =>
+          memory
+            .createFact({
+              rootDropId: context.rootDropId,
+              branchId: context.branchId,
+              fact,
+            })
+            .then(() => undefined),
+      }),
+    );
+  }
+  snapshotterRegistry.register(
+    createNulleditNullMemFreshnessSnapshotter({
+      writeWatermark: (watermark) =>
+        data.put(
+          createNullMemFreshnessWatermarkKey(
+            watermark.rootDropId,
+            watermark.branchId,
+          ),
+          watermark,
+          {
+            indexes: [
+              {
+                name: "rootDropId",
+                value: watermark.rootDropId,
+                mode: "exact",
+              },
+              { name: "branchId", value: watermark.branchId, mode: "exact" },
+              {
+                name: "headSnapshotId",
+                value: watermark.headSnapshotId,
+                mode: "range",
+              },
+            ],
+          },
+        ),
+    }),
+  );
   const voidProvider = createVoidProvider({
     data,
     nulledit: {
+      registerSnapshotter: (snapshotter) =>
+        snapshotterRegistry.register(snapshotter),
+      yieldNext: (snapshotterId, request) =>
+        snapshotterRegistry.yieldNext?.(snapshotterId, request),
       appendDiffEvents: ({ branch, events, ...options }) =>
         appendEventsToBranch(
           blobs,
@@ -166,49 +308,170 @@ export const createLocalNulldownServer = ({
           {
             ...options,
             data,
-            snapshotters: [...builtInSnapshotters, ...(options.snapshotters ?? [])],
+            snapshotters: [
+              ...snapshotterRegistry.list(),
+              ...(options.snapshotters ?? []),
+            ],
+            commitBuffer: branchCommitBuffer,
           },
           sql,
         ),
     },
-    memory: createNullMemService({ blobs, sql }),
+    memory,
   });
+  const repairBufferedCommitsForQuery = ({
+    rootDropId,
+    branchId,
+  }: {
+    rootDropId: string;
+    branchId: string;
+  }): Promise<void> =>
+    flushBranchCommitBufferSnapshotters({
+      commitBuffer: branchCommitBuffer,
+      data,
+      rootDropId,
+      branchId,
+      reason: "explicit-query",
+      snapshotters: snapshotterRegistry.list(),
+    }).then(() => undefined);
 
   const routes: NulldownServerRoute[] = [
     {
       method: "POST",
       path: "/api/store",
       handler: ({ request }) => {
-        const logger = createRequestLogger({ request, env, route: "/api/store" });
+        const logger = createRequestLogger({
+          request,
+          env,
+          route: "/api/store",
+        });
         logger.logStart();
         return storeDrop({ request, env: createStoreEnv(env), logger });
       },
     },
-    { method: "GET", path: "/api/get/:id", handler: ({ request, params }) => getDrop(env, request, params.id) },
-    { method: "GET", path: "/api/list", handler: ({ request }) => listPublicDrops(env, request) },
-    { method: "DELETE", path: "/api/delete/:id", handler: ({ request, params }) => deleteDrop(env, request, params.id) },
-    { method: "GET", path: "/api/diff/:id", handler: ({ request, params }) => pollDiffEvents(env, routeParams(params), request) },
-    { method: "POST", path: "/api/diff/:id", handler: ({ request, params }) => postDiffEvents(env, routeParams(params), request, { voidProvider }) },
-    { method: "GET", path: "/api/branches/:id", handler: ({ params }) => listBranchesForDrop(env, routeParams(params)) },
-    { method: "POST", path: "/api/branches/resolve/:id", handler: ({ request, params }) => resolveBranchForRequest(env, routeParams(params), request) },
-    { method: "GET", path: "/api/branches/:rootId/:branchId/content", handler: ({ params }) => getBranchContent(env, routeParams(params)) },
-    { method: "GET", path: "/api/branches/:rootId/:branchId/snapshots", handler: ({ params }) => listBranchSnapshots(env, routeParams(params)) },
-    { method: "GET", path: "/api/branches/:rootId/:branchId/resolved/query", handler: ({ request, params }) => queryResolvedHeap(env, routeParams(params), request) },
-    { method: "POST", path: "/api/branches/:rootId/:branchId/resolved/update", handler: ({ request, params }) => updateResolvedHeap(env, routeParams(params), request) },
-    { method: "GET", path: "/api/branches/:rootId/:branchId/resolved/priority", handler: ({ request, params }) => listResolvedPriorityFacts(env, routeParams(params), request) },
-    { method: "POST", path: "/api/branches/:rootId/:branchId/resolved/priority", handler: ({ request, params }) => createResolvedPriorityFact(env, routeParams(params), request) },
-    { method: "DELETE", path: "/api/branches/:rootId/:branchId/resolved/priority/:factId", handler: ({ request, params }) => deleteResolvedPriorityFact(env, routeParams(params), request) },
-    { method: "GET", path: "/api/branches/:rootId/:branchId/memory/query", handler: ({ request, params }) => queryNullMem(env, routeParams(params), request, { memory: voidProvider.memory }) },
-    { method: "POST", path: "/api/branches/:rootId/:branchId/memory/facts", handler: ({ request, params }) => createNullMemFact(env, routeParams(params), request, { memory: voidProvider.memory }) },
-    { method: "POST", path: "/api/branches/:rootId/:branchId/memory/procedures", handler: ({ request, params }) => createNullMemProcedure(env, routeParams(params), request, { memory: voidProvider.memory }) },
+    {
+      method: "GET",
+      path: "/api/get/:id",
+      handler: ({ request, params }) => getDrop(env, request, params.id),
+    },
+    {
+      method: "GET",
+      path: "/api/list",
+      handler: ({ request }) => listPublicDrops(env, request),
+    },
+    {
+      method: "DELETE",
+      path: "/api/delete/:id",
+      handler: ({ request, params }) => deleteDrop(env, request, params.id),
+    },
+    {
+      method: "GET",
+      path: "/api/diff/:id",
+      handler: ({ request, params }) =>
+        pollDiffEvents(env, routeParams(params), request),
+    },
+    {
+      method: "POST",
+      path: "/api/diff/:id",
+      handler: ({ request, params }) =>
+        postDiffEvents(env, routeParams(params), request, { voidProvider }),
+    },
+    {
+      method: "GET",
+      path: "/api/branches/:id",
+      handler: ({ params }) => listBranchesForDrop(env, routeParams(params)),
+    },
+    {
+      method: "POST",
+      path: "/api/branches/resolve/:id",
+      handler: ({ request, params }) =>
+        resolveBranchForRequest(env, routeParams(params), request),
+    },
+    {
+      method: "GET",
+      path: "/api/branches/:rootId/:branchId/content",
+      handler: ({ params }) => getBranchContent(env, routeParams(params)),
+    },
+    {
+      method: "GET",
+      path: "/api/branches/:rootId/:branchId/snapshots",
+      handler: ({ params }) => listBranchSnapshots(env, routeParams(params)),
+    },
+    {
+      method: "GET",
+      path: "/api/branches/:rootId/:branchId/resolved/query",
+      handler: ({ request, params }) =>
+        queryResolvedHeap(env, routeParams(params), request, {
+          repairBufferedCommits: repairBufferedCommitsForQuery,
+        }),
+    },
+    {
+      method: "POST",
+      path: "/api/branches/:rootId/:branchId/resolved/update",
+      handler: ({ request, params }) =>
+        updateResolvedHeap(env, routeParams(params), request),
+    },
+    {
+      method: "GET",
+      path: "/api/branches/:rootId/:branchId/resolved/priority",
+      handler: ({ request, params }) =>
+        listResolvedPriorityFacts(env, routeParams(params), request),
+    },
+    {
+      method: "POST",
+      path: "/api/branches/:rootId/:branchId/resolved/priority",
+      handler: ({ request, params }) =>
+        createResolvedPriorityFact(env, routeParams(params), request),
+    },
+    {
+      method: "DELETE",
+      path: "/api/branches/:rootId/:branchId/resolved/priority/:factId",
+      handler: ({ request, params }) =>
+        deleteResolvedPriorityFact(env, routeParams(params), request),
+    },
+    {
+      method: "GET",
+      path: "/api/branches/:rootId/:branchId/memory/query",
+      handler: ({ request, params }) =>
+        queryNullMem(env, routeParams(params), request, {
+          memory: voidProvider.memory,
+        }),
+    },
+    {
+      method: "POST",
+      path: "/api/branches/:rootId/:branchId/memory/facts",
+      handler: ({ request, params }) =>
+        createNullMemFact(env, routeParams(params), request, {
+          memory: voidProvider.memory,
+        }),
+    },
+    {
+      method: "POST",
+      path: "/api/branches/:rootId/:branchId/memory/procedures",
+      handler: ({ request, params }) =>
+        createNullMemProcedure(env, routeParams(params), request, {
+          memory: voidProvider.memory,
+        }),
+    },
+    {
+      method: "DELETE",
+      path: "/api/branches/:rootId/:branchId/memory/:recordId",
+      handler: ({ request, params }) =>
+        deleteNullMemRecord(env, routeParams(params), request, {
+          memory: voidProvider.memory,
+        }),
+    },
   ];
 
   return createNulldownServer({ routes });
 };
 
 /** Returns the default public URL for a local Nulldown server. */
-export const localNulldownServerBaseUrl = (host: string, port: number): string =>
-  `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+export const localNulldownServerBaseUrl = (
+  host: string,
+  port: number,
+): string => `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
 
 /** Returns the short app link path for a stored drop id under a local server. */
-export const localDropPath = (dropId: string): string => `/d/${toShortDropId(dropId)}`;
+export const localDropPath = (dropId: string): string =>
+  `/d/${toShortDropId(dropId)}`;

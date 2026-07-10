@@ -62,10 +62,40 @@ Run tests:
 bun run test
 ```
 
-Build the CLI executable:
+Build the current-platform CLI executable:
 
 ```bash
 bun run cli:build
+```
+
+Build the current-platform CLI and MCP executables:
+
+```bash
+bun run bin:build:current
+```
+
+Smoke the compiled CLI and MCP executables against `https://nulldown.app`:
+
+```bash
+bun run bin:smoke
+```
+
+Check the published CLI package boundary:
+
+```bash
+bun run package:check-cli
+```
+
+Check the published MCP package boundary:
+
+```bash
+bun run package:check-mcp
+```
+
+Smoke the paired package tarballs by installing local `@thenullnode/nulldown` and `@thenullnode/nulldown-mcp` tarballs into a temporary project, then running an MCP stdio protocol check:
+
+```bash
+bun run package:smoke-mcp
 ```
 
 ## CLI
@@ -148,13 +178,15 @@ Global installs store CLI state in `~/.config/nulldown` by default.
 
 ## MCP
 
-Nulldown ships a stdio MCP server for direct API access without shelling out to `nd`:
+The repository includes a stdio MCP server for direct API access without shelling out to `nd`:
 
 ```bash
 bun run mcp
 ```
 
-Installed package binaries expose the same server as `nd-mcp` and `nulldown-mcp`. Configure it with `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment. For protected diff writes, export an `ND_DIFF_AUTH_TOKEN` from `nd diff token export`; `DIFF_WEBHOOK_SECRET` is also supported for webhook-style signing. The server writes protocol messages only to stdout; diagnostics use stderr.
+The base `@thenullnode/nulldown` package publishes only the `nd` and `nulldown` CLI binaries. MCP now lives in the separate `@thenullnode/nulldown-mcp` package, which publishes `nd-mcp` and `nulldown-mcp` bins. Configure it with `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment. For protected diff writes, export an `ND_DIFF_AUTH_TOKEN` from `nd diff token export`; `DIFF_WEBHOOK_SECRET` is also supported for webhook-style signing. The server writes protocol messages only to stdout; diagnostics use stderr.
+
+The MCP package must be tested with the cleaned base package tarball, because older published base package versions also exposed MCP bin names. Use `bun run package:smoke-mcp` before publishing the split pair.
 
 ## Cloudflare
 

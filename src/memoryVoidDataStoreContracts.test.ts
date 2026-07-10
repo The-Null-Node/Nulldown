@@ -7,9 +7,11 @@ import type { DropBranchRecord, DropSnapshotRecord } from "../shared/drop/branch
 import { createDropDiffRef, type DropDiffEvent } from "../shared/drop/diff";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
-  type ResolvedDocumentNode,
-  type ResolvedNulldownState,
-} from "../shared/drop/resolved";
+} from "../shared/drop/resolved/constants";
+import type {
+  ResolvedDocumentNode,
+  ResolvedNulldownState,
+} from "../shared/drop/resolved/types";
 
 const rootDropId = "memory-root";
 const branchId = "owner";
@@ -70,6 +72,54 @@ describe("Memory VoidDataStore contracts", () => {
 
     await data.delete(key);
     await expect(data.get(key)).resolves.toBeNull();
+  });
+
+  it("stores multiple records through putMany and preserves ifAbsent conflicts", async () => {
+    const data = createMemoryVoidDataStore();
+    const keyA = {
+      namespace: "resolved",
+      collection: "document_nodes",
+      scope: { rootDropId, branchId, snapshotId: 2, resolverId: "doc" },
+      id: "node-a",
+    };
+    const keyB = { ...keyA, id: "node-b" };
+
+    await data.putMany([
+      {
+        key: keyA,
+        value: { kind: "paragraph", text: "Batch alpha node" },
+        options: {
+          indexes: [
+            { name: "kind", value: "paragraph" },
+            { name: "text", value: "Batch alpha node", mode: "fulltext" },
+          ],
+        },
+      },
+      {
+        key: keyB,
+        value: { kind: "heading", text: "Batch beta node" },
+        options: { indexes: [{ name: "kind", value: "heading" }] },
+      },
+    ]);
+
+    await expect(
+      data.query({
+        namespace: "resolved",
+        collection: "document_nodes",
+        scope: { rootDropId, branchId, snapshotId: 2, resolverId: "doc" },
+        indexes: [{ name: "kind", value: "paragraph" }],
+        text: "alpha",
+      }),
+    ).resolves.toEqual([{ kind: "paragraph", text: "Batch alpha node" }]);
+    await expect(
+      data.putMany([
+        {
+          key: keyA,
+          value: { kind: "paragraph", text: "Duplicate" },
+          options: { ifAbsent: true },
+        },
+      ]),
+    ).rejects.toThrow("void_data_put_conflict");
   });
 
   it("runs the resolved document snapshotter without Cloudflare test doubles", async () => {

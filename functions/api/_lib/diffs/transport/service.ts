@@ -24,12 +24,11 @@ import {
 } from "../../accounts/session/auth";
 import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import {
-  pollBranchDiffEventsSince,
-  readBranchHeadEventSeq,
+  createBranchDiffRepository,
 } from "../../branches/storage/diffLogRepository";
 import { resolveBranchForActor } from "../../branches/lifecycle/service";
-import { readBranch } from "../../branches/storage/repository";
-import { resolveRemoteDropId } from "../../drops/identity/id";
+import { createBranchRepository } from "../../branches/storage/repository";
+import { createDropIdentityRepository } from "../../drops/identity/id";
 import type { VoidProvider } from "../../../../../src/server/provider";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 import { createRequestLogger, toLogRef } from "../../core/logging/logger";
@@ -128,8 +127,12 @@ const resolveBranchForDiffRequest = async (
   request: Request,
   auth: Pick<DiffRequestAuthSuccess, "mode" | "branchId" | "clientId">,
 ): Promise<DropBranchRecord> => {
+  const branchRepository = createBranchRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
   if (auth.branchId) {
-    const branch = await readBranch(env.R2_BUCKET, dropId, auth.branchId, env.DB);
+    const branch = await branchRepository.readBranch(dropId, auth.branchId);
     if (!branch) {
       throw new Error("Resolved branch credential points to a missing branch.");
     }
@@ -139,7 +142,7 @@ const resolveBranchForDiffRequest = async (
   const accountId = await resolveAuthenticatedAccountId(request, env);
   const requestedBranchId = resolveRequestedBranchId(request);
   if (requestedBranchId) {
-    const branch = await readBranch(env.R2_BUCKET, dropId, requestedBranchId, env.DB);
+    const branch = await branchRepository.readBranch(dropId, requestedBranchId);
     if (branch) {
       return branch;
     }
@@ -181,7 +184,14 @@ export const postDiffEvents = async (
       return new Response("R2 bucket binding is required.", { status: 500 });
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const id = await dropIdentityRepository.resolveRemoteDropId(
+      requestedId,
+      logger,
+    );
     if (!id) {
       logger.logEnd(400, { reason: "invalid_drop_id" });
       return new Response("Drop ID is required.", { status: 400 });
@@ -295,7 +305,14 @@ export const pollDiffEvents = async (
       return new Response("R2 bucket binding is required.", { status: 500 });
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const id = await dropIdentityRepository.resolveRemoteDropId(
+      requestedId,
+      logger,
+    );
     if (!id) {
       logger.logEnd(400, { reason: "invalid_drop_id" });
       return new Response("Drop ID is required.", { status: 400 });
@@ -303,6 +320,10 @@ export const pollDiffEvents = async (
 
     const query = parseDiffPollQuery(request);
     const cursorParam = query.cursor;
+    const branchDiffRepository = createBranchDiffRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
 
     if (cursorParam === "__latest__") {
       // The editor handshake asks for the current cursor only so it can start tailing fresh events.
@@ -314,7 +335,10 @@ export const pollDiffEvents = async (
       const maxSeq =
         typeof branch.headEventSeq === "number"
           ? branch.headEventSeq
-          : await readBranchHeadEventSeq(env.R2_BUCKET, id, branch.branchId, env.DB);
+          : await branchDiffRepository.readBranchHeadEventSeq(
+              id,
+              branch.branchId,
+            );
       const response: DropDiffPollResponse = {
         events: [],
         cursor: maxSeq >= 0 ? String(maxSeq) : null,
@@ -341,14 +365,12 @@ export const pollDiffEvents = async (
       clientId: sanitizeDiffAuthToken(excludeClient),
     });
 
-    const page = await pollBranchDiffEventsSince(
-      env.R2_BUCKET,
+    const page = await branchDiffRepository.pollBranchDiffEventsSince(
       id,
       branch.branchId,
       afterSeq,
       limit,
       excludeClient,
-      env.DB,
     );
     const nextCursor =
       page.nextCursor !== null ? String(page.nextCursor) : null;

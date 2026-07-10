@@ -4,17 +4,21 @@ import type {
 } from "../../shared/drop/branch";
 import type { DropDiffEvent } from "../../shared/drop/diff";
 import type {
+  NulleditSnapshotter,
   NulleditSnapshotterDispatchOptions,
+  NulleditSnapshotterUnsubscribe,
 } from "./nulledit";
 import type { VoidDataStore } from "./ports";
 import type {
   NullMemCapsule,
   NullMemFactRecord,
+  NullMemFreshnessReport,
+  NullMemProcedureStepProjection,
   NullMemProcedureRecord,
   NullMemQuery,
   NullMemRecord,
   NullMemSourceRef,
-} from "../../shared/nullmem";
+} from "../../shared/nullmem/types";
 import type { JsonValue } from "../../shared/nullplug/types";
 
 /** Request passed through the VoidProvider Nulledit append facade. */
@@ -48,6 +52,15 @@ export interface VoidProviderNulledit {
   appendDiffEvents(
     request: VoidProviderNulleditAppendRequest,
   ): Promise<VoidProviderNulleditAppendResult>;
+  /** Registers a persistent secondary snapshotter for future branch appends. */
+  registerSnapshotter(
+    snapshotter: NulleditSnapshotter,
+  ): NulleditSnapshotterUnsubscribe;
+  /** Lightweight compact projection from a specific snapshotter (if it implements yieldNext). */
+  yieldNext(
+    snapshotterId: string,
+    request?: import("./nulledit/types").NulleditNextRequest,
+  ): import("./nulledit/types").NulleditNextResult | Promise<import("./nulledit/types").NulleditNextResult> | undefined;
 }
 
 /** Branch target used by VoidMemory operations. */
@@ -68,6 +81,18 @@ export interface VoidMemoryQueryRequest extends VoidMemoryBranchTarget {
   labels?: string[];
   /** Maximum number of records to return. */
   limit?: number;
+  /** When true, the implementation should also compute freshness for results. */
+  includeFreshness?: boolean;
+  /** Current branch head snapshot id to use when computing freshness. */
+  currentSnapshotId?: number;
+  /** Exact procedure record id for compact next-step projection. */
+  procedureId?: string;
+  /** Return steps with index greater than this cursor. */
+  afterStep?: number;
+  /** Maximum procedure steps to project. */
+  stepLimit?: number;
+  /** Whether full records should be returned alongside capsules. */
+  includeRecords?: boolean;
 }
 
 /** Result returned by the VoidProvider memory query facade. */
@@ -82,6 +107,10 @@ export interface VoidMemoryQueryResult {
   capsules: NullMemCapsule[];
   /** Full matching memory records. */
   records: NullMemRecord[];
+  /** Compact procedure step projections for atomic next-step execution. */
+  procedureSteps?: NullMemProcedureStepProjection[];
+  /** Optional freshness reports when requested. */
+  freshness?: NullMemFreshnessReport[];
 }
 
 /** Input accepted when creating a VoidMemory fact record. */
@@ -146,6 +175,22 @@ export interface VoidMemoryProcedureRequest extends VoidMemoryBranchTarget {
   procedure: VoidMemoryProcedureInput;
 }
 
+/** Request accepted when deleting a branch-scoped memory record. */
+export interface VoidMemoryDeleteRequest extends VoidMemoryBranchTarget {
+  /** Stable memory record id to delete. */
+  recordId: string;
+}
+
+/** Result returned after a VoidMemory delete. */
+export interface VoidMemoryDeleteResult {
+  /** Canonical root drop id whose branch memory was touched. */
+  rootDropId: string;
+  /** Branch id whose memory was touched. */
+  branchId: string;
+  /** Stable memory record id requested for deletion. */
+  recordId: string;
+}
+
 /** Result returned after a VoidMemory write. */
 export interface VoidMemoryWriteResult<TRecord extends NullMemRecord> {
   /** Canonical root drop id whose branch memory was written. */
@@ -168,6 +213,8 @@ export interface VoidMemory {
   createProcedure(
     request: VoidMemoryProcedureRequest,
   ): Promise<VoidMemoryWriteResult<NullMemProcedureRecord>>;
+  /** Deletes a branch-scoped memory record by stable record id. */
+  delete(request: VoidMemoryDeleteRequest): Promise<VoidMemoryDeleteResult>;
 }
 
 /** App-facing server facade composed from storage, crypto, and Nulledit services. */

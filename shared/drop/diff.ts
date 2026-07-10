@@ -13,7 +13,9 @@ import {
   DropDiffOpSchema,
 } from "./diffSchemas";
 
+/** Legacy JSON-safe operation kind carried alongside native diff ops. */
 export type DropDiffOpType = "insert" | "delete";
+/** Semantic category for diff event metadata. */
 export type DropDiffEventKind =
   | "user.edit"
   | "agent.edit"
@@ -22,49 +24,83 @@ export type DropDiffEventKind =
   | "ui.response"
   | "policy.decision";
 
+/** JSON primitive allowed in diff event metadata. */
 export type JsonPrimitive = string | number | boolean | null;
+/** JSON value allowed in diff event metadata. */
 export type JsonValue =
   | JsonPrimitive
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/** Native editor diff op encoded for JSON transport. */
 export interface DropDiffNativeOp {
+  /** Nulledit operation code. */
   op: DiffOp;
+  /** Base64-encoded binary `Diff.data` payload. */
   data: string;
+  /** Text range the operation applies to. */
   range?: DiffRange;
 }
 
+/** JSON-safe branch diff operation with legacy and native representations. */
 export interface DropDiffOp {
+  /** Legacy text operation type. */
   type?: DropDiffOpType;
+  /** Legacy inclusive start offset. */
   start?: number;
+  /** Legacy exclusive end offset. */
   end?: number;
+  /** Legacy text payload. */
   text?: string;
+  /** Authoritative native binary-safe operation. */
   native?: DropDiffNativeOp;
 }
 
+/** Structured metadata attached to a branch diff event. */
 export interface DropDiffEventMetadata {
+  /** High-level event kind for retrieval and policy routing. */
   kind?: DropDiffEventKind;
+  /** Human-readable intent for agent/user authored events. */
   intent?: string;
+  /** Nullplug id when the event came from plugin execution. */
   pluginId?: string;
+  /** Additional semantic metadata; rich fields belong here, not top level. */
   args?: Record<string, JsonValue>;
+  /** Batch id for grouped diff events. */
   batchId?: string;
+  /** Position within a batch. */
   batchIndex?: number;
+  /** Parent event id for response/result chains. */
   parentEventId?: string;
+  /** Expected predecessor sequence for optimistic ordering. */
   followsSeq?: number;
+  /** Retrieval labels. */
   labels?: string[];
+  /** Agent confidence in the event or result. */
   confidence?: number;
+  /** Reference to a produced result artifact. */
   resultRef?: string;
+  /** Reference to a policy decision artifact. */
   policyDecisionRef?: string;
 }
 
+/** Immutable edit event accepted into a branch timeline. */
 export interface DropDiffEvent {
+  /** Writer-supplied stable event id used for dedupe. */
   eventId: string;
+  /** Durable branch sequence assigned by the server. */
   seq: number;
+  /** Root/drop id targeted by the diff transport. */
   dropId: string;
+  /** Client id that produced the event. */
   sourceClientId: string;
+  /** Creation time in epoch milliseconds. */
   createdAt: number;
+  /** Snapshot id that accepted the event, when known. */
   snapshotId?: number;
+  /** Ordered operations in this event. */
   ops: DropDiffOp[];
+  /** Optional semantic metadata. */
   metadata?: DropDiffEventMetadata;
 }
 
@@ -88,12 +124,17 @@ export interface DropDiffRef {
 }
 
 export interface DropDiffEnvelope {
+  /** Envelope schema version. */
   version: 1;
+  /** Events carried by the transport envelope. */
   events: DropDiffEvent[];
 }
 
+/** Poll response for branch diff transport. */
 export interface DropDiffPollResponse {
+  /** Events after the requested cursor. */
   events: DropDiffEvent[];
+  /** Cursor to send on the next poll, or null when no events are available. */
   cursor: string | null;
 }
 
@@ -148,6 +189,7 @@ export const isDropDiffRef = (value: unknown): value is DropDiffRef => {
   );
 };
 
+/** Returns true when `value` is valid diff event metadata. */
 export const isDropDiffEventMetadata = (
   value: unknown,
 ): value is DropDiffEventMetadata =>
@@ -171,16 +213,20 @@ const fromBase64 = (value: string): ArrayBuffer => {
   return bytes.buffer;
 };
 
+/** Returns true when `value` is a valid JSON-safe branch diff operation. */
 export const isDropDiffOp = (value: unknown): value is DropDiffOp =>
   DropDiffOpSchema.safeParse(value).success;
 
+/** Returns true when `value` is a valid branch diff event. */
 export const isDropDiffEvent = (value: unknown): value is DropDiffEvent =>
   DropDiffEventSchema.safeParse(value).success;
 
+/** Returns true when `value` is a valid diff transport envelope. */
 export const isDropDiffEnvelope = (
   value: unknown,
 ): value is DropDiffEnvelope => DropDiffEnvelopeSchema.safeParse(value).success;
 
+/** Converts an in-memory Nulledit diff to the branch transport operation shape. */
 export const diffToDropDiffOp = (diff: Diff): DropDiffOp => {
   const range = diff.range ?? { start: 0, end: 0 };
   const text = decodeText(diff.data);
@@ -199,6 +245,7 @@ export const diffToDropDiffOp = (diff: Diff): DropDiffOp => {
   };
 };
 
+/** Converts a branch transport operation back to an in-memory Nulledit diff. */
 export const dropDiffOpToDiff = (op: DropDiffOp): Diff | null => {
   if (op.native) {
     // Native ops are authoritative because they preserve the editor's original byte payload.

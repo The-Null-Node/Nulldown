@@ -3,8 +3,8 @@ import { type DropDiffEvent, dropDiffOpToDiff } from "../../../../../shared/drop
 import { applyDiff } from "../../../../../shared/nulledit/textDiff";
 import { DiffOp, type Diff } from "../../../../../shared/nulledit/types";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
-import { readBranchDiffEventBySeq } from "../storage/diffLogRepository";
-import { readSnapshot, readSnapshotCheckpoint } from "../storage/repository";
+import { createBranchDiffRepository } from "../storage/diffLogRepository";
+import { createBranchRepository } from "../storage/repository";
 
 const toEditableDiff = (op: DropDiffEvent["ops"][number]): Diff | null => {
   const converted = dropDiffOpToDiff(op);
@@ -51,10 +51,14 @@ const readEventsBySeqRange = async (
     return [];
   }
 
+  const branchDiffRepository = createBranchDiffRepository({
+    blobs: bucket,
+    sql: db,
+  });
   const eventReads: Promise<DropDiffEvent | null>[] = [];
   for (let seq = startSeq; seq <= endSeq; seq += 1) {
     eventReads.push(
-      readBranchDiffEventBySeq(bucket, rootDropId, branchId, seq, db),
+      branchDiffRepository.readBranchDiffEventBySeq(rootDropId, branchId, seq),
     );
   }
 
@@ -90,8 +94,8 @@ export const readBranchContent = async (
   snapshotId: number,
   db?: VoidSqlStore,
 ): Promise<string | null> => {
-  const direct = await readSnapshotCheckpoint(
-    bucket,
+  const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
+  const direct = await branchRepository.readSnapshotCheckpoint(
     rootDropId,
     branchId,
     snapshotId,
@@ -100,12 +104,10 @@ export const readBranchContent = async (
     return direct;
   }
 
-  const targetSnapshot = await readSnapshot(
-    bucket,
+  const targetSnapshot = await branchRepository.readSnapshot(
     rootDropId,
     branchId,
     snapshotId,
-    db,
   );
   if (!targetSnapshot) {
     return null;
@@ -116,8 +118,7 @@ export const readBranchContent = async (
   let baseContent: string | null = null;
 
   while (cursor) {
-    const checkpoint = await readSnapshotCheckpoint(
-      bucket,
+    const checkpoint = await branchRepository.readSnapshotCheckpoint(
       rootDropId,
       branchId,
       cursor.snapshotId,
@@ -133,12 +134,10 @@ export const readBranchContent = async (
       break;
     }
 
-    cursor = await readSnapshot(
-      bucket,
+    cursor = await branchRepository.readSnapshot(
       rootDropId,
       branchId,
       cursor.parentSnapshotId,
-      db,
     );
   }
 
@@ -171,8 +170,7 @@ export const readBranchContent = async (
       continue;
     }
 
-    const fallbackCheckpoint = await readSnapshotCheckpoint(
-      bucket,
+    const fallbackCheckpoint = await branchRepository.readSnapshotCheckpoint(
       rootDropId,
       branchId,
       snapshot.snapshotId,

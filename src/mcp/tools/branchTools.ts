@@ -1,0 +1,102 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import {
+  DropDiffEventMetadataSchema,
+  DropDiffOpSchema,
+} from "../../../shared/drop/diffSchemas";
+import type {
+  DropDiffEventMetadata,
+  DropDiffOp,
+} from "../../../shared/drop/diff";
+import { asCompact, asJsonText } from "../response";
+import { clientArgsSchema, createClient, extractMcpResponseArgs, mcpResponseArgsSchema } from "../tooling";
+
+/** Registers branch query/content and diff tools on the MCP server. */
+export const registerBranchTools = (server: McpServer): void => {
+  server.registerTool(
+    "branch_resolve",
+    {
+      title: "Resolve Branch",
+      description: "Resolve or create the current actor branch for a root drop.",
+      inputSchema: {
+        ...clientArgsSchema,
+        dropId: z.string().describe("Root drop id."),
+      },
+    },
+    async (args) => asCompact(await createClient(args).resolveBranch(args.dropId)),
+  );
+
+  server.registerTool(
+    "branch_content",
+    {
+      title: "Get Branch Content",
+      description: "Fetch exact materialized branch content.",
+      inputSchema: {
+        ...clientArgsSchema,
+        rootId: z.string().describe("Root drop id."),
+        branchId: z.string().describe("Branch id."),
+      },
+    },
+    async (args) =>
+      asCompact(await createClient(args).getBranchContent(args.rootId, args.branchId)),
+  );
+
+  server.registerTool(
+    "branch_query",
+    {
+      title: "Query Branch Heap",
+      description: "Query a branch resolved heap.",
+      inputSchema: {
+        ...clientArgsSchema,
+        ...mcpResponseArgsSchema,
+        rootId: z.string().describe("Root drop id."),
+        branchId: z.string().describe("Branch id."),
+        query: z.string().optional(),
+        top: z.number().int().min(1).max(50).optional(),
+        snapshotId: z.union([z.string(), z.number()]).optional(),
+        resolverId: z.string().optional(),
+        kind: z.string().optional(),
+        fromSeq: z.number().int().min(0).optional(),
+        toSeq: z.number().int().min(0).optional(),
+        pluginId: z.string().optional(),
+        callId: z.string().optional(),
+        primitiveId: z.string().optional(),
+        changedOnly: z.boolean().optional(),
+        includeAncestors: z.boolean().optional(),
+        includeEventMetadata: z.boolean().optional(),
+        snapshotterId: z.string().optional(),
+      },
+    },
+    async (args) => {
+      const respOpts = extractMcpResponseArgs(args);
+      return asCompact(await createClient(args).queryBranch(args), respOpts);
+    },
+  );
+
+  server.registerTool(
+    "diff_apply",
+    {
+      title: "Apply Branch Diff",
+      description:
+        "Post one atomic branch diff event. Protected branches require ND_TOKEN and any server-side diff credentials already configured.",
+      inputSchema: {
+        ...clientArgsSchema,
+        dropId: z.string().describe("Route drop id."),
+        branchId: z.string().optional(),
+        ops: z.array(DropDiffOpSchema).min(1),
+        metadata: DropDiffEventMetadataSchema.optional(),
+        eventDropId: z.string().optional(),
+      },
+    },
+    async (args) =>
+      asJsonText(
+        await createClient(args).applyDiff({
+          dropId: args.dropId,
+          branchId: args.branchId,
+          ops: args.ops as DropDiffOp[],
+          metadata: args.metadata as DropDiffEventMetadata | undefined,
+          eventDropId: args.eventDropId,
+        }),
+      ),
+  );
+};

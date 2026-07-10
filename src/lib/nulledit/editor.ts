@@ -6,7 +6,12 @@ snapshot id so stale async flushes cannot overwrite newer typing.
 
 import useEditorStore, { type EditorState } from "../../stores/editorStore";
 import useDropStore from "../../stores/dropStore";
-import { RenderCancelledError, renderMarkdownWithNullplug } from "../nullplug";
+import {
+  RenderCancelledError,
+  renderMarkdownWithNullplugState,
+  type RenderPipelineResult,
+} from "../nullplug";
+import { hashMarkdownSource } from "../../../shared/drop/resolved/hash";
 import Snapshotter from "../../../shared/nulledit/snapshotter";
 import { applyDiff, computeDiffOps } from "../../../shared/nulledit/textDiff";
 import type {
@@ -28,6 +33,17 @@ export interface IEditor {
 }
 
 const snapshotter = new Snapshotter(3);
+
+const uniqueStrings = (values: Iterable<string | undefined>): string[] =>
+  [...new Set([...values].filter((value): value is string => Boolean(value)))];
+
+const collectNullplugCallIds = (result: RenderPipelineResult): string[] =>
+  uniqueStrings([
+    ...result.uiPrimitives.map((primitive) => primitive.source?.callId),
+    ...result.mutations.map((mutation) =>
+      mutation.kind === "ui.state.patch" ? mutation.callId : undefined,
+    ),
+  ]);
 
 export default function createEditor(): IEditor {
   let currentSnapshotId: SnapshotId | null = null;
@@ -98,6 +114,7 @@ export default function createEditor(): IEditor {
       if (!prevText) {
         useEditorStore.getState().setTextContent("");
         useEditorStore.getState().setRenderedMarkdown("");
+        useEditorStore.getState().clearStructuredRenderState();
         useEditorStore.getState().setRenderProgress(1);
         useEditorStore.getState().setRenderStatus("idle");
         return;
@@ -111,6 +128,7 @@ export default function createEditor(): IEditor {
         return useEditorStore.getState().textContent;
       }
       const snapshotId = currentSnapshotId;
+      const rootDropId = useEditorStore.getState().baseDropId ?? undefined;
       const content = useEditorStore.getState().textContent;
       const baseSnapshot = lastRenderedSnapshotId
         ? snapshotter.get(lastRenderedSnapshotId)
@@ -130,14 +148,15 @@ export default function createEditor(): IEditor {
       initialState.setRenderProgress(0);
 
       let renderedMarkdown = content;
+      let renderResult: RenderPipelineResult | null = null;
 
       try {
         const allowedUrls = useDropStore.getState().allowedUrls;
         const resolveDrop = useDropStore.getState().getDrop;
-        renderedMarkdown = await renderMarkdownWithNullplug(content, {
+        renderResult = await renderMarkdownWithNullplugState(content, {
           allowedUrls,
           caller: {
-            dropId: useEditorStore.getState().baseDropId ?? undefined,
+            dropId: rootDropId,
             snapshotId,
           },
           resolveDrop,
@@ -154,6 +173,7 @@ export default function createEditor(): IEditor {
           shouldCancel: () =>
             token !== renderToken || snapshotId !== currentSnapshotId,
         });
+        renderedMarkdown = renderResult.markdown;
       } catch (error) {
         if (error instanceof RenderCancelledError) {
           return useEditorStore.getState().renderedMarkdown;
@@ -172,6 +192,21 @@ export default function createEditor(): IEditor {
         return renderedMarkdown;
       }
 
+      if (!renderResult) {
+        return renderedMarkdown;
+      }
+
+      const [sourceContentHash, renderedContentHash] = await Promise.all([
+        hashMarkdownSource(content),
+        hashMarkdownSource(renderedMarkdown),
+      ]);
+
+      if (token !== renderToken || snapshotId !== currentSnapshotId) {
+        return renderedMarkdown;
+      }
+
+      const nullplugCallIds = collectNullplugCallIds(renderResult);
+
       // The render diff is recorded after the final winning render so draft packs reflect visible output.
       snapshotter.upsertRenderDiff(snapshotId, renderDiff);
       snapshotter.updateSnapshot(snapshotId, {
@@ -183,6 +218,28 @@ export default function createEditor(): IEditor {
       lastRenderedSnapshotId = snapshotId;
       const state = useEditorStore.getState();
       state.setRenderedMarkdown(renderedMarkdown);
+      state.setRenderFrame({
+        frameId: `render:${snapshotId}:${token}`,
+        rootDropId,
+        versionId: snapshotId,
+        sourceMarkdown: content,
+        renderedMarkdown,
+        sourceContentHash,
+        renderedContentHash,
+        acceptedDiffRefs: [],
+        resolverRefs: [],
+        nullplugCallIds,
+        diagnostics: renderResult.diagnostics,
+        status: "final",
+      });
+      state.setNullplugRenderState({
+        uiPrimitives: renderResult.uiPrimitives,
+        uiState: renderResult.uiState,
+        mutations: renderResult.mutations,
+        yields: renderResult.yields,
+        diagnostics: renderResult.diagnostics,
+        callIds: nullplugCallIds,
+      });
       state.setRenderProgress(1);
       state.setRenderStatus("idle");
       return renderedMarkdown;
@@ -192,16 +249,16 @@ export default function createEditor(): IEditor {
       const snapshotId = snapshotter.requestSnapshotId();
       snapshotter.updateSnapshot(snapshotId, {
         content,
-        renderedMarkdown: content,
-        status: "rendered",
+        renderedMarkdown: "",
+        status: "pending",
       });
-      snapshotter.registerSnapshot(snapshotId);
-      lastRenderedSnapshotId = snapshotId;
       setCurrentSnapshotId(snapshotId);
       useEditorStore.getState().setTextContent(content);
-      useEditorStore.getState().setRenderedMarkdown(content);
-      useEditorStore.getState().setRenderStatus("idle");
-      useEditorStore.getState().setRenderProgress(1);
+      useEditorStore.getState().setRenderedMarkdown("");
+      useEditorStore.getState().clearStructuredRenderState();
+      useEditorStore.getState().setRenderStatus("rendering");
+      useEditorStore.getState().setRenderProgress(0);
+      queueRender();
       return snapshotId;
     },
 
@@ -213,6 +270,7 @@ export default function createEditor(): IEditor {
       renderScheduled = false;
       useEditorStore.getState().setTextContent("");
       useEditorStore.getState().setRenderedMarkdown("");
+      useEditorStore.getState().clearStructuredRenderState();
       useEditorStore.getState().setRenderStatus("idle");
       useEditorStore.getState().setRenderProgress(1);
       useEditorStore.getState().setCurrentSnapshotId(null);

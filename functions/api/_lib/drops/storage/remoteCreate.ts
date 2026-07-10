@@ -1,8 +1,8 @@
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 import { DROP_ID_LENGTH, generateDropId } from "../../../../../shared/drop/id";
 import { syncPublicDropIndexForPayload } from "../index/repository";
-import { removeRemoteAliasIfMatch, reserveRemoteAlias } from "../identity/id";
-import { BlobDropObjectRepository } from "./objectRepository";
+import { createDropIdentityRepository } from "../identity/id";
+import { createDropObjectRepository } from "./objectRepository";
 
 const MAX_ID_ALLOCATION_ATTEMPTS = 64;
 
@@ -13,11 +13,15 @@ export const createRemoteJsonDrop = async (
   db?: VoidSqlStore,
 ): Promise<string> => {
   const storedPayload = JSON.stringify(payload);
-  const dropRepository = new BlobDropObjectRepository(bucket);
+  const dropRepository = createDropObjectRepository({ blobs: bucket, sql: db });
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: bucket,
+    sql: db,
+  });
 
   for (let attempt = 0; attempt < MAX_ID_ALLOCATION_ATTEMPTS; attempt += 1) {
     const candidateId = generateDropId(DROP_ID_LENGTH);
-    const aliasState = await reserveRemoteAlias(bucket, candidateId, undefined, db);
+    const aliasState = await dropIdentityRepository.reserveRemoteAlias(candidateId);
     if (aliasState === "conflict") {
       continue;
     }
@@ -35,7 +39,7 @@ export const createRemoteJsonDrop = async (
       }
     } finally {
       if (!storedSuccessfully && aliasState === "reserved") {
-        await removeRemoteAliasIfMatch(bucket, candidateId, undefined, db);
+        await dropIdentityRepository.removeRemoteAliasIfMatch(candidateId);
       }
     }
   }

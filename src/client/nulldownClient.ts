@@ -13,6 +13,19 @@ import type {
   DropDiffEventMetadata,
   DropDiffOp,
 } from "../../shared/drop/diff";
+import type {
+  NullplugInvokeRequest,
+  NullplugInvokeResponse,
+} from "../../shared/nullplug/types";
+import type {
+  NullplugUiResponseFact,
+  NullplugUiStatePatchFact,
+  NullplugUiStateSnapshot,
+} from "../../shared/nullplug/ui";
+import type {
+  RemoteNullplugManifest,
+  RemoteNullplugRegistryRecord,
+} from "../../shared/nullplug/registry";
 
 /** JSON-compatible value accepted by Nulldown HTTP APIs. */
 export type NulldownJsonValue =
@@ -45,8 +58,7 @@ export interface NulldownClientConfig {
 }
 
 /** Options accepted when constructing a Nulldown client. */
-export interface CreateNulldownClientOptions
-  extends Partial<NulldownClientConfig> {}
+export interface CreateNulldownClientOptions extends Partial<NulldownClientConfig> {}
 
 /** Raw HTTP response returned by the Nulldown client request helper. */
 export interface NulldownApiResponse<T = unknown> {
@@ -130,6 +142,8 @@ export interface NulldownBranchQueryRequest {
   callId?: string;
   /** Optional nullplug primitive id filter. */
   primitiveId?: string;
+  /** Optional snapshotter id to invoke yieldNext on the server side (for compact projections). */
+  snapshotterId?: string;
   /** Whether to include only changed nodes. */
   changedOnly?: boolean;
   /** Whether to include ancestor nodes. */
@@ -152,6 +166,16 @@ export interface NulldownMemoryQueryRequest {
   labels?: string[];
   /** Maximum result count. */
   limit?: number;
+  /** When true, the response includes freshness reports for the matching records. */
+  includeFreshness?: boolean;
+  /** Exact procedure record id for compact next-step projection. */
+  procedureId?: string;
+  /** Return procedure steps with index greater than this cursor. */
+  afterStep?: number;
+  /** Maximum procedure steps to return. */
+  stepLimit?: number;
+  /** Whether full records should be returned alongside capsules. */
+  includeRecords?: boolean;
 }
 
 /** Request accepted when creating a NullMem fact. */
@@ -204,6 +228,16 @@ export interface NulldownMemoryProcedureRequest {
   metadata?: Record<string, NulldownJsonValue>;
 }
 
+/** Request accepted when deleting a branch-scoped NullMem record. */
+export interface NulldownMemoryDeleteRequest {
+  /** Root drop id. */
+  rootId: string;
+  /** Branch id. */
+  branchId: string;
+  /** Stable memory record id to delete. */
+  recordId: string;
+}
+
 /** Request accepted when applying an atomic branch diff event. */
 export interface NulldownDiffApplyRequest {
   /** Route drop id. */
@@ -216,6 +250,37 @@ export interface NulldownDiffApplyRequest {
   metadata?: DropDiffEventMetadata;
   /** Optional canonical drop id stored in the event. */
   eventDropId?: string;
+}
+
+/** Response returned after storing an immutable nullplug UI response fact. */
+export interface NulldownNullplugSubmitResult {
+  stored: boolean;
+  key: string;
+  fact: NullplugUiResponseFact;
+}
+
+/** Nullplug UI state facts accepted by the provider runtime. */
+export type NulldownNullplugStateFact =
+  | NullplugUiStatePatchFact
+  | NullplugUiStateSnapshot;
+
+/** Response returned after storing a nullplug UI state fact. */
+export interface NulldownNullplugStateResult {
+  stored: boolean;
+  key: string;
+  fact: NulldownNullplugStateFact;
+}
+
+/** Response returned by the remote nullplug registry list endpoint. */
+export interface NulldownNullplugRegistryListResult {
+  items: RemoteNullplugManifest[];
+  cursor: string | null;
+}
+
+/** Response returned by the remote nullplug registry registration endpoint. */
+export interface NulldownNullplugRegistryRegisterResult {
+  registered: boolean;
+  record: RemoteNullplugRegistryRecord;
 }
 
 interface DiffCredentialEntry {
@@ -243,7 +308,10 @@ export class NulldownClientError extends Error {
   /** Structured Nulldown error code when present. */
   readonly code?: string;
 
-  constructor(message: string, options: { status?: number; code?: string } = {}) {
+  constructor(
+    message: string,
+    options: { status?: number; code?: string } = {},
+  ) {
     super(message);
     this.name = "NulldownClientError";
     this.status = options.status;
@@ -277,7 +345,9 @@ const decodeDiffAuthToken = (
     : trimmed;
 
   try {
-    const parsed = JSON.parse(base64UrlDecode(encoded)) as Partial<DiffAuthTokenBundle>;
+    const parsed = JSON.parse(
+      base64UrlDecode(encoded),
+    ) as Partial<DiffAuthTokenBundle>;
     if (parsed.version !== 1 || parsed.kind !== "nulldown.diff-auth.v1") {
       return null;
     }
@@ -336,7 +406,8 @@ export const createNulldownClientConfig = (
   token: options.token ?? process.env.ND_TOKEN ?? null,
   accountId: options.accountId ?? process.env.ND_ACCOUNT_ID ?? null,
   clientId: options.clientId ?? process.env.ND_CLIENT_ID ?? null,
-  diffAuthToken: options.diffAuthToken ?? process.env.ND_DIFF_AUTH_TOKEN ?? null,
+  diffAuthToken:
+    options.diffAuthToken ?? process.env.ND_DIFF_AUTH_TOKEN ?? null,
   diffWebhookSecret:
     options.diffWebhookSecret ?? process.env.DIFF_WEBHOOK_SECRET ?? null,
   fetch: options.fetch,
@@ -428,7 +499,9 @@ export class NulldownClient {
   }
 
   /** Searches public indexed drops. */
-  async searchDrops(request: NulldownSearchDropsRequest = {}): Promise<unknown> {
+  async searchDrops(
+    request: NulldownSearchDropsRequest = {},
+  ): Promise<unknown> {
     const params = new URLSearchParams();
     params.set("q", request.query ?? "");
     appendParam(params, "owner", request.owner);
@@ -474,6 +547,7 @@ export class NulldownClient {
     if (request.includeEventMetadata === false) {
       params.set("includeEventMetadata", "false");
     }
+    appendParam(params, "snapshotterId", request.snapshotterId);
     const suffix = params.size ? `?${params}` : "";
     const response = await this.request(
       `/api/branches/${encodeURIComponent(request.rootId)}/${encodeBranchPathSegment(request.branchId)}/resolved/query${suffix}`,
@@ -488,6 +562,13 @@ export class NulldownClient {
     appendParam(params, "kind", request.kind);
     if (request.labels?.length) params.set("labels", request.labels.join(","));
     appendParam(params, "limit", request.limit);
+    appendParam(params, "procedureId", request.procedureId);
+    appendParam(params, "afterStep", request.afterStep);
+    appendParam(params, "stepLimit", request.stepLimit);
+    if (request.includeFreshness) params.set("includeFreshness", "true");
+    if (request.includeRecords !== undefined) {
+      params.set("includeRecords", request.includeRecords ? "true" : "false");
+    }
     const suffix = params.size ? `?${params}` : "";
     const response = await this.request(
       `/api/branches/${encodeURIComponent(request.rootId)}/${encodeBranchPathSegment(request.branchId)}/memory/query${suffix}`,
@@ -525,6 +606,87 @@ export class NulldownClient {
     return response.data;
   }
 
+  /** Deletes a branch-scoped NullMem record. */
+  async deleteMemoryRecord(
+    request: NulldownMemoryDeleteRequest,
+  ): Promise<unknown> {
+    const response = await this.request(
+      `/api/branches/${encodeURIComponent(request.rootId)}/${encodeBranchPathSegment(request.branchId)}/memory/${encodeURIComponent(request.recordId)}`,
+      { method: "DELETE" },
+    );
+    return response.data;
+  }
+
+  /** Resolves a nullplug invocation through the provider runtime. */
+  async resolveNullplug(
+    request: NullplugInvokeRequest,
+  ): Promise<NullplugInvokeResponse | null> {
+    const response = await this.request<NullplugInvokeResponse>(
+      "/api/nullplug/resolve",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      },
+    );
+    return response.data;
+  }
+
+  /** Stores an immutable nullplug UI response fact. */
+  async submitNullplugResponse(
+    fact: NullplugUiResponseFact,
+  ): Promise<NulldownNullplugSubmitResult | null> {
+    const response = await this.request<NulldownNullplugSubmitResult>(
+      "/api/nullplug/submit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fact),
+      },
+    );
+    return response.data;
+  }
+
+  /** Stores a nullplug UI state patch or snapshot fact. */
+  async storeNullplugState(
+    fact: NulldownNullplugStateFact,
+  ): Promise<NulldownNullplugStateResult | null> {
+    const response = await this.request<NulldownNullplugStateResult>(
+      "/api/nullplug/state",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fact),
+      },
+    );
+    return response.data;
+  }
+
+  /** Lists active remote nullplug manifests. */
+  async listNullplugRegistry(): Promise<
+    NulldownNullplugRegistryListResult | null
+  > {
+    const response = await this.request<NulldownNullplugRegistryListResult>(
+      "/api/nullplug/registry",
+    );
+    return response.data;
+  }
+
+  /** Registers a signed remote nullplug manifest. */
+  async registerNullplugManifest(
+    manifest: RemoteNullplugManifest,
+  ): Promise<NulldownNullplugRegistryRegisterResult | null> {
+    const response = await this.request<NulldownNullplugRegistryRegisterResult>(
+      "/api/nullplug/registry",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manifest),
+      },
+    );
+    return response.data;
+  }
+
   /** Posts a single atomic branch diff event. */
   async applyDiff(request: NulldownDiffApplyRequest): Promise<unknown> {
     const eventDropId = request.eventDropId ?? request.dropId;
@@ -548,7 +710,10 @@ export class NulldownClient {
     const path = `/api/diff/${encodeURIComponent(request.dropId)}`;
     const body = JSON.stringify(envelope);
     const headers = new Headers({ "Content-Type": "application/json" });
-    const credential = findDiffCredential(this.config.diffAuthToken, eventDropId);
+    const credential = findDiffCredential(
+      this.config.diffAuthToken,
+      eventDropId,
+    );
 
     if (credential) {
       const timestamp = String(Date.now());
@@ -574,14 +739,11 @@ export class NulldownClient {
       );
     }
 
-    const response = await this.request(
-      `${path}${query}`,
-      {
-        method: "POST",
-        headers,
-        body,
-      },
-    );
+    const response = await this.request(`${path}${query}`, {
+      method: "POST",
+      headers,
+      body,
+    });
     return response.data;
   }
 }

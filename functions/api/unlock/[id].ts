@@ -1,6 +1,6 @@
 import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import { isDropEnvelopeV1 } from "../../../shared/drop/types";
-import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, serializeError, toLogRef } from "../_lib/core/logging/logger";
 import { serverVoidCrypto } from "../_lib/crypto/void/serverVoidCrypto";
 
@@ -59,7 +59,14 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       });
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const id = await dropIdentityRepository.resolveRemoteDropId(
+      requestedId,
+      logger,
+    );
     if (!id) {
       logger.warn("unlock.invalid_drop_id", {
         requestedDropRef: toLogRef(requestedId),

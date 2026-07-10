@@ -2,6 +2,44 @@
 
 This repository is the Nulldown codebase. Work as a careful, minimal-change engineering agent.
 
+## Nulldown First (Non-Negotiable)
+
+Before starting any architecture, refactor, planning, checklist, strategy, skill, agent-memory, agent behavior, contract, or hosted data work:
+
+- Load `nulldown-priority-strategy` (or read the SKILL.md directly and run the mandatory first query if the skill is not available).
+- Run the hosted priority query on the master checklist and relevant child plans before local planning or coding.
+- For any write to a hosted plan, checklist, strategy, or memory, also load `nulldown-atomic-diffs`.
+
+This is a hard gate. Do not skip it. Do not start making changes based on local intuition.
+
+## Post-Change Hosted Update Ritual (Mandatory)
+
+After implementing changes that affect architecture, agent/MCP/CLI behavior, contracts, response handling, data presentation from hosted sources, or documented strategy/procedures:
+
+You **must** perform this ritual before considering the work complete:
+
+1. Identify the relevant hosted Nulldown root(s) — usually the master checklist and the appropriate child plan.
+2. Update the hosted content using small atomic branch diffs (`nd diff apply`) with proper metadata (kind, intent, labels, args.summary, priority).
+3. Record a memory fact (and a procedure when the work defines a reusable workflow).
+4. Verify the update is retrievable with a `branch query`.
+5. Only then move on.
+
+Local code or instruction changes are not enough. The hosted Nulldown is the source of truth that future agents will query.
+
+Trigger examples (use categories, not specific symbols):
+- Changing rules or behavior for how agents retrieve or present information from hosted plans/memory.
+- Modifying architecture, contracts, or observable behavior that other work should follow.
+- Adding or changing agent procedures, best practices, or instructions that should be discoverable later.
+- Any work that should become part of the canonical plans or memory.
+
+Do not hard-code current implementation names in the ritual. Keep it general so it applies broadly.
+
+## Stale Memory & Memory Hygiene
+
+- Before trusting branch memory (especially current-work, procedure-memory, capability records) for priority, load `nulldown-stale-memory-check`.
+- If the runtime cannot load it, read the SKILL.md directly and run the stale detection + supersede workflow.
+- Delete stale records when possible, or write an explicit superseding `stale-memory` fact.
+
 ## Development Rules
 
 - Prefer small, behavior-preserving changes over broad rewrites.
@@ -29,7 +67,7 @@ This repository is the Nulldown codebase. Work as a careful, minimal-change engi
 
 ## Documentation Rules
 
-- Before any Nulldown-hosted plan or document work, load the `nulldown-atomic-diffs` skill. The skill defines the atomic diff protocol, metadata requirements, query-first retrieval workflow, semantic memory writes, and common anti-patterns. Agents that skip this will silently violate the Nulldown editing model.
+- Before choosing or planning architecture work, load `nulldown-priority-strategy`. Before any Nulldown-hosted plan or document write, load `nulldown-atomic-diffs`. Agents that skip these will silently violate the Nulldown editing model.
 - Do not create new `.nmdn` docs on disk for refactor planning. Publish refactor plans as real Nulldown drops with `nd create`.
 - Keep `AGENTS.md` short and prompt-like; do not turn it into the full architecture plan.
 - Update `README.md` when public docs, commands, or architecture entry points change.

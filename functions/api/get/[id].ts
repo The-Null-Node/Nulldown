@@ -5,7 +5,7 @@ how to interpret plaintext payloads versus sealed envelopes.
 */
 
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 
 interface Env {
@@ -50,7 +50,14 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
   try {
     validateEnv(env);
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const id = await dropIdentityRepository.resolveRemoteDropId(
+      requestedId,
+      logger,
+    );
 
     if (!id) {
       logger.warn("get.invalid_drop_id", {

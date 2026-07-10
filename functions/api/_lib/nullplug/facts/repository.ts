@@ -12,7 +12,10 @@ import {
   type NullplugUiStatePatchFact,
   type NullplugUiStateSnapshot,
 } from "../../../../../shared/nullplug/ui";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type {
+  VoidBlobStore,
+  VoidSqlStore,
+} from "../../../../../src/server/ports";
 import { parseJsonColumn } from "../../core/d1/metadata";
 
 type NullplugFactKind = "ui.response" | "ui.state.patch" | "ui.state.snapshot";

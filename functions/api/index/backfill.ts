@@ -7,7 +7,10 @@ import {
   removePublicDropIndexEntry,
   upsertPublicDropIndexEntry,
 } from "../_lib/drops/index/repository";
-import { REMOTE_DROP_ALIAS_PREFIX, reserveRemoteAlias } from "../_lib/drops/identity/id";
+import {
+  createDropIdentityRepository,
+  REMOTE_DROP_ALIAS_PREFIX,
+} from "../_lib/drops/identity/id";
 import { createRequestLogger } from "../_lib/core/logging/logger";
 import { verifyBearerToken } from "../_lib/core/auth/bearer";
 import {
@@ -98,6 +101,9 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
     const query = parseBackfillQuery(request);
     const cursor = query.cursor;
     const limit = query.limit ?? DEFAULT_LIMIT;
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+    });
 
     const listed = await env.R2_BUCKET.list({
       limit,
@@ -143,7 +149,10 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
         continue;
       }
 
-      const aliasState = await reserveRemoteAlias(env.R2_BUCKET, entry.key, logger);
+      const aliasState = await dropIdentityRepository.reserveRemoteAlias(
+        entry.key,
+        logger,
+      );
       if (aliasState === "reserved") {
         stats.aliasReserved += 1;
       } else if (aliasState === "already-registered") {

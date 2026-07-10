@@ -9,7 +9,7 @@ import {
   isDropSnapshotRecord,
 } from "../../../../../shared/drop/branch";
 import { DROP_RESOLVED_HEAP_KEY_PREFIX } from "../../../../../shared/drop/sidecar";
-import { isResolvedNulldownState } from "../../../../../shared/drop/resolved";
+import { isResolvedNulldownState } from "../../../../../shared/drop/resolved/validators";
 import {
   isNullplugUiResponseFact,
   isNullplugUiStatePatchFact,
@@ -24,7 +24,7 @@ import {
   putAccountRecord,
 } from "../../accounts/session/auth";
 import {
-  writeRemoteAliasToD1,
+  createDropIdentityRepository,
   REMOTE_DROP_ALIAS_PREFIX,
 } from "../../drops/identity/id";
 import {
@@ -40,15 +40,14 @@ import {
   WRITER_BRANCH_KEY_PREFIX,
 } from "../../branches/storage/keys";
 import {
+  createBranchRepository,
   readR2Json,
-  writeBranch,
-  writeSnapshot,
 } from "../../branches/storage/repository";
-import { writeBranchDiffEvent } from "../../branches/storage/diffLogRepository";
+import { createBranchDiffRepository } from "../../branches/storage/diffLogRepository";
 import {
+  createDiffCredentialRepository,
   DIFF_AUTH_KEY_PREFIX,
   isDiffAuthCredentialRecord,
-  putDiffAuthCredential,
 } from "../../diffs/credentials/repository";
 import {
   syncNullplugUiResponseFactToD1,
@@ -58,7 +57,10 @@ import { syncResolvedStateToD1 } from "../../resolved/heap/service";
 import { verifyBearerToken } from "../auth/bearer";
 import { jsonErrorResponse, jsonResponse } from "../http/responses";
 import { type RequestLogger, toLogRef } from "../logging/logger";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type {
+  VoidBlobStore,
+  VoidSqlStore,
+} from "../../../../../src/server/ports";
 import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
 
 /** Environment required by D1 metadata backfill. */
@@ -244,6 +246,9 @@ const upsertWriterPointer = async (
 
 const extractTitleFromContent = (content: string): string | null => {
   const lines = content.split("\n");
+
+  const stringChunks = Math.ceil(lines.length / 100);
+
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.startsWith("# ")) {
@@ -264,8 +269,11 @@ const handleBackfillObject = async (
       stats.invalid += 1;
       return;
     }
-    await writeRemoteAliasToD1(
-      env.DB,
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    await dropIdentityRepository.writeRemoteAliasToD1(
       key.slice(REMOTE_DROP_ALIAS_PREFIX.length),
       fullId,
     );
@@ -309,7 +317,11 @@ const handleBackfillObject = async (
       stats.invalid += 1;
       return;
     }
-    await writeBranch(env.R2_BUCKET, branch, env.DB);
+    const branchRepository = createBranchRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    await branchRepository.writeBranch(branch);
     stats.branchesUpserted += 1;
     return;
   }
@@ -330,7 +342,11 @@ const handleBackfillObject = async (
       stats.invalid += 1;
       return;
     }
-    await writeSnapshot(env.R2_BUCKET, snapshot, env.DB);
+    const branchRepository = createBranchRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    await branchRepository.writeSnapshot(snapshot);
     stats.snapshotsUpserted += 1;
     return;
   }
@@ -341,12 +357,14 @@ const handleBackfillObject = async (
       stats.invalid += 1;
       return;
     }
-    await writeBranchDiffEvent(
-      env.R2_BUCKET,
+    const branchDiffRepository = createBranchDiffRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    await branchDiffRepository.writeBranchDiffEvent(
       event.dropId,
       key.slice(BRANCH_DIFF_EVENT_KEY_PREFIX.length).split("/")[1] ?? "",
       event,
-      env.DB,
     );
     stats.eventsUpserted += 1;
     return;
@@ -362,7 +380,11 @@ const handleBackfillObject = async (
       stats.invalid += 1;
       return;
     }
-    await putDiffAuthCredential(env.R2_BUCKET, credential, env.DB);
+    const diffCredentialRepository = createDiffCredentialRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    await diffCredentialRepository.putDiffAuthCredential(credential);
     stats.diffCredentialsUpserted += 1;
     return;
   }
@@ -440,7 +462,11 @@ const handleBackfillObject = async (
   }
 
   const visibility = await upsertDropMetadataFromObject(env.DB, key, object);
-  await writeRemoteAliasToD1(env.DB, toShortDropId(key), key);
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  await dropIdentityRepository.writeRemoteAliasToD1(toShortDropId(key), key);
   stats.aliasesUpserted += 1;
 
   if (visibility === "invalid-json") {
@@ -477,7 +503,11 @@ const handleBackfillObject = async (
     } else {
       try {
         const parsed = await object.json<unknown>();
-        if (isDropPayload(parsed) && typeof parsed.content === "string" && parsed.content.trim()) {
+        if (
+          isDropPayload(parsed) &&
+          typeof parsed.content === "string" &&
+          parsed.content.trim()
+        ) {
           indexContent = parsed.content;
         }
       } catch {

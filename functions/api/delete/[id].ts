@@ -1,6 +1,6 @@
 import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import { removePublicDropIndexEntry } from "../_lib/drops/index/repository";
-import { removeRemoteAliasIfMatch, resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 
 interface Env {
@@ -64,7 +64,14 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       );
     }
 
-    const id = await resolveRemoteDropId(env.R2_BUCKET, requestedId, logger, env.DB);
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const id = await dropIdentityRepository.resolveRemoteDropId(
+      requestedId,
+      logger,
+    );
 
     if (!id) {
       logger.warn("delete.invalid_drop_id", {
@@ -116,7 +123,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
 
     await env.R2_BUCKET.delete(id);
     await Promise.all([
-      removeRemoteAliasIfMatch(env.R2_BUCKET, id, logger, env.DB),
+      dropIdentityRepository.removeRemoteAliasIfMatch(id, logger),
       removePublicDropIndexEntry(env.R2_BUCKET, id, env.DB),
       env.DB
         ? env.DB.prepare("DELETE FROM drops WHERE id = ?").bind(id).run()

@@ -9,7 +9,7 @@ import {
   type NullplugUiResponseFact,
 } from "../../../shared/nullplug/ui";
 import { putNullplugUiResponseFact } from "../_lib/nullplug/facts/repository";
-import { resolveRemoteDropId } from "../_lib/drops/identity/id";
+import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import {
   jsonErrorResponse,
@@ -64,11 +64,13 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
       );
     }
 
-    const canonicalRootDropId = await resolveRemoteDropId(
-      env.R2_BUCKET,
+    const dropIdentityRepository = createDropIdentityRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const canonicalRootDropId = await dropIdentityRepository.resolveRemoteDropId(
       parsed.source.rootDropId,
       logger,
-      env.DB,
     );
     if (!canonicalRootDropId) {
       logger.logEnd(404, {

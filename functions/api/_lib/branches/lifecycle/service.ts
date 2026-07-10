@@ -2,8 +2,14 @@ import {
   type DropBranchRecord,
   type DropSnapshotRecord,
 } from "../../../../../shared/drop/branch";
-import { isDropEnvelopeV1, isDropPayload } from "../../../../../shared/drop/types";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import {
+  isDropEnvelopeV1,
+  isDropPayload,
+} from "../../../../../shared/drop/types";
+import type {
+  VoidBlobStore,
+  VoidSqlStore,
+} from "../../../../../src/server/ports";
 import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
@@ -13,20 +19,12 @@ import {
   createWriterBranchKey,
   createWriterKey,
 } from "../storage/keys";
-import {
-  readBranchHeadEventSeq,
-  readLegacyBranchDiffLog,
-  writeBranchDiffEvent,
-} from "../storage/diffLogRepository";
+import { createBranchDiffRepository } from "../storage/diffLogRepository";
 import { withBranchMutationLock } from "../storage/mutationLock";
 import {
-  readBranch,
+  createBranchRepository,
   readR2Text,
   resolveSnapshotCheckpointKey,
-  writeBranch,
-  writeBranchDiffLog,
-  writeSnapshot,
-  writeSnapshotCheckpoint,
 } from "../storage/repository";
 
 /** Root drop material required to initialize or resolve branch timelines. */
@@ -134,6 +132,11 @@ export const ensureBranchHeapV2 = async (
   branch: DropBranchRecord,
   db?: VoidSqlStore,
 ): Promise<DropBranchRecord> => {
+  const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
+  const branchDiffRepository = createBranchDiffRepository({
+    blobs: bucket,
+    sql: db,
+  });
   if (
     branch.snapshotHeapVersion === 2 &&
     typeof branch.headEventSeq === "number"
@@ -141,8 +144,7 @@ export const ensureBranchHeapV2 = async (
     return branch;
   }
 
-  const legacyEvents = await readLegacyBranchDiffLog(
-    bucket,
+  const legacyEvents = await branchDiffRepository.readLegacyBranchDiffLog(
     branch.rootDropId,
     branch.branchId,
   );
@@ -151,7 +153,11 @@ export const ensureBranchHeapV2 = async (
     // Migration is additive: copy legacy log entries into per-seq objects before flipping the branch version.
     await Promise.all(
       legacyEvents.map((event) =>
-        writeBranchDiffEvent(bucket, branch.rootDropId, branch.branchId, event, db),
+        branchDiffRepository.writeBranchDiffEvent(
+          branch.rootDropId,
+          branch.branchId,
+          event,
+        ),
       ),
     );
 
@@ -175,7 +181,10 @@ export const ensureBranchHeapV2 = async (
 
   const maxSeq = legacyEvents.length
     ? Math.max(...legacyEvents.map((event) => event.seq))
-    : await readBranchHeadEventSeq(bucket, branch.rootDropId, branch.branchId, db);
+    : await branchDiffRepository.readBranchHeadEventSeq(
+        branch.rootDropId,
+        branch.branchId,
+      );
 
   const upgraded: DropBranchRecord = {
     ...branch,
@@ -187,7 +196,7 @@ export const ensureBranchHeapV2 = async (
     ),
   };
 
-  await writeBranch(bucket, upgraded, db);
+  await branchRepository.writeBranch(upgraded);
   return upgraded;
 };
 
@@ -209,7 +218,9 @@ const readWriterBranchId = async (
     if (row?.branch_id) return row.branch_id;
   }
 
-  const writerPointer = await bucket.get(createWriterBranchKey(rootDropId, writerKey));
+  const writerPointer = await bucket.get(
+    createWriterBranchKey(rootDropId, writerKey),
+  );
   return (await readR2Text(writerPointer))?.trim() || null;
 };
 
@@ -250,6 +261,7 @@ const createInitialBranchState = async (
   baseContent: string,
   db?: VoidSqlStore,
 ): Promise<DropBranchRecord> => {
+  const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const now = Date.now();
   const branch: DropBranchRecord = {
     version: 1,
@@ -290,17 +302,16 @@ const createInitialBranchState = async (
   };
 
   await Promise.all([
-    writeBranch(bucket, branch, db),
-    writeSnapshot(bucket, snapshot, db),
-    writeSnapshotCheckpoint(
-      bucket,
+    branchRepository.writeBranch(branch),
+    branchRepository.writeSnapshot(snapshot),
+    branchRepository.writeSnapshotCheckpoint(
       rootDropId,
       branchId,
       0,
       baseContent,
       initialCheckpointKey,
     ),
-    writeBranchDiffLog(bucket, rootDropId, branchId, []),
+    branchRepository.writeBranchDiffLog(rootDropId, branchId, []),
   ]);
 
   return branch;
@@ -315,6 +326,7 @@ export const resolveBranchForActor = async (
   rawProviderPrivateKey?: string,
   db?: VoidSqlStore,
 ): Promise<{ branch: DropBranchRecord; created: boolean }> => {
+  const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const ownerAccountId = await getOwnerAccountIdForDrop(bucket, rootDropId);
   const rootState = await readRootDropState(
     bucket,
@@ -328,7 +340,10 @@ export const resolveBranchForActor = async (
   }
 
   if (ownerAccountId && accountId === ownerAccountId) {
-    const existing = await readBranch(bucket, rootDropId, OWNER_BRANCH_ID, db);
+    const existing = await branchRepository.readBranch(
+      rootDropId,
+      OWNER_BRANCH_ID,
+    );
     if (existing) {
       const upgraded = await ensureBranchHeapV2(bucket, existing, db);
       return { branch: upgraded, created: false };
@@ -349,13 +364,16 @@ export const resolveBranchForActor = async (
   }
 
   const writerKey = createWriterKey(accountId, clientId);
-  const existingBranchId = await readWriterBranchId(bucket, rootDropId, writerKey, db);
+  const existingBranchId = await readWriterBranchId(
+    bucket,
+    rootDropId,
+    writerKey,
+    db,
+  );
   if (existingBranchId) {
-    const existingBranch = await readBranch(
-      bucket,
+    const existingBranch = await branchRepository.readBranch(
       rootDropId,
       existingBranchId,
-      db,
     );
     if (existingBranch) {
       const upgraded = await ensureBranchHeapV2(bucket, existingBranch, db);
@@ -364,7 +382,7 @@ export const resolveBranchForActor = async (
   }
 
   const branchId = createCloneBranchId(writerKey);
-  const existing = await readBranch(bucket, rootDropId, branchId, db);
+  const existing = await branchRepository.readBranch(rootDropId, branchId);
   if (existing) {
     const upgraded = await ensureBranchHeapV2(bucket, existing, db);
     return { branch: upgraded, created: false };
@@ -394,13 +412,14 @@ export const backfillBranchToSnapshotHeapV2 = async (
   branchId: string,
   db?: VoidSqlStore,
 ): Promise<DropBranchRecord | null> => {
-  const existing = await readBranch(bucket, rootDropId, branchId, db);
+  const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
+  const existing = await branchRepository.readBranch(rootDropId, branchId);
   if (!existing) {
     return null;
   }
 
   return withBranchMutationLock(bucket, rootDropId, branchId, async () => {
-    const latest = await readBranch(bucket, rootDropId, branchId, db);
+    const latest = await branchRepository.readBranch(rootDropId, branchId);
     if (!latest) {
       return null;
     }

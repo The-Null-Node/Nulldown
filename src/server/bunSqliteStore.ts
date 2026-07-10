@@ -75,7 +75,8 @@ export const createBunSqliteStore = async ({
   return {
     databasePath,
     prepare: (sql) => new BunSqliteStatement(database.query(sql)),
-    batch: async (statements) => Promise.all(statements.map((statement) => statement.run())),
+    batch: async (statements) =>
+      Promise.all(statements.map((statement) => statement.run())),
     exec: (sql) => {
       database.exec(sql);
     },
