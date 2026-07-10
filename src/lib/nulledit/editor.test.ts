@@ -10,7 +10,7 @@ const waitFor = async (predicate: () => boolean): Promise<void> => {
   throw new Error("Timed out waiting for editor render.");
 };
 
-describe("nulledit editor nullplug render state", () => {
+describe("nulledit editor", () => {
   it("stores structured nullplug data from the winning render frame", async () => {
     nullplug("editor-structured-state-test", () => ({
       content: "Rendered action host",
@@ -73,5 +73,64 @@ describe("nulledit editor nullplug render state", () => {
     } finally {
       editor.reset();
     }
+  });
+
+  it("renders seeded content through the nullplug pipeline", async () => {
+    nullplug("seed-render-test", () => "Rendered seed plugin\n");
+    const editor = createEditor();
+    editor.reset();
+
+    const content = [
+      "before",
+      "```seed-render-test",
+      "plugin body",
+      "```",
+      "after",
+    ].join("\n");
+    const snapshotId = editor.seedSnapshot(content);
+
+    expect(useEditorStore.getState()).toEqual(
+      expect.objectContaining({
+        textContent: content,
+        renderedMarkdown: "",
+        renderStatus: "rendering",
+        renderProgress: 0,
+      }),
+    );
+    expect(editor.getSnapshotter().get(snapshotId)).toEqual(
+      expect.objectContaining({
+        content,
+        renderedMarkdown: "",
+        status: "pending",
+      }),
+    );
+    expect(editor.getSnapshotter().list()).toHaveLength(0);
+
+    await waitFor(() => useEditorStore.getState().renderStatus === "idle");
+
+    expect(useEditorStore.getState()).toEqual(
+      expect.objectContaining({
+        textContent: content,
+        renderedMarkdown: ["before", "Rendered seed plugin", "after"].join(
+          "\n",
+        ),
+        renderStatus: "idle",
+        renderProgress: 1,
+      }),
+    );
+    expect(editor.getSnapshotter().get(snapshotId)).toEqual(
+      expect.objectContaining({
+        content,
+        renderedMarkdown: ["before", "Rendered seed plugin", "after"].join(
+          "\n",
+        ),
+        status: "rendered",
+      }),
+    );
+    expect(editor.getSnapshotter().list()).toEqual([
+      expect.objectContaining({ id: snapshotId }),
+    ]);
+
+    editor.reset();
   });
 });

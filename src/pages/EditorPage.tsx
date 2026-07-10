@@ -164,7 +164,7 @@ const EditorPage: React.FC = () => {
     [],
   );
 
-  const { publishDiffs } = useDiffChannel({
+  const { flushPendingDiffs, publishDiffs } = useDiffChannel({
     dropId: diffTargetDropId,
     branchId: activeBranchSession?.branchId,
     accountId: activeBranchSession?.accountId,
@@ -467,12 +467,38 @@ const EditorPage: React.FC = () => {
     });
   }, [baseDropId, draftDiffPolicy, editor, existingDropId]);
 
+  const publishActiveBranch = useCallback(async () => {
+    if (!activeBranchSession || !shouldUseRemoteBranchDiff) {
+      throw new Error("No remote branch is active for publishing.");
+    }
+
+    await flushPendingDiffs();
+
+    const branchClient = createBranchApiClient({
+      baseUrl: "",
+      accountId: activeBranchSession.accountId,
+      clientId: activeBranchSession.clientId,
+      authTokenProvider,
+    });
+    const promoted = await branchClient.promoteBranch(
+      activeBranchSession.rootDropId,
+      activeBranchSession.branchId,
+    );
+    return { url: promoted.url, offline: false };
+  }, [
+    activeBranchSession,
+    authTokenProvider,
+    flushPendingDiffs,
+    shouldUseRemoteBranchDiff,
+  ]);
+
   const {
     error,
     resetShare,
     setError,
     shareDrop,
     sharing,
+    successKind,
     successOffline,
     successUrl,
   } = useShareDrop(markdown, clearDraft, {
@@ -481,6 +507,7 @@ const EditorPage: React.FC = () => {
     existingDropId,
     snapshotId: currentSnapshotId,
     buildDraftPack,
+    publishBranch: shouldUseRemoteBranchDiff ? publishActiveBranch : undefined,
   });
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -949,6 +976,7 @@ const EditorPage: React.FC = () => {
         onCopyError={setError}
         onNewDrop={newDrop}
         offline={successOffline}
+        kind={successKind}
       />
     );
   }
@@ -967,6 +995,10 @@ const EditorPage: React.FC = () => {
           isTransitioning={isTransitioning}
           offlineMode={offlineMode}
           shareVisibility={shareVisibility}
+          shareLabel={
+            shouldUseRemoteBranchDiff ? "Publish Branch" : "Share to the Void"
+          }
+          sharingLabel={shouldUseRemoteBranchDiff ? "Publishing..." : "Sharing..."}
           sharing={sharing}
           modeSwitching={modeSwitching}
           onToggleMode={handleToggleMode}

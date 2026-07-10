@@ -2,6 +2,8 @@ import {
   buildSeedDropContent,
   buildSeedDropMetadata,
   buildSeedNextCommands,
+  isSeedCreateArgs,
+  resolveSeedTitle,
 } from "./cli/index";
 
 describe("CLI semantic seed helpers", () => {
@@ -44,5 +46,35 @@ describe("CLI semantic seed helpers", () => {
     expect(commands.recordFact).toContain(
       "nd branch memory fact drop_1 branch_1",
     );
+  });
+
+  it("treats --seed with a value as seed mode and title", () => {
+    const args = {
+      positionals: ["create"],
+      flags: { seed: "Branching Guide" },
+    };
+
+    expect(isSeedCreateArgs(args)).toBe(true);
+    expect(resolveSeedTitle(args)).toBe("Branching Guide");
+  });
+
+  it("prefers explicit --title over a string-valued --seed", () => {
+    const args = {
+      positionals: ["create"],
+      flags: { seed: "Fallback", title: "Explicit" },
+    };
+
+    expect(isSeedCreateArgs(args)).toBe(true);
+    expect(resolveSeedTitle(args)).toBe("Explicit");
+  });
+
+  it("keeps positional title fallback for boolean --seed", () => {
+    const args = {
+      positionals: ["create", "Positional"],
+      flags: { seed: true },
+    };
+
+    expect(isSeedCreateArgs(args)).toBe(true);
+    expect(resolveSeedTitle(args)).toBe("Positional");
   });
 });

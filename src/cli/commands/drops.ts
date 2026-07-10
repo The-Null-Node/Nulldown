@@ -7,6 +7,8 @@ import {
   buildSeedDropContent,
   buildSeedDropMetadata,
   formatSeedHuman,
+  isSeedCreateArgs,
+  resolveSeedTitle,
 } from "../seed";
 
 const parseLabels = (args: ParsedArgs): string[] =>
@@ -45,17 +47,13 @@ export const createDropCommands = <TConfig>(
   {
     name: "create",
     async run({ args }) {
-      const seed = hasFlag(args, "seed") || flagString(args, "seed") !== null;
+      const seed = isSeedCreateArgs(args);
       const source = args.positionals[1] ?? "-";
       const metadataOverride = await dependencies.parseMetadata(args);
       const labels = parseLabels(args);
       const content = seed
         ? buildSeedDropContent({
-            title:
-              flagString(args, "title") ||
-              flagString(args, "seed") ||
-              args.positionals[1] ||
-              "Untitled Nulldown Seed",
+            title: resolveSeedTitle(args),
             intent: flagString(args, "intent"),
             labels,
           })

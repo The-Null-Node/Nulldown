@@ -1,3 +1,5 @@
+import { flagString, hasFlag, type ParsedArgs } from "./core/args";
+
 interface SeedDropInput {
   title: string;
   intent?: string | null;
@@ -18,6 +20,17 @@ const branchIdFromResponse = (value: unknown): string | undefined => {
   const branchId = (value as { branchId?: unknown }).branchId;
   return typeof branchId === "string" && branchId ? branchId : undefined;
 };
+
+/** Returns true for both `--seed` and `--seed "Title"`. */
+export const isSeedCreateArgs = (args: ParsedArgs): boolean =>
+  hasFlag(args, "seed") || flagString(args, "seed") !== null;
+
+/** Resolves the seed title from explicit title, seed flag value, or positional title. */
+export const resolveSeedTitle = (args: ParsedArgs): string =>
+  flagString(args, "title") ||
+  flagString(args, "seed") ||
+  args.positionals[1] ||
+  "Untitled Nulldown Seed";
 
 /** Builds the intentionally tiny root body for branch-first authoring. */
 export const buildSeedDropContent = (input: SeedDropInput): string => {
