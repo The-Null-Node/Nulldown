@@ -163,7 +163,7 @@ const main = async () => {
           branchId: "clone_account:91c993ac-2c8c-46d6-aaec-5d31e610a2b7",
           query: "priority",
           top: 5,
-          maxTokens: 30,
+          maxTokens: 100,
         },
       }),
       "MCP branch_query maxTokens small",
@@ -171,6 +171,36 @@ const main = async () => {
     const tinyText = readTextContent(tinyResult);
     if (tinyText.length > 500) {
       fail("maxTokens capped response still too large", { len: tinyText.length });
+    }
+    const tinyParsed = JSON.parse(tinyText) as {
+      truncated?: unknown;
+      maxTokens?: unknown;
+      preview?: unknown;
+    };
+    if (
+      tinyParsed.truncated !== true ||
+      tinyParsed.maxTokens !== 100 ||
+      typeof tinyParsed.preview !== "string"
+    ) {
+      fail("maxTokens capped response did not return a truncation envelope", { tinyParsed });
+    }
+
+    const contentResult = await withTimeout(
+      client.callTool({
+        name: "branch_content",
+        arguments: {
+          baseUrl: process.env.ND_BASE_URL ?? "https://nulldown.app",
+          rootId: "1wrhjx8Wzk67",
+          branchId: "clone_account:91c993ac-2c8c-46d6-aaec-5d31e610a2b7",
+          format: "full",
+          maxTokens: 8000,
+        },
+      }),
+      "MCP branch_content full response",
+    );
+    const contentParsed = JSON.parse(readTextContent(contentResult)) as { content?: unknown };
+    if (typeof contentParsed.content !== "string") {
+      fail("branch_content format full did not return complete content", { contentParsed });
     }
 
     console.log(
@@ -185,6 +215,7 @@ const main = async () => {
           snapshotterCompactItems: snapParsed.items?.length ?? 0,
           snapshotterCompactLen: snapLen,
           maxTokensLen: tinyText.length,
+          branchContentLen: contentParsed.content.length,
           stderr: Buffer.concat(stderrChunks).toString("utf8"),
         },
         null,
