@@ -111,6 +111,7 @@ interface HeadingSpan {
   start: number;
   end: number;
   path: string[];
+  parentId?: string;
 }
 
 const collectMarkdownLines = (content: string): MarkdownLineSpan[] => {
@@ -237,6 +238,7 @@ export const heapifyResolvedDocument = async ({
   const headings: HeadingSpan[] = [];
   const headingStack: HeadingSpan[] = [];
   let title: string | undefined;
+  let hasDocumentTitle = false;
   let index = 0;
 
   const currentHeadingPath = (): string[] => headingStack.map((entry) => entry.text);
@@ -259,6 +261,7 @@ export const heapifyResolvedDocument = async ({
         start: span.start,
         end: span.end,
         path: [...headingStack.map((entry) => entry.text), text],
+        parentId: headingStack[headingStack.length - 1]?.id,
       };
       headingStack.push(heading);
       headings.push(heading);
@@ -270,11 +273,12 @@ export const heapifyResolvedDocument = async ({
         sourceRange: { start: span.start, end: span.end },
         sourceHash: sourceContentHash,
         headingPath: heading.path,
-        parentId: headingStack[headingStack.length - 2]?.id,
+        parentId: heading.parentId,
         depth,
         importance: importanceForNodeKind("heading", depth),
       });
-      if (!nodes.some((node) => node.kind === "document.title") && depth === 1) {
+      if (!hasDocumentTitle && depth === 1) {
+        hasDocumentTitle = true;
         nodes.push({
           id: documentNodeId("document.title", sourceContentHash, span.start, span.end),
           kind: "document.title",
@@ -421,29 +425,30 @@ export const heapifyResolvedDocument = async ({
     }
   }
 
-  headings.forEach((heading, headingIndex) => {
+  // Walk backward once so each section closes at the nearest later heading of
+  // equal or lesser depth without rescanning the heading list for every node.
+  const nextHeadingStarts = Array<number>(7).fill(content.length);
+  const sections: ResolvedDocumentNode[] = Array(headings.length);
+  for (let headingIndex = headings.length - 1; headingIndex >= 0; headingIndex -= 1) {
+    const heading = headings[headingIndex];
     let end = content.length;
-    for (let nextIndex = headingIndex + 1; nextIndex < headings.length; nextIndex += 1) {
-      if (headings[nextIndex].depth <= heading.depth) {
-        end = headings[nextIndex].start;
-        break;
-      }
+    for (let depth = 1; depth <= heading.depth; depth += 1) {
+      end = Math.min(end, nextHeadingStarts[depth]);
     }
-    nodes.push({
+    nextHeadingStarts[heading.depth] = heading.start;
+    sections[headingIndex] = {
       id: documentNodeId("section", sourceContentHash, heading.start, end),
       kind: "section",
       text: content.slice(heading.start, end).trim().slice(0, 1600),
       sourceRange: { start: heading.start, end },
       sourceHash: sourceContentHash,
       headingPath: heading.path,
-      parentId: headings
-        .slice(0, headingIndex)
-        .reverse()
-        .find((candidate) => candidate.depth < heading.depth)?.id,
+      parentId: heading.parentId,
       depth: heading.depth,
       importance: importanceForNodeKind("section", heading.depth),
-    });
-  });
+    };
+  }
+  nodes.push(...sections);
 
   return {
     version: 1,

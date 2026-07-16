@@ -323,6 +323,62 @@ describe("resolved drop helpers", () => {
     );
   });
 
+  it("builds section boundaries and parents for deep repeated headings", async () => {
+    const content = [
+      "# Root",
+      "## Alpha",
+      "### First",
+      "first content",
+      "### Second",
+      "second content",
+      "## Beta",
+      "beta content",
+      "# Final",
+      "final content",
+    ].join("\n");
+    const state = await heapifyResolvedDocument({ rootDropId: "root-1", content });
+    const sections = (state.documentNodes ?? []).filter(
+      (node) => node.kind === "section",
+    );
+    const headings = (state.documentNodes ?? []).filter(
+      (node) => node.kind === "heading",
+    );
+    const alpha = headings.find((node) => node.text === "Alpha");
+    const first = headings.find((node) => node.text === "First");
+    const second = headings.find((node) => node.text === "Second");
+    const final = headings.find((node) => node.text === "Final");
+
+    expect(sections.find((node) => node.text.startsWith("### First"))).toEqual(
+      expect.objectContaining({
+        parentId: alpha?.id,
+        sourceRange: {
+          start: content.indexOf("### First"),
+          end: content.indexOf("### Second"),
+        },
+      }),
+    );
+    expect(sections.find((node) => node.text.startsWith("### Second"))).toEqual(
+      expect.objectContaining({
+        parentId: alpha?.id,
+        sourceRange: {
+          start: content.indexOf("### Second"),
+          end: content.indexOf("## Beta"),
+        },
+      }),
+    );
+    expect(sections.find((node) => node.text.startsWith("## Beta"))).toEqual(
+      expect.objectContaining({
+        sourceRange: {
+          start: content.indexOf("## Beta"),
+          end: content.indexOf("# Final"),
+        },
+      }),
+    );
+    expect(first?.parentId).toBe(alpha?.id);
+    expect(second?.parentId).toBe(alpha?.id);
+    expect(final?.parentId).toBeUndefined();
+  });
+
   it("queries top document nodes by text and diff event metadata", async () => {
     const content = [
       "# Runtime Plan",
@@ -376,6 +432,60 @@ describe("resolved drop helpers", () => {
     expect(results[0].eventRefs?.[0].metadata?.intent).toBe(
       "Explain mutation downgrade policy.",
     );
+  });
+
+  it("keeps zero-length changes at source boundaries queryable", async () => {
+    const content = ["# Plan", "", "Alpha paragraph.", "", "Beta paragraph."].join("\n");
+    const alphaEnd = content.indexOf("\n\nBeta");
+    const state = await heapifyResolvedDocument({ rootDropId: "root-1", content });
+
+    const results = queryResolvedDocumentNodes(state, {
+      changedOnly: true,
+      changedRanges: [{ start: alphaEnd, end: alphaEnd }],
+      kinds: ["paragraph"],
+    });
+
+    expect(results.map((entry) => entry.node.text)).toContain("Alpha paragraph.");
+  });
+
+  it("checks later disjoint changed ranges after a source-boundary candidate", async () => {
+    const content = ["# Plan", "", "Alpha paragraph."].join("\n");
+    const alphaStart = content.indexOf("Alpha paragraph.");
+    const state = await heapifyResolvedDocument({ rootDropId: "root-1", content });
+
+    const results = queryResolvedDocumentNodes(state, {
+      changedOnly: true,
+      changedRanges: [
+        { start: 0, end: alphaStart },
+        { start: alphaStart + 1, end: alphaStart + 2 },
+      ],
+      kinds: ["paragraph"],
+    });
+
+    expect(results.map((entry) => entry.node.text)).toContain("Alpha paragraph.");
+  });
+
+  it("keeps source-order ties while retaining only the requested top document nodes", async () => {
+    const paragraphs = Array.from(
+      { length: 150 },
+      (_, index) => `common candidate ${String(index).padStart(3, "0")}`,
+    );
+    const state = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      content: ["# Plan", "", ...paragraphs].join("\n\n"),
+    });
+
+    expect(
+      queryResolvedDocumentNodes(state, {
+        q: "common candidate",
+        kinds: ["paragraph"],
+        limit: 3,
+      }).map((entry) => entry.node.text),
+    ).toEqual([
+      "common candidate 000",
+      "common candidate 001",
+      "common candidate 002",
+    ]);
   });
 
   it("uses diff priority facts when scoring nodes with matching diff refs", async () => {

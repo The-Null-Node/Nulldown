@@ -66,6 +66,7 @@
     "bin:build:current": "bun run cli:build:current && bun run mcp:build:current",
     "bin:smoke": "bun run scripts/smoke-compiled-binaries.ts",
     "package:smoke-mcp": "bun run scripts/smoke-mcp-package.ts",
+    "bench:resolved-heap": "bun run scripts/bench-resolved-heap.ts",
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview",
