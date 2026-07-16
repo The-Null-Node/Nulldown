@@ -5,7 +5,7 @@
   "workspaces": [
     "packages/*"
   ],
-  "description": "A Markdown-native document runtime for encrypted drops",
+  "description": "Deterministic structure for Markdown, agents, memory, and interfaces",
   "type": "module",
   "bin": {
     "nd": "bin/nulldown",
@@ -66,6 +66,7 @@
     "bin:build:current": "bun run cli:build:current && bun run mcp:build:current",
     "bin:smoke": "bun run scripts/smoke-compiled-binaries.ts",
     "package:smoke-mcp": "bun run scripts/smoke-mcp-package.ts",
+    "bench:resolved-heap": "bun run scripts/bench-resolved-heap.ts",
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview",
@@ -91,7 +92,13 @@
   },
   "keywords": [
     "markdown",
-    "sharing",
+    "deterministic-state",
+    "agent-memory",
+    "retrieval",
+    "mcp",
+    "document-runtime",
+    "provenance",
+    "self-hosted",
     "cloudflare"
   ],
   "author": "",

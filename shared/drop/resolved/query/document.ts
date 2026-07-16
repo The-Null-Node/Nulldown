@@ -16,6 +16,7 @@ import type {
 
 const tokenPattern = /[a-z0-9]+/g;
 const priorityFactScoreMultiplier = 4;
+const documentNodeSearchTextCache = new WeakMap<ResolvedDocumentNode, string>();
 
 const tokenizeQueryText = (value: string | undefined): string[] => {
   if (!value) return [];
@@ -39,8 +40,11 @@ const importanceForNodeKind = (
   return 0.8;
 };
 
-const documentNodeSearchText = (node: ResolvedDocumentNode): string =>
-  [
+const documentNodeSearchText = (node: ResolvedDocumentNode): string => {
+  const cached = documentNodeSearchTextCache.get(node);
+  if (cached !== undefined) return cached;
+
+  const searchable = [
     node.text,
     ...(node.headingPath ?? []),
     node.pluginId,
@@ -51,6 +55,9 @@ const documentNodeSearchText = (node: ResolvedDocumentNode): string =>
     .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
     .join(" ")
     .toLowerCase();
+  documentNodeSearchTextCache.set(node, searchable);
+  return searchable;
+};
 
 const sourceRangesOverlap = (
   left: ResolvedSourceRange,
@@ -63,6 +70,57 @@ const sourceRangesOverlap = (
     return right.start <= left.start && left.start <= right.end;
   }
   return left.start < right.end && right.start < left.end;
+};
+
+const mergeSourceRanges = (
+  ranges: readonly ResolvedSourceRange[],
+): ResolvedSourceRange[] => {
+  if (ranges.length < 2) return [...ranges];
+
+  const ordered = [...ranges].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+  const merged: ResolvedSourceRange[] = [];
+
+  ordered.forEach((range) => {
+    const previous = merged[merged.length - 1];
+    if (!previous || range.start > previous.end) {
+      merged.push({ ...range });
+      return;
+    }
+
+    previous.end = Math.max(previous.end, range.end);
+  });
+
+  return merged;
+};
+
+type SourceRangeOverlapChecker = (range: ResolvedSourceRange) => boolean;
+
+const createSourceRangeOverlapChecker = (
+  ranges: readonly ResolvedSourceRange[],
+): SourceRangeOverlapChecker => {
+  if (!ranges.length) return () => false;
+
+  return (range) => {
+    let low = 0;
+    let high = ranges.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (ranges[middle].end < range.start) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+
+    // Large sections may overlap more than one changed range. Most nodes exit on
+    // the first candidate, while the source-order cutoff keeps the rest bounded.
+    for (let index = low; index < ranges.length && ranges[index].start <= range.end; index += 1) {
+      if (sourceRangesOverlap(range, ranges[index])) return true;
+    }
+    return false;
+  };
 };
 
 const eventRefsForNode = (
@@ -88,7 +146,7 @@ const scoreDocumentNode = (
   state: ResolvedNulldownState,
   node: ResolvedDocumentNode,
   queryTokens: readonly string[],
-  changedRanges: readonly ResolvedSourceRange[],
+  changedRangeOverlapsNode: SourceRangeOverlapChecker,
   priority: number,
 ): { score: number; reasons: string[]; changed: boolean } => {
   const reasons: string[] = [];
@@ -127,7 +185,7 @@ const scoreDocumentNode = (
     }
   }
 
-  const changed = changedRanges.some((range) => sourceRangesOverlap(node.sourceRange, range));
+  const changed = changedRangeOverlapsNode(node.sourceRange);
   if (changed) {
     score += 4;
     reasons.push("changed-range-overlap");
@@ -164,6 +222,47 @@ export const changedRangesFromDropDiffEvents = (
     };
   });
 
+interface ScoredDocumentNode {
+  node: ResolvedDocumentNode;
+  score: number;
+  reasons: string[];
+  changed: boolean;
+  eventRefs: ResolvedDiffEventRef[];
+}
+
+const compareScoredDocumentNodes = (
+  left: ScoredDocumentNode,
+  right: ScoredDocumentNode,
+): number =>
+  right.score - left.score ||
+  left.node.sourceRange.start - right.node.sourceRange.start;
+
+const retainTopDocumentNode = (
+  candidates: ScoredDocumentNode[],
+  candidate: ScoredDocumentNode,
+  limit: number,
+): void => {
+  if (
+    candidates.length === limit &&
+    compareScoredDocumentNodes(candidate, candidates[candidates.length - 1]) >= 0
+  ) {
+    return;
+  }
+
+  let low = 0;
+  let high = candidates.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareScoredDocumentNodes(candidate, candidates[middle]) < 0) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  candidates.splice(low, 0, candidate);
+  if (candidates.length > limit) candidates.pop();
+};
+
 export const queryResolvedDocumentNodes = (
   state: ResolvedNulldownState,
   query: ResolvedDocumentQuery = {},
@@ -173,42 +272,51 @@ export const queryResolvedDocumentNodes = (
   const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 10)));
   const kindSet = query.kinds?.length ? new Set(query.kinds) : null;
   const eventRefs = query.events ?? [];
-  const changedRanges = [
+  const changedRanges = mergeSourceRanges([
     ...(query.changedRanges ?? []),
     ...eventRefs.flatMap((event) => event.changedRanges),
-  ];
+  ]);
+  const changedRangeOverlapsNode = createSourceRangeOverlapChecker(changedRanges);
+  const candidates: ScoredDocumentNode[] = [];
 
-  const scored = nodes
-    .filter((node) => !kindSet || kindSet.has(node.kind))
-    .map((node) => {
-      const nodeEventRefs = eventRefsForNode(node, eventRefs);
-      const priority =
-        (query.heapPriority ?? 0) +
-        (query.priorityByNodeId?.[node.id] ?? 0) +
-        priorityFromDiffRefs(nodeEventRefs, query.priorityByDiffEventId);
-      const scoredNode = scoreDocumentNode(
-        state,
-        node,
-        queryTokens,
-        changedRanges,
-        priority,
-      );
-      return {
+  nodes.forEach((node) => {
+    if (kindSet && !kindSet.has(node.kind)) return;
+
+    const nodeEventRefs = eventRefsForNode(node, eventRefs);
+    const priority =
+      (query.heapPriority ?? 0) +
+      (query.priorityByNodeId?.[node.id] ?? 0) +
+      priorityFromDiffRefs(nodeEventRefs, query.priorityByDiffEventId);
+    const scoredNode = scoreDocumentNode(
+      state,
+      node,
+      queryTokens,
+      changedRangeOverlapsNode,
+      priority,
+    );
+    if (query.changedOnly && !scoredNode.changed) return;
+    if (
+      queryTokens.length > 0 &&
+      !scoredNode.reasons.includes("query-match") &&
+      !scoredNode.changed
+    ) {
+      return;
+    }
+
+    retainTopDocumentNode(
+      candidates,
+      {
         node,
         score: scoredNode.score,
         reasons: scoredNode.reasons,
         changed: scoredNode.changed,
         eventRefs: nodeEventRefs,
-      };
-    })
-    .filter((entry) => !query.changedOnly || entry.changed)
-    .filter((entry) => queryTokens.length === 0 || entry.reasons.includes("query-match") || entry.changed)
-    .sort((left, right) => {
-      if (right.score !== left.score) return right.score - left.score;
-      return left.node.sourceRange.start - right.node.sourceRange.start;
-    });
+      },
+      limit,
+    );
+  });
 
-  const selected = scored.slice(0, limit).map(({ changed: _changed, ...entry }) => ({
+  const selected = candidates.map(({ changed: _changed, ...entry }) => ({
     ...entry,
     eventRefs: entry.eventRefs.length ? entry.eventRefs : undefined,
   }));

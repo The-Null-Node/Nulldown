@@ -2,7 +2,7 @@
   "name": "@thenullnode/nulldown-mcp",
   "version": "0.0.5",
   "private": false,
-  "description": "A stdio MCP server for Nulldown API, branch, diff, and NullMem tools",
+  "description": "Stdio MCP access to Nulldown's deterministic Markdown state, retrieval, and memory",
   "type": "module",
   "bin": {
     "nd-mcp": "bin/nulldown-mcp",
@@ -22,6 +22,13 @@
   "publishConfig": {
     "access": "public"
   },
+  "keywords": [
+    "mcp",
+    "markdown",
+    "agent-memory",
+    "retrieval",
+    "nulldown"
+  ],
   "scripts": {
     "start": "bun run bin/nulldown-mcp.ts",
     "pack:check": "npm pack --dry-run --json"

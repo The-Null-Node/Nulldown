@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const fail = (message: string, details: Record<string, unknown> = {}): never => {
   console.error(message);
@@ -27,6 +27,9 @@ const run = (command: string, args: string[]) => {
 
 const cliPath = "dist/nulldown";
 const mcpPath = "dist/nulldown-mcp";
+const packageVersion = (JSON.parse(readFileSync("package.json", "utf8")) as {
+  version: string;
+}).version;
 
 if (!existsSync(cliPath) || !existsSync(mcpPath)) {
   fail("Compiled binaries are missing. Run bun run bin:build:current first.", {
@@ -36,6 +39,13 @@ if (!existsSync(cliPath) || !existsSync(mcpPath)) {
 }
 
 run(cliPath, ["--help"]);
+const version = run(cliPath, ["--version"]);
+if (version.stdout.trim() !== packageVersion) {
+  fail("Compiled CLI version output did not match package metadata.", {
+    expected: packageVersion,
+    actual: version.stdout.trim(),
+  });
+}
 const query = run(cliPath, [
   "--base=https://nulldown.app",
   "branch",

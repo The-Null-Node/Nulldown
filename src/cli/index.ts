@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import packageJson from "../../package.json";
 import {
   isDropDiffEnvelope,
   isDropDiffEventMetadata,
@@ -178,6 +179,7 @@ Auth and admin:
   smoke diff
 
 Global flags:
+  --version          Print the CLI version
   --base <url>       API base URL (default: ${DEFAULT_BASE_URL})
   --json             Stable JSON output
   --token <token>    Account bearer token
@@ -763,6 +765,10 @@ const dispatch = async (config: CliConfig, args: ParsedArgs): Promise<void> => {
 
 export const runCli = async (argv: string[]): Promise<void> => {
   const args = parseArgs(argv);
+  if (hasFlag(args, "version")) {
+    console.log(packageJson.version);
+    return;
+  }
   const config = await resolveConfig(args);
   try {
     await dispatch(config, args);
