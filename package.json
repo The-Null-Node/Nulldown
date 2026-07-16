@@ -5,7 +5,7 @@
   "workspaces": [
     "packages/*"
   ],
-  "description": "A Markdown-native document runtime for encrypted drops",
+  "description": "Deterministic structure for Markdown, agents, memory, and interfaces",
   "type": "module",
   "bin": {
     "nd": "bin/nulldown",
@@ -91,7 +91,13 @@
   },
   "keywords": [
     "markdown",
-    "sharing",
+    "deterministic-state",
+    "agent-memory",
+    "retrieval",
+    "mcp",
+    "document-runtime",
+    "provenance",
+    "self-hosted",
     "cloudflare"
   ],
   "author": "",

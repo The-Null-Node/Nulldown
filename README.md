@@ -1,34 +1,95 @@
 # Nulldown
 
-Nulldown is a Markdown-native document runtime for encrypted drops, branch-based editing, atomic diffs, resolved heaps, and nullplug execution.
+**Nulldown turns Markdown into deterministic structure.**
 
-The public app is hosted at [https://nulldown.app](https://nulldown.app).
+Markdown is the shared language of people and agents. Nulldown makes it addressable, replayable, queryable, attributable, composable, and renderable, so one source can power documents, shared state, agent memory, targeted retrieval, workflows, and interfaces.
 
-Public documentation starts at [https://nulldown.app/d/K7kgGh](https://nulldown.app/d/K7kgGh).
+```mermaid
+flowchart LR
+  Markdown["Markdown"] --> Nulldown["Nulldown"]
+  Nulldown --> State["Deterministic structure"]
+  State --> Memory["Agent memory"]
+  State --> Retrieval["Targeted retrieval"]
+  State --> UI["Document-native UI"]
+  State --> Trust["Explicit trust modes"]
+```
 
-## Core Concepts
+Most systems repeatedly translate the same work between documents, prompts, databases, memory, and component state. Nulldown keeps those uses connected to readable Markdown and inspectable state.
 
-- Drops are persisted document payloads or sealed `nmdn.drop.v1` envelopes.
-- The void runtime is the app-facing provider, crypto, storage, and graph architecture.
-- Branches are writable edit streams rooted at drops.
-- Diffs are append-only edit events that materialize branch content and snapshots.
-- Resolved heaps store derived document/runtime facts for branch snapshots.
-- Nullplugs are Markdown-embedded runtime integrations.
+## Start Here
 
-## Refactor Plan
+The canonical documentation lives in Nulldown:
 
-Refactor plans are real Nulldown drops, not repo-local `.nmdn` files.
+- [Documentation index](https://nulldown.app/d/vjdL1x)
+- [Why Nulldown: deterministic structure for Markdown](https://nulldown.app/d/q2BylK)
+- [State model](https://nulldown.app/d/H305WE)
+- [Agents, retrieval, and memory](https://nulldown.app/d/TwPp4l)
+- [Documents as interfaces](https://nulldown.app/d/SqO1St)
+- [Privacy and trust boundaries](https://nulldown.app/d/9a7WcT)
+- [Build with Nulldown](https://nulldown.app/d/hCPw9B)
+- [Status and direction](https://nulldown.app/d/OXIC7z)
 
-| Area | Drop |
+## What Exists Today
+
+| Area | Current capability |
 | --- | --- |
-| Master checklist | https://nulldown.app/d/1wrhjx |
-| Target architecture | https://nulldown.app/d/ODuywL |
-| Docs foundation | https://nulldown.app/d/S6ptyz |
-| Void provider | https://nulldown.app/d/D1JGec |
-| Crypto and storage | https://nulldown.app/d/Z64oPj |
-| Backend services | https://nulldown.app/d/xLKsZS |
-| Branches and diffs | https://nulldown.app/d/ocQBBs |
-| Tests and smoke | https://nulldown.app/d/6eC0Jc |
+| Deterministic state | Ordered branch diff events, parent-linked snapshots, checkpoints, replay, and promotion. |
+| Retrieval and memory | Structural document/runtime queries, source references, priority overlays, and optional NullMem facts, procedures, capabilities, and freshness signals. |
+| Interfaces | Native Nulldown composition, nullplug runtime contracts, runtime facts, and policy-controlled proposed mutations. |
+| Trust | Public plaintext, client-sealed, provider-assisted, and self-hosted workflows with different explicit trust properties. |
+| Deployment | Cloudflare Pages/R2/D1 plus a self-hostable Bun API backend using filesystem blobs and SQLite metadata. |
+
+## Quick Start
+
+Install the CLI:
+
+```bash
+bun install -g @thenullnode/nulldown
+nd --help
+```
+
+Create a document, edit its branch, and retrieve the changed structure:
+
+```bash
+nd create README.md --json
+nd branch resolve <rootId> --json
+nd diff apply <rootId> --branch <branchId> --insert '0:# Updated title\n\n' --json
+nd branch query <rootId> <branchId> --query "updated title" --top 1 --json
+```
+
+Run against a local or preview API:
+
+```bash
+nd --base=http://127.0.0.1:8788 get <id> --json
+```
+
+## Agents And MCP
+
+Use the separate MCP package to let agents retrieve structure, manage branch diffs, and work with NullMem without shelling out:
+
+```bash
+bun install -g @thenullnode/nulldown-mcp
+nulldown-mcp
+```
+
+Configure `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment as needed. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
+
+## Self-Host
+
+Run the API locally with filesystem blob storage and SQLite metadata:
+
+```bash
+nd serve --host 127.0.0.1 --port 8788 --data-dir .nulldown-data
+```
+
+Run the same API in Docker with `/data` as the persistent volume:
+
+```bash
+docker build -t nulldown .
+docker run --rm -p 8788:8788 -v nulldown-data:/data nulldown
+```
+
+The local server supports core drop, branch, diff, resolved-query, priority, and NullMem routes. It is a self-hostable API backend, not a full packaged replacement for every hosted route or the web application.
 
 ## Development
 
@@ -38,192 +99,31 @@ Install dependencies:
 bun install
 ```
 
-Run the Vite dev server:
+Run the Vite development server:
 
 ```bash
 bun run dev
 ```
 
-Run the Cloudflare Pages dev server with Functions:
+Run Cloudflare Pages development with Functions:
 
 ```bash
 bun run pages:dev
 ```
 
-Build the web app:
-
-```bash
-bun run build
-```
-
-Run tests:
+Run focused verification:
 
 ```bash
 bun run test
-```
-
-Build the current-platform CLI executable:
-
-```bash
+bun run build
 bun run cli:build
-```
-
-Build the current-platform CLI and MCP executables:
-
-```bash
-bun run bin:build:current
-```
-
-Smoke the compiled CLI and MCP executables against `https://nulldown.app`:
-
-```bash
-bun run bin:smoke
-```
-
-Check the published CLI package boundary:
-
-```bash
 bun run package:check-cli
-```
-
-Check the published MCP package boundary:
-
-```bash
 bun run package:check-mcp
 ```
 
-Smoke the paired package tarballs by installing local `@thenullnode/nulldown` and `@thenullnode/nulldown-mcp` tarballs into a temporary project, then running an MCP stdio protocol check:
+## Contributing
 
-```bash
-bun run package:smoke-mcp
-```
-
-## CLI
-
-Run the CLI from the checkout:
-
-```bash
-bun run nd -- --help
-```
-
-Create a drop:
-
-```bash
-bun run nd -- create README.md --json
-```
-
-Create a tiny semantic seed, then build the real document with branch diffs and memory facts:
-
-```bash
-bun run nd -- create --seed "Branching Guide" --intent "Explain branch editing incrementally" --labels branching,semantic-seed --json
-bun run nd -- --account <accountId> branch resolve <rootId> --json
-bun run nd -- diff apply <rootId> --branch <branchId> --insert '0:
-## First Section
-
-Focused text.
-' --metadata '{"kind":"agent.edit","intent":"Add first section","labels":["semantic-seed"],"args":{"summary":"Adds one focused section.","priority":0.5},"confidence":0.9}' --json
-```
-
-Fetch a drop:
-
-```bash
-bun run nd -- get <id> --json
-```
-
-Install the package globally with Bun when using the published package:
-
-```bash
-bun install -g @thenullnode/nulldown
-nd --help
-```
-
-Use a local or preview API base:
-
-```bash
-bun run nd -- --base=http://127.0.0.1:8788 get <id> --json
-```
-
-Serve the API locally with filesystem blob storage and SQLite metadata:
-
-```bash
-bun run nd -- serve --host 127.0.0.1 --port 8788 --data-dir .nulldown-data
-```
-
-The local server supports core drop, diff, branch, and resolved-query routes using filesystem blobs plus SQLite metadata. Generic functional snapshot data is still in-memory unless a future adapter is provided. Use `--migrations-dir` to override the migration path or `--no-sqlite` to run with blob fallback only.
-
-Attach an agent priority fact to a resolved node so future branch queries rank it earlier:
-
-```bash
-bun run nd -- --account <accountId> branch priority <rootId> <branchId> --node <nodeId> --priority 3 --reason "important for the next agent"
-bun run nd -- --account <accountId> branch priority list <rootId> <branchId>
-bun run nd -- --account <accountId> branch priority delete <rootId> <branchId> <factId>
-```
-
-Store and query optional NullMem records for agent-facing facts, procedures, and capability memory:
-
-```bash
-bun run nd -- --account <accountId> branch memory fact <rootId> <branchId> --text "Use approval nullplugs for explicit user confirmation" --labels nullplug,capability-memory
-bun run nd -- --account <accountId> branch memory procedure <rootId> <branchId> --goal "Build approval widget" --summary "Query memory, choose a nullplug, write state facts, verify runtime refs"
-bun run nd -- --account <accountId> branch memory query <rootId> <branchId> --query "approval nullplug" --json
-```
-
-Run the same local server in Docker with `/data` as the persistent volume:
-
-```bash
-docker build -t nulldown .
-docker run --rm -p 8788:8788 -v nulldown-data:/data nulldown
-```
-
-Global installs store CLI state in `~/.config/nulldown` by default.
-
-## MCP
-
-The repository includes a stdio MCP server for direct API access without shelling out to `nd`:
-
-```bash
-bun run mcp
-```
-
-The base `@thenullnode/nulldown` package publishes only the `nd` and `nulldown` CLI binaries. MCP now lives in the separate `@thenullnode/nulldown-mcp` package, which publishes `nd-mcp` and `nulldown-mcp` bins. Configure it with `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment. For protected diff writes, export an `ND_DIFF_AUTH_TOKEN` from `nd diff token export`; `DIFF_WEBHOOK_SECRET` is also supported for webhook-style signing. The server writes protocol messages only to stdout; diagnostics use stderr.
-
-The MCP package must be tested with the cleaned base package tarball, because older published base package versions also exposed MCP bin names. Use `bun run package:smoke-mcp` before publishing the split pair.
-
-## Cloudflare
-
-The app is designed for Cloudflare Pages Functions with R2 blob storage and a D1 metadata/index database.
-
-Required production configuration:
-
-- `PUBLIC_BASE_URL`
-- `R2_BUCKET` Pages Functions binding
-- `DB` D1 binding with migrations in `migrations/`
-- provider signing and escrow keys when provider-assisted unlock is enabled
-- branch/diff/admin tokens when using protected maintenance APIs
-
-Admin backfills:
-
-```bash
-bun run nd -- admin metadata-backfill --token <token> --json
-```
-
-Deploy:
-
-```bash
-bun run deploy
-```
-
-## Repository Rules
-
-Agent and contributor rules live in `AGENTS.md`.
-
-Highlights:
-
-- Use `Drop*` names for persisted/domain records.
-- Use `Void*` names for runtime architecture.
-- Keep storage sealed-envelope-only.
-- Keep crypto separate from persistence.
-- Keep backend routes thin HTTP adapters.
-- Use `nd` for real Nulldown document publishing and smoke tests.
+Repository rules live in [AGENTS.md](AGENTS.md). Nulldown-hosted plans, documentation, and agent memory are updated with branch diffs and verified through resolved queries. The local [`docs/`](docs/README.md) directory retains source-coupled references and migration material; the hosted documentation graph is the public conceptual source of truth.
 
 ## License
 
