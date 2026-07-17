@@ -37,7 +37,10 @@ import {
   type NullplugUiResponseFact,
 } from "../shared/nullplug/ui";
 import type { DropDiffEvent } from "../shared/drop/diff";
-import type { NullMemFactRecord } from "../shared/nullmem/types";
+import type {
+  NullMemFactRecord,
+  NullMemProcedureRecord,
+} from "../shared/nullmem/types";
 
 interface StoredObject {
   value: string;
@@ -532,6 +535,101 @@ describe("functions api diff contracts", () => {
     expect(byRecordId.size).toBe(1);
   });
 
+  it("projects only explicit completed candidates as idempotent procedures", async () => {
+    const candidate = {
+      ...makeEvent({
+        eventId: "evt-procedure-candidate",
+        sourceClientId: "writer-procedure-candidate",
+        text: "P",
+        createdAt: 116,
+        metadata: {
+          intent: "Capture an accepted diff procedure.",
+          args: {
+            summary: "Apply the verified branch update.",
+            procedureCandidate: {
+              goal: "Apply a verified branch update",
+              summary: "Persist the marked update and retain its diff evidence.",
+              completed: true,
+              reusableAs: "accepted-diff projection",
+            },
+          },
+          labels: ["nullmem/procedure-candidate"],
+          confidence: 0.8,
+        },
+      }),
+      seq: 8,
+      snapshotId: 4,
+    } as DropDiffEvent;
+    const ignored = {
+      ...makeEvent({
+        eventId: "evt-procedure-ignored",
+        sourceClientId: "writer-procedure-ignored",
+        text: "I",
+        createdAt: 117,
+        metadata: {
+          labels: ["nullmem/procedure-candidate"],
+          args: { procedureCandidate: { goal: "Missing completion", summary: "Ignore me" } },
+        },
+      }),
+      seq: 9,
+      snapshotId: 4,
+    } as DropDiffEvent;
+    const procedures: NullMemProcedureRecord[] = [];
+    const snapshotter = createNulleditNullMemObserverSnapshotter({
+      writeFact() {},
+      writeProcedure(procedure) {
+        procedures.push(procedure as NullMemProcedureRecord);
+      },
+    });
+    const context = {
+      data: {} as never,
+      rootDropId,
+      branchId: "branch-procedure-candidate",
+      snapshotId: 4,
+      parentSnapshotId: 3,
+      branch: {} as never,
+      snapshot: {} as never,
+      frame: { content: "PI" },
+      acceptedEvents: [candidate, ignored],
+      acceptedDiffRefs: [],
+      deduplicatedCount: 0,
+      totalStored: 10,
+    };
+
+    await snapshotter.snapshot(context);
+    await snapshotter.snapshot(context);
+
+    expect(procedures).toHaveLength(2);
+    expect(procedures[0]).toEqual(
+      expect.objectContaining({
+        recordId: `memproc:auto-accepted-diff:${rootDropId}:branch-procedure-candidate:evt-procedure-candidate`,
+        goal: "Apply a verified branch update",
+        outcome: "success",
+        labels: ["procedure-memory", "auto-extracted", "needs-review", "accepted-diff"],
+        confidence: 0.5,
+        sourceRefs: [
+          { kind: "branch", rootDropId, branchId: "branch-procedure-candidate" },
+          {
+            kind: "diff",
+            rootDropId,
+            branchId: "branch-procedure-candidate",
+            eventId: "evt-procedure-candidate",
+            seq: 8,
+          },
+        ],
+      }),
+    );
+    expect(procedures[0]?.steps).toEqual([
+      expect.objectContaining({
+        kind: "diff.apply",
+        status: "success",
+        name: "Capture an accepted diff procedure.",
+        argsSummary: "Apply the verified branch update.",
+      }),
+    ]);
+    expect(procedures[1]?.recordId).toBe(procedures[0]?.recordId);
+  });
+
   it("skips policy observer facts without accepted policy metadata", async () => {
     const event = {
       ...makeEvent({
@@ -746,8 +844,16 @@ describe("functions api diff contracts", () => {
       metadata: {
         kind: "agent.edit",
         intent: "Persist snapshot frame and diff ref.",
-        args: { priority: 4 },
-        labels: ["data.put", "snapshotter"],
+        args: {
+          priority: 4,
+          summary: "Persist the verified snapshot projection.",
+          procedureCandidate: {
+            goal: "Persist a verified snapshot projection",
+            summary: "Apply the marked diff and retain the immutable diff reference.",
+            completed: true,
+          },
+        },
+        labels: ["data.put", "snapshotter", "nullmem/procedure-candidate"],
         confidence: 0.8,
         policyDecisionRef: "policy-decision-persist",
       },
@@ -923,7 +1029,7 @@ describe("functions api diff contracts", () => {
         sourceSeq: 0,
         sourceEventId: event.eventId,
         reason: "Persist snapshot frame and diff ref.",
-        labels: ["data.put", "snapshotter"],
+        labels: ["data.put", "snapshotter", "nullmem/procedure-candidate"],
       }),
     ]);
 
@@ -957,16 +1063,22 @@ describe("functions api diff contracts", () => {
         policyDecisionRef: "policy-decision-persist",
         metadataKind: "agent.edit",
         intent: "Persist snapshot frame and diff ref.",
-        labels: ["data.put", "snapshotter"],
+        labels: ["data.put", "snapshotter", "nullmem/procedure-candidate"],
         confidence: 0.8,
-        args: { priority: 4 },
+        args: expect.objectContaining({ priority: 4 }),
         text: expect.stringContaining("policy-decision-persist"),
       }),
     );
     expect(policyFacts).toEqual([policyFact]);
 
-    const nullmemFacts = [...db.nullmemRecords.values()].map(
-      (entry) => JSON.parse(entry) as NullMemFactRecord,
+    const nullmemRecords = [...db.nullmemRecords.values()].map(
+      (entry) => JSON.parse(entry) as NullMemFactRecord | NullMemProcedureRecord,
+    );
+    const nullmemFacts = nullmemRecords.filter(
+      (entry): entry is NullMemFactRecord => entry.kind === "fact",
+    );
+    const nullmemProcedures = nullmemRecords.filter(
+      (entry): entry is NullMemProcedureRecord => entry.kind === "procedure",
     );
     expect(nullmemFacts).toEqual([
       expect.objectContaining({
@@ -1009,6 +1121,24 @@ describe("functions api diff contracts", () => {
         },
       ]),
     );
+    expect(nullmemProcedures).toEqual([
+      expect.objectContaining({
+        recordId: `memproc:auto-accepted-diff:${rootDropId}:${body.branchId}:${event.eventId}`,
+        goal: "Persist a verified snapshot projection",
+        outcome: "success",
+        labels: ["procedure-memory", "auto-extracted", "needs-review", "accepted-diff"],
+        sourceRefs: [
+          { kind: "branch", rootDropId, branchId: body.branchId },
+          {
+            kind: "diff",
+            rootDropId,
+            branchId: body.branchId,
+            eventId: event.eventId,
+            seq: 0,
+          },
+        ],
+      }),
+    ]);
   });
 
   it("rejects invalid diff event metadata", async () => {
@@ -1403,5 +1533,59 @@ describe("functions api diff contracts", () => {
     expect(appended.acceptedEvents).toHaveLength(1);
     await waitUntilPromises[0];
     expect(errors).toEqual(["bad-snapshotter"]);
+  });
+
+  it("isolates accepted-diff procedure projection failures", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-procedure-observer-error",
+      sourceClientId: "writer-procedure-observer-error",
+      text: "E",
+      createdAt: 118,
+      metadata: {
+        labels: ["nullmem/procedure-candidate"],
+        args: {
+          procedureCandidate: {
+            goal: "Exercise observer failure isolation",
+            summary: "A failing procedure writer must not reject the accepted diff.",
+            completed: true,
+          },
+        },
+      },
+    });
+    const errors: string[] = [];
+    const waitUntilPromises: Promise<void>[] = [];
+
+    const appended = await appendEventsToBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      [event],
+      {
+        snapshotters: [
+          createNulleditNullMemObserverSnapshotter({
+            writeFact() {},
+            writeProcedure() {
+              throw new Error("procedure projection failed");
+            },
+          }),
+        ],
+        waitUntil: (promise) => {
+          waitUntilPromises.push(promise);
+        },
+        onSnapshotterError: (_error, snapshotterId) => {
+          errors.push(snapshotterId);
+        },
+      },
+    );
+
+    expect(appended.acceptedEvents).toHaveLength(1);
+    await waitUntilPromises[0];
+    expect(errors).toEqual(["nulledit.nullmem-observer"]);
   });
 });
