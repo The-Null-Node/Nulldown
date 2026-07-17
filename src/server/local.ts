@@ -263,6 +263,14 @@ export const createLocalNulldownServer = ({
               fact,
             })
             .then(() => undefined),
+        writeProcedure: (procedure, context) =>
+          memory
+            .createProcedure({
+              rootDropId: context.rootDropId,
+              branchId: context.branchId,
+              procedure,
+            })
+            .then(() => undefined),
       }),
     );
   }

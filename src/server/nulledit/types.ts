@@ -9,7 +9,11 @@ import type {
   JsonValue,
 } from "../../../shared/drop/diff";
 import type { ResolvedPriorityFactRecord } from "../../../shared/drop/resolved/types";
-import type { NullMemFactRecord, NullMemSourceRef } from "../../../shared/nullmem/types";
+import type {
+  NullMemFactRecord,
+  NullMemProcedureRecord,
+  NullMemSourceRef,
+} from "../../../shared/nullmem/types";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
@@ -183,9 +187,41 @@ export interface NulleditNullMemObservedAppendFact {
   metadata: Record<string, JsonValue>;
 }
 
+/** Procedure payload derived from one explicitly marked accepted diff event. */
+export interface NulleditNullMemObservedProcedure {
+  /** Stable deterministic memory record id for idempotent replay. */
+  recordId: string;
+  /** Goal declared by the accepted procedure candidate. */
+  goal: string;
+  /** Safe summary declared by the accepted procedure candidate. */
+  summary: string;
+  /** Ordered, source-backed execution steps. */
+  steps: NullMemProcedureRecord["steps"];
+  /** Derived procedures are emitted only for explicit successful candidates. */
+  outcome: "success";
+  /** Optional reuse category declared by the candidate. */
+  reusableAs?: string;
+  /** Retrieval labels for the procedure. */
+  labels: string[];
+  /** Retrieval priority for the derived procedure. */
+  priority: number;
+  /** Conservative confidence derived from the source event. */
+  confidence: number;
+  /** Branch and immutable diff refs that justify this procedure. */
+  sourceRefs: NullMemSourceRef[];
+  /** Compact extraction metadata that omits raw diff payloads. */
+  metadata: Record<string, JsonValue>;
+}
+
 /** Persists one derived NullMem fact for a Nulledit snapshotter. */
 export type NulleditNullMemFactWriter = (
   fact: NulleditNullMemObservedAppendFact,
+  context: NulleditSnapshotContext,
+) => Promise<void> | void;
+
+/** Persists one derived NullMem procedure for a Nulledit snapshotter. */
+export type NulleditNullMemProcedureWriter = (
+  procedure: NulleditNullMemObservedProcedure,
   context: NulleditSnapshotContext,
 ) => Promise<void> | void;
 
@@ -193,6 +229,8 @@ export type NulleditNullMemFactWriter = (
 export interface NulleditNullMemObserverSnapshotterOptions {
   /** Writes the observed append fact to the platform-specific memory store. */
   writeFact: NulleditNullMemFactWriter;
+  /** Optionally writes procedures from explicitly marked accepted diff events. */
+  writeProcedure?: NulleditNullMemProcedureWriter;
 }
 
 /** Accepted branch commit summary passed to hot-path buffering policy. */
