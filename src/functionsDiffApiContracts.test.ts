@@ -10,6 +10,7 @@ import {
   readBranch,
   readSnapshot,
 } from "../functions/api/_lib/branches/storage/repository";
+import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtimeFactLogRepository";
 import {
   createNulleditNullMemObserverSnapshotter,
   createNulleditPolicyDecisionFactDataKey,
@@ -758,6 +759,74 @@ describe("functions api diff contracts", () => {
     expect(pollBody.events[0].sourceClientId).toBe("writer-b");
     expect(pollBody.events[0].eventId).toBe("evt-b");
     expect(pollBody.cursor).toBe("1");
+  });
+
+  it("returns authenticated runtime fact pages with an independent cursor", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const facts = createBranchRuntimeFactLogRepository({
+      blobs: bucket as never,
+    });
+    await facts.appendBranchRuntimeFact(rootDropId, branch.branchId, {
+      version: 1,
+      kind: "ui.state.patch",
+      id: "patch-1",
+      callId: "call-1",
+      createdAt: 1,
+      source: {
+        rootDropId,
+        branchId: branch.branchId,
+        snapshotId: branch.headSnapshotId,
+        callId: "call-1",
+      },
+      patch: [{ op: "set", path: ["approved"], value: true }],
+    });
+
+    const response = await onRequest({
+      request: createGetRequest(
+        `?cursor=-1&factCursor=-1&branchId=${encodeURIComponent(branch.branchId)}`,
+      ),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    const body = (await response.json()) as {
+      cursor: string | null;
+      events: unknown[];
+      factCursor?: string | null;
+      facts?: Array<{ seq: number; fact: { id: string } }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.events).toEqual([]);
+    expect(body.cursor).toBeNull();
+    expect(body.factCursor).toBe("0");
+    expect(body.facts).toEqual([
+      expect.objectContaining({
+        seq: 0,
+        fact: expect.objectContaining({ id: "patch-1" }),
+      }),
+    ]);
+  });
+
+  it("requires branch-writer access when requesting runtime facts", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: new Request(
+        `https://nulldown.test/api/diff/${rootDropId}?cursor=-1&factCursor=-1`,
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ACCOUNT_AUTH_SECRET: "production-secret",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(403);
   });
 
   it("preserves event metadata through append and poll", async () => {

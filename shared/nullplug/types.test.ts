@@ -106,9 +106,24 @@ describe("nullplug shared DTOs", () => {
     expect(
       isNullplugInvokeResponse({
         result: { content: "ok" },
-        diagnostics: [{ level: "info", message: "rendered" }],
+        diagnostics: [
+          { level: "info", code: "render_complete", message: "rendered" },
+        ],
+        resolution: {
+          pluginId: "remote",
+          version: "1.0.0",
+          providerId: "provider-1",
+          baseUrl: "https://provider.example",
+          scope: "remote",
+        },
       }),
     ).toBe(true);
+    expect(
+      isNullplugInvokeResponse({
+        result: {},
+        diagnostics: [{ level: "error", code: 42, message: "bad" }],
+      }),
+    ).toBe(false);
     expect(isNullplugInvokeResponse({ result: { text: "bad" } })).toBe(false);
   });
 });

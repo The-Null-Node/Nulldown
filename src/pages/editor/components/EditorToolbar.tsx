@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  GitBranch,
   Cloud,
   Globe,
   HardDrive,
@@ -11,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 interface EditorToolbarProps {
+  canOpenBranches?: boolean;
   canShare: boolean;
   isTransitioning: boolean;
   offlineMode: boolean;
@@ -22,12 +24,14 @@ interface EditorToolbarProps {
   onToggleMode: () => void;
   onToggleShareVisibility: () => void;
   onOpenLibrary: () => void;
+  onOpenBranches?: () => void;
   onOpenSettings: () => void;
   onShare: () => void;
 }
 
 const EditorToolbar: React.FC<EditorToolbarProps> = ({
   canShare,
+  canOpenBranches = false,
   isTransitioning,
   offlineMode,
   shareVisibility,
@@ -38,6 +42,7 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onToggleMode,
   onToggleShareVisibility,
   onOpenLibrary,
+  onOpenBranches,
   onOpenSettings,
   onShare,
 }) => {
@@ -122,6 +127,19 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           <Search className="h-4 w-4" aria-hidden="true" />
           Search
         </Button>
+        {canOpenBranches && onOpenBranches ? (
+          <Button
+            type="button"
+            onClick={onOpenBranches}
+            variant="outline"
+            size="sm"
+            className="border-border text-muted hover:text-foreground"
+            aria-label="Open branch activity"
+          >
+            <GitBranch className="h-4 w-4" aria-hidden="true" />
+            Branches
+          </Button>
+        ) : null}
         <Button
           type="button"
           onClick={onOpenSettings}

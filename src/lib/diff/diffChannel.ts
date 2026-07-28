@@ -5,6 +5,7 @@ originating from the current client to avoid replaying our own writes.
 */
 
 import type {
+  DropBranchRuntimeFact,
   DropDiffEnvelope,
   DropDiffEvent,
   DropDiffEventMetadata,
@@ -14,17 +15,26 @@ import type {
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../shared/drop/branch";
 import { emitEvent } from "../events/eventBus";
 
-export type DiffChannelListener = (events: DropDiffEvent[]) => void;
+/** One received branch transport batch. */
+export interface DiffChannelBatch {
+  /** Markdown diff events after the current event cursor. */
+  events: DropDiffEvent[];
+  /** Runtime facts after the independent fact cursor. */
+  facts: DropBranchRuntimeFact[];
+}
+
+export type DiffChannelListener = (batch: DiffChannelBatch) => void;
 
 export interface DiffChannel {
   readonly dropId: string;
   readonly clientId: string;
   publish: (ops: DropDiffOp[], options?: DiffChannelPublishOptions) => Promise<void>;
-  poll: () => Promise<DropDiffEvent[]>;
+  poll: () => Promise<DiffChannelBatch>;
   subscribe: (listener: DiffChannelListener) => () => void;
   start: () => void;
   stop: () => void;
   readonly cursor: string | null;
+  readonly factCursor: string | null;
 }
 
 export interface DiffChannelPublishOptions {
@@ -57,6 +67,8 @@ export interface RemoteDiffChannelOptions {
   authTokenProvider?: (() => Promise<string | null>) | null;
   pollIntervalMs?: number;
   initialCursor?: string | null;
+  initialFactCursor?: string | null;
+  enableRuntimeFacts?: boolean;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
@@ -73,10 +85,13 @@ export const createRemoteDiffChannel = (
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   let cursor: string | null = options.initialCursor ?? null;
+  let factCursor: string | null = options.initialFactCursor ?? null;
+  const enableRuntimeFacts = options.enableRuntimeFacts ?? false;
   let timer: ReturnType<typeof setInterval> | null = null;
   const listeners = new Set<DiffChannelListener>();
   let localSeq = 0;
   let hasCompletedHandshake = false;
+  let pollInFlight = false;
 
   const buildHeaders = async (): Promise<HeadersInit> => {
     const headers: Record<string, string> = {
@@ -107,7 +122,7 @@ export const createRemoteDiffChannel = (
       : `/api/diff/${encodeURIComponent(dropId)}`;
   };
 
-  const doHandshake = async (): Promise<void> => {
+  const doHandshake = async (): Promise<boolean> => {
     const params = new URLSearchParams({ cursor: "__latest__" });
     const response = await fetch(buildDiffUrl(params), {
       headers: await buildHeaders(),
@@ -115,7 +130,7 @@ export const createRemoteDiffChannel = (
 
     if (!response.ok) {
       console.error("[diff-channel] Handshake failed:", response.statusText);
-      return;
+      return false;
     }
 
     const data = (await response.json()) as DropDiffPollResponse;
@@ -124,8 +139,8 @@ export const createRemoteDiffChannel = (
     if (data.cursor !== null) {
       cursor = data.cursor;
     }
-
     hasCompletedHandshake = true;
+    return true;
   };
 
   const publish = async (
@@ -165,10 +180,13 @@ export const createRemoteDiffChannel = (
     }
   };
 
-  const poll = async (): Promise<DropDiffEvent[]> => {
+  const poll = async (): Promise<DiffChannelBatch> => {
     const params = new URLSearchParams();
     if (cursor !== null) {
       params.set("cursor", cursor);
+    }
+    if (enableRuntimeFacts) {
+      params.set("factCursor", factCursor ?? "-1");
     }
     params.set("excludeClient", clientId);
 
@@ -178,7 +196,7 @@ export const createRemoteDiffChannel = (
 
     if (!response.ok) {
       console.error("[diff-channel] Poll failed:", response.statusText);
-      return [];
+      return { events: [], facts: [] };
     }
 
     const data = (await response.json()) as DropDiffPollResponse;
@@ -186,22 +204,33 @@ export const createRemoteDiffChannel = (
     if (data.cursor !== null) {
       cursor = data.cursor;
     }
+    if (
+      enableRuntimeFacts &&
+      data.factCursor !== undefined &&
+      data.factCursor !== null
+    ) {
+      factCursor = data.factCursor;
+    }
 
-    return data.events;
+    return { events: data.events, facts: data.facts ?? [] };
   };
 
   const runPoll = async () => {
+    if (pollInFlight) return;
+    pollInFlight = true;
     try {
       if (!hasCompletedHandshake) {
-        await doHandshake();
+        if (!(await doHandshake())) return;
       }
 
-      const events = await poll();
-      if (events.length > 0) {
-        emitEvent("diff:received", { dropId, count: events.length });
+      const batch = await poll();
+      if (batch.events.length > 0) {
+        emitEvent("diff:received", { dropId, count: batch.events.length });
+      }
+      if (batch.events.length > 0 || batch.facts.length > 0) {
         listeners.forEach((listener) => {
           try {
-            listener(events);
+            listener(batch);
           } catch (error) {
             console.error("[diff-channel] Listener error:", error);
           }
@@ -209,6 +238,8 @@ export const createRemoteDiffChannel = (
       }
     } catch (error) {
       console.error("[diff-channel] Poll error:", error);
+    } finally {
+      pollInFlight = false;
     }
   };
 
@@ -243,6 +274,9 @@ export const createRemoteDiffChannel = (
     stop,
     get cursor() {
       return cursor;
+    },
+    get factCursor() {
+      return factCursor;
     },
   };
 };
@@ -281,7 +315,7 @@ export const createLocalDiffChannel = (
 
       listeners.forEach((listener) => {
         try {
-          listener(data.events!);
+          listener({ events: data.events!, facts: [] });
         } catch (error) {
           console.error("[local-diff-channel] Listener error:", error);
         }
@@ -313,8 +347,8 @@ export const createLocalDiffChannel = (
     });
   };
 
-  const poll = async (): Promise<DropDiffEvent[]> => {
-    return [];
+  const poll = async (): Promise<DiffChannelBatch> => {
+    return { events: [], facts: [] };
   };
 
   const subscribe = (listener: DiffChannelListener): (() => void) => {
@@ -342,6 +376,9 @@ export const createLocalDiffChannel = (
     start,
     stop,
     get cursor() {
+      return null;
+    },
+    get factCursor() {
       return null;
     },
   };

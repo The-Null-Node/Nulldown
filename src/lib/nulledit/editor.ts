@@ -19,6 +19,9 @@ import type {
   SnapshotDiff,
   SnapshotId,
 } from "../../../shared/nulledit/types";
+import type { NullplugCaller } from "../../../shared/nullplug/types";
+import type { VoidNullplugRuntime } from "../../../shared/nullplug/runtime";
+import type { RootRuntimePolicy } from "../../../shared/nullplug/policy";
 
 export interface IEditor {
   state: EditorState;
@@ -28,28 +31,36 @@ export interface IEditor {
   render: () => Promise<string>;
   seedSnapshot: (content: string) => SnapshotId;
   reset: () => void;
+  setRuntimeCaller: (caller: NullplugCaller | null) => void;
+  setRuntimePolicy: (policy: RootRuntimePolicy | null) => void;
   getSnapshotter: () => Snapshotter;
   getCurrentSnapshotId: () => SnapshotId | null;
 }
 
 const snapshotter = new Snapshotter(3);
 
-const uniqueStrings = (values: Iterable<string | undefined>): string[] =>
-  [...new Set([...values].filter((value): value is string => Boolean(value)))];
+const uniqueStrings = (values: Iterable<string | undefined>): string[] => [
+  ...new Set([...values].filter((value): value is string => Boolean(value))),
+];
 
 const collectNullplugCallIds = (result: RenderPipelineResult): string[] =>
-  uniqueStrings([
-    ...result.uiPrimitives.map((primitive) => primitive.source?.callId),
-    ...result.mutations.map((mutation) =>
-      mutation.kind === "ui.state.patch" ? mutation.callId : undefined,
-    ),
-  ]);
+  uniqueStrings(result.nullplugCalls.flatMap((call) => call.callIds));
 
-export default function createEditor(): IEditor {
+/** Runtime dependencies used by the browser Nulledit editor. */
+export interface CreateEditorOptions {
+  /** Optional provider runtime used after trusted local nullplug resolution. */
+  nullplugRuntime?: VoidNullplugRuntime;
+}
+
+export default function createEditor(
+  options: CreateEditorOptions = {},
+): IEditor {
   let currentSnapshotId: SnapshotId | null = null;
   let lastRenderedSnapshotId: SnapshotId | null = null;
   let renderToken = 0;
   let renderScheduled = false;
+  let runtimeCaller: NullplugCaller | null = null;
+  let runtimePolicy: RootRuntimePolicy | null = null;
 
   const setCurrentSnapshotId = (snapshotId: SnapshotId | null) => {
     currentSnapshotId = snapshotId;
@@ -86,7 +97,9 @@ export default function createEditor(): IEditor {
       prevText,
     );
 
-    useEditorStore.getState().setTextContent(nextText);
+    const state = useEditorStore.getState();
+    state.setTextContent(nextText);
+    state.invalidateStructuredRenderState();
     snapshotter.updateSnapshot(snapshotId, { content: nextText });
 
     const editDiff: SnapshotDiff = {
@@ -128,7 +141,10 @@ export default function createEditor(): IEditor {
         return useEditorStore.getState().textContent;
       }
       const snapshotId = currentSnapshotId;
-      const rootDropId = useEditorStore.getState().baseDropId ?? undefined;
+      const rootDropId =
+        runtimeCaller?.dropId ??
+        useEditorStore.getState().baseDropId ??
+        undefined;
       const content = useEditorStore.getState().textContent;
       const baseSnapshot = lastRenderedSnapshotId
         ? snapshotter.get(lastRenderedSnapshotId)
@@ -144,6 +160,7 @@ export default function createEditor(): IEditor {
 
       const token = (renderToken += 1);
       const initialState = useEditorStore.getState();
+      initialState.invalidateStructuredRenderState();
       initialState.setRenderStatus("rendering");
       initialState.setRenderProgress(0);
 
@@ -156,10 +173,15 @@ export default function createEditor(): IEditor {
         renderResult = await renderMarkdownWithNullplugState(content, {
           allowedUrls,
           caller: {
+            ...runtimeCaller,
             dropId: rootDropId,
-            snapshotId,
+            snapshotId: runtimeCaller?.branchId
+              ? runtimeCaller.snapshotId
+              : snapshotId,
           },
           resolveDrop,
+          runtimePolicy,
+          nullplugRuntime: options.nullplugRuntime,
           onFlush: (buffered, status) => {
             // Flushes are advisory; only the latest render token is allowed to touch UI state.
             if (token !== renderToken || snapshotId !== currentSnapshotId) {
@@ -181,6 +203,9 @@ export default function createEditor(): IEditor {
 
         if (token === renderToken && snapshotId === currentSnapshotId) {
           const state = useEditorStore.getState();
+          if (state.renderFrame) {
+            state.setRenderFrame({ ...state.renderFrame, status: "error" });
+          }
           state.setRenderStatus("idle");
           state.setRenderProgress(1);
         }
@@ -218,9 +243,11 @@ export default function createEditor(): IEditor {
       lastRenderedSnapshotId = snapshotId;
       const state = useEditorStore.getState();
       state.setRenderedMarkdown(renderedMarkdown);
-      state.setRenderFrame({
-        frameId: `render:${snapshotId}:${token}`,
+      state.commitStructuredRender(
+        {
+          frameId: `render:${snapshotId}:${token}`,
         rootDropId,
+        branchId: runtimeCaller?.branchId,
         versionId: snapshotId,
         sourceMarkdown: content,
         renderedMarkdown,
@@ -228,18 +255,20 @@ export default function createEditor(): IEditor {
         renderedContentHash,
         acceptedDiffRefs: [],
         resolverRefs: [],
+        nullplugCalls: renderResult.nullplugCalls,
         nullplugCallIds,
-        diagnostics: renderResult.diagnostics,
-        status: "final",
-      });
-      state.setNullplugRenderState({
-        uiPrimitives: renderResult.uiPrimitives,
-        uiState: renderResult.uiState,
-        mutations: renderResult.mutations,
-        yields: renderResult.yields,
-        diagnostics: renderResult.diagnostics,
-        callIds: nullplugCallIds,
-      });
+          diagnostics: renderResult.diagnostics,
+          status: "final",
+        },
+        {
+         uiPrimitives: renderResult.uiPrimitives,
+         uiState: renderResult.uiState,
+         mutations: renderResult.mutations,
+         yields: renderResult.yields,
+         diagnostics: renderResult.diagnostics,
+          callIds: nullplugCallIds,
+        },
+      );
       state.setRenderProgress(1);
       state.setRenderStatus("idle");
       return renderedMarkdown;
@@ -268,12 +297,23 @@ export default function createEditor(): IEditor {
       lastRenderedSnapshotId = null;
       renderToken = 0;
       renderScheduled = false;
+      runtimeCaller = null;
+      runtimePolicy = null;
+      useEditorStore.getState().clearRuntimeFacts();
       useEditorStore.getState().setTextContent("");
       useEditorStore.getState().setRenderedMarkdown("");
       useEditorStore.getState().clearStructuredRenderState();
       useEditorStore.getState().setRenderStatus("idle");
       useEditorStore.getState().setRenderProgress(1);
       useEditorStore.getState().setCurrentSnapshotId(null);
+    },
+
+    setRuntimeCaller: (caller) => {
+      runtimeCaller = caller ? { ...caller } : null;
+    },
+
+    setRuntimePolicy: (policy) => {
+      runtimePolicy = policy;
     },
 
     getSnapshotter: () => snapshotter,

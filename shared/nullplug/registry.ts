@@ -4,6 +4,9 @@ import {
   RemoteNullplugManifestSchema,
   RemoteNullplugRegistryRecordSchema,
 } from "./registrySchemas";
+import { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
+
+export { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
 
 export const NULLPLUG_REGISTRY_MANIFEST_KEY_PREFIX =
   "__nullplug_registry__/manifests/";
@@ -23,6 +26,7 @@ export interface RemoteNullplugManifest {
   id: string;
   version: string;
   endpoint: string;
+  contentType: typeof NULLPLUG_INVOKE_CONTENT_TYPE;
   inputSchema: Record<string, JsonValue>;
   outputSchema: Record<string, JsonValue>;
   permissions: NullplugPermission[];
@@ -115,6 +119,20 @@ export const readRemoteNullplugManifest = async (
   version: string,
 ): Promise<RemoteNullplugRegistryRecord | null> => {
   const object = await store.get(remoteNullplugManifestKey(id, version));
+  if (!object) return null;
+  try {
+    const parsed = await object.json();
+    return isRemoteNullplugRegistryRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+export const readLatestRemoteNullplugManifest = async (
+  store: NullplugRegistryJsonStore,
+  id: string,
+): Promise<RemoteNullplugRegistryRecord | null> => {
+  const object = await store.get(remoteNullplugLatestKey(id));
   if (!object) return null;
   try {
     const parsed = await object.json();

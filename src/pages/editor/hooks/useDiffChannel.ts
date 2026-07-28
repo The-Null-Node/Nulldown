@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   diffToDropDiffOp,
   dropDiffOpToDiff,
+  type DropBranchRuntimeFact,
   type DropDiffEventMetadata,
   type DropDiffOp,
 } from "../../../../shared/drop/diff";
@@ -34,6 +35,7 @@ export interface UseDiffChannelOptions {
   isOffline: boolean;
   editor: EditorDiffApi | null;
   enabled?: boolean;
+  onRuntimeFacts?: (facts: DropBranchRuntimeFact[]) => void;
 }
 
 export function useDiffChannel({
@@ -45,11 +47,14 @@ export function useDiffChannel({
   isOffline,
   editor,
   enabled = true,
+  onRuntimeFacts,
 }: UseDiffChannelOptions) {
   const channelRef = useRef<DiffChannel | null>(null);
   const pendingPublishesRef = useRef(new Set<Promise<void>>());
   const editorRef = useRef(editor);
+  const onRuntimeFactsRef = useRef(onRuntimeFacts);
   editorRef.current = editor;
+  onRuntimeFactsRef.current = onRuntimeFacts;
 
   // Start/stop channel when dropId changes
   useEffect(() => {
@@ -67,21 +72,24 @@ export function useDiffChannel({
           accountId,
           clientId: clientId ?? undefined,
           authTokenProvider,
+          enableRuntimeFacts: Boolean(accountId),
         });
 
     channelRef.current = channel;
 
-    const unsubscribe = channel.subscribe((events) => {
+    const unsubscribe = channel.subscribe((batch) => {
       const editorApi = editorRef.current;
-      if (!editorApi) return;
 
       // Remote events can arrive batched; flatten them so the editor applies one ordered diff stream.
-      const allOps = events.flatMap((event) => event.ops);
+      const allOps = batch.events.flatMap((event) => event.ops);
       const editorDiffs = allOps
         .map((op) => dropDiffOpToDiff(op))
         .filter((entry): entry is Diff => Boolean(entry));
-      if (editorDiffs.length > 0) {
+      if (editorApi && editorDiffs.length > 0) {
         editorApi.addDiffs(editorDiffs);
+      }
+      if (batch.facts.length > 0) {
+        onRuntimeFactsRef.current?.(batch.facts);
       }
     });
 

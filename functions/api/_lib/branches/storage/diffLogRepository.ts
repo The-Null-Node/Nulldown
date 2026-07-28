@@ -122,7 +122,6 @@ export const readHeapBranchDiffLog = async (
       cursor,
       limit: 1000,
     });
-
     if (!listed.objects.length) {
       break;
     }
@@ -323,7 +322,8 @@ export const pollBranchDiffEventsSince = async (
       const lastSeq = events[events.length - 1]?.seq ?? normalizedAfter;
       return {
         events,
-        nextCursor: lastSeq < headSeq ? lastSeq : null,
+        // A returned event always advances the caller high-water mark, including at head.
+        nextCursor: lastSeq,
         headSeq,
       };
     }

@@ -51,6 +51,7 @@ describe("graph nullplug", () => {
     const block = {
       id: "graph",
       args: null,
+      invocationForm: "bare" as const,
       start: 0,
       end: 100,
       content: JSON.stringify(graphData),
@@ -90,6 +91,7 @@ describe("graph nullplug", () => {
     const block = {
       id: "graph",
       args: null,
+      invocationForm: "bare" as const,
       start: 0,
       end: 100,
       content: "",
@@ -118,6 +120,7 @@ describe("graph nullplug", () => {
     const block = {
       id: "graph",
       args: null,
+      invocationForm: "bare" as const,
       start: 0,
       end: 100,
       content: JSON.stringify({ nodes: [{ id: "solo" }], edges: [] }),
@@ -162,6 +165,7 @@ describe("graph nullplug", () => {
     const block = {
       id: "graph",
       args: null,
+      invocationForm: "bare" as const,
       start: 0,
       end: 100,
       content: "child",
@@ -203,6 +207,7 @@ describe("graph nullplug", () => {
     const makeBlock = (content: string) => ({
       id: "graph",
       args: null,
+      invocationForm: "bare" as const,
       start: 0,
       end: 100,
       content,

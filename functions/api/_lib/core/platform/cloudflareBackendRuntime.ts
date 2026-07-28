@@ -19,6 +19,8 @@ import type { VoidDataStore } from "../../../../../src/server/ports";
 import { appendEventsToBranch } from "../../nulledit/service";
 import { createNullMemService } from "../../nullmem/service";
 import { listNullplugRuntimeFacts } from "../../nullplug/facts/repository";
+import { createCloudflareRuntimePolicy } from "../../nullplug/policy";
+import { createCloudflareNullplugRuntime } from "../../nullplug/runtime";
 import { syncResolvedPriorityFactToD1 } from "../../resolved/heap/service";
 import { createCloudflareVoidDataStore } from "./cloudflarePorts";
 
@@ -28,6 +30,12 @@ export interface CloudflareVoidProviderBindings {
   R2_BUCKET: R2Bucket;
   /** Optional D1-compatible SQL store for queryable metadata and derived data. */
   DB?: D1Database;
+  /** Provider escrow key used by trusted built-in nullplug resolvers. */
+  PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
+  /** Remote nullplug endpoint allowlist used at registration and invocation. */
+  NULLPLUG_REGISTRY_ALLOWED_HOSTS?: string;
+  /** Optional fetch implementation for focused runtime tests. */
+  fetchImpl?: typeof fetch;
 }
 
 /** Branch whose buffered derived writes should be flushed before a read. */
@@ -46,6 +54,10 @@ export interface CloudflareBackendRuntime {
   memory: VoidProvider["memory"];
   /** Nulledit append and snapshotter operations. */
   nulledit: VoidProvider["nulledit"];
+  /** Provider-owned nullplug runtime. */
+  nullplug: VoidProvider["nullplug"];
+  /** Provider-owned runtime policy service. */
+  policy: VoidProvider["policy"];
   /** App-facing provider facade, created lazily for routes that need it. */
   readonly voidProvider: VoidProvider;
   /** Flushes buffered derived writes before explicit resolved-query reads. */
@@ -209,14 +221,27 @@ export const createCloudflareBackendRuntime = (
     data,
   });
   const nulledit = createCloudflareNulleditRuntime(bindings, data, memory);
+  const policy = createCloudflareRuntimePolicy({
+    bindings,
+    trustedPluginIds: ["nd"],
+  });
+  const nullplug = createCloudflareNullplugRuntime(bindings, policy);
   let voidProvider: VoidProvider | null = null;
 
   return {
     data,
     memory,
     nulledit,
+    nullplug,
+    policy,
     get voidProvider() {
-      voidProvider ??= createVoidProvider({ data, nulledit, memory });
+      voidProvider ??= createVoidProvider({
+        data,
+        nulledit,
+        memory,
+        nullplug,
+        policy,
+      });
       return voidProvider;
     },
     async repairBufferedCommitsForQuery({ rootDropId, branchId }) {

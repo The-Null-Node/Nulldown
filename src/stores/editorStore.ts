@@ -1,8 +1,11 @@
 import { create, StateCreator } from "zustand";
+import { subscribeWithSelector } from "zustand/middleware";
 import type {
   DropRuntimeNullplugRenderState,
   DropRuntimeRenderFrame,
 } from "../../shared/drop/runtime";
+import type { DropBranchRuntimeFact } from "../../shared/drop/diff";
+import { applyBranchRuntimeFacts } from "../lib/nullplug/reactRuntime";
 
 export enum EditorMode {
   Preview,
@@ -38,6 +41,14 @@ export interface EditorState {
   setRenderFrame: (frame: EditorRenderFrame | null) => void;
   nullplugRenderState: EditorNullplugRenderState;
   setNullplugRenderState: (state: EditorNullplugRenderState) => void;
+  commitStructuredRender: (
+    frame: EditorRenderFrame,
+    state: EditorNullplugRenderState,
+  ) => void;
+  runtimeFacts: DropBranchRuntimeFact[];
+  applyRuntimeFacts: (facts: DropBranchRuntimeFact[]) => void;
+  clearRuntimeFacts: () => void;
+  invalidateStructuredRenderState: () => void;
   clearStructuredRenderState: () => void;
   currentSnapshotId: number | null;
   setCurrentSnapshotId: (snapshotId: number | null) => void;
@@ -76,7 +87,60 @@ const editorStoreCreator: StateCreator<EditorState> = (set) => ({
 
   nullplugRenderState: createEmptyNullplugRenderState(),
   setNullplugRenderState: (state: EditorNullplugRenderState) =>
-    set({ nullplugRenderState: state }),
+    set((current) => ({
+      nullplugRenderState: applyBranchRuntimeFacts(
+        state,
+        current.renderFrame,
+        current.runtimeFacts,
+      ),
+    })),
+
+  commitStructuredRender: (frame, state) =>
+    set((current) => ({
+      renderFrame: frame,
+      nullplugRenderState: applyBranchRuntimeFacts(
+        state,
+        frame,
+        current.runtimeFacts,
+      ),
+    })),
+
+  runtimeFacts: [],
+
+  applyRuntimeFacts: (facts: DropBranchRuntimeFact[]) =>
+    set((state) => {
+      const knownFactIds = new Set(
+        state.runtimeFacts.map(
+          (fact) => `${fact.rootDropId}:${fact.branchId}:${fact.factId}`,
+        ),
+      );
+      const newFacts = facts.filter((fact) => {
+        const key = `${fact.rootDropId}:${fact.branchId}:${fact.factId}`;
+        if (knownFactIds.has(key)) return false;
+        knownFactIds.add(key);
+        return true;
+      });
+      if (!newFacts.length) return {};
+      const runtimeFacts = [...state.runtimeFacts, ...newFacts];
+      const next = applyBranchRuntimeFacts(
+        state.nullplugRenderState,
+        state.renderFrame,
+        runtimeFacts,
+      );
+      return next === state.nullplugRenderState
+        ? { runtimeFacts }
+        : { runtimeFacts, nullplugRenderState: next };
+    }),
+
+  clearRuntimeFacts: () => set({ runtimeFacts: [] }),
+
+  invalidateStructuredRenderState: () =>
+    set((state) => ({
+      renderFrame: state.renderFrame
+        ? { ...state.renderFrame, status: "stale" }
+        : null,
+      nullplugRenderState: createEmptyNullplugRenderState(),
+    })),
 
   clearStructuredRenderState: () =>
     set({
@@ -97,6 +161,8 @@ const editorStoreCreator: StateCreator<EditorState> = (set) => ({
   setEditorMode: (mode: EditorMode) => set({ editorMode: mode }),
 });
 
-const useEditorStore = create<EditorState>(editorStoreCreator);
+const useEditorStore = create<EditorState>()(
+  subscribeWithSelector(editorStoreCreator),
+);
 
 export default useEditorStore;

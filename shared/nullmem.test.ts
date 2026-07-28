@@ -17,6 +17,7 @@ import {
   extractSupersedesFromLabels,
   collectSnapshotSourceIds,
 } from "./nullmem";
+import { NULLPLUG_INVOKE_CONTENT_TYPE } from "./nullplug/registry";
 
 describe("NullMem contracts", () => {
   it("validates capability, procedure, and fact records", () => {
@@ -53,11 +54,15 @@ describe("NullMem contracts", () => {
       ],
       outcome: "success" as const,
       labels: ["procedure-memory"],
-      sourceRefs: [{ kind: "branch" as const, rootDropId: "root_1", branchId: "owner" }],
+      sourceRefs: [
+        { kind: "branch" as const, rootDropId: "root_1", branchId: "owner" },
+      ],
       createdAt: 100,
     };
     expect(isNullMemProcedureRecord(procedure)).toBe(true);
-    expect(isNullMemProcedureRecord({ ...procedure, outcome: "maybe" })).toBe(false);
+    expect(isNullMemProcedureRecord({ ...procedure, outcome: "maybe" })).toBe(
+      false,
+    );
     expect(nullMemRecordText(procedure)).toContain("Focused tests pass");
 
     const fact = {
@@ -72,14 +77,17 @@ describe("NullMem contracts", () => {
       createdAt: 101,
     };
     expect(isNullMemFactRecord(fact)).toBe(true);
-    expect(isNullMemFactRecord({ ...fact, metadata: { bad: undefined } })).toBe(false);
+    expect(isNullMemFactRecord({ ...fact, metadata: { bad: undefined } })).toBe(
+      false,
+    );
   });
 
   it("creates searchable text and compact capsules", () => {
     const capability = createBuiltInNullMemCapabilities(100).find(
       (record) => record.capabilityId === "nd branch memory query",
     );
-    if (!capability) throw new Error("Expected built-in memory query capability.");
+    if (!capability)
+      throw new Error("Expected built-in memory query capability.");
 
     expect(nullMemRecordText(capability)).toContain("prior procedures");
     expect(nullMemRecordToCapsule(capability)).toEqual(
@@ -97,6 +105,17 @@ describe("NullMem contracts", () => {
       expect.objectContaining({
         recordId: "capability:tool:nd-branch-memory-delete",
         labels: expect.arrayContaining(["stale-memory"]),
+      }),
+    );
+
+    const approvalCapability = createBuiltInNullMemCapabilities(100).find(
+      (record) => record.capabilityId === "approval",
+    );
+    expect(approvalCapability).toEqual(
+      expect.objectContaining({
+        recordId: "capability:nullplug:approval",
+        capabilityKind: "nullplug",
+        labels: expect.arrayContaining(["approval", "human-in-the-loop"]),
       }),
     );
 
@@ -141,6 +160,7 @@ describe("NullMem contracts", () => {
         id: "remote.summary",
         version: "1.0.0",
         endpoint: "https://plugins.nulldown.test/summary",
+        contentType: NULLPLUG_INVOKE_CONTENT_TYPE,
         inputSchema: { type: "object" },
         outputSchema: { type: "object" },
         permissions: [
@@ -158,7 +178,10 @@ describe("NullMem contracts", () => {
         capabilityKind: "nullplug",
         capabilityId: "remote.summary",
         capabilityVersion: "1.0.0",
-        labels: expect.arrayContaining(["remote-nullplug", "permission:network"]),
+        labels: expect.arrayContaining([
+          "remote-nullplug",
+          "permission:network",
+        ]),
         metadata: expect.objectContaining({
           endpoint: "https://plugins.nulldown.test/summary",
           registeredBy: "acct_1",
@@ -214,7 +237,14 @@ describe("NullMem contracts", () => {
       rootDropId: "r1",
       branchId: "b1",
       text: "Current work at snapshot 10.",
-      sourceRefs: [{ kind: "snapshot" as const, rootDropId: "r1", branchId: "b1", snapshotId: 10 }],
+      sourceRefs: [
+        {
+          kind: "snapshot" as const,
+          rootDropId: "r1",
+          branchId: "b1",
+          snapshotId: 10,
+        },
+      ],
       labels: ["current-work"],
       createdAt: 200,
     };
@@ -225,7 +255,14 @@ describe("NullMem contracts", () => {
       rootDropId: "r1",
       branchId: "b1",
       text: "Old work at snapshot 5.",
-      sourceRefs: [{ kind: "snapshot" as const, rootDropId: "r1", branchId: "b1", snapshotId: 5 }],
+      sourceRefs: [
+        {
+          kind: "snapshot" as const,
+          rootDropId: "r1",
+          branchId: "b1",
+          snapshotId: 5,
+        },
+      ],
       labels: ["current-work"],
       createdAt: 100,
     };
@@ -262,7 +299,9 @@ describe("NullMem contracts", () => {
     expect(res.byRecordId["memfact:old"].status).toBe("superseded");
 
     expect(hasStaleMemoryLabel(factExplicit)).toBe(true);
-    expect(extractSupersedesFromLabels(factSuperseded.labels)).toContain("memfact:old");
+    expect(extractSupersedesFromLabels(factSuperseded.labels)).toContain(
+      "memfact:old",
+    );
     expect(collectSnapshotSourceIds(factStale)).toEqual([5]);
   });
 
@@ -275,7 +314,12 @@ describe("NullMem contracts", () => {
       branchId: "planBranch",
       text: "Cites plan snapshot 3.",
       sourceRefs: [
-        { kind: "snapshot" as const, rootDropId: "planRoot", branchId: "planBranch", snapshotId: 3 },
+        {
+          kind: "snapshot" as const,
+          rootDropId: "planRoot",
+          branchId: "planBranch",
+          snapshotId: 3,
+        },
       ],
       createdAt: 300,
     };
@@ -297,7 +341,9 @@ describe("NullMem contracts", () => {
       rootDropId: "r2",
       branchId: "b2",
       text: "Has branch ref but no snapshot head to compare.",
-      sourceRefs: [{ kind: "branch" as const, rootDropId: "r2", branchId: "b2" }],
+      sourceRefs: [
+        { kind: "branch" as const, rootDropId: "r2", branchId: "b2" },
+      ],
       createdAt: 400,
     };
 

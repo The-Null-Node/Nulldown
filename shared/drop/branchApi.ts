@@ -1,4 +1,5 @@
 import {
+  type DropBranchListResponse,
   NULLDOWN_ACCOUNT_ID_HEADER,
   type DropBranchContentResponse,
   type DropBranchPromoteResponse,
@@ -51,7 +52,9 @@ export interface BranchResolvedQueryResponse {
   stale: boolean;
   heapGenerated: boolean;
   nodeCount: number;
-  nodes: Array<ResolvedDocumentNodeQueryResult | ResolvedRuntimeNodeQueryResult>;
+  nodes: Array<
+    ResolvedDocumentNodeQueryResult | ResolvedRuntimeNodeQueryResult
+  >;
 }
 
 export interface BranchResolvedUpdateRequest {
@@ -74,6 +77,20 @@ export interface BranchResolvedUpdateResponse {
     nodeCount: number;
     sourceContentHash: string;
   }>;
+}
+
+export interface NullplugResponseSubmitResponse {
+  stored: boolean;
+  indexed: boolean;
+  key: string;
+  fact: NullplugUiResponseFact;
+}
+
+export interface NullplugStateSubmitResponse {
+  stored: boolean;
+  indexed: boolean;
+  key: string;
+  fact: NullplugUiStatePatchFact | NullplugUiStateSnapshot;
 }
 
 const withHeaders = async (
@@ -120,6 +137,17 @@ export const createBranchApiClient = (options: BranchApiClientOptions) => {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
 
   return {
+    async listBranches(rootDropId: string): Promise<DropBranchListResponse> {
+      const response = await fetchImpl(
+        `${baseUrl}/api/branches/${encodeURIComponent(rootDropId)}`,
+        {
+          method: "GET",
+          headers: await withHeaders(options),
+        },
+      );
+      return readJson<DropBranchListResponse>(response);
+    },
+
     async resolveBranch(dropId: string): Promise<DropBranchResolveResponse> {
       const response = await fetchImpl(
         `${baseUrl}/api/branches/resolve/${encodeURIComponent(dropId)}`,
@@ -174,7 +202,11 @@ export const createBranchApiClient = (options: BranchApiClientOptions) => {
       appendDefined(params, "toSeq", queryOptions.toSeq);
       appendDefined(params, "changedOnly", queryOptions.changedOnly);
       appendDefined(params, "includeAncestors", queryOptions.includeAncestors);
-      appendDefined(params, "includeEventMetadata", queryOptions.includeEventMetadata);
+      appendDefined(
+        params,
+        "includeEventMetadata",
+        queryOptions.includeEventMetadata,
+      );
       appendDefined(params, "pluginId", queryOptions.pluginId);
       appendDefined(params, "callId", queryOptions.callId);
       appendDefined(params, "primitiveId", queryOptions.primitiveId);
@@ -205,6 +237,32 @@ export const createBranchApiClient = (options: BranchApiClientOptions) => {
         },
       );
       return readJson<BranchResolvedUpdateResponse>(response);
+    },
+
+    async submitNullplugResponse(
+      fact: NullplugUiResponseFact,
+    ): Promise<NullplugResponseSubmitResponse> {
+      const response = await fetchImpl(`${baseUrl}/api/nullplug/submit`, {
+        method: "POST",
+        headers: await withHeaders(options, {
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify(fact),
+      });
+      return readJson<NullplugResponseSubmitResponse>(response);
+    },
+
+    async submitNullplugState(
+      fact: NullplugUiStatePatchFact | NullplugUiStateSnapshot,
+    ): Promise<NullplugStateSubmitResponse> {
+      const response = await fetchImpl(`${baseUrl}/api/nullplug/state`, {
+        method: "POST",
+        headers: await withHeaders(options, {
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify(fact),
+      });
+      return readJson<NullplugStateSubmitResponse>(response);
     },
 
     async promoteBranch(

@@ -350,6 +350,41 @@ export const createBuiltInNullMemCapabilities = (
   {
     version: NULLMEM_RECORD_VERSION,
     kind: "capability",
+    recordId: "capability:nullplug:approval",
+    capabilityKind: "nullplug",
+    capabilityId: "approval",
+    title: "Built-in approval nullplug",
+    description:
+      "Renders an explicit human approval form and stores the submitted decision as an immutable branch-scoped response fact.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, body: { type: "string" } },
+      required: ["id"],
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        approved: { type: "boolean" },
+        reason: { type: "string" },
+      },
+    },
+    whenToUse: [
+      "Request and durably record a human decision without applying document mutations.",
+      "Use a stable id so agents can retrieve the response with a branch runtime-ref query.",
+    ],
+    whenNotToUse: [
+      "Do not treat rendering the form as approval; authority comes only from a stored response fact.",
+      "Do not use the response to apply diffs without a separate explicit policy grant.",
+    ],
+    labels: ["nullplug", "approval", "human-in-the-loop", "capability-memory"],
+    sourceRefs: [{ kind: "nullplug", pluginId: "approval" }],
+    priority: 0.9,
+    confidence: 0.95,
+    createdAt,
+  },
+  {
+    version: NULLMEM_RECORD_VERSION,
+    kind: "capability",
     recordId: "capability:tool:nd-branch-memory-query",
     capabilityKind: "tool",
     capabilityId: "nd branch memory query",
@@ -384,7 +419,13 @@ export const createBuiltInNullMemCapabilities = (
     whenNotToUse: [
       "Do not use as proof of primary branch content; the check only evaluates memory metadata and cited sources.",
     ],
-    labels: ["tool", "nullmem", "stale-memory", "capability-memory", "freshness"],
+    labels: [
+      "tool",
+      "nullmem",
+      "stale-memory",
+      "capability-memory",
+      "freshness",
+    ],
     sourceRefs: [{ kind: "tool", toolId: "nd branch memory stale-check" }],
     createdAt,
   },

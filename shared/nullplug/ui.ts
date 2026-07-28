@@ -20,6 +20,8 @@ export interface NullplugUiSource {
   rootDropId: string;
   branchId?: string;
   snapshotId?: number;
+  /** Hash of the source rendered when this fact was created. */
+  sourceContentHash?: string;
   eventId?: string;
   callId?: string;
 }
@@ -125,6 +127,12 @@ export interface NullplugUiStateSnapshot {
   metadata?: Record<string, JsonValue>;
 }
 
+/** Immutable UI facts that can be synchronized across a branch runtime. */
+export type NullplugUiRuntimeFact =
+  | NullplugUiResponseFact
+  | NullplugUiStatePatchFact
+  | NullplugUiStateSnapshot;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -216,6 +224,20 @@ export const isNullplugUiStateSnapshot = (
   value: unknown,
 ): value is NullplugUiStateSnapshot =>
   NullplugUiStateSnapshotSchema.safeParse(value).success;
+
+/** Checks whether a value is a persisted, branch-synchronizable Nullplug UI fact. */
+export const isNullplugUiRuntimeFact = (
+  value: unknown,
+): value is NullplugUiRuntimeFact =>
+  isNullplugUiResponseFact(value) ||
+  isNullplugUiStatePatchFact(value) ||
+  isNullplugUiStateSnapshot(value);
+
+/** Returns the stable branch-log identity for one immutable Nullplug UI fact. */
+export const nullplugUiRuntimeFactId = (fact: NullplugUiRuntimeFact): string =>
+  fact.kind === "ui.response"
+    ? `${fact.kind}:${fact.primitiveId}:${fact.id}`
+    : `${fact.kind}:${fact.callId}:${fact.id}`;
 
 const cloneJsonRecord = (
   value: Record<string, JsonValue>,

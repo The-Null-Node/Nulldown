@@ -8,6 +8,7 @@ import type { PluginBlock } from "./types";
 const block: PluginBlock = {
   id: "test",
   args: null,
+  invocationForm: "bare",
   start: 10,
   end: 20,
   content: "body",
@@ -97,7 +98,11 @@ describe("nullplug runtime normalization", () => {
       result: {},
       patch: null,
       diagnostics: [
-        { level: "error", message: "Root policy denied nullplug invocation: test." },
+        {
+          level: "error",
+          code: "policy_denied",
+          message: "Root policy denied nullplug invocation: test.",
+        },
       ],
     });
   });
@@ -170,12 +175,21 @@ describe("nullplug runtime normalization", () => {
     });
     expect(validated.patch).toEqual({ text: "safe render" });
     expect(validated.diagnostics).toEqual([
-      { level: "info", message: "Normalized top-level diffs into a proposed mutation." },
+      {
+        level: "info",
+        code: "diffs_normalized",
+        message: "Normalized top-level diffs into a proposed mutation.",
+      },
       {
         level: "warn",
+        code: "policy_mutation_downgraded",
         message: "Root policy downgraded one or more apply mutations to proposals.",
       },
-      { level: "warn", message: "Root policy rejected one or more nullplug mutations." },
+      {
+        level: "warn",
+        code: "policy_mutation_rejected",
+        message: "Root policy rejected one or more nullplug mutations.",
+      },
     ]);
   });
 
@@ -246,7 +260,11 @@ describe("nullplug runtime normalization", () => {
 
     expect(rejected.result).toEqual({});
     expect(rejected.diagnostics).toEqual([
-      { level: "warn", message: "Root policy rejected one or more nullplug mutations." },
+      {
+        level: "warn",
+        code: "policy_mutation_rejected",
+        message: "Root policy rejected one or more nullplug mutations.",
+      },
     ]);
   });
 
@@ -271,8 +289,16 @@ describe("nullplug runtime normalization", () => {
 
     expect(validated.result).toEqual({});
     expect(validated.diagnostics).toEqual([
-      { level: "info", message: "Normalized top-level diffs into a proposed mutation." },
-      { level: "warn", message: "Root policy rejected one or more nullplug mutations." },
+      {
+        level: "info",
+        code: "diffs_normalized",
+        message: "Normalized top-level diffs into a proposed mutation.",
+      },
+      {
+        level: "warn",
+        code: "policy_mutation_rejected",
+        message: "Root policy rejected one or more nullplug mutations.",
+      },
     ]);
   });
 
@@ -305,7 +331,11 @@ describe("nullplug runtime normalization", () => {
 
     expect(validated.result).toEqual({});
     expect(validated.diagnostics).toEqual([
-      { level: "warn", message: "Root policy rejected one or more nullplug streams." },
+      {
+        level: "warn",
+        code: "policy_stream_rejected",
+        message: "Root policy rejected one or more nullplug streams.",
+      },
     ]);
   });
 });

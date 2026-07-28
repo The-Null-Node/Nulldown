@@ -9,7 +9,10 @@ import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPri
 import { createNullMemFact, createNullMemProcedure, createNullMemService, deleteNullMemRecord, queryNullMem } from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
-import { writeRemoteNullplugManifest } from "../shared/nullplug/registry";
+import {
+  NULLPLUG_INVOKE_CONTENT_TYPE,
+  writeRemoteNullplugManifest,
+} from "../shared/nullplug/registry";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
 } from "../shared/drop/resolved/constants";
@@ -835,6 +838,7 @@ describe("D1 metadata contracts", () => {
           id: "remote.summary",
           version: "1.0.0",
           endpoint: "https://plugins.nulldown.test/summary",
+          contentType: NULLPLUG_INVOKE_CONTENT_TYPE,
           inputSchema: { type: "object" },
           outputSchema: { type: "object" },
           permissions: [

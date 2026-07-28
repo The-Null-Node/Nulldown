@@ -27,6 +27,7 @@ import PreviewPane from "./editor/components/PreviewPane";
 import ShareSuccessView from "./editor/components/ShareSuccessView";
 import SettingsModal from "./editor/components/SettingsModal";
 import LibraryPalette from "./editor/components/LibraryPalette";
+import BranchActivityDialog from "./editor/components/BranchActivityDialog";
 import { useShareDrop } from "./editor/hooks/useShareDrop";
 import { usePreviewToggle } from "./editor/hooks/usePreviewToggle";
 import { useDiffChannel } from "./editor/hooks/useDiffChannel";
@@ -53,6 +54,12 @@ import { toUserFacingDropError } from "../lib/drop/userErrors";
 import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
 import { createBranchApiClient } from "../../shared/drop/branchApi";
 import { getAccountSessionToken } from "../lib/auth/accountSession";
+import type {
+  NullplugUiResponseFact,
+  NullplugUiStatePatchFact,
+} from "../../shared/nullplug/ui";
+import { getDefaultRemoteNullplugRuntime } from "../lib/nullplug/providerRuntime";
+import { resolveRootRuntimePolicy } from "../../shared/nullplug/policy";
 
 type PaletteAction =
   | { kind: "open-drop"; id: string; source: "owned" | "external" }
@@ -100,7 +107,9 @@ const formatTimestamp = (timestamp: number) => {
 const EditorPage: React.FC = () => {
   const editorRef = useRef<ReturnType<typeof createEditor> | null>(null);
   if (!editorRef.current) {
-    editorRef.current = createEditor();
+    editorRef.current = createEditor({
+      nullplugRuntime: getDefaultRemoteNullplugRuntime(),
+    });
   }
   const editor = editorRef.current;
   const navigate = useNavigate();
@@ -128,6 +137,9 @@ const EditorPage: React.FC = () => {
   const setBaseDropId = useEditorStore(
     (state: EditorState) => state.setBaseDropId,
   );
+  const applyRuntimeFacts = useEditorStore(
+    (state: EditorState) => state.applyRuntimeFacts,
+  );
 
   const bufferRef = useRef(markdown);
   const branchClientIdRef = useRef(
@@ -140,6 +152,7 @@ const EditorPage: React.FC = () => {
   const [activeRootDropId, setActiveRootDropId] = useState<string | null>(null);
   const [activeBranchSession, setActiveBranchSession] =
     useState<ActiveBranchSession | null>(null);
+  const [branchActivityOpen, setBranchActivityOpen] = useState(false);
 
   useEffect(() => {
     bufferRef.current = markdown;
@@ -150,19 +163,24 @@ const EditorPage: React.FC = () => {
   const offlineMode = useDropStore((state) => state.offlineMode);
 
   const diffTargetDropId =
-    activeBranchSession?.rootDropId ?? existingDropId ?? editId ?? baseDropId ?? cloneId ?? null;
+    activeBranchSession?.rootDropId ??
+    existingDropId ??
+    editId ??
+    baseDropId ??
+    cloneId ??
+    null;
   const hasDiffTarget = Boolean(diffTargetDropId);
   const shouldWaitForRemoteBranchSession = Boolean(
     routeDropId && !offlineMode && !isOfflineDropId(routeDropId),
   );
   const shouldUseRemoteBranchDiff = Boolean(
-    activeBranchSession && !offlineMode && diffTargetDropId && !isOfflineDropId(diffTargetDropId),
+    activeBranchSession &&
+    !offlineMode &&
+    diffTargetDropId &&
+    !isOfflineDropId(diffTargetDropId),
   );
 
-  const authTokenProvider = useCallback(
-    () => getAccountSessionToken(),
-    [],
-  );
+  const authTokenProvider = useCallback(() => getAccountSessionToken(), []);
 
   const { flushPendingDiffs, publishDiffs } = useDiffChannel({
     dropId: diffTargetDropId,
@@ -172,6 +190,7 @@ const EditorPage: React.FC = () => {
     authTokenProvider,
     isOffline: !shouldUseRemoteBranchDiff,
     editor,
+    onRuntimeFacts: applyRuntimeFacts,
     enabled: shouldWaitForRemoteBranchSession
       ? Boolean(activeBranchSession?.rootDropId)
       : hasDiffTarget,
@@ -288,11 +307,17 @@ const EditorPage: React.FC = () => {
   }, [baseDropId, cloneId, draftStorageKey, editId, existingDropId, markdown]);
 
   useEffect(() => {
+    setBranchActivityOpen(false);
+  }, [activeBranchSession?.branchId, activeBranchSession?.rootDropId]);
+
+  useEffect(() => {
     if (!routeDropId) {
       ignoreDraftLoadRef.current = false;
       setExistingDropId(null);
       setActiveRootDropId(null);
       setActiveBranchSession(null);
+      editor.setRuntimeCaller(null);
+      editor.setRuntimePolicy(null);
       return;
     }
 
@@ -350,13 +375,21 @@ const EditorPage: React.FC = () => {
               clientId: branchClientIdRef.current,
             };
           } catch (branchError) {
-            console.error("Failed to resolve remote branch state:", branchError);
+            console.error(
+              "Failed to resolve remote branch state:",
+              branchError,
+            );
           }
         }
 
         const shouldEditInPlace = ownedByCurrentAccount;
 
         editor.reset();
+        editor.setRuntimePolicy(resolveRootRuntimePolicy(payload.metadata));
+        editor.setRuntimeCaller({
+          dropId: rootDropId,
+          branchId: nextBranchSession?.branchId,
+        });
         editor.seedSnapshot(content);
         setActiveRootDropId(rootDropId);
         setActiveBranchSession(nextBranchSession);
@@ -718,8 +751,11 @@ const EditorPage: React.FC = () => {
   );
 
   const searchGroups = useMemo<SearchableGroup<PaletteAction>[]>(() => {
-    const embedSnippet = '```embed\nhttps://www.youtube.com/embed/\n```';
+    const embedSnippet = "```embed\nhttps://www.youtube.com/embed/\n```";
     const embedUrlStart = embedSnippet.indexOf("https://");
+    const approvalSnippet =
+      '```approval(id="release-approval")\nApprove this action?\n```';
+    const approvalIdStart = approvalSnippet.indexOf("release-approval");
 
     const commandEntities: PaletteEntity[] = [
       {
@@ -779,6 +815,20 @@ const EditorPage: React.FC = () => {
           selectionStartOffset: embedUrlStart,
           selectionEndOffset:
             embedUrlStart + "https://www.youtube.com/embed/".length,
+        },
+      },
+      {
+        id: "block-approval",
+        type: "block",
+        title: "Insert approval block",
+        description:
+          "Records an authenticated human decision as a branch fact.",
+        keywords: ["approval", "decision", "human", "nullplug"],
+        value: {
+          kind: "insert-block",
+          snippet: approvalSnippet,
+          selectionStartOffset: approvalIdStart,
+          selectionEndOffset: approvalIdStart + "release-approval".length,
         },
       },
     ];
@@ -969,6 +1019,56 @@ const EditorPage: React.FC = () => {
     ],
   );
 
+  const handleSubmitNullplugResponse = useCallback(
+    async (fact: NullplugUiResponseFact) => {
+      if (!activeBranchSession) {
+        throw new Error(
+          "A remote branch session is required for approval responses.",
+        );
+      }
+      if (
+        fact.source.rootDropId !== activeBranchSession.rootDropId ||
+        fact.source.branchId !== activeBranchSession.branchId
+      ) {
+        throw new Error(
+          "The approval response does not match the active branch.",
+        );
+      }
+
+      const branchClient = createBranchApiClient({
+        baseUrl: "",
+        accountId: activeBranchSession.accountId,
+        clientId: activeBranchSession.clientId,
+        authTokenProvider,
+      });
+      await branchClient.submitNullplugResponse(fact);
+    },
+    [activeBranchSession, authTokenProvider],
+  );
+
+  const handleSubmitNullplugState = useCallback(
+    async (fact: NullplugUiStatePatchFact) => {
+      if (!activeBranchSession) {
+        throw new Error("A remote branch session is required for UI state.");
+      }
+      if (
+        fact.source.rootDropId !== activeBranchSession.rootDropId ||
+        fact.source.branchId !== activeBranchSession.branchId
+      ) {
+        throw new Error("The UI state does not match the active branch.");
+      }
+
+      const branchClient = createBranchApiClient({
+        baseUrl: "",
+        accountId: activeBranchSession.accountId,
+        clientId: activeBranchSession.clientId,
+        authTokenProvider,
+      });
+      await branchClient.submitNullplugState(fact);
+    },
+    [activeBranchSession, authTokenProvider],
+  );
+
   if (successUrl) {
     return (
       <ShareSuccessView
@@ -990,28 +1090,45 @@ const EditorPage: React.FC = () => {
 
   return (
     <div className="fixed inset-0 flex flex-col">
-        <EditorToolbar
-          canShare={Boolean(markdown.trim())}
-          isTransitioning={isTransitioning}
-          offlineMode={offlineMode}
-          shareVisibility={shareVisibility}
-          shareLabel={
-            shouldUseRemoteBranchDiff ? "Publish Branch" : "Share to the Void"
-          }
-          sharingLabel={shouldUseRemoteBranchDiff ? "Publishing..." : "Sharing..."}
-          sharing={sharing}
-          modeSwitching={modeSwitching}
-          onToggleMode={handleToggleMode}
-          onToggleShareVisibility={handleToggleShareVisibility}
-          onOpenLibrary={openLibrary}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onShare={shareDrop}
-        />
+      <EditorToolbar
+        canShare={Boolean(markdown.trim())}
+        canOpenBranches={Boolean(activeBranchSession && !offlineMode)}
+        isTransitioning={isTransitioning}
+        offlineMode={offlineMode}
+        shareVisibility={shareVisibility}
+        shareLabel={
+          shouldUseRemoteBranchDiff ? "Publish Branch" : "Share to the Void"
+        }
+        sharingLabel={
+          shouldUseRemoteBranchDiff ? "Publishing..." : "Sharing..."
+        }
+        sharing={sharing}
+        modeSwitching={modeSwitching}
+        onToggleMode={handleToggleMode}
+        onToggleShareVisibility={handleToggleShareVisibility}
+        onOpenLibrary={openLibrary}
+        onOpenBranches={() => setBranchActivityOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onShare={shareDrop}
+      />
 
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {activeBranchSession ? (
+        <BranchActivityDialog
+          open={branchActivityOpen}
+          onOpenChange={setBranchActivityOpen}
+          rootDropId={activeBranchSession.rootDropId}
+          activeBranchId={activeBranchSession.branchId}
+          activeContent={markdown}
+          accountId={activeBranchSession.accountId}
+          clientId={activeBranchSession.clientId}
+          authTokenProvider={authTokenProvider}
+        />
+      ) : null}
 
       <LibraryPalette
         open={libraryOpen}
@@ -1053,6 +1170,12 @@ const EditorPage: React.FC = () => {
           allowedUrls={allowedUrls}
           onRequestEdit={handlePreviewRequestEdit}
           onRequestAddNetworkHost={handleRequestAddNetworkHost}
+          onSubmitNullplugResponse={
+            activeBranchSession ? handleSubmitNullplugResponse : undefined
+          }
+          onSubmitNullplugState={
+            activeBranchSession ? handleSubmitNullplugState : undefined
+          }
         />
       </div>
     </div>

@@ -5,6 +5,10 @@ import {
   NullplugPrimitivePanel,
   NullplugProvider,
 } from "../../../lib/nullplug/react";
+import type {
+  NullplugUiResponseFact,
+  NullplugUiStatePatchFact,
+} from "../../../../shared/nullplug/ui";
 
 const EnhancedMarkdown = lazy(
   () => import("../../../components/EnhancedMarkdown"),
@@ -17,6 +21,8 @@ interface PreviewPaneProps {
   allowedUrls?: readonly string[];
   onRequestEdit?: (selection: { start: number; end: number } | null) => void;
   onRequestAddNetworkHost?: (host: string) => void;
+  onSubmitNullplugResponse?: (fact: NullplugUiResponseFact) => Promise<void>;
+  onSubmitNullplugState?: (fact: NullplugUiStatePatchFact) => Promise<void>;
 }
 
 const getPlainTextOffsetFromPoint = (
@@ -27,16 +33,20 @@ const getPlainTextOffsetFromPoint = (
   const doc = container.ownerDocument;
   if (!doc) return null;
 
-  const caretRangeFromPoint = (doc as Document & {
-    caretRangeFromPoint?: (x: number, y: number) => Range | null;
-  }).caretRangeFromPoint;
+  const caretRangeFromPoint = (
+    doc as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    }
+  ).caretRangeFromPoint;
 
-  const caretPositionFromPoint = (doc as Document & {
-    caretPositionFromPoint?: (
-      x: number,
-      y: number,
-    ) => { offsetNode: Node; offset: number } | null;
-  }).caretPositionFromPoint;
+  const caretPositionFromPoint = (
+    doc as Document & {
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
+    }
+  ).caretPositionFromPoint;
 
   let range: Range | null = null;
 
@@ -66,6 +76,8 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
   allowedUrls,
   onRequestEdit,
   onRequestAddNetworkHost,
+  onSubmitNullplugResponse,
+  onSubmitNullplugState,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -115,7 +127,10 @@ const PreviewPane: React.FC<PreviewPaneProps> = ({
           {markdown || "*Click to edit*"}
         </EnhancedMarkdown>
       </Suspense>
-      <NullplugProvider>
+      <NullplugProvider
+        submitResponse={onSubmitNullplugResponse}
+        patchState={onSubmitNullplugState}
+      >
         <NullplugPrimitivePanel className="mt-4 rounded-xl border border-border bg-muted/30 p-3" />
       </NullplugProvider>
     </div>
