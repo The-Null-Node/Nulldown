@@ -1,6 +1,10 @@
-import { asCompact } from "../../packages/nulldown-mcp/src/response";
+import { asCompact as asSourceCompact } from "./response";
+import { asCompact as asPackageCompact } from "../../packages/nulldown-mcp/src/response";
 
-describe("asCompact", () => {
+describe.each([
+  ["source", asSourceCompact],
+  ["package", asPackageCompact],
+])("asCompact (%s)", (_name, asCompact) => {
   it("preserves small responses as valid JSON", () => {
     const response = asCompact({ ok: true }, { maxTokens: 100 });
 

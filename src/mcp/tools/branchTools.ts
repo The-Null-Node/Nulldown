@@ -9,7 +9,12 @@ import type {
   DropDiffOp,
 } from "../../../shared/drop/diff";
 import { asCompact, asJsonText } from "../response";
-import { clientArgsSchema, createClient, extractMcpResponseArgs, mcpResponseArgsSchema } from "../tooling";
+import {
+  clientArgsSchema,
+  createClient,
+  extractMcpResponseArgs,
+  mcpResponseArgsSchema,
+} from "../tooling";
 
 /** Registers branch query/content and diff tools on the MCP server. */
 export const registerBranchTools = (server: McpServer): void => {
@@ -20,25 +25,34 @@ export const registerBranchTools = (server: McpServer): void => {
       description: "Resolve or create the current actor branch for a root drop.",
       inputSchema: {
         ...clientArgsSchema,
+        ...mcpResponseArgsSchema,
         dropId: z.string().describe("Root drop id."),
       },
     },
-    async (args) => asCompact(await createClient(args).resolveBranch(args.dropId)),
+    async (args) =>
+      asCompact(
+        await createClient(args).resolveBranch(args.dropId),
+        extractMcpResponseArgs(args),
+      ),
   );
 
   server.registerTool(
     "branch_content",
     {
       title: "Get Branch Content",
-      description: "Fetch exact materialized branch content.",
+      description: "Fetch materialized branch content; request format full for exact content.",
       inputSchema: {
         ...clientArgsSchema,
+        ...mcpResponseArgsSchema,
         rootId: z.string().describe("Root drop id."),
         branchId: z.string().describe("Branch id."),
       },
     },
     async (args) =>
-      asCompact(await createClient(args).getBranchContent(args.rootId, args.branchId)),
+      asCompact(
+        await createClient(args).getBranchContent(args.rootId, args.branchId),
+        extractMcpResponseArgs(args),
+      ),
   );
 
   server.registerTool(
@@ -67,10 +81,8 @@ export const registerBranchTools = (server: McpServer): void => {
         snapshotterId: z.string().optional(),
       },
     },
-    async (args) => {
-      const respOpts = extractMcpResponseArgs(args);
-      return asCompact(await createClient(args).queryBranch(args), respOpts);
-    },
+    async (args) =>
+      asCompact(await createClient(args).queryBranch(args), extractMcpResponseArgs(args)),
   );
 
   server.registerTool(
