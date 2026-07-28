@@ -1,7 +1,9 @@
 import {
+  NULLPLUG_INVOKE_CONTENT_TYPE,
   isRemoteNullplugManifest,
   isRemoteNullplugManifestAllowed,
   isRemoteNullplugRegistryRecord,
+  readLatestRemoteNullplugManifest,
   readRemoteNullplugManifest,
   remoteNullplugLatestKey,
   remoteNullplugManifestKey,
@@ -42,6 +44,7 @@ const record: RemoteNullplugRegistryRecord = {
     id: "remote.nd-summary",
     version: "1.0.0",
     endpoint: "https://plugins.nulldown.test/nd-summary",
+    contentType: NULLPLUG_INVOKE_CONTENT_TYPE,
     inputSchema: { type: "object" },
     outputSchema: { type: "object" },
     permissions: [
@@ -65,6 +68,12 @@ describe("remote nullplug registry helpers", () => {
       isRemoteNullplugManifest({
         ...record.manifest,
         permissions: [{ kind: "network", hosts: [42] }],
+      }),
+    ).toBe(false);
+    expect(
+      isRemoteNullplugManifest({
+        ...record.manifest,
+        id: "Remote.Summary",
       }),
     ).toBe(false);
   });

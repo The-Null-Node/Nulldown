@@ -4,10 +4,12 @@ import type {
   NullplugCaller,
   NullplugResult,
 } from "../../../shared/nullplug/types";
+import type { NullplugFenceInvocationForm } from "../../../shared/nullplug/fence";
 
 export interface PluginBlock {
   id: string;
   args: string | null;
+  invocationForm: NullplugFenceInvocationForm;
   start: number;
   end: number;
   content: string;

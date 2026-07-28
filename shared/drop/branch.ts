@@ -49,6 +49,14 @@ export interface DropBranchRecord {
   updatedAt: number;
 }
 
+/** Response listing persisted branches for a root drop. */
+export interface DropBranchListResponse {
+  /** Canonical root drop id. */
+  rootDropId: string;
+  /** Persisted branches for the root drop. */
+  branches: DropBranchRecord[];
+}
+
 /** Materialized branch snapshot record stored in D1/R2. */
 export interface DropSnapshotRecord {
   /** Snapshot record schema version. */

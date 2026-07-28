@@ -88,14 +88,31 @@ export interface NullplugInvokeRequest {
   context: NullplugInvokeContext;
 }
 
+/** Runtime-selected plugin and provider identity for one invocation. */
+export interface NullplugRuntimeResolution {
+  /** Resolved plugin id. */
+  pluginId: string;
+  /** Effective plugin version, when versioned. */
+  version?: string;
+  /** Provider that selected the invoker. */
+  providerId: string;
+  /** Provider endpoint or local runtime identifier. */
+  baseUrl: string;
+  /** Provider execution scope. */
+  scope: "local" | "remote";
+}
+
 export interface NullplugDiagnostic {
   level: "info" | "warn" | "error";
   message: string;
+  /** Stable machine-readable diagnostic code. */
+  code?: string;
 }
 
 export interface NullplugInvokeResponse {
   result: NullplugResult;
   diagnostics?: NullplugDiagnostic[];
+  resolution?: NullplugRuntimeResolution;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -308,7 +325,20 @@ export const isNullplugDiagnostic = (
   ) {
     return false;
   }
-  return isString(value.message);
+  return (
+    isString(value.message) &&
+    (value.code === undefined || isString(value.code))
+  );
+};
+
+const isNullplugRuntimeResolution = (
+  value: unknown,
+): value is NullplugRuntimeResolution => {
+  if (!isRecord(value)) return false;
+  if (!isString(value.pluginId)) return false;
+  if (value.version !== undefined && !isString(value.version)) return false;
+  if (!isString(value.providerId) || !isString(value.baseUrl)) return false;
+  return value.scope === "local" || value.scope === "remote";
 };
 
 export const isNullplugInvokeResponse = (
@@ -320,6 +350,12 @@ export const isNullplugInvokeResponse = (
     value.diagnostics !== undefined &&
     (!Array.isArray(value.diagnostics) ||
       !value.diagnostics.every(isNullplugDiagnostic))
+  ) {
+    return false;
+  }
+  if (
+    value.resolution !== undefined &&
+    !isNullplugRuntimeResolution(value.resolution)
   ) {
     return false;
   }

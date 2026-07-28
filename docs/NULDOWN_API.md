@@ -551,17 +551,25 @@ Query parameters:
 | `excludeClient` | no | Client ID to filter out. |
 | `limit` | no | Default `50`, max `200`. |
 | `branchId` | no | Explicit branch ID. |
+| `factCursor` | no | Enables branch runtime-fact polling. Accepts `__latest__` or an integer string and requires the authenticated branch owner or writer. |
+| `factLimit` | no | Runtime-fact page size. Default `50`, max `200`. |
 
 Response:
 
 ```json
 {
   "events": [],
-  "cursor": null
+  "cursor": null,
+  "facts": [],
+  "factCursor": "18"
 }
 ```
 
 `cursor=__latest__` returns no events and sets the cursor to the current branch head.
+When requested, `factCursor` advances independently through immutable `ui.response`,
+`ui.state.patch`, and `ui.state.snapshot` facts. It is tail-only during the
+`__latest__` handshake, matching the event channel; clients begin receiving
+facts written after they connect.
 
 Implementation: `functions/api/diff/[id].ts`.
 

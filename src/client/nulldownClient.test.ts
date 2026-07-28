@@ -8,6 +8,7 @@ import {
   buildDiffSigningPayload,
 } from "../../shared/drop/diffAuth";
 import { createNulldownClient } from "./nulldownClient";
+import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../shared/nullplug/registry";
 
 const base64UrlEncode = (value: string): string =>
   Buffer.from(value, "utf8")
@@ -64,7 +65,14 @@ describe("NulldownClient", () => {
       "sha256",
       "secret-1",
     )
-      .update(buildDiffSigningPayload("POST", "/api/diff/route-drop", timestamp, body))
+      .update(
+        buildDiffSigningPayload(
+          "POST",
+          "/api/diff/route-drop",
+          timestamp,
+          body,
+        ),
+      )
       .digest("hex")}`;
 
     expect(captured.url).toBe(
@@ -98,7 +106,12 @@ describe("NulldownClient", () => {
           return Response.json({ result: { content: "resolved" } });
         }
         if (requestUrl.endsWith("/api/nullplug/submit")) {
-          return Response.json({ stored: true, key: "response-key", fact: {} });
+          return Response.json({
+            stored: true,
+            indexed: true,
+            key: "response-key",
+            fact: {},
+          });
         }
         if (requestUrl.endsWith("/api/nullplug/state")) {
           return Response.json({ stored: true, key: "state-key", fact: {} });
@@ -151,6 +164,7 @@ describe("NulldownClient", () => {
       id: "remote.summary",
       version: "1.0.0",
       endpoint: "https://plugins.nulldown.test/summary",
+      contentType: NULLPLUG_INVOKE_CONTENT_TYPE,
       inputSchema: { type: "object" },
       outputSchema: { type: "object" },
       permissions: [{ kind: "drop.read", scope: "caller" }],

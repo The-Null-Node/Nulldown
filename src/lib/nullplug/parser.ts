@@ -5,19 +5,25 @@ markdown parsing or partial user input.
 */
 
 import type { PluginBlock } from "./types";
+import type { JsonValue } from "../../../shared/nullplug/types";
+import {
+  parseNullplugFenceInvocation,
+  type NullplugFenceInvocation,
+} from "../../../shared/nullplug/fence";
 
-const KEYWORD_PATTERN = /^[a-z0-9._:-]+$/i;
-const LEGACY_PLUGIN_INFO_PATTERN = /^plugin\(\s*(["'])([a-z0-9._:-]+)\1\s*\)$/i;
+export type ParsedPluginInvocation = NullplugFenceInvocation;
 
-export interface ParsedPluginInvocation {
-  id: string;
-  args: string | null;
-}
+const trimFenceIndent = (line: string): string | null => {
+  const indentation = /^[ \t]*/.exec(line)?.[0] ?? "";
+  if (indentation.includes("\t") || indentation.length > 3) return null;
+  return line.slice(indentation.length);
+};
 
 const parseFenceHeader = (
   line: string,
 ): { fenceChar: "`" | "~"; fenceLength: number; info: string } | null => {
-  const trimmed = line.trimStart();
+  const trimmed = trimFenceIndent(line);
+  if (trimmed === null) return null;
   const first = trimmed[0];
 
   if (first !== "`" && first !== "~") {
@@ -45,7 +51,9 @@ const isFenceCloser = (
   fenceChar: "`" | "~",
   minFenceLength: number,
 ): boolean => {
-  const trimmed = line.trim();
+  const indented = trimFenceIndent(line);
+  if (indented === null) return false;
+  const trimmed = indented.trimEnd();
   if (trimmed.length < minFenceLength) {
     return false;
   }
@@ -68,53 +76,43 @@ const nextLineEnd = (value: string, start: number): number => {
   return index === -1 ? value.length : index;
 };
 
-const normalizePluginId = (id: string): string => id.trim().toLowerCase();
+const ARGUMENT_PAIR_PATTERN =
+  /([a-zA-Z][\w.-]*)\s*=\s*("[^"]*"|'[^']*'|[^,\s]+)/g;
 
-const parseKeywordInvocation = (
-  value: string,
-): ParsedPluginInvocation | null => {
-  if (KEYWORD_PATTERN.test(value)) {
-    return {
-      id: normalizePluginId(value),
-      args: null,
-    };
+const parseArgumentValue = (raw: string): JsonValue => {
+  const trimmed = raw.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1);
   }
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  const numeric = Number(trimmed);
+  return trimmed && Number.isFinite(numeric) ? numeric : trimmed;
+};
 
-  const openParen = value.indexOf("(");
-  if (openParen <= 0 || !value.endsWith(")")) {
-    return null;
+/** Parses conservative fence arguments into the shared invocation DTO shape. */
+export const parseNullplugArguments = (
+  value: string | null,
+): Record<string, JsonValue> => {
+  if (!value) return {};
+  const args: Record<string, JsonValue> = {};
+  let match: RegExpExecArray | null;
+  while ((match = ARGUMENT_PAIR_PATTERN.exec(value)) !== null) {
+    if (match[1] && match[2] !== undefined) {
+      args[match[1]] = parseArgumentValue(match[2]);
+    }
   }
-
-  const id = value.slice(0, openParen).trim();
-  if (!KEYWORD_PATTERN.test(id)) {
-    return null;
-  }
-
-  const args = value.slice(openParen + 1, -1).trim();
-  return {
-    id: normalizePluginId(id),
-    args: args.length > 0 ? args : null,
-  };
+  return Object.keys(args).length ? args : { value: parseArgumentValue(value) };
 };
 
 export const parsePluginInvocation = (
   info: string,
-): ParsedPluginInvocation | null => {
-  const trimmed = info.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const legacyMatch = LEGACY_PLUGIN_INFO_PATTERN.exec(trimmed);
-  if (legacyMatch?.[2]) {
-    return {
-      id: normalizePluginId(legacyMatch[2]),
-      args: null,
-    };
-  }
-
-  return parseKeywordInvocation(trimmed);
-};
+): ParsedPluginInvocation | null => parseNullplugFenceInvocation(info);
 
 export const parsePluginId = (info: string): string | null => {
   const invocation = parsePluginInvocation(info);
@@ -182,6 +180,7 @@ export const parseNullplugBlocks = (markdown: string): PluginBlock[] => {
     blocks.push({
       id: invocation.id,
       args: invocation.args,
+      invocationForm: invocation.form,
       start: lineStart,
       end: blockEnd,
       content: markdown.slice(contentStart, closeLineStart),

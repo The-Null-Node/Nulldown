@@ -1,6 +1,7 @@
 import {
   createDropDiffRef,
   createDropDiffRenderableRef,
+  isDropBranchRuntimeFact,
   isDropDiffRef,
   isDropDiffRenderableRef,
 } from "./diff";
@@ -33,5 +34,39 @@ describe("DropDiffRef", () => {
     });
     expect(isDropDiffRef(ref)).toBe(true);
     expect(isDropDiffRef({ ...ref, ref: "<diff:other>" })).toBe(false);
+  });
+});
+
+describe("DropBranchRuntimeFact", () => {
+  it("requires the payload source to match its branch timeline", () => {
+    const fact = {
+      version: 1,
+      rootDropId: "root-1",
+      branchId: "branch-1",
+      seq: 0,
+      factId: "ui.state.patch:patch-1",
+      createdAt: 1,
+      fact: {
+        version: 1,
+        kind: "ui.state.patch",
+        id: "patch-1",
+        callId: "call-1",
+        createdAt: 1,
+        source: {
+          rootDropId: "root-1",
+          branchId: "branch-1",
+          callId: "call-1",
+        },
+        patch: [{ op: "set", path: ["approved"], value: true }],
+      },
+    };
+
+    expect(isDropBranchRuntimeFact(fact)).toBe(true);
+    expect(
+      isDropBranchRuntimeFact({
+        ...fact,
+        branchId: "other-branch",
+      }),
+    ).toBe(false);
   });
 });

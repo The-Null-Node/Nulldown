@@ -10,10 +10,26 @@ export {
 } from "./renderPipeline";
 export {
   parseNullplugBlocks,
+  parseNullplugArguments,
   parsePluginId,
   parsePluginInvocation,
 } from "./parser";
-export { normalizeNullplugRuntimeReturn } from "./runtime";
+export {
+  normalizeNullplugRuntimeReturn,
+  validateNullplugRuntimeResult,
+} from "./runtime";
+export {
+  createNullplugRuntime,
+  isNullplugRuntimeError,
+  NullplugRuntimeError,
+  type NullplugRuntimeResolver,
+  type VoidNullplugRuntime,
+} from "../../../shared/nullplug/runtime";
+export {
+  createRemoteNullplugRuntime,
+  getDefaultRemoteNullplugRuntime,
+  type CreateRemoteNullplugRuntimeOptions,
+} from "./providerRuntime";
 export type {
   NullplugContext,
   NullplugCall,

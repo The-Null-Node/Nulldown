@@ -28,6 +28,9 @@ import {
   pollDiffEvents,
   postDiffEvents,
 } from "../../functions/api/_lib/diffs/transport/service";
+import { onRequest as resolveNullplugProvider } from "../../functions/api/nullplug/resolve";
+import { onRequest as submitNullplugState } from "../../functions/api/nullplug/state";
+import { onRequest as submitNullplugResponse } from "../../functions/api/nullplug/submit";
 import { createDropIdentityRepository } from "../../functions/api/_lib/drops/identity/id";
 import {
   REMOTE_PUBLIC_DROP_INDEX_PREFIX,
@@ -49,6 +52,10 @@ import {
   flushBranchCommitBufferSnapshotters,
 } from "./nulledit";
 import { createVoidProvider } from "./provider";
+import {
+  createNullplugRuntime,
+  type VoidRuntimePolicy,
+} from "../../shared/nullplug/runtime";
 import { createMemoryVoidDataStore } from "./memoryDataStore";
 import { createFilesystemBlobStore } from "./filesystemBlobStore";
 import {
@@ -252,6 +259,10 @@ export const createLocalNulldownServer = ({
     LOG_LEVEL: logLevel,
   };
   const memory = createNullMemService({ blobs, sql, data });
+  const policy: VoidRuntimePolicy = {
+    prepare: (request) => request,
+    validate: (response) => response,
+  };
   if (sql) {
     snapshotterRegistry.register(
       createNulleditNullMemObserverSnapshotter({
@@ -303,6 +314,7 @@ export const createLocalNulldownServer = ({
   );
   const voidProvider = createVoidProvider({
     data,
+    nullplug: createNullplugRuntime({ resolvers: [], policy }),
     nulledit: {
       registerSnapshotter: (snapshotter) =>
         snapshotterRegistry.register(snapshotter),
@@ -326,6 +338,7 @@ export const createLocalNulldownServer = ({
         ),
     },
     memory,
+    policy,
   });
   const repairBufferedCommitsForQuery = ({
     rootDropId,
@@ -383,6 +396,36 @@ export const createLocalNulldownServer = ({
       path: "/api/diff/:id",
       handler: ({ request, params }) =>
         postDiffEvents(env, routeParams(params), request, { voidProvider }),
+    },
+    {
+      method: "POST",
+      path: "/api/nullplug/resolve",
+      handler: ({ request }) =>
+        resolveNullplugProvider({
+          request,
+          env,
+          params: {},
+        } as Parameters<typeof resolveNullplugProvider>[0]),
+    },
+    {
+      method: "POST",
+      path: "/api/nullplug/submit",
+      handler: ({ request }) =>
+        submitNullplugResponse({
+          request,
+          env,
+          params: {},
+        } as Parameters<typeof submitNullplugResponse>[0]),
+    },
+    {
+      method: "POST",
+      path: "/api/nullplug/state",
+      handler: ({ request }) =>
+        submitNullplugState({
+          request,
+          env,
+          params: {},
+        } as Parameters<typeof submitNullplugState>[0]),
     },
     {
       method: "GET",

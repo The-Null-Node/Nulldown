@@ -5,6 +5,7 @@ import type {
   RemoteNullplugManifest,
   RemoteNullplugRegistryRecord,
 } from "./registry";
+import { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
 
 const finiteNumberSchema = z.number().finite();
 
@@ -37,9 +38,10 @@ export const NullplugPermissionSchema = z.discriminatedUnion("kind", [
 ]) satisfies z.ZodType<NullplugPermission>;
 
 export const RemoteNullplugManifestSchema = z.object({
-  id: z.string(),
+  id: z.string().regex(/^[a-z0-9._:-]+$/),
   version: z.string(),
   endpoint: z.string(),
+  contentType: z.literal(NULLPLUG_INVOKE_CONTENT_TYPE),
   inputSchema: NullplugRegistryJsonRecordSchema,
   outputSchema: NullplugRegistryJsonRecordSchema,
   permissions: z.array(NullplugPermissionSchema),

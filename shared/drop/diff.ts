@@ -7,6 +7,10 @@ string-based op shape while carrying the native encoded diff alongside it.
 import { DiffOp, type Diff, type DiffRange } from "../nulledit/types";
 import { decodeText, encodeText } from "../nulledit/textDiff";
 import {
+  isNullplugUiRuntimeFact,
+  type NullplugUiRuntimeFact,
+} from "../nullplug/ui";
+import {
   DropDiffEnvelopeSchema,
   DropDiffEventMetadataSchema,
   DropDiffEventSchema,
@@ -130,12 +134,34 @@ export interface DropDiffEnvelope {
   events: DropDiffEvent[];
 }
 
+/** Immutable Nullplug runtime fact appended to a branch-local fact timeline. */
+export interface DropBranchRuntimeFact {
+  /** Fact-log schema version. */
+  version: 1;
+  /** Root drop id that owns this branch timeline. */
+  rootDropId: string;
+  /** Branch id that owns this fact timeline. */
+  branchId: string;
+  /** Monotonic, branch-local fact sequence assigned by the server. */
+  seq: number;
+  /** Stable fact identity used for idempotent writes. */
+  factId: string;
+  /** Server-assigned append time in epoch milliseconds. */
+  createdAt: number;
+  /** Immutable runtime fact payload. */
+  fact: NullplugUiRuntimeFact;
+}
+
 /** Poll response for branch diff transport. */
 export interface DropDiffPollResponse {
   /** Events after the requested cursor. */
   events: DropDiffEvent[];
   /** Cursor to send on the next poll, or null when no events are available. */
   cursor: string | null;
+  /** Runtime facts after the optional requested fact cursor. */
+  facts?: DropBranchRuntimeFact[];
+  /** Cursor to send on the next runtime-fact poll. */
+  factCursor?: string | null;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -145,6 +171,23 @@ const isString = (value: unknown): value is string => typeof value === "string";
 
 const isNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+
+/** Checks whether a value is a branch-local, cursor-addressable runtime fact. */
+export const isDropBranchRuntimeFact = (
+  value: unknown,
+): value is DropBranchRuntimeFact => {
+  if (!isRecord(value)) return false;
+  if (value.version !== 1) return false;
+  if (!isString(value.rootDropId) || !isString(value.branchId)) return false;
+  if (!Number.isInteger(value.seq) || value.seq < 0) return false;
+  if (!isString(value.factId) || !isNumber(value.createdAt)) return false;
+  if (!isNullplugUiRuntimeFact(value.fact)) return false;
+
+  return (
+    value.fact.source.rootDropId === value.rootDropId &&
+    value.fact.source.branchId === value.branchId
+  );
+};
 
 /** Formats an event id as a renderable diff reference. */
 export const createDropDiffRenderableRef = (

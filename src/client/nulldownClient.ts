@@ -255,6 +255,7 @@ export interface NulldownDiffApplyRequest {
 /** Response returned after storing an immutable nullplug UI response fact. */
 export interface NulldownNullplugSubmitResult {
   stored: boolean;
+  indexed: boolean;
   key: string;
   fact: NullplugUiResponseFact;
 }
@@ -663,9 +664,7 @@ export class NulldownClient {
   }
 
   /** Lists active remote nullplug manifests. */
-  async listNullplugRegistry(): Promise<
-    NulldownNullplugRegistryListResult | null
-  > {
+  async listNullplugRegistry(): Promise<NulldownNullplugRegistryListResult | null> {
     const response = await this.request<NulldownNullplugRegistryListResult>(
       "/api/nullplug/registry",
     );

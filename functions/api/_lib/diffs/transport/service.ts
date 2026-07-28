@@ -26,6 +26,9 @@ import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import {
   createBranchDiffRepository,
 } from "../../branches/storage/diffLogRepository";
+import {
+  createBranchRuntimeFactLogRepository,
+} from "../../branches/storage/runtimeFactLogRepository";
 import { resolveBranchForActor } from "../../branches/lifecycle/service";
 import { createBranchRepository } from "../../branches/storage/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
@@ -85,6 +88,15 @@ const diffPollQuerySchema = z
       .transform((value) => Number.parseInt(value, 10))
       .pipe(z.number().int().min(1).max(MAX_POLL_LIMIT))
       .optional(),
+    factCursor: z
+      .union([z.literal("__latest__"), z.string().regex(/^-?\d+$/)])
+      .optional(),
+    factLimit: z
+      .string()
+      .regex(/^\d+$/)
+      .transform((value) => Number.parseInt(value, 10))
+      .pipe(z.number().int().min(1).max(MAX_POLL_LIMIT))
+      .optional(),
   })
   .strict();
 
@@ -106,6 +118,8 @@ const parseDiffPollQuery = (request: Request): DiffPollQuery => {
   };
   const excludeClient = url.searchParams.get("excludeClient");
   const limit = url.searchParams.get("limit");
+  const factCursor = url.searchParams.get("factCursor");
+  const factLimit = url.searchParams.get("factLimit");
 
   if (excludeClient !== null) {
     query.excludeClient = excludeClient;
@@ -113,11 +127,29 @@ const parseDiffPollQuery = (request: Request): DiffPollQuery => {
   if (limit !== null) {
     query.limit = limit;
   }
+  if (factCursor !== null) {
+    query.factCursor = factCursor;
+  }
+  if (factLimit !== null) {
+    query.factLimit = factLimit;
+  }
 
   return parseWithSchema(
     diffPollQuerySchema,
     query,
     "Invalid diff poll query.",
+  );
+};
+
+const canReadRuntimeFacts = async (
+  env: DiffTransportEnv,
+  request: Request,
+  branch: DropBranchRecord,
+): Promise<boolean> => {
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  return Boolean(
+    accountId &&
+      (accountId === branch.ownerAccountId || accountId === branch.writerAccountId),
   );
 };
 
@@ -320,28 +352,54 @@ export const pollDiffEvents = async (
 
     const query = parseDiffPollQuery(request);
     const cursorParam = query.cursor;
+    const factCursorParam = query.factCursor;
     const branchDiffRepository = createBranchDiffRepository({
       blobs: env.R2_BUCKET,
       sql: env.DB,
     });
+    const branchRuntimeFactRepository = createBranchRuntimeFactLogRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const branch = await resolveBranchForDiffRequest(env, id, request, {
+      mode: "none",
+      branchId: resolveRequestedBranchId(request),
+      clientId: sanitizeDiffAuthToken(query.excludeClient ?? null),
+    });
+    if (
+      factCursorParam !== undefined &&
+      !(await canReadRuntimeFacts(env, request, branch))
+    ) {
+      logger.logEnd(403, {
+        reason: "runtime_fact_read_forbidden",
+        dropRef: toLogRef(id),
+        branchRef: toLogRef(branch.branchId),
+      });
+      return new Response(
+        "You are not allowed to read runtime facts for this branch.",
+        { status: 403 },
+      );
+    }
 
     if (cursorParam === "__latest__") {
       // The editor handshake asks for the current cursor only so it can start tailing fresh events.
-      const branch = await resolveBranchForDiffRequest(env, id, request, {
-        mode: "none",
-        branchId: resolveRequestedBranchId(request),
-        clientId: sanitizeDiffAuthToken(query.excludeClient ?? null),
-      });
-      const maxSeq =
+      const [maxSeq, maxFactSeq] = await Promise.all([
         typeof branch.headEventSeq === "number"
           ? branch.headEventSeq
-          : await branchDiffRepository.readBranchHeadEventSeq(
+          : branchDiffRepository.readBranchHeadEventSeq(id, branch.branchId),
+        factCursorParam !== undefined
+          ? branchRuntimeFactRepository.readBranchHeadRuntimeFactSeq(
               id,
               branch.branchId,
-            );
+            )
+          : Promise.resolve(-1),
+      ]);
       const response: DropDiffPollResponse = {
         events: [],
         cursor: maxSeq >= 0 ? String(maxSeq) : null,
+        ...(factCursorParam !== undefined
+          ? { facts: [], factCursor: String(maxFactSeq) }
+          : {}),
       };
 
       logger.logEnd(200, {
@@ -349,6 +407,7 @@ export const pollDiffEvents = async (
         branchRef: toLogRef(branch.branchId),
         returned: 0,
         totalStored: maxSeq + 1,
+        totalFacts: maxFactSeq + 1,
       });
 
       return jsonResponse(response);
@@ -358,26 +417,46 @@ export const pollDiffEvents = async (
       cursorParam !== null ? Number.parseInt(cursorParam, 10) : -1;
     const excludeClient = query.excludeClient;
     const limit = query.limit ?? DEFAULT_POLL_LIMIT;
-
-    const branch = await resolveBranchForDiffRequest(env, id, request, {
-      mode: "none",
-      branchId: resolveRequestedBranchId(request),
-      clientId: sanitizeDiffAuthToken(excludeClient),
-    });
-
-    const page = await branchDiffRepository.pollBranchDiffEventsSince(
+    const pagePromise = branchDiffRepository.pollBranchDiffEventsSince(
       id,
       branch.branchId,
       afterSeq,
       limit,
       excludeClient,
     );
+    const factsPromise =
+      factCursorParam === undefined
+        ? Promise.resolve(null)
+        : factCursorParam === "__latest__"
+          ? branchRuntimeFactRepository
+              .readBranchHeadRuntimeFactSeq(id, branch.branchId)
+              .then((headSeq) => ({
+                facts: [],
+                nextCursor: headSeq,
+                headSeq,
+              }))
+          : branchRuntimeFactRepository.pollBranchRuntimeFactsSince(
+              id,
+              branch.branchId,
+              Number.parseInt(factCursorParam, 10),
+              query.factLimit ?? DEFAULT_POLL_LIMIT,
+            );
+    const [page, factPage] = await Promise.all([pagePromise, factsPromise]);
     const nextCursor =
       page.nextCursor !== null ? String(page.nextCursor) : null;
 
     const response: DropDiffPollResponse = {
       events: page.events,
       cursor: nextCursor,
+      ...(factPage
+        ? {
+            facts: factPage.facts,
+            factCursor:
+              factPage.nextCursor !== null
+                ? String(factPage.nextCursor)
+                : null,
+          }
+        : {}),
     };
 
     logger.logEnd(200, {
@@ -385,6 +464,8 @@ export const pollDiffEvents = async (
       branchRef: toLogRef(branch.branchId),
       returned: page.events.length,
       totalStored: page.headSeq + 1,
+      returnedFacts: factPage?.facts.length ?? 0,
+      totalFacts: factPage ? factPage.headSeq + 1 : undefined,
     });
 
     return jsonResponse(response);
