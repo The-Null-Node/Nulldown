@@ -551,17 +551,25 @@ Query parameters:
 | `excludeClient` | no | Client ID to filter out. |
 | `limit` | no | Default `50`, max `200`. |
 | `branchId` | no | Explicit branch ID. |
+| `factCursor` | no | Enables branch runtime-fact polling. Accepts `__latest__` or an integer string and requires the authenticated branch owner or writer. |
+| `factLimit` | no | Runtime-fact page size. Default `50`, max `200`. |
 
 Response:
 
 ```json
 {
   "events": [],
-  "cursor": null
+  "cursor": null,
+  "facts": [],
+  "factCursor": "18"
 }
 ```
 
 `cursor=__latest__` returns no events and sets the cursor to the current branch head.
+When requested, `factCursor` advances independently through immutable `ui.response`,
+`ui.state.patch`, and `ui.state.snapshot` facts. It is tail-only during the
+`__latest__` handshake, matching the event channel; clients begin receiving
+facts written after they connect.
 
 Implementation: `functions/api/diff/[id].ts`.
 
@@ -580,6 +588,13 @@ bun run nd -- diff apply <dropId> --branch <branchId> --metadata-file event-meta
 bun run nd -- diff batch <dropId> --branch <branchId> --body-file batch.json --json
 bun run nd -- diff event <dropId> --branch <branchId> --body-file event.json --json
 ```
+
+For an explicit `nd diff apply` retry, pass `--event-id` and `--created-at`
+together with the original operation and metadata. The server returns
+acknowledgements with the durable event sequence and snapshot; clients must treat
+a missing or malformed acknowledgement as an unconfirmed result. `nd diff replace`
+recomputes from live branch content and cannot be replayed by identity alone; save
+and retry its exact envelope with `nd diff event` or `nd diff batch` instead.
 
 Request body:
 
@@ -614,9 +629,18 @@ Response:
 ```json
 {
   "accepted": 1,
+  "deduplicated": 0,
   "branchId": "clone_anonymous",
   "snapshotId": 1,
-  "totalStored": 1
+  "totalStored": 1,
+  "acknowledgements": [
+    {
+      "eventId": "client-unique-id",
+      "seq": 0,
+      "snapshotId": 1,
+      "status": "accepted"
+    }
+  ]
 }
 ```
 
@@ -1099,15 +1123,31 @@ Implementation: `functions/api/nullplug/state.ts`.
 
 ### POST /api/branches/:rootId/:branchId/promote
 
-Create a new drop from branch head content.
+Create a new drop from one observed branch head. The request is fenced to the
+snapshot the caller observed and must carry a stable idempotency key. Reuse the
+same key after a lost response; do not generate a second promotion request.
 
 CLI example:
 
 ```bash
-bun run nd -- branch promote <rootId> <branchId> --token <account-session-token> --json
+bun run nd -- branch promote <rootId> <branchId> --expected-snapshot <n> --idempotency-key <key> --token <account-session-token> --json
 ```
 
 Auth: account session required. The account must be the branch owner or writer.
+
+Request:
+
+```json
+{
+  "expectedSnapshotId": 3,
+  "idempotencyKey": "publish-2026-08-12-1"
+}
+```
+
+`409 promotion_head_mismatch` means the branch advanced before the first
+promotion committed. Refresh the branch and use a new key for its new snapshot.
+`409 promotion_idempotency_mismatch` means the key was already used for a
+different snapshot.
 
 Response:
 

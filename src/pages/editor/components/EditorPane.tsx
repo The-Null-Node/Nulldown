@@ -20,6 +20,7 @@ interface EditorPaneProps {
   visible?: boolean;
   editorState: {
     editorHidden: boolean;
+    syncReadOnly?: boolean;
   };
 
   markdown: string;
@@ -480,7 +481,7 @@ const EditorPane: React.FC<EditorPaneProps> = ({
         onBlur={handleBlur}
         onMouseUp={handleMouseUp}
         onSelect={handleSelect}
-        readOnly={editorState.editorHidden}
+        readOnly={editorState.editorHidden || editorState.syncReadOnly}
         placeholder="Ready to take your text."
         className="w-full h-full resize-none bg-card border border-border rounded-md p-4 text-foreground font-mono focus:border-accent focus:outline-none"
         autoFocus

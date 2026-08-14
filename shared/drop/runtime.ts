@@ -5,6 +5,7 @@ import type {
   JsonValue,
   NullplugDiagnostic,
   NullplugMutation,
+  NullplugRuntimeResolution,
   NullplugYield,
 } from "../nullplug/types";
 import type { NullplugUiPrimitive } from "../nullplug/ui";
@@ -154,8 +155,39 @@ export interface DropRuntimeNullplugRenderState {
   diagnostics: NullplugDiagnostic[];
   /** Call ids included in the render. */
   callIds: string[];
+  /** Runtime fact identities already applied to this render frame. */
+  runtimeFactIds?: string[];
   /** Durable refs for resolved nullplug artifacts. */
   resolutionRefs?: DropRuntimeNullplugResolutionRef[];
+}
+
+/** Final outcome of one nullplug fence processed during a render. */
+export type DropRuntimeNullplugCallStatus = "resolved" | "blocked" | "failed";
+
+/** Structured failure retained when an invocation produced no accepted response. */
+export interface DropRuntimeNullplugCallFailure {
+  code: string;
+  message: string;
+}
+
+/** Ordered per-invocation provenance retained by a render frame. */
+export interface DropRuntimeNullplugCallProvenance {
+  /** Zero-based invocation occurrence within this frame. */
+  index: number;
+  /** Half-open range in the original source markdown. */
+  sourceRange: { start: number; end: number };
+  /** Requested plugin id. */
+  pluginId: string;
+  /** Runtime-selected plugin and provider identity, when resolution succeeded. */
+  resolution?: NullplugRuntimeResolution;
+  /** Outcome after invocation and provider policy filtering. */
+  status: DropRuntimeNullplugCallStatus;
+  /** Semantic call ids emitted by this invocation. */
+  callIds: string[];
+  /** Diagnostics attributable to this invocation. */
+  diagnostics: NullplugDiagnostic[];
+  /** Structured boundary failure when the invocation did not resolve. */
+  failure?: DropRuntimeNullplugCallFailure;
 }
 
 /** Render-frame provenance for the latest winning editor render. */
@@ -180,7 +212,9 @@ export interface DropRuntimeRenderFrame {
   acceptedDiffRefs: DropDiffRef[];
   /** Durable resolver refs included in the render. */
   resolverRefs: string[];
-  /** Nullplug call ids included in the render. */
+  /** Ordered nullplug invocations included in the render. */
+  nullplugCalls: DropRuntimeNullplugCallProvenance[];
+  /** Deduplicated semantic call ids derived from `nullplugCalls`. */
   nullplugCallIds: string[];
   /** Diagnostics emitted while rendering. */
   diagnostics: NullplugDiagnostic[];

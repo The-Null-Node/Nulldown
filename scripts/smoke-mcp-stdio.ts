@@ -53,6 +53,14 @@ const readTextContent = (result: Awaited<ReturnType<Client["callTool"]>>): strin
   return first.text;
 };
 
+const requireInputValidationError = (
+  result: Awaited<ReturnType<Client["callTool"]>>,
+): void => {
+  if (!result.isError || !readTextContent(result).includes("Input validation error")) {
+    fail("MCP diff_apply accepted an incomplete retry identity.", { result });
+  }
+};
+
 const main = async () => {
   const { command, args } = parseArgs();
   const transport = new StdioClientTransport({
@@ -77,6 +85,22 @@ const main = async () => {
     const missingTools = expectedTools.filter((tool) => !toolNames.includes(tool));
     if (missingTools.length > 0) {
       fail("MCP tools/list missed expected tools.", { missingTools, toolNames });
+    }
+
+    for (const identity of [{ eventId: "retry-1" }, { createdAt: 1 }]) {
+      requireInputValidationError(
+        await withTimeout(
+          client.callTool({
+            name: "diff_apply",
+            arguments: {
+              dropId: "retry-validation-only",
+              ops: [{ type: "insert", start: 0, end: 0, text: "x" }],
+              ...identity,
+            },
+          }),
+          "MCP diff_apply retry identity validation",
+        ),
+      );
     }
 
     const queryResult = await withTimeout(
@@ -190,7 +214,7 @@ const main = async () => {
         name: "branch_content",
         arguments: {
           baseUrl: process.env.ND_BASE_URL ?? "https://nulldown.app",
-          rootId: "1wrhjx8Wzk67",
+          rootId: "UubhvMyw6N3a",
           branchId: "clone_account:91c993ac-2c8c-46d6-aaec-5d31e610a2b7",
           format: "full",
           maxTokens: 8000,

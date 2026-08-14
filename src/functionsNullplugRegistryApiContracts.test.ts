@@ -3,6 +3,7 @@ import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/nullplug/registry";
 import {
+  NULLPLUG_INVOKE_CONTENT_TYPE,
   NULLPLUG_MANIFEST_SIGNATURE_PREFIX,
   serializeRemoteNullplugManifestForSignature,
   type RemoteNullplugManifest,
@@ -59,7 +60,11 @@ class MemoryR2Bucket {
     return { key, etag: next.etag, uploaded };
   }
 
-  async list(options?: { prefix?: string; limit?: number }): Promise<any> {
+  async list(options?: {
+    prefix?: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<any> {
     const prefix = options?.prefix ?? "";
     const limit = options?.limit ?? 1000;
     const objects = [...this.objects.entries()]
@@ -88,6 +93,7 @@ const createManifest = (): RemoteNullplugManifest =>
     id: "remote.summary",
     version: "1.0.0",
     endpoint: "https://plugins.nulldown.test/summary",
+    contentType: NULLPLUG_INVOKE_CONTENT_TYPE,
     inputSchema: { type: "object" },
     outputSchema: { type: "object" },
     permissions: [
@@ -169,6 +175,23 @@ describe("functions api nullplug registry contracts", () => {
     const body = (await response.json()) as { code: string };
     expect(response.status).toBe(401);
     expect(body.code).toBe("unauthorized");
+  });
+
+  it("forwards registry cursors to R2 listing", async () => {
+    const bucket = new MemoryR2Bucket();
+    const list = jest.spyOn(bucket, "list");
+    const response = await onRequest({
+      request: new Request(
+        "https://nulldown.test/api/nullplug/registry?cursor=next-page",
+      ),
+      env: envFor(bucket),
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(200);
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: "next-page" }),
+    );
   });
 
   it("rejects invalid signatures and disallowed manifests", async () => {

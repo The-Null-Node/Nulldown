@@ -20,6 +20,14 @@ export const DIFF_METADATA_KEY_MAX_LENGTH = 120;
 const finiteNumberSchema = z.number().finite();
 const sequenceNumberSchema = finiteNumberSchema.int().min(-1);
 const tokenSchema = z.string().trim().min(1).max(DIFF_TOKEN_MAX_LENGTH);
+/** Stable event identifier accepted by durable diff retry surfaces. */
+export const DropDiffEventIdSchema = z
+  .string()
+  .min(1)
+  .max(DIFF_TOKEN_MAX_LENGTH)
+  .refine((value) => value.trim() === value, {
+    message: "Event id must not include surrounding whitespace.",
+  });
 const metadataStringSchema = z.string().max(DIFF_METADATA_STRING_MAX_LENGTH);
 const base64Schema = z
   .string()

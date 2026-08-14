@@ -20,7 +20,10 @@ import {
   createWriterKey,
 } from "../storage/keys";
 import { createBranchDiffRepository } from "../storage/diffLogRepository";
-import { withBranchMutationLock } from "../storage/mutationLock";
+import {
+  withBranchMutationLock,
+  type BranchMutationLockContext,
+} from "../storage/mutationLock";
 import {
   createBranchRepository,
   readR2Text,
@@ -126,11 +129,13 @@ export const getOwnerAccountIdForDrop = async (
   return null;
 };
 
-/** Upgrades a branch to heap-v2 event storage without removing legacy fallback data. */
-export const ensureBranchHeapV2 = async (
+/** Upgrades a branch to heap-v2 event storage while the caller holds its mutation fence. */
+export const ensureBranchHeapV2ForMutation = async (
   bucket: VoidBlobStore,
   branch: DropBranchRecord,
+  lock: BranchMutationLockContext,
   db?: VoidSqlStore,
+  expectedEtag?: string,
 ): Promise<DropBranchRecord> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const branchDiffRepository = createBranchDiffRepository({
@@ -144,15 +149,57 @@ export const ensureBranchHeapV2 = async (
     return branch;
   }
 
+  // The migration writes canonical event objects before publishing the branch head.
+  await lock.beginCommit();
+
   const legacyEvents = await branchDiffRepository.readLegacyBranchDiffLog(
     branch.rootDropId,
     branch.branchId,
   );
+  const snapshots = await branchRepository.listSnapshotsForBranch(
+    branch.rootDropId,
+    branch.branchId,
+  );
+  const snapshotsById = new Map(
+    snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]),
+  );
+  const snapshotIdByEventId = new Map<string, number>();
+  const visitedSnapshotIds = new Set<number>();
+  let snapshotId: number | null = branch.headSnapshotId;
+  while (snapshotId !== null && !visitedSnapshotIds.has(snapshotId)) {
+    visitedSnapshotIds.add(snapshotId);
+    const snapshot = snapshotsById.get(snapshotId);
+    if (
+      !snapshot ||
+      snapshot.rootDropId !== branch.rootDropId ||
+      snapshot.branchId !== branch.branchId
+    ) {
+      break;
+    }
+    snapshot.eventIds.forEach((eventId) => {
+      if (!snapshotIdByEventId.has(eventId)) {
+        snapshotIdByEventId.set(eventId, snapshot.snapshotId);
+      }
+    });
+    if (
+      snapshot.parentSnapshotId !== null &&
+      snapshot.parentSnapshotId >= snapshot.snapshotId
+    ) {
+      break;
+    }
+    snapshotId = snapshot.parentSnapshotId;
+  }
+  const normalizedLegacyEvents = legacyEvents.map((event) => ({
+    ...event,
+    ...(event.snapshotId === undefined && snapshotIdByEventId.has(event.eventId)
+      ? { snapshotId: snapshotIdByEventId.get(event.eventId)! }
+      : {}),
+  }));
 
-  if (legacyEvents.length > 0) {
+  if (normalizedLegacyEvents.length > 0) {
     // Migration is additive: copy legacy log entries into per-seq objects before flipping the branch version.
     await Promise.all(
-      legacyEvents.map((event) =>
+      normalizedLegacyEvents.map((event) =>
         branchDiffRepository.writeBranchDiffEvent(
           branch.rootDropId,
           branch.branchId,
@@ -162,7 +209,7 @@ export const ensureBranchHeapV2 = async (
     );
 
     await Promise.all(
-      legacyEvents.map((event) =>
+      normalizedLegacyEvents.map((event) =>
         bucket.put(
           createBranchDiffEventIdKey(
             branch.rootDropId,
@@ -179,8 +226,8 @@ export const ensureBranchHeapV2 = async (
     );
   }
 
-  const maxSeq = legacyEvents.length
-    ? Math.max(...legacyEvents.map((event) => event.seq))
+  const maxSeq = normalizedLegacyEvents.length
+    ? Math.max(...normalizedLegacyEvents.map((event) => event.seq))
     : await branchDiffRepository.readBranchHeadEventSeq(
         branch.rootDropId,
         branch.branchId,
@@ -196,8 +243,59 @@ export const ensureBranchHeapV2 = async (
     ),
   };
 
-  await branchRepository.writeBranch(upgraded);
+  if (!(await branchRepository.writeBranch(upgraded, expectedEtag))) {
+    throw new Error("branch_head_fenced_write_failed");
+  }
+  await Promise.all(
+    normalizedLegacyEvents.map((event) => {
+      if (event.snapshotId === undefined) {
+        return Promise.resolve();
+      }
+      return branchDiffRepository.writeBranchDiffEventIdMarker(
+        branch.rootDropId,
+        branch.branchId,
+        event,
+      );
+    }),
+  );
   return upgraded;
+};
+
+/** Upgrades a branch to heap-v2 event storage without removing legacy fallback data. */
+export const ensureBranchHeapV2 = async (
+  bucket: VoidBlobStore,
+  branch: DropBranchRecord,
+  db?: VoidSqlStore,
+): Promise<DropBranchRecord> => {
+  if (
+    branch.snapshotHeapVersion === 2 &&
+    typeof branch.headEventSeq === "number"
+  ) {
+    return branch;
+  }
+
+  const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
+  return withBranchMutationLock(
+    bucket,
+    branch.rootDropId,
+    branch.branchId,
+    async (lock) => {
+      const current = await branchRepository.readBranchWithEtag(
+        branch.rootDropId,
+        branch.branchId,
+      );
+      if (!current) {
+        throw new Error("Branch not found.");
+      }
+      return ensureBranchHeapV2ForMutation(
+        bucket,
+        current.branch,
+        lock,
+        db,
+        current.etag,
+      );
+    },
+  );
 };
 
 const readWriterBranchId = async (
@@ -418,12 +516,18 @@ export const backfillBranchToSnapshotHeapV2 = async (
     return null;
   }
 
-  return withBranchMutationLock(bucket, rootDropId, branchId, async () => {
-    const latest = await branchRepository.readBranch(rootDropId, branchId);
-    if (!latest) {
+  return withBranchMutationLock(bucket, rootDropId, branchId, async (lock) => {
+    const current = await branchRepository.readBranchWithEtag(rootDropId, branchId);
+    if (!current) {
       return null;
     }
 
-    return ensureBranchHeapV2(bucket, latest, db);
+    return ensureBranchHeapV2ForMutation(
+      bucket,
+      current.branch,
+      lock,
+      db,
+      current.etag,
+    );
   });
 };

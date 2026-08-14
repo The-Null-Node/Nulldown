@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  GitBranch,
   Cloud,
   Globe,
   HardDrive,
@@ -11,10 +12,14 @@ import {
 import { Button } from "@/components/ui/button";
 
 interface EditorToolbarProps {
+  canOpenBranches?: boolean;
   canShare: boolean;
   isTransitioning: boolean;
   offlineMode: boolean;
   shareVisibility: "private" | "unlisted" | "public";
+  syncLabel?: string | null;
+  syncTitle?: string | null;
+  canTakeOverBranch?: boolean;
   shareLabel?: string;
   sharingLabel?: string;
   sharing: boolean;
@@ -22,15 +27,21 @@ interface EditorToolbarProps {
   onToggleMode: () => void;
   onToggleShareVisibility: () => void;
   onOpenLibrary: () => void;
+  onOpenBranches?: () => void;
   onOpenSettings: () => void;
+  onTakeOverBranch?: () => void;
   onShare: () => void;
 }
 
 const EditorToolbar: React.FC<EditorToolbarProps> = ({
   canShare,
+  canOpenBranches = false,
   isTransitioning,
   offlineMode,
   shareVisibility,
+  syncLabel,
+  syncTitle,
+  canTakeOverBranch = false,
   shareLabel = "Share to the Void",
   sharingLabel = "Sharing...",
   sharing,
@@ -38,7 +49,9 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onToggleMode,
   onToggleShareVisibility,
   onOpenLibrary,
+  onOpenBranches,
   onOpenSettings,
+  onTakeOverBranch,
   onShare,
 }) => {
   const visibilityLabel =
@@ -89,6 +102,20 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           )}
           {modeSwitching ? "Switching..." : offlineMode ? "Offline" : "Online"}
         </Button>
+        {syncLabel ? (
+          <span
+            className="hidden rounded-full border border-border px-2 py-1 text-xs text-muted sm:inline-flex"
+            title={syncTitle ?? undefined}
+            aria-label={syncTitle ?? syncLabel}
+          >
+            {syncLabel}
+          </span>
+        ) : null}
+        {canTakeOverBranch && onTakeOverBranch ? (
+          <Button type="button" size="sm" variant="outline" onClick={onTakeOverBranch}>
+            Take over
+          </Button>
+        ) : null}
 
         <Button
           type="button"
@@ -122,6 +149,19 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           <Search className="h-4 w-4" aria-hidden="true" />
           Search
         </Button>
+        {canOpenBranches && onOpenBranches ? (
+          <Button
+            type="button"
+            onClick={onOpenBranches}
+            variant="outline"
+            size="sm"
+            className="border-border text-muted hover:text-foreground"
+            aria-label="Open branch activity"
+          >
+            <GitBranch className="h-4 w-4" aria-hidden="true" />
+            Branches
+          </Button>
+        ) : null}
         <Button
           type="button"
           onClick={onOpenSettings}

@@ -1,23 +1,17 @@
-/*
- `/api/nullplug/resolve` is the explicit provider runtime boundary for built-in
- nullplug resolution. First pass supports trusted `nd` resolution only; remote plugin
- manifests and arbitrary imports are intentionally out of scope.
-*/
-
-import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import {
   isNullplugInvokeRequest,
   type NullplugInvokeRequest,
-  type NullplugInvokeResponse,
 } from "../../../shared/nullplug/types";
-import { toShortDropId } from "../../../shared/drop/id";
 import {
-  isDropEnvelopeV1,
-  isDropPayload,
-  type DropPayload,
-} from "../../../shared/drop/types";
+  isNullplugRuntimeError,
+  type NullplugRuntimeError,
+} from "../../../shared/nullplug/runtime";
+import { createCloudflareBackendRuntime } from "../_lib/core/platform/cloudflareBackendRuntime";
+import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/auth";
+import { createBranchRepository } from "../_lib/branches/storage/repository";
+import { sanitizeDiffAuthToken } from "../_lib/diffs/credentials/repository";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
-import { decryptProviderEscrowEnvelope } from "../_lib/crypto/envelopes/providerEscrow";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import {
   jsonErrorResponse,
@@ -30,6 +24,11 @@ interface Env {
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
+  NULLPLUG_REGISTRY_ALLOWED_HOSTS?: string;
+  ACCOUNT_AUTH_SECRET?: string;
+  ACCOUNT_AUTH_TOKEN_TTL_MS?: string;
+  ALLOW_INSECURE_ACCOUNT_HEADER?: string;
+  fetchImpl?: typeof fetch;
 }
 
 const NULLPLUG_RESOLVE_BODY_MAX_BYTES = 256_000;
@@ -41,150 +40,90 @@ const parseInvokeRequest = (rawBody: string): NullplugInvokeRequest | null => {
   } catch {
     return null;
   }
-
   return isNullplugInvokeRequest(parsed) ? parsed : null;
 };
 
-const readText = async (
-  object: { text: () => Promise<string> } | null,
-): Promise<string | null> => {
-  if (!object) return null;
-  try {
-    return await object.text();
-  } catch {
-    return null;
+const runtimeErrorStatus = (error: NullplugRuntimeError): number => {
+  if (error.code === "drop_not_found") return 404;
+  if (error.code === "unsupported_plugin") return 404;
+  if (
+    error.code === "drop_unreadable" ||
+    error.code === "policy_denied" ||
+    error.code === "policy_conditional" ||
+    error.code === "policy_source_required" ||
+    error.code === "policy_source_unreadable" ||
+    error.code === "invalid_root_policy"
+  ) {
+    return 403;
   }
-};
-
-const readProviderDropPayload = async (
-  bucket: R2Bucket,
-  dropId: string,
-  providerPrivateKey?: string,
-): Promise<DropPayload | null> => {
-  const raw = await readText(await bucket.get(dropId));
-  if (raw === null) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return { content: raw };
+  if (error.code === "missing_target" || error.code === "caller_mismatch") {
+    return 400;
   }
-
-  if (isDropPayload(parsed)) {
-    return parsed;
-  }
-
-  if (isDropEnvelopeV1(parsed) && providerPrivateKey) {
-    try {
-      return await decryptProviderEscrowEnvelope(parsed, providerPrivateKey);
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
+  return 502;
 };
 
-const firstStringArg = (
-  request: NullplugInvokeRequest,
-  key: string,
-): string | null => {
-  const value = request.call.args[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-};
-
-const firstBodyLine = (value: string | undefined): string | null => {
-  if (!value) return null;
-  const first = value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean);
-  return first ?? null;
-};
-
-const extractTitle = (content: string): string => {
-  const heading = content
-    .split(/\r?\n/)
-    .map((line) => /^\s{0,3}#\s+(.+?)\s*#*\s*$/.exec(line)?.[1]?.trim())
-    .find((line): line is string => Boolean(line));
-  return heading ?? "Nulldown Drop";
-};
-
-const extractExcerpt = (content: string): string => {
-  const excerpt = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return excerpt.length > 180 ? `${excerpt.slice(0, 177)}...` : excerpt;
-};
-
-const escapeMarkdownLinkText = (value: string): string =>
-  value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
-
-const resolveNd = async (
+const authorizeCallerBranch = async (
   env: Env,
-  request: NullplugInvokeRequest,
-): Promise<Response> => {
-  const target = firstStringArg(request, "id") ?? firstBodyLine(request.call.body);
-  if (!target) {
+  request: Request,
+  invokeRequest: NullplugInvokeRequest,
+): Promise<Response | null> => {
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  if (!accountId) {
     return jsonErrorResponse(
-      400,
-      "missing_target",
-      "nd resolver requires args.id or a body drop id.",
+      401,
+      "account_required",
+      "Authenticated account session is required.",
     );
   }
 
-  const dropIdentityRepository = createDropIdentityRepository({
+  const requestedRootDropId =
+    invokeRequest.call.caller.dropId ?? invokeRequest.context.callerDropId;
+  const branchId = sanitizeDiffAuthToken(
+    invokeRequest.call.caller.branchId ?? invokeRequest.context.branchId ?? "",
+  );
+  if (!requestedRootDropId || !branchId) {
+    return jsonErrorResponse(
+      400,
+      "caller_branch_required",
+      "Remote nullplug invocation requires an active caller branch.",
+    );
+  }
+
+  const identities = createDropIdentityRepository({
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  const resolvedDropId = await dropIdentityRepository.resolveRemoteDropId(target);
-  if (!resolvedDropId) {
-    return jsonErrorResponse(404, "drop_not_found", "Drop not found.");
+  const rootDropId = await identities.resolveRemoteDropId(requestedRootDropId);
+  if (!rootDropId) {
+    return jsonErrorResponse(404, "caller_root_not_found", "Caller root not found.");
   }
 
-  const payload = await readProviderDropPayload(
-    env.R2_BUCKET,
-    resolvedDropId,
-    env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
-  );
-  if (!payload) {
+  const branch = await createBranchRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  }).readBranch(rootDropId, branchId);
+  if (!branch) {
+    return jsonErrorResponse(404, "caller_branch_not_found", "Caller branch not found.");
+  }
+  if (
+    accountId !== branch.ownerAccountId &&
+    accountId !== branch.writerAccountId
+  ) {
     return jsonErrorResponse(
       403,
-      "drop_unreadable",
-      "Provider could not read the requested drop.",
+      "caller_branch_forbidden",
+      "You are not allowed to invoke nullplugs for this caller branch.",
+    );
+  }
+  if (branch.status !== "active") {
+    return jsonErrorResponse(
+      409,
+      "caller_branch_not_active",
+      "Remote nullplug invocation requires an active caller branch.",
     );
   }
 
-  const title = extractTitle(payload.content);
-  const excerpt = extractExcerpt(payload.content);
-  const shortId = toShortDropId(resolvedDropId);
-  const response: NullplugInvokeResponse = {
-    result: {
-      content: [`### [${escapeMarkdownLinkText(title)}](/d/${shortId})`, excerpt]
-        .filter(Boolean)
-        .join("\n\n"),
-      metadata: {
-        pluginId: "nd",
-        resolvedDropId,
-        shortId,
-        title,
-        excerpt,
-      },
-    },
-    diagnostics: [
-      {
-        level: "info",
-        message: "Resolved built-in nd nullplug through provider runtime.",
-      },
-    ],
-  };
-
-  return jsonResponse(response);
+  return null;
 };
 
 const handlePost = async (env: Env, request: Request): Promise<Response> => {
@@ -215,36 +154,44 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
       );
     }
 
-    if (parsed.call.pluginId !== "nd") {
-      logger.logEnd(400, {
-        reason: "unsupported_plugin",
-        pluginId: parsed.call.pluginId,
-      });
-      return jsonErrorResponse(
-        400,
-        "unsupported_plugin",
-        "Provider resolver currently supports the built-in nd plugin only.",
-      );
+    const authorizationError = await authorizeCallerBranch(env, request, parsed);
+    if (authorizationError) {
+      logger.logEnd(authorizationError.status, { reason: "caller_unauthorized" });
+      return authorizationError;
     }
 
-    const response = await resolveNd(env, parsed);
-    logger.logEnd(response.status, {
+    const runtime = createCloudflareBackendRuntime(env);
+    const response = await runtime.voidProvider.nullplug.invoke(parsed);
+    logger.logEnd(200, {
       pluginId: parsed.call.pluginId,
       callerDropRef: toLogRef(parsed.call.caller.dropId),
     });
-    return response;
+    return jsonResponse(response);
   } catch (error) {
+    if (isNullplugRuntimeError(error)) {
+      const status = runtimeErrorStatus(error);
+      logger.logEnd(status, { reason: error.code });
+      return jsonErrorResponse(status, error.code, error.message);
+    }
+
     logger.logError("nullplug.resolve.unhandled_error", error);
     logger.logEnd(500, { reason: "unhandled_error" });
-    const message = error instanceof Error ? error.message : String(error);
-    return new Response(`Failed to resolve nullplug: ${message}`, { status: 500 });
+    return jsonErrorResponse(
+      500,
+      "resolve_failed",
+      "Failed to resolve nullplug.",
+    );
   }
 };
 
-export const onRequest: PagesFunction<Env> = async (context) => {
+const handleRequest = async (context: {
+  request: Request;
+  env: Env;
+}): Promise<Response> => {
   if (context.request.method === "POST") {
     return handlePost(context.env, context.request);
   }
-
   return methodNotAllowedResponse();
 };
+
+export const onRequest = handleRequest;

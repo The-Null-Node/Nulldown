@@ -5,6 +5,7 @@ import type {
 } from "@thenullnode/nulldown/drop/diff";
 import { z } from "zod";
 import {
+  DropDiffEventIdSchema,
   DropDiffEventMetadataSchema,
   DropDiffOpSchema,
 } from "../diffSchemas";
@@ -15,6 +16,26 @@ import {
   extractMcpResponseArgs,
   mcpResponseArgsSchema,
 } from "../tooling";
+
+const diffApplyInputSchema = z
+  .object({
+    ...clientArgsSchema,
+    dropId: z.string().describe("Route drop id."),
+    branchId: z.string().optional(),
+    ops: z.array(DropDiffOpSchema).min(1),
+    metadata: DropDiffEventMetadataSchema.optional(),
+    eventDropId: z.string().optional(),
+    eventId: DropDiffEventIdSchema.optional(),
+    createdAt: z.number().finite().int().min(0).optional(),
+  })
+  .superRefine((value, context) => {
+    if ((value.eventId === undefined) !== (value.createdAt === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "eventId and createdAt must be provided together.",
+      });
+    }
+  });
 
 /** Registers branch query/content and diff tools on the MCP server. */
 export const registerBranchTools = (server: McpServer): void => {
@@ -91,14 +112,7 @@ export const registerBranchTools = (server: McpServer): void => {
       title: "Apply Branch Diff",
       description:
         "Post one atomic branch diff event. Protected branches require ND_TOKEN and any server-side diff credentials already configured.",
-      inputSchema: {
-        ...clientArgsSchema,
-        dropId: z.string().describe("Route drop id."),
-        branchId: z.string().optional(),
-        ops: z.array(DropDiffOpSchema).min(1),
-        metadata: DropDiffEventMetadataSchema.optional(),
-        eventDropId: z.string().optional(),
-      },
+      inputSchema: diffApplyInputSchema,
     },
     async (args) =>
       asJsonText(
@@ -108,6 +122,8 @@ export const registerBranchTools = (server: McpServer): void => {
           ops: args.ops as DropDiffOp[],
           metadata: args.metadata as DropDiffEventMetadata | undefined,
           eventDropId: args.eventDropId,
+          eventId: args.eventId,
+          createdAt: args.createdAt,
         }),
       ),
   );

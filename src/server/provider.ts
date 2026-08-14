@@ -2,7 +2,10 @@ import type {
   DropBranchRecord,
   DropSnapshotRecord,
 } from "../../shared/drop/branch";
-import type { DropDiffEvent } from "../../shared/drop/diff";
+import type {
+  DropDiffEvent,
+  DropDiffEventAcknowledgement,
+} from "../../shared/drop/diff";
 import type {
   NulleditSnapshotter,
   NulleditSnapshotterDispatchOptions,
@@ -20,6 +23,10 @@ import type {
   NullMemSourceRef,
 } from "../../shared/nullmem/types";
 import type { JsonValue } from "../../shared/nullplug/types";
+import type {
+  VoidNullplugRuntime,
+  VoidRuntimePolicy,
+} from "../../shared/nullplug/runtime";
 
 /** Request passed through the VoidProvider Nulledit append facade. */
 export interface VoidProviderNulleditAppendRequest
@@ -40,6 +47,8 @@ export interface VoidProviderNulleditAppendResult {
   content: string;
   /** Events accepted during this append with durable sequence numbers assigned. */
   acceptedEvents: DropDiffEvent[];
+  /** Acknowledgements for new and idempotently replayed input events. */
+  acknowledgements: DropDiffEventAcknowledgement[];
   /** Number of input events ignored because they were duplicates. */
   deduplicatedCount: number;
   /** Total number of branch events stored after the append. */
@@ -217,7 +226,7 @@ export interface VoidMemory {
   delete(request: VoidMemoryDeleteRequest): Promise<VoidMemoryDeleteResult>;
 }
 
-/** App-facing server facade composed from storage, crypto, and Nulledit services. */
+/** App-facing server facade composed from data, edit, memory, nullplug, and policy services. */
 export interface VoidProvider {
   /** Functional persistence, indexing, caching, and locking boundary. */
   data: VoidDataStore;
@@ -225,6 +234,10 @@ export interface VoidProvider {
   nulledit: VoidProviderNulledit;
   /** Branch-scoped facts, procedures, and capability memory. */
   memory: VoidMemory;
+  /** Provider-owned nullplug invocation, normalization, and policy boundary. */
+  nullplug: VoidNullplugRuntime;
+  /** Root-scoped runtime policy service used by nullplug invocation. */
+  policy: VoidRuntimePolicy;
 }
 
 /** Dependencies required to compose a VoidProvider. */
@@ -235,6 +248,10 @@ export interface CreateVoidProviderOptions {
   nulledit: VoidProviderNulledit;
   /** Memory facade implementation for the current platform. */
   memory: VoidMemory;
+  /** Nullplug runtime implementation for the current platform. */
+  nullplug: VoidNullplugRuntime;
+  /** Runtime policy implementation for the current platform. */
+  policy: VoidRuntimePolicy;
 }
 
 /** Creates the app-facing VoidProvider facade from platform-neutral capabilities. */
@@ -242,8 +259,12 @@ export const createVoidProvider = ({
   data,
   nulledit,
   memory,
+  nullplug,
+  policy,
 }: CreateVoidProviderOptions): VoidProvider => ({
   data,
   nulledit,
   memory,
+  nullplug,
+  policy,
 });

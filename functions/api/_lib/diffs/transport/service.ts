@@ -6,6 +6,7 @@ branch credentials, an environment webhook secret, or unauthenticated local deve
 
 import { z } from "zod";
 import {
+  type DropDiffAppendResponse,
   type DropDiffEvent,
   type DropDiffPollResponse,
 } from "../../../../../shared/drop/diff";
@@ -26,6 +27,10 @@ import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import {
   createBranchDiffRepository,
 } from "../../branches/storage/diffLogRepository";
+import {
+  createBranchRuntimeFactLogRepository,
+} from "../../branches/storage/runtimeFactLogRepository";
+import { BranchMutationLockError } from "../../branches/storage/mutationLock";
 import { resolveBranchForActor } from "../../branches/lifecycle/service";
 import { createBranchRepository } from "../../branches/storage/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
@@ -35,6 +40,7 @@ import { createRequestLogger, toLogRef } from "../../core/logging/logger";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
+  jsonErrorResponse,
   jsonResponse,
   parseJsonTextWithSchema,
   parseWithSchema,
@@ -85,6 +91,15 @@ const diffPollQuerySchema = z
       .transform((value) => Number.parseInt(value, 10))
       .pipe(z.number().int().min(1).max(MAX_POLL_LIMIT))
       .optional(),
+    factCursor: z
+      .union([z.literal("__latest__"), z.string().regex(/^-?\d+$/)])
+      .optional(),
+    factLimit: z
+      .string()
+      .regex(/^\d+$/)
+      .transform((value) => Number.parseInt(value, 10))
+      .pipe(z.number().int().min(1).max(MAX_POLL_LIMIT))
+      .optional(),
   })
   .strict();
 
@@ -106,6 +121,8 @@ const parseDiffPollQuery = (request: Request): DiffPollQuery => {
   };
   const excludeClient = url.searchParams.get("excludeClient");
   const limit = url.searchParams.get("limit");
+  const factCursor = url.searchParams.get("factCursor");
+  const factLimit = url.searchParams.get("factLimit");
 
   if (excludeClient !== null) {
     query.excludeClient = excludeClient;
@@ -113,11 +130,29 @@ const parseDiffPollQuery = (request: Request): DiffPollQuery => {
   if (limit !== null) {
     query.limit = limit;
   }
+  if (factCursor !== null) {
+    query.factCursor = factCursor;
+  }
+  if (factLimit !== null) {
+    query.factLimit = factLimit;
+  }
 
   return parseWithSchema(
     diffPollQuerySchema,
     query,
     "Invalid diff poll query.",
+  );
+};
+
+const canReadRuntimeFacts = async (
+  env: DiffTransportEnv,
+  request: Request,
+  branch: DropBranchRecord,
+): Promise<boolean> => {
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  return Boolean(
+    accountId &&
+      (accountId === branch.ownerAccountId || accountId === branch.writerAccountId),
   );
 };
 
@@ -158,6 +193,15 @@ const resolveBranchForDiffRequest = async (
   );
   return resolved.branch;
 };
+
+const canWriteBranch = (
+  branch: DropBranchRecord,
+  accountId: string | null,
+): boolean =>
+  Boolean(
+    accountId &&
+      (accountId === branch.ownerAccountId || accountId === branch.writerAccountId),
+  );
 
 /** Appends posted diff events to the resolved branch. */
 export const postDiffEvents = async (
@@ -220,6 +264,22 @@ export const postDiffEvents = async (
 
     const branch = await resolveBranchForDiffRequest(env, id, request, auth);
 
+    if (auth.mode === "account") {
+      const accountId = await resolveAuthenticatedAccountId(request, env);
+      if (!canWriteBranch(branch, accountId)) {
+        logger.logEnd(403, {
+          reason: "branch_write_forbidden",
+          dropRef: toLogRef(id),
+          branchRef: toLogRef(branch.branchId),
+        });
+        return jsonErrorResponse(
+          403,
+          "branch_write_forbidden",
+          "You are not allowed to write to this branch.",
+        );
+      }
+    }
+
     const mismatch = parsed.events.find((event) => event.dropId !== id);
     if (mismatch) {
       logger.logEnd(400, { reason: "drop_id_mismatch", dropRef: toLogRef(id) });
@@ -255,10 +315,12 @@ export const postDiffEvents = async (
 
     return jsonResponse({
       accepted: appended.acceptedEvents.length,
+      deduplicated: appended.deduplicatedCount,
       branchId: branch.branchId,
       snapshotId,
       totalStored: appended.totalStored,
-    });
+      acknowledgements: appended.acknowledgements,
+    } satisfies DropDiffAppendResponse);
   } catch (error: unknown) {
     if (isApiHttpError(error)) {
       logger.logEnd(error.status, {
@@ -268,11 +330,70 @@ export const postDiffEvents = async (
       return apiHttpErrorResponse(error);
     }
 
+    if (error instanceof BranchMutationLockError) {
+      const status =
+        error.code === "branch_lock_timeout"
+          ? 503
+          : error.outcome === "not_committed"
+            ? 409
+            : 503;
+      const message =
+        error.code === "branch_lock_timeout"
+          ? "Branch is busy. Retry shortly."
+          : error.outcome === "not_committed"
+          ? "Branch lock was not held before commit. Refresh and retry."
+          : "Branch mutation outcome could not be confirmed. Retry the exact same event.";
+      logger.logEnd(status, { reason: error.code });
+      return jsonErrorResponse(status, error.code, message);
+    }
+
     const message = error instanceof Error ? error.message : String(error);
 
     if (message === "branch_lock_timeout") {
       logger.logEnd(409, { reason: "branch_busy" });
       return new Response("Branch is busy. Retry shortly.", { status: 409 });
+    }
+
+    if (message === "diff_predecessor_mismatch") {
+      logger.logEnd(409, { reason: message });
+      return jsonErrorResponse(
+        409,
+        message,
+        "Branch diff predecessor no longer matches the current head. Refresh and try again.",
+      );
+    }
+
+    if (message === "diff_event_id_reused") {
+      logger.logEnd(409, { reason: message });
+      return new Response(
+        "A diff event id was already used for different event data.",
+        { status: 409 },
+      );
+    }
+
+    if (message === "diff_event_ack_missing") {
+      logger.logEnd(500, { reason: message });
+      return new Response("Stored diff event acknowledgement is missing.", {
+        status: 500,
+      });
+    }
+
+    if (message === "diff_event_outcome_unknown") {
+      logger.logEnd(503, { reason: message });
+      return jsonErrorResponse(
+        503,
+        message,
+        "Diff commit outcome could not be confirmed. Retry the exact same event.",
+      );
+    }
+
+    if (message === "diff_event_identity_invalid") {
+      logger.logEnd(500, { reason: message });
+      return jsonErrorResponse(
+        500,
+        message,
+        "Stored diff event identity is inconsistent. Do not retry with a new event.",
+      );
     }
 
     logger.logError("diff.post.unhandled_error", error, {
@@ -320,28 +441,54 @@ export const pollDiffEvents = async (
 
     const query = parseDiffPollQuery(request);
     const cursorParam = query.cursor;
+    const factCursorParam = query.factCursor;
     const branchDiffRepository = createBranchDiffRepository({
       blobs: env.R2_BUCKET,
       sql: env.DB,
     });
+    const branchRuntimeFactRepository = createBranchRuntimeFactLogRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const branch = await resolveBranchForDiffRequest(env, id, request, {
+      mode: "none",
+      branchId: resolveRequestedBranchId(request),
+      clientId: sanitizeDiffAuthToken(query.excludeClient ?? null),
+    });
+    if (
+      factCursorParam !== undefined &&
+      !(await canReadRuntimeFacts(env, request, branch))
+    ) {
+      logger.logEnd(403, {
+        reason: "runtime_fact_read_forbidden",
+        dropRef: toLogRef(id),
+        branchRef: toLogRef(branch.branchId),
+      });
+      return new Response(
+        "You are not allowed to read runtime facts for this branch.",
+        { status: 403 },
+      );
+    }
 
     if (cursorParam === "__latest__") {
       // The editor handshake asks for the current cursor only so it can start tailing fresh events.
-      const branch = await resolveBranchForDiffRequest(env, id, request, {
-        mode: "none",
-        branchId: resolveRequestedBranchId(request),
-        clientId: sanitizeDiffAuthToken(query.excludeClient ?? null),
-      });
-      const maxSeq =
+      const [maxSeq, maxFactSeq] = await Promise.all([
         typeof branch.headEventSeq === "number"
           ? branch.headEventSeq
-          : await branchDiffRepository.readBranchHeadEventSeq(
+          : branchDiffRepository.readBranchHeadEventSeq(id, branch.branchId),
+        factCursorParam !== undefined
+          ? branchRuntimeFactRepository.readBranchHeadRuntimeFactSeq(
               id,
               branch.branchId,
-            );
+            )
+          : Promise.resolve(-1),
+      ]);
       const response: DropDiffPollResponse = {
         events: [],
         cursor: maxSeq >= 0 ? String(maxSeq) : null,
+        ...(factCursorParam !== undefined
+          ? { facts: [], factCursor: String(maxFactSeq) }
+          : {}),
       };
 
       logger.logEnd(200, {
@@ -349,6 +496,7 @@ export const pollDiffEvents = async (
         branchRef: toLogRef(branch.branchId),
         returned: 0,
         totalStored: maxSeq + 1,
+        totalFacts: maxFactSeq + 1,
       });
 
       return jsonResponse(response);
@@ -358,26 +506,46 @@ export const pollDiffEvents = async (
       cursorParam !== null ? Number.parseInt(cursorParam, 10) : -1;
     const excludeClient = query.excludeClient;
     const limit = query.limit ?? DEFAULT_POLL_LIMIT;
-
-    const branch = await resolveBranchForDiffRequest(env, id, request, {
-      mode: "none",
-      branchId: resolveRequestedBranchId(request),
-      clientId: sanitizeDiffAuthToken(excludeClient),
-    });
-
-    const page = await branchDiffRepository.pollBranchDiffEventsSince(
+    const pagePromise = branchDiffRepository.pollBranchDiffEventsSince(
       id,
       branch.branchId,
       afterSeq,
       limit,
       excludeClient,
     );
+    const factsPromise =
+      factCursorParam === undefined
+        ? Promise.resolve(null)
+        : factCursorParam === "__latest__"
+          ? branchRuntimeFactRepository
+              .readBranchHeadRuntimeFactSeq(id, branch.branchId)
+              .then((headSeq) => ({
+                facts: [],
+                nextCursor: headSeq,
+                headSeq,
+              }))
+          : branchRuntimeFactRepository.pollBranchRuntimeFactsSince(
+              id,
+              branch.branchId,
+              Number.parseInt(factCursorParam, 10),
+              query.factLimit ?? DEFAULT_POLL_LIMIT,
+            );
+    const [page, factPage] = await Promise.all([pagePromise, factsPromise]);
     const nextCursor =
       page.nextCursor !== null ? String(page.nextCursor) : null;
 
     const response: DropDiffPollResponse = {
       events: page.events,
       cursor: nextCursor,
+      ...(factPage
+        ? {
+            facts: factPage.facts,
+            factCursor:
+              factPage.nextCursor !== null
+                ? String(factPage.nextCursor)
+                : null,
+          }
+        : {}),
     };
 
     logger.logEnd(200, {
@@ -385,6 +553,8 @@ export const pollDiffEvents = async (
       branchRef: toLogRef(branch.branchId),
       returned: page.events.length,
       totalStored: page.headSeq + 1,
+      returnedFacts: factPage?.facts.length ?? 0,
+      totalFacts: factPage ? factPage.headSeq + 1 : undefined,
     });
 
     return jsonResponse(response);

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/diff/[id]";
+import { postDiffEvents } from "../functions/api/_lib/diffs/transport/service";
+import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutationLock";
 import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
 import { createCloudflareVoidProvider } from "../functions/api/_lib/core/platform/cloudflareProvider";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
@@ -10,6 +12,15 @@ import {
   readBranch,
   readSnapshot,
 } from "../functions/api/_lib/branches/storage/repository";
+import {
+  createBranchKey,
+  createBranchDiffLogKey,
+  createBranchDiffEventIdKey,
+  createBranchDiffEventIdMarkerV2Key,
+  createBranchDiffEventKey,
+  createSnapshotKey,
+} from "../functions/api/_lib/branches/storage/keys";
+import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtimeFactLogRepository";
 import {
   createNulleditNullMemObserverSnapshotter,
   createNulleditPolicyDecisionFactDataKey,
@@ -304,6 +315,10 @@ class MemoryD1Statement {
 
 class MemoryD1Database {
   private readonly records = new Map<string, VoidDataRecordRow>();
+  private readonly branchEvents = new Map<
+    string,
+    { rootDropId: string; branchId: string; seq: number; eventId: string; eventJson: string }
+  >();
   readonly priorityFacts = new Map<string, string>();
   readonly nullmemRecords = new Map<string, string>();
   readonly batchCalls: number[] = [];
@@ -321,7 +336,66 @@ class MemoryD1Database {
     return `${String(namespace)}/${String(collection)}/${String(scopeKey)}/${String(id)}`;
   }
 
+  private branchEventKey(rootDropId: unknown, branchId: unknown, seq: unknown): string {
+    return `${String(rootDropId)}/${String(branchId)}/${String(seq)}`;
+  }
+
+  readBranchEvent(
+    rootDropId: string,
+    branchId: string,
+    seq: number,
+  ): DropDiffEvent | null {
+    const event = this.branchEvents.get(this.branchEventKey(rootDropId, branchId, seq));
+    return event ? (JSON.parse(event.eventJson) as DropDiffEvent) : null;
+  }
+
+  seedBranchEvent(
+    rootDropId: string,
+    branchId: string,
+    event: DropDiffEvent,
+  ): void {
+    this.branchEvents.set(this.branchEventKey(rootDropId, branchId, event.seq), {
+      rootDropId,
+      branchId,
+      seq: event.seq,
+      eventId: event.eventId,
+      eventJson: JSON.stringify(event),
+    });
+  }
+
   run(sql: string, params: unknown[]): void {
+    if (sql.includes("UPDATE branch_events")) {
+      const key = this.branchEventKey(params[2], params[3], params[4]);
+      const existing = this.branchEvents.get(key);
+      if (existing) {
+        this.branchEvents.set(key, {
+          ...existing,
+          eventJson: String(params[1]),
+        });
+      }
+      return;
+    }
+
+    if (sql.includes("INSERT OR IGNORE INTO branch_events")) {
+      const key = this.branchEventKey(params[0], params[1], params[2]);
+      const duplicateEventId = [...this.branchEvents.values()].some(
+        (event) =>
+          event.rootDropId === params[0] &&
+          event.branchId === params[1] &&
+          event.eventId === params[3],
+      );
+      if (!this.branchEvents.has(key) && !duplicateEventId) {
+        this.branchEvents.set(key, {
+          rootDropId: String(params[0]),
+          branchId: String(params[1]),
+          seq: Number(params[2]),
+          eventId: String(params[3]),
+          eventJson: String(params[7]),
+        });
+      }
+      return;
+    }
+
     if (sql.includes("INSERT INTO void_data_records")) {
       this.records.set(this.recordKey(params[0], params[1], params[2], params[3]), {
         namespace: String(params[0]),
@@ -352,6 +426,21 @@ class MemoryD1Database {
   }
 
   first(sql: string, params: unknown[]): Record<string, unknown> | null {
+    if (sql.includes("FROM branch_events")) {
+      if (sql.includes("seq = ?")) {
+        const event = this.branchEvents.get(this.branchEventKey(params[0], params[1], params[2]));
+        return event ? { event_json: event.eventJson } : null;
+      }
+      if (sql.includes("event_id = ?")) {
+        const event = [...this.branchEvents.values()].find(
+          (entry) =>
+            entry.rootDropId === params[0] &&
+            entry.branchId === params[1] &&
+            entry.eventId === params[2],
+        );
+        return event ? { event_json: event.eventJson } : null;
+      }
+    }
     if (sql.includes("FROM void_data_records")) {
       return this.records.get(this.recordKey(params[0], params[1], params[2], params[3])) ?? null;
     }
@@ -359,6 +448,14 @@ class MemoryD1Database {
   }
 
   all(sql: string, params: unknown[]): Record<string, unknown>[] {
+    if (sql.includes("FROM branch_events")) {
+      return [...this.branchEvents.values()]
+        .filter(
+          (event) => event.rootDropId === params[0] && event.branchId === params[1],
+        )
+        .sort((left, right) => left.seq - right.seq)
+        .map((event) => ({ event_json: event.eventJson }));
+    }
     if (!sql.includes("FROM void_data_records")) return [];
     const namespace = String(params[0]);
     const collection = sql.includes("collection = ?") ? String(params[1]) : null;
@@ -408,6 +505,23 @@ const createPostRequestWithClientHeader = (
     },
     body: JSON.stringify({ version: 1, events }),
   });
+
+const createPostRequestForBranch = (
+  events: unknown,
+  branchId: string,
+  requestAccountId: string,
+): Request =>
+  new Request(
+    `https://nulldown.test/api/diff/${rootDropId}?branchId=${encodeURIComponent(branchId)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-nulldown-account-id": requestAccountId,
+      },
+      body: JSON.stringify({ version: 1, events }),
+    },
+  );
 
 const createPostRequestWithPartialProviderHeaders = (
   events: unknown,
@@ -673,6 +787,7 @@ describe("functions api diff contracts", () => {
       sourceClientId: "writer-a",
       text: "hello",
       createdAt: 100,
+      metadata: { followsSeq: -1 },
     });
 
     const first = await onRequest({
@@ -683,6 +798,13 @@ describe("functions api diff contracts", () => {
 
     const firstBody = (await first.json()) as {
       accepted: number;
+      deduplicated: number;
+      acknowledgements: Array<{
+        eventId: string;
+        seq: number;
+        snapshotId: number;
+        status: string;
+      }>;
       totalStored: number;
     };
 
@@ -694,16 +816,736 @@ describe("functions api diff contracts", () => {
 
     const secondBody = (await second.json()) as {
       accepted: number;
+      deduplicated: number;
+      acknowledgements: Array<{
+        eventId: string;
+        seq: number;
+        snapshotId: number;
+        status: string;
+      }>;
       totalStored: number;
     };
 
     expect(first.status).toBe(200);
     expect(firstBody.accepted).toBe(1);
+    expect(firstBody.deduplicated).toBe(0);
+    expect(firstBody.acknowledgements).toEqual([
+      { eventId: "evt-1", seq: 0, snapshotId: 1, status: "accepted" },
+    ]);
     expect(firstBody.totalStored).toBe(1);
 
     expect(second.status).toBe(200);
     expect(secondBody.accepted).toBe(0);
+    expect(secondBody.deduplicated).toBe(1);
+    expect(secondBody.acknowledgements).toEqual([
+      { eventId: "evt-1", seq: 0, snapshotId: 1, status: "duplicate" },
+    ]);
     expect(secondBody.totalStored).toBe(1);
+
+    const reused = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-1",
+          sourceClientId: "writer-a",
+          text: "different payload",
+          createdAt: 100,
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(reused.status).toBe(409);
+  });
+
+  it("keeps distinct event ids isolated when legacy marker keys collide", async () => {
+    const bucket = createSeededBucket();
+    const firstEventId = "evt/a";
+    const secondEventId = "evt?a";
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+
+    expect(
+      createBranchDiffEventIdKey(rootDropId, branch.branchId, firstEventId),
+    ).toBe(createBranchDiffEventIdKey(rootDropId, branch.branchId, secondEventId));
+    expect(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        firstEventId,
+      ),
+    ).not.toBe(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        secondEventId,
+      ),
+    );
+
+    const first = makeEvent({
+      eventId: firstEventId,
+      sourceClientId: "writer-a",
+      text: "first",
+      createdAt: 100,
+    });
+    const second = makeEvent({
+      eventId: secondEventId,
+      sourceClientId: "writer-a",
+      text: "second",
+      createdAt: 101,
+    });
+    const accepted = await onRequest({
+      request: createPostRequest([first, second]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(accepted.status).toBe(200);
+    await expect(
+      onRequest({
+        request: createPostRequest([first]),
+        env: { R2_BUCKET: bucket as unknown as R2Bucket },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]),
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      onRequest({
+        request: createPostRequest([second]),
+        env: { R2_BUCKET: bucket as unknown as R2Bucket },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]),
+    ).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("repairs a missing v2 marker when a legacy event is durably reachable", async () => {
+    const bucket = createSeededBucket();
+    const event = makeEvent({
+      eventId: "evt-repair-marker",
+      sourceClientId: "writer-a",
+      text: "hello",
+      createdAt: 100,
+    });
+    const first = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const markerKey = createBranchDiffEventIdMarkerV2Key(
+      rootDropId,
+      branch.branchId,
+      event.eventId,
+    );
+    await bucket.delete(markerKey);
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(200);
+    await expect(bucket.head(markerKey)).resolves.not.toBeNull();
+  });
+
+  it("keeps legacy polling complete when an interrupted migration leaves heap objects", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const first = makeEvent({
+      eventId: "evt-legacy-first",
+      sourceClientId: "writer-a",
+      text: "first",
+      createdAt: 100,
+    });
+    const second = makeEvent({
+      eventId: "evt-legacy-second",
+      sourceClientId: "writer-a",
+      text: "second",
+      createdAt: 101,
+    });
+    bucket.seed(
+      createBranchDiffLogKey(rootDropId, branch.branchId),
+      JSON.stringify([{ ...first, seq: 0 }, { ...second, seq: 1 }]),
+    );
+    bucket.seed(
+      createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      JSON.stringify({ ...first, seq: 0, snapshotId: 1 }),
+    );
+    bucket.seed(
+      createBranchKey(rootDropId, branch.branchId),
+      JSON.stringify({
+        ...branch,
+        snapshotHeapVersion: undefined,
+        headEventSeq: undefined,
+      }),
+    );
+
+    const response = await onRequest({
+      request: createGetRequest(`?branchId=${encodeURIComponent(branch.branchId)}&cursor=-1`),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      events: [
+        { eventId: first.eventId, seq: 0 },
+        { eventId: second.eventId, seq: 1 },
+      ],
+    });
+  });
+
+  it("normalizes a snapshot-less legacy event before repairing its marker on repeated retries", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-legacy-snapshotless",
+      sourceClientId: "writer-a",
+      text: "legacy",
+      createdAt: 100,
+    });
+    const first = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+
+    const markerKey = createBranchDiffEventIdMarkerV2Key(
+      rootDropId,
+      branch.branchId,
+      event.eventId,
+    );
+    await bucket.delete(markerKey);
+    const legacyOnlyEvent = { ...event, seq: 0 };
+    bucket.seed(
+      createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      JSON.stringify(legacyOnlyEvent),
+    );
+    bucket.seed(
+      createBranchDiffLogKey(rootDropId, branch.branchId),
+      JSON.stringify([legacyOnlyEvent]),
+    );
+    bucket.seed(
+      createBranchKey(rootDropId, branch.branchId),
+      JSON.stringify({
+        ...branch,
+        headSnapshotId: 1,
+        snapshotHeapVersion: undefined,
+        headEventSeq: undefined,
+      }),
+    );
+
+    await expect(
+      (await bucket.get(createBranchDiffEventKey(rootDropId, branch.branchId, 0)))!.json(),
+    ).resolves.toEqual(legacyOnlyEvent);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const retry = await onRequest({
+        request: createPostRequest([event]),
+        env: { R2_BUCKET: bucket as unknown as R2Bucket },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+      expect(retry.status).toBe(200);
+      await expect(retry.json()).resolves.toMatchObject({
+        acknowledgements: [
+          { eventId: event.eventId, seq: 0, snapshotId: 1, status: "duplicate" },
+        ],
+      });
+    }
+  });
+
+  it("repairs a snapshot-less D1 projection during repeated heap-v2 retries", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const event = makeEvent({
+      eventId: "evt-legacy-d1-snapshotless",
+      sourceClientId: "writer-a",
+      text: "legacy D1",
+      createdAt: 100,
+    });
+    const first = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const legacyEvent = { ...event, seq: 0 };
+    db.seedBranchEvent(rootDropId, branch.branchId, legacyEvent);
+    await bucket.delete(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        event.eventId,
+      ),
+    );
+    bucket.seed(
+      createBranchDiffLogKey(rootDropId, branch.branchId),
+      JSON.stringify([legacyEvent]),
+    );
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const retry = await onRequest({
+        request: createPostRequest([event]),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+        },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+
+      expect(retry.status).toBe(200);
+      await expect(retry.json()).resolves.toMatchObject({
+        acknowledgements: [
+          { eventId: event.eventId, seq: 0, snapshotId: 1, status: "duplicate" },
+        ],
+      });
+    }
+
+    expect(db.readBranchEvent(rootDropId, branch.branchId, 0)).toEqual({
+      ...legacyEvent,
+      snapshotId: 1,
+    });
+  });
+
+  it("uses the branch-head ancestry when normalizing legacy migration events", async () => {
+    const bucket = createSeededBucket();
+    const event = makeEvent({
+      eventId: "evt-legacy-ancestor",
+      sourceClientId: "writer-a",
+      text: "ancestor",
+      createdAt: 100,
+    });
+    const first = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const legacyEvent = { ...event, seq: 0 };
+    await bucket.delete(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        event.eventId,
+      ),
+    );
+    bucket.seed(
+      createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      JSON.stringify(legacyEvent),
+    );
+    bucket.seed(
+      createBranchDiffLogKey(rootDropId, branch.branchId),
+      JSON.stringify([legacyEvent]),
+    );
+    bucket.seed(
+      createSnapshotKey(rootDropId, branch.branchId, 2),
+      JSON.stringify({
+        version: 1,
+        snapshotId: 2,
+        rootDropId,
+        branchId: branch.branchId,
+        parentSnapshotId: 0,
+        seq: 2,
+        eventIds: [event.eventId],
+        checkpointed: false,
+        patchStartSeq: 0,
+        patchEndSeq: 0,
+        textLength: 0,
+        createdAt: 101,
+      }),
+    );
+    bucket.seed(
+      createBranchKey(rootDropId, branch.branchId),
+      JSON.stringify({
+        ...branch,
+        snapshotHeapVersion: undefined,
+        headEventSeq: undefined,
+      }),
+    );
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({
+      acknowledgements: [
+        { eventId: event.eventId, seq: 0, snapshotId: 1, status: "duplicate" },
+      ],
+    });
+  });
+
+  it("does not acknowledge a marker and event that have not reached the branch head", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-orphaned",
+      sourceClientId: "writer-a",
+      text: "orphan",
+      createdAt: 100,
+    }) as DropDiffEvent;
+    const stored = { ...event, snapshotId: 1 };
+    bucket.seed(
+      createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      JSON.stringify(stored),
+    );
+    bucket.seed(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        event.eventId,
+      ),
+      JSON.stringify({
+        version: 2,
+        rootDropId,
+        branchId: branch.branchId,
+        eventId: event.eventId,
+        seq: 0,
+        snapshotId: 1,
+      }),
+    );
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(503);
+    await expect(retry.json()).resolves.toMatchObject({
+      code: "diff_event_outcome_unknown",
+    });
+  });
+
+  it("resumes a markerless next-sequence event interrupted before branch-head publication", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-resume-orphan",
+      sourceClientId: "writer-a",
+      text: "resume",
+      createdAt: 100,
+    }) as DropDiffEvent;
+    bucket.seed(
+      createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      JSON.stringify({ ...event, seq: 0, snapshotId: 1 }),
+    );
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({
+      accepted: 1,
+      acknowledgements: [
+        { eventId: "evt-resume-orphan", seq: 0, snapshotId: 1, status: "accepted" },
+      ],
+    });
+  });
+
+  it("does not overwrite a markerless event with a different identity at its sequence", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const orphan = makeEvent({
+      eventId: "evt-orphaned-sequence",
+      sourceClientId: "writer-a",
+      text: "orphan",
+      createdAt: 100,
+    }) as DropDiffEvent;
+    bucket.seed(
+      createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      JSON.stringify({ ...orphan, seq: 0, snapshotId: 1 }),
+    );
+
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-competing-sequence",
+          sourceClientId: "writer-b",
+          text: "different",
+          createdAt: 101,
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "diff_predecessor_mismatch",
+    });
+    await expect(bucket.get(createBranchDiffEventKey(rootDropId, branch.branchId, 0))).resolves
+      .toMatchObject({ key: createBranchDiffEventKey(rootDropId, branch.branchId, 0) });
+    await expect(
+      (
+        await bucket.get(createBranchDiffEventKey(rootDropId, branch.branchId, 0))
+      )!.json(),
+    ).resolves.toEqual({ ...orphan, seq: 0, snapshotId: 1 });
+  });
+
+  it("does not acknowledge an event in a non-ancestor snapshot", async () => {
+    const bucket = createSeededBucket();
+    const event = makeEvent({
+      eventId: "evt-non-ancestor",
+      sourceClientId: "writer-a",
+      text: "reachable only from the orphan",
+      createdAt: 100,
+    });
+    const first = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    bucket.seed(
+      createSnapshotKey(rootDropId, branch.branchId, 2),
+      JSON.stringify({
+        version: 1,
+        snapshotId: 2,
+        rootDropId,
+        branchId: branch.branchId,
+        parentSnapshotId: 0,
+        seq: 2,
+        eventIds: [],
+        checkpointed: false,
+        patchStartSeq: null,
+        patchEndSeq: null,
+        checkpointKey: "__drop_checkpoint__/orphan.txt",
+        textLength: 5,
+        createdAt: 102,
+      }),
+    );
+    bucket.seed("__drop_checkpoint__/orphan.txt", "hello", "text/plain");
+    bucket.seed(
+      createBranchKey(rootDropId, branch.branchId),
+      JSON.stringify({ ...branch, headSnapshotId: 2, headEventSeq: 0 }),
+    );
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(503);
+    await expect(retry.json()).resolves.toMatchObject({
+      code: "diff_event_outcome_unknown",
+    });
+  });
+
+  it.each([
+    ["branch_lock_timeout", "not_committed", 503],
+    ["branch_lock_lost_before_commit", "not_committed", 409],
+    ["branch_mutation_outcome_unknown", "unknown", 503],
+  ] as const)(
+    "maps %s lock outcomes to structured retry responses",
+    async (code, outcome, status) => {
+      const bucket = createSeededBucket();
+      const response = await postDiffEvents(
+        { R2_BUCKET: bucket as never },
+        { id: rootDropId },
+        createPostRequest([
+          makeEvent({
+            eventId: `evt-${code}`,
+            sourceClientId: "writer-a",
+            text: "hello",
+            createdAt: 100,
+          }),
+        ]),
+        {
+          voidProvider: {
+            nulledit: {
+              appendDiffEvents: async () => {
+                throw new BranchMutationLockError({ code, outcome });
+              },
+            },
+          } as never,
+        },
+      );
+
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toMatchObject({ code });
+    },
+  );
+
+  it("accepts contiguous predecessor sequences in one batch", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-chain-1",
+          sourceClientId: "writer-chain",
+          text: "first ",
+          createdAt: 101,
+          metadata: { followsSeq: -1 },
+        }),
+        makeEvent({
+          eventId: "evt-chain-2",
+          sourceClientId: "writer-chain",
+          text: "second ",
+          createdAt: 102,
+          metadata: { followsSeq: 0 },
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({
+        accepted: 2,
+        deduplicated: 0,
+        snapshotId: 1,
+        totalStored: 2,
+        acknowledgements: [
+          { eventId: "evt-chain-1", seq: 0, snapshotId: 1, status: "accepted" },
+          { eventId: "evt-chain-2", seq: 1, snapshotId: 1, status: "accepted" },
+        ],
+      }),
+    );
+  });
+
+  it("rejects stale predecessors before mutating branch state", async () => {
+    const bucket = createSeededBucket();
+    const winner = makeEvent({
+      eventId: "evt-winner",
+      sourceClientId: "writer-a",
+      text: "winner ",
+      createdAt: 101,
+      metadata: { followsSeq: -1 },
+    });
+    const first = await onRequest({
+      request: createPostRequest([winner]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+
+    const stale = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-loser",
+          sourceClientId: "writer-b",
+          text: "loser ",
+          createdAt: 102,
+          metadata: { followsSeq: -1 },
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toEqual({
+      error:
+        "Branch diff predecessor no longer matches the current head. Refresh and try again.",
+      code: "diff_predecessor_mismatch",
+    });
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    expect(branch).toEqual(
+      expect.objectContaining({ headSnapshotId: 1, headEventSeq: 0 }),
+    );
+    await expect(readSnapshot(bucket as never, rootDropId, branch.branchId, 2)).resolves.toBeNull();
+  });
+
+  it("rejects conflicting event IDs within one envelope", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-conflict",
+          sourceClientId: "writer-conflict",
+          text: "first ",
+          createdAt: 101,
+        }),
+        makeEvent({
+          eventId: "evt-conflict",
+          sourceClientId: "writer-conflict",
+          text: "second ",
+          createdAt: 101,
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(409);
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    expect(branch).toEqual(
+      expect.objectContaining({ headSnapshotId: 0, headEventSeq: -1 }),
+    );
   });
 
   it("returns filtered diff pages with cursor", async () => {
@@ -758,6 +1600,74 @@ describe("functions api diff contracts", () => {
     expect(pollBody.events[0].sourceClientId).toBe("writer-b");
     expect(pollBody.events[0].eventId).toBe("evt-b");
     expect(pollBody.cursor).toBe("1");
+  });
+
+  it("returns authenticated runtime fact pages with an independent cursor", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const facts = createBranchRuntimeFactLogRepository({
+      blobs: bucket as never,
+    });
+    await facts.appendBranchRuntimeFact(rootDropId, branch.branchId, {
+      version: 1,
+      kind: "ui.state.patch",
+      id: "patch-1",
+      callId: "call-1",
+      createdAt: 1,
+      source: {
+        rootDropId,
+        branchId: branch.branchId,
+        snapshotId: branch.headSnapshotId,
+        callId: "call-1",
+      },
+      patch: [{ op: "set", path: ["approved"], value: true }],
+    });
+
+    const response = await onRequest({
+      request: createGetRequest(
+        `?cursor=-1&factCursor=-1&branchId=${encodeURIComponent(branch.branchId)}`,
+      ),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    const body = (await response.json()) as {
+      cursor: string | null;
+      events: unknown[];
+      factCursor?: string | null;
+      facts?: Array<{ seq: number; fact: { id: string } }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.events).toEqual([]);
+    expect(body.cursor).toBeNull();
+    expect(body.factCursor).toBe("0");
+    expect(body.facts).toEqual([
+      expect.objectContaining({
+        seq: 0,
+        fact: expect.objectContaining({ id: "patch-1" }),
+      }),
+    ]);
+  });
+
+  it("requires branch-writer access when requesting runtime facts", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: new Request(
+        `https://nulldown.test/api/diff/${rootDropId}?cursor=-1&factCursor=-1`,
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ACCOUNT_AUTH_SECRET: "production-secret",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(403);
   });
 
   it("preserves event metadata through append and poll", async () => {
@@ -1180,6 +2090,62 @@ describe("functions api diff contracts", () => {
     } as unknown as Parameters<typeof onRequest>[0]);
 
     expect(response.status).toBe(200);
+  });
+
+  it("rejects an account session write to another account's existing branch", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      "owner-client",
+    );
+    const response = await onRequest({
+      request: createPostRequestForBranch(
+        [
+          makeEvent({
+            eventId: "evt-forbidden-branch-write",
+            sourceClientId: "other-client",
+            text: "forbidden",
+            createdAt: 105,
+          }),
+        ],
+        branch.branchId,
+        "acct_other",
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "You are not allowed to write to this branch.",
+      code: "branch_write_forbidden",
+    });
+  });
+
+  it("does not let an insecure account header bypass configured webhook auth", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-webhook-auth-required",
+          sourceClientId: "writer-webhook-auth-required",
+          text: "blocked",
+          createdAt: 106,
+        }),
+      ]),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DIFF_WEBHOOK_SECRET: "webhook-secret",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(401);
   });
 
   it("ignores partial provider auth headers for normal diff writes", async () => {

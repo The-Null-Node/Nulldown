@@ -38,6 +38,7 @@ export const NullplugUiSourceSchema = z.object({
   rootDropId: z.string(),
   branchId: z.string().optional(),
   snapshotId: finiteNumberSchema.optional(),
+  sourceContentHash: z.string().min(1).optional(),
   eventId: z.string().optional(),
   callId: z.string().optional(),
 }) satisfies z.ZodType<NullplugUiSource>;

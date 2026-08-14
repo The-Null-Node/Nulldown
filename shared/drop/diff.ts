@@ -7,6 +7,10 @@ string-based op shape while carrying the native encoded diff alongside it.
 import { DiffOp, type Diff, type DiffRange } from "../nulledit/types";
 import { decodeText, encodeText } from "../nulledit/textDiff";
 import {
+  isNullplugUiRuntimeFact,
+  type NullplugUiRuntimeFact,
+} from "../nullplug/ui";
+import {
   DropDiffEnvelopeSchema,
   DropDiffEventMetadataSchema,
   DropDiffEventSchema,
@@ -104,6 +108,34 @@ export interface DropDiffEvent {
   metadata?: DropDiffEventMetadata;
 }
 
+/** Server acknowledgement for one accepted or idempotently replayed diff event. */
+export interface DropDiffEventAcknowledgement {
+  /** Writer-supplied stable event identity. */
+  eventId: string;
+  /** Durable branch sequence assigned to the event. */
+  seq: number;
+  /** Snapshot that contains the event. */
+  snapshotId: number;
+  /** Whether this request appended the event or replayed an existing event. */
+  status: "accepted" | "duplicate";
+}
+
+/** Response returned after a diff envelope is accepted by the branch transport. */
+export interface DropDiffAppendResponse {
+  /** Number of new events appended by the request. */
+  accepted: number;
+  /** Number of input events ignored because their identities already existed. */
+  deduplicated: number;
+  /** Branch that accepted or acknowledged the events. */
+  branchId: string;
+  /** Current branch head snapshot after processing the request. */
+  snapshotId: number;
+  /** Total number of stored branch events after processing the request. */
+  totalStored: number;
+  /** Per-event acknowledgement, including durable sequence information. */
+  acknowledgements: DropDiffEventAcknowledgement[];
+}
+
 /** Renderable stable reference to a branch diff event. */
 export type DropDiffRenderableRef = `<diff:${string}>`;
 
@@ -130,12 +162,34 @@ export interface DropDiffEnvelope {
   events: DropDiffEvent[];
 }
 
+/** Immutable Nullplug runtime fact appended to a branch-local fact timeline. */
+export interface DropBranchRuntimeFact {
+  /** Fact-log schema version. */
+  version: 1;
+  /** Root drop id that owns this branch timeline. */
+  rootDropId: string;
+  /** Branch id that owns this fact timeline. */
+  branchId: string;
+  /** Monotonic, branch-local fact sequence assigned by the server. */
+  seq: number;
+  /** Stable fact identity used for idempotent writes. */
+  factId: string;
+  /** Server-assigned append time in epoch milliseconds. */
+  createdAt: number;
+  /** Immutable runtime fact payload. */
+  fact: NullplugUiRuntimeFact;
+}
+
 /** Poll response for branch diff transport. */
 export interface DropDiffPollResponse {
   /** Events after the requested cursor. */
   events: DropDiffEvent[];
   /** Cursor to send on the next poll, or null when no events are available. */
   cursor: string | null;
+  /** Runtime facts after the optional requested fact cursor. */
+  facts?: DropBranchRuntimeFact[];
+  /** Cursor to send on the next runtime-fact poll. */
+  factCursor?: string | null;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -145,6 +199,57 @@ const isString = (value: unknown): value is string => typeof value === "string";
 
 const isNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+
+const isAcknowledgement = (
+  value: unknown,
+): value is DropDiffEventAcknowledgement => {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.eventId) &&
+    Number.isInteger(value.seq) &&
+    value.seq >= 0 &&
+    Number.isInteger(value.snapshotId) &&
+    value.snapshotId >= 0 &&
+    (value.status === "accepted" || value.status === "duplicate")
+  );
+};
+
+/** Returns true when a response contains validated durable event acknowledgements. */
+export const isDropDiffAppendResponse = (
+  value: unknown,
+): value is DropDiffAppendResponse => {
+  if (!isRecord(value)) return false;
+  return (
+    Number.isInteger(value.accepted) &&
+    value.accepted >= 0 &&
+    Number.isInteger(value.deduplicated) &&
+    value.deduplicated >= 0 &&
+    isString(value.branchId) &&
+    Number.isInteger(value.snapshotId) &&
+    value.snapshotId >= 0 &&
+    Number.isInteger(value.totalStored) &&
+    value.totalStored >= 0 &&
+    Array.isArray(value.acknowledgements) &&
+    value.acknowledgements.every(isAcknowledgement)
+  );
+};
+
+/** Checks whether a value is a branch-local, cursor-addressable runtime fact. */
+export const isDropBranchRuntimeFact = (
+  value: unknown,
+): value is DropBranchRuntimeFact => {
+  if (!isRecord(value)) return false;
+  if (value.version !== 1) return false;
+  if (!isString(value.rootDropId) || !isString(value.branchId)) return false;
+  if (!Number.isInteger(value.seq) || value.seq < 0) return false;
+  if (!isString(value.factId) || !isNumber(value.createdAt)) return false;
+  if (!isNullplugUiRuntimeFact(value.fact)) return false;
+
+  return (
+    value.fact.source.rootDropId === value.rootDropId &&
+    value.fact.source.branchId === value.branchId
+  );
+};
 
 /** Formats an event id as a renderable diff reference. */
 export const createDropDiffRenderableRef = (

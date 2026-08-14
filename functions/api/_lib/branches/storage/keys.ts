@@ -14,7 +14,15 @@ const BRANCH_DIFF_LOG_KEY_PREFIX = "__drop_branch_diffs__/";
 /** R2 prefix for per-sequence branch diff event records. */
 export const BRANCH_DIFF_EVENT_KEY_PREFIX = "__drop_branch_diff_events__/";
 const BRANCH_DIFF_EVENT_ID_KEY_PREFIX = "__drop_branch_diff_event_ids__/";
+const BRANCH_DIFF_EVENT_ID_MARKER_V2_KEY_PREFIX =
+  "__drop_branch_diff_event_id_markers_v2__/";
+/** R2 prefix for per-sequence branch runtime fact records. */
+export const BRANCH_RUNTIME_FACT_EVENT_KEY_PREFIX =
+  "__drop_branch_runtime_fact_events__/";
+const BRANCH_RUNTIME_FACT_EVENT_ID_KEY_PREFIX =
+  "__drop_branch_runtime_fact_event_ids__/";
 const BRANCH_LOCK_KEY_PREFIX = "__drop_branch_lock__/";
+const BRANCH_PROMOTION_RECEIPT_KEY_PREFIX = "__drop_branch_promotion_receipts__/";
 const EVENT_SEQ_PAD = 16;
 
 /** Sanitizes a dynamic branch key segment before embedding it in an R2 key. */
@@ -75,11 +83,63 @@ export const createBranchDiffEventIdKey = (
 ): string =>
   `${BRANCH_DIFF_EVENT_ID_KEY_PREFIX}${rootDropId}/${branchId}/${sanitizeBranchKeyPart(eventId)}.txt`;
 
+/** Encodes exact UTF-16 code units into a path-safe, collision-free key segment. */
+export const encodeBranchDiffEventIdKeyPart = (eventId: string): string => {
+  let binary = "";
+  for (let index = 0; index < eventId.length; index += 1) {
+    const codeUnit = eventId.charCodeAt(index);
+    binary += String.fromCharCode(codeUnit >> 8, codeUnit & 0xff);
+  }
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+};
+
+/** Builds the v2 R2 key for an exact branch diff-event identity marker. */
+export const createBranchDiffEventIdMarkerV2Key = (
+  rootDropId: string,
+  branchId: string,
+  eventId: string,
+): string =>
+  `${BRANCH_DIFF_EVENT_ID_MARKER_V2_KEY_PREFIX}${rootDropId}/${branchId}/u16-${encodeBranchDiffEventIdKeyPart(eventId)}.json`;
+
+/** Builds the R2 prefix for per-sequence branch runtime fact objects. */
+export const createBranchRuntimeFactEventPrefix = (
+  rootDropId: string,
+  branchId: string,
+): string => `${BRANCH_RUNTIME_FACT_EVENT_KEY_PREFIX}${rootDropId}/${branchId}/`;
+
+/** Builds the R2 key for one cursor-addressable branch runtime fact. */
+export const createBranchRuntimeFactEventKey = (
+  rootDropId: string,
+  branchId: string,
+  seq: number,
+): string =>
+  `${createBranchRuntimeFactEventPrefix(rootDropId, branchId)}${String(seq).padStart(EVENT_SEQ_PAD, "0")}.json`;
+
+/** Builds the R2 key used to dedupe a branch runtime fact identity. */
+export const createBranchRuntimeFactEventIdKey = (
+  rootDropId: string,
+  branchId: string,
+  factId: string,
+): string =>
+  `${BRANCH_RUNTIME_FACT_EVENT_ID_KEY_PREFIX}${rootDropId}/${branchId}/${sanitizeBranchKeyPart(factId)}.json`;
+
 /** Builds the R2 key for the coarse branch mutation lock. */
 export const createBranchLockKey = (
   rootDropId: string,
   branchId: string,
 ): string => `${BRANCH_LOCK_KEY_PREFIX}${rootDropId}/${branchId}.json`;
+
+/** Builds the exact actor-scoped idempotency receipt key for a branch promotion. */
+export const createBranchPromotionReceiptKey = (
+  rootDropId: string,
+  branchId: string,
+  accountId: string,
+  idempotencyKey: string,
+): string =>
+  `${BRANCH_PROMOTION_RECEIPT_KEY_PREFIX}${rootDropId}/${branchId}/${accountId}/${idempotencyKey}.json`;
 
 /** Builds the stable writer identity key used to assign clone branches. */
 export const createWriterKey = (

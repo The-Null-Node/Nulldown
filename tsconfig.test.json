@@ -4,5 +4,5 @@
     "types": ["jest", "node"],
     "noEmit": false
   },
-  "include": ["src/**/*.ts", "shared/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "shared/**/*.ts"]
 }

@@ -125,9 +125,11 @@ const handleGet = async (env: Env, request: Request): Promise<Response> => {
       return new Response("R2 bucket binding is required.", { status: 500 });
     }
 
+    const cursor = new URL(request.url).searchParams.get("cursor") ?? undefined;
     const listed = await env.R2_BUCKET.list({
       prefix: NULLPLUG_REGISTRY_LATEST_KEY_PREFIX,
       limit: REGISTRY_LIST_LIMIT,
+      cursor,
     });
     const records = await Promise.all(
       listed.objects.map((entry) => env.R2_BUCKET.get(entry.key).then(readRegistryRecord)),

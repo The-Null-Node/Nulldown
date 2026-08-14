@@ -31,13 +31,19 @@ The canonical documentation lives in Nulldown:
 
 ## What Exists Today
 
-| Area | Current capability |
-| --- | --- |
-| Deterministic state | Ordered branch diff events, parent-linked snapshots, checkpoints, replay, and promotion. |
+| Area                 | Current capability                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deterministic state  | Ordered branch diff events, parent-linked snapshots, checkpoints, replay, and promotion.                                                                |
 | Retrieval and memory | Structural document/runtime queries, source references, priority overlays, and optional NullMem facts, procedures, capabilities, and freshness signals. |
-| Interfaces | Native Nulldown composition, nullplug runtime contracts, runtime facts, and policy-controlled proposed mutations. |
-| Trust | Public plaintext, client-sealed, provider-assisted, and self-hosted workflows with different explicit trust properties. |
-| Deployment | Cloudflare Pages/R2/D1 plus a self-hostable Bun API backend using filesystem blobs and SQLite metadata. |
+| Interfaces           | Native Nulldown composition, nullplug runtime contracts, runtime facts, and policy-controlled proposed mutations.                                       |
+| Trust                | Public plaintext, client-sealed, provider-assisted, and self-hosted workflows with different explicit trust properties.                                 |
+| Deployment           | Cloudflare Pages/R2/D1 plus a self-hostable Bun API backend using filesystem blobs and SQLite metadata.                                                 |
+
+## Nullplug Providers
+
+`VoidProvider.nullplug` is the common invocation boundary for trusted built-ins and registered remote HTTP nullplugs. The runtime resolves a plugin, normalizes its return into `NullplugInvokeResponse`, applies the configured policy validator, and preserves structured results for editor and public render surfaces.
+
+Remote manifests declare the versioned invocation media type `application/vnd.nulldown.nullplug.invoke+json;version=1`. Provider invocation rechecks the endpoint allowlist, narrows capabilities to the manifest permissions, enforces a timeout and response-size limit, and rejects non-conforming responses. It never imports code from manifest URLs.
 
 ## Quick Start
 
@@ -57,6 +63,17 @@ nd diff apply <rootId> --branch <branchId> --insert '0:# Updated title\n\n' --js
 nd branch query <rootId> <branchId> --query "updated title" --top 1 --json
 ```
 
+When retrying `nd diff apply` after an ambiguous network failure, reuse both the
+original event identity and creation time. A successful response includes the
+durable event receipt; do not retry with a new identity until the original outcome
+is known. For a generated `diff replace`, save the generated envelope and retry it
+with `diff event` or `diff batch`; replacement re-computes its operations from live
+branch content and is not an exact replay surface.
+
+```bash
+nd diff apply <rootId> --branch <branchId> --event-id retry-1 --created-at 1770000000000 --insert '0:retry\n' --json
+```
+
 Run against a local or preview API:
 
 ```bash
@@ -73,6 +90,18 @@ nulldown-mcp
 ```
 
 Configure `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment as needed. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
+
+## Interactive Approval
+
+An authenticated remote branch can render a built-in approval nullplug in the editor:
+
+````markdown
+```approval(id="release-42")
+Approve the production release?
+```
+````
+
+The `id` is required and should remain stable. Submitting the form stores an immutable, actor-attributed `ui.response` fact and rebuilds the branch runtime-reference heap. Agents can retrieve the decision with MCP `branch_query` using resolver `nulldown.resolved.runtime-refs`, kind `ui.response`, and primitive id `release-42`. Approval responses never apply document diffs or mint runtime authority by themselves.
 
 ## Self-Host
 
