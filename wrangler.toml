@@ -20,6 +20,3 @@ preview_database_id = "DB"
 migrations_dir = "migrations"
 
 # 272f4fd9d668c5b64f0fe15702351709
-
-[secrets]
-required = ["ACCOUNT_AUTH_SECRET"]
