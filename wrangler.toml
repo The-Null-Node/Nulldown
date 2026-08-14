@@ -2,6 +2,9 @@ name = "nulldown"
 
 compatibility_date = "2025-04-03"
 
+[secrets]
+required = ["ACCOUNT_AUTH_SECRET"]
+
 # Tell Pages where your built static assets are
 pages_build_output_dir = "dist"
 
