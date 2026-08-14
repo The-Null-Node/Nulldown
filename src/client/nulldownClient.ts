@@ -9,10 +9,13 @@ import {
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 import type {
+  DropDiffAppendResponse,
   DropDiffEnvelope,
   DropDiffEventMetadata,
   DropDiffOp,
 } from "../../shared/drop/diff";
+import { isDropDiffAppendResponse } from "../../shared/drop/diff";
+import { DropDiffEventIdSchema } from "../../shared/drop/diffSchemas";
 import type {
   NullplugInvokeRequest,
   NullplugInvokeResponse,
@@ -250,6 +253,10 @@ export interface NulldownDiffApplyRequest {
   metadata?: DropDiffEventMetadata;
   /** Optional canonical drop id stored in the event. */
   eventDropId?: string;
+  /** Stable event identity to reuse when retrying the same request. */
+  eventId?: string;
+  /** Original event creation time to reuse with `eventId` during a retry. */
+  createdAt?: number;
 }
 
 /** Response returned after storing an immutable nullplug UI response fact. */
@@ -686,18 +693,43 @@ export class NulldownClient {
     return response.data;
   }
 
-  /** Posts a single atomic branch diff event. */
-  async applyDiff(request: NulldownDiffApplyRequest): Promise<unknown> {
+  /** Posts a single atomic branch diff event and returns its server acknowledgement. */
+  async applyDiff(
+    request: NulldownDiffApplyRequest,
+  ): Promise<DropDiffAppendResponse> {
+    if ((request.eventId === undefined) !== (request.createdAt === undefined)) {
+      throw new NulldownClientError(
+        "Diff retries must provide eventId and createdAt together.",
+        { code: "diff_retry_identity_incomplete" },
+      );
+    }
+    if (request.eventId !== undefined) {
+      const eventId = DropDiffEventIdSchema.safeParse(request.eventId);
+      if (!eventId.success) {
+        throw new NulldownClientError("Diff retry eventId is invalid.", {
+          code: "diff_retry_identity_invalid",
+        });
+      }
+      if (
+        !Number.isFinite(request.createdAt) ||
+        !Number.isInteger(request.createdAt) ||
+        request.createdAt < 0
+      ) {
+        throw new NulldownClientError("Diff retry createdAt is invalid.", {
+          code: "diff_retry_identity_invalid",
+        });
+      }
+    }
     const eventDropId = request.eventDropId ?? request.dropId;
     const envelope: DropDiffEnvelope = {
       version: 1,
       events: [
         {
-          eventId: `mcp-${Date.now()}-${randomUUID()}`,
+          eventId: request.eventId ?? `mcp-${Date.now()}-${randomUUID()}`,
           seq: 0,
           dropId: eventDropId,
           sourceClientId: this.config.clientId || "nulldown-mcp",
-          createdAt: Date.now(),
+          createdAt: request.createdAt ?? Date.now(),
           ops: request.ops,
           metadata: request.metadata,
         },
@@ -743,6 +775,23 @@ export class NulldownClient {
       headers,
       body,
     });
+    if (!isDropDiffAppendResponse(response.data)) {
+      throw new NulldownClientError(
+        "Diff response did not include a durable acknowledgement. Upgrade the server before retrying.",
+        { code: "diff_receipt_unconfirmed", status: response.status },
+      );
+    }
+    if (
+      (request.branchId && response.data.branchId !== request.branchId) ||
+      response.data.acknowledgements.filter(
+        (ack) => ack.eventId === envelope.events[0]?.eventId,
+      ).length !== 1
+    ) {
+      throw new NulldownClientError(
+        "Diff response did not acknowledge the submitted event. Retry the exact same event.",
+        { code: "diff_receipt_unconfirmed", status: response.status },
+      );
+    }
     return response.data;
   }
 }

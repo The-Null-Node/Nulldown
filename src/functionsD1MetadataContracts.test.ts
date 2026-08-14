@@ -592,6 +592,112 @@ describe("D1 metadata contracts", () => {
     expect(page.headSeq).toBe(0);
   });
 
+  it("falls back to R2 when D1 skips an event before the branch head", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const branch = createBranch({ headEventSeq: 2 });
+    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    const first = createEvent();
+    const second = { ...createEvent(), eventId: "evt_2", seq: 1 };
+    const third = { ...createEvent(), eventId: "evt_3", seq: 2 };
+    await writeBranchDiffEvent(
+      bucket as unknown as R2Bucket,
+      branch.rootDropId,
+      branch.branchId,
+      first,
+      db as unknown as D1Database,
+    );
+    await writeBranchDiffEvent(
+      bucket as unknown as R2Bucket,
+      branch.rootDropId,
+      branch.branchId,
+      third,
+      db as unknown as D1Database,
+    );
+    await writeBranchDiffEvent(
+      bucket as unknown as R2Bucket,
+      branch.rootDropId,
+      branch.branchId,
+      second,
+    );
+
+    await expect(
+      pollBranchDiffEventsSince(
+        bucket as unknown as R2Bucket,
+        branch.rootDropId,
+        branch.branchId,
+        -1,
+        10,
+        undefined,
+        db as unknown as D1Database,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({ events: [first, second, third], nextCursor: 2 }),
+    );
+  });
+
+  it("does not expose an R2 event beyond the committed branch head", async () => {
+    const bucket = new MemoryR2Bucket();
+    const branch = createBranch({ headEventSeq: 0 });
+    await writeBranch(bucket as unknown as R2Bucket, branch);
+    const committed = createEvent();
+    const orphan = { ...createEvent(), eventId: "evt_orphan", seq: 1, snapshotId: 2 };
+    await writeBranchDiffEvent(
+      bucket as unknown as R2Bucket,
+      branch.rootDropId,
+      branch.branchId,
+      committed,
+    );
+    await writeBranchDiffEvent(
+      bucket as unknown as R2Bucket,
+      branch.rootDropId,
+      branch.branchId,
+      orphan,
+    );
+
+    await expect(
+      pollBranchDiffEventsSince(
+        bucket as unknown as R2Bucket,
+        branch.rootDropId,
+        branch.branchId,
+        -1,
+        10,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({ events: [committed], nextCursor: 0, headSeq: 0 }),
+    );
+  });
+
+  it("falls back to R2 when the D1 projection is unavailable", async () => {
+    const bucket = new MemoryR2Bucket();
+    const branch = createBranch();
+    const event = createEvent();
+    await writeBranch(bucket as unknown as R2Bucket, branch);
+    await writeBranchDiffEvent(
+      bucket as unknown as R2Bucket,
+      branch.rootDropId,
+      branch.branchId,
+      event,
+    );
+    const unavailableD1 = {
+      prepare() {
+        throw new Error("D1 unavailable");
+      },
+    };
+
+    await expect(
+      pollBranchDiffEventsSince(
+        bucket as unknown as R2Bucket,
+        branch.rootDropId,
+        branch.branchId,
+        -1,
+        10,
+        undefined,
+        unavailableD1 as never,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ events: [event], nextCursor: 0 }));
+  });
+
   it("lists nullplug runtime facts from D1 without R2 records", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();

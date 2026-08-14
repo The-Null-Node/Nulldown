@@ -28,6 +28,7 @@ import ShareSuccessView from "./editor/components/ShareSuccessView";
 import SettingsModal from "./editor/components/SettingsModal";
 import LibraryPalette from "./editor/components/LibraryPalette";
 import BranchActivityDialog from "./editor/components/BranchActivityDialog";
+import BranchSyncBanner from "./editor/components/BranchSyncBanner";
 import { useShareDrop } from "./editor/hooks/useShareDrop";
 import { usePreviewToggle } from "./editor/hooks/usePreviewToggle";
 import { useDiffChannel } from "./editor/hooks/useDiffChannel";
@@ -54,6 +55,12 @@ import { toUserFacingDropError } from "../lib/drop/userErrors";
 import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
 import { createBranchApiClient } from "../../shared/drop/branchApi";
 import { getAccountSessionToken } from "../lib/auth/accountSession";
+import {
+  clearBranchPromotionIntent,
+  readBranchPromotionIntent,
+  writeBranchPromotionIntent,
+  type BranchPromotionIntent,
+} from "../lib/branch/promotionIntent";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
@@ -80,6 +87,7 @@ interface ActiveBranchSession {
   branchId: string;
   accountId: string;
   clientId: string;
+  headEventSeq: number;
 }
 
 const VISIBILITY_CYCLE: Array<"private" | "unlisted" | "public"> = [
@@ -147,7 +155,10 @@ const EditorPage: React.FC = () => {
       ? crypto.randomUUID()
       : `branch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
   );
+  const promotionIntentRef = useRef<BranchPromotionIntent | null>(null);
   const ignoreDraftLoadRef = useRef(false);
+  const runtimePolicyRef = useRef<ReturnType<typeof resolveRootRuntimePolicy>>(null);
+  const activeBranchSessionRef = useRef<ActiveBranchSession | null>(null);
   const [existingDropId, setExistingDropId] = useState<string | null>(null);
   const [activeRootDropId, setActiveRootDropId] = useState<string | null>(null);
   const [activeBranchSession, setActiveBranchSession] =
@@ -157,6 +168,8 @@ const EditorPage: React.FC = () => {
   useEffect(() => {
     bufferRef.current = markdown;
   }, [markdown]);
+
+  activeBranchSessionRef.current = activeBranchSession;
 
   const initializeStorage = useStorageStore((state) => state.initialize);
   const mode = useDropStore((state) => state.mode);
@@ -171,25 +184,59 @@ const EditorPage: React.FC = () => {
     null;
   const hasDiffTarget = Boolean(diffTargetDropId);
   const shouldWaitForRemoteBranchSession = Boolean(
-    routeDropId && !offlineMode && !isOfflineDropId(routeDropId),
+    routeDropId && !isOfflineDropId(routeDropId),
   );
   const shouldUseRemoteBranchDiff = Boolean(
     activeBranchSession &&
-    !offlineMode &&
     diffTargetDropId &&
     !isOfflineDropId(diffTargetDropId),
   );
 
-  const authTokenProvider = useCallback(() => getAccountSessionToken(), []);
+  const authTokenProvider = useCallback(
+    (options?: { forceRefresh?: boolean }) => getAccountSessionToken(options),
+    [],
+  );
 
-  const { flushPendingDiffs, publishDiffs } = useDiffChannel({
+  const setDraftContent = useCallback(
+    (value: string) => {
+      if (ignoreDraftLoadRef.current) return;
+      const branchSession = activeBranchSessionRef.current;
+      if (!value) {
+        editor.reset();
+        return;
+      }
+      editor.reset();
+      editor.setRuntimePolicy(runtimePolicyRef.current);
+      editor.setRuntimeCaller(
+        branchSession
+          ? {
+              dropId: branchSession.rootDropId,
+              branchId: branchSession.branchId,
+            }
+          : null,
+      );
+      editor.seedSnapshot(value);
+      bufferRef.current = value;
+    },
+    [editor],
+  );
+
+  const {
+    discardSyncConflict,
+    flushPendingDiffs,
+    publishDiffs,
+    syncState,
+    takeOverEditing,
+  } = useDiffChannel({
     dropId: diffTargetDropId,
     branchId: activeBranchSession?.branchId,
     accountId: activeBranchSession?.accountId,
     clientId: activeBranchSession?.clientId,
+    initialHeadSeq: activeBranchSession?.headEventSeq,
     authTokenProvider,
-    isOffline: !shouldUseRemoteBranchDiff,
+    isOffline: Boolean(activeBranchSession && offlineMode),
     editor,
+    onRestoreBranchDraft: setDraftContent,
     onRuntimeFacts: applyRuntimeFacts,
     enabled: shouldWaitForRemoteBranchSession
       ? Boolean(activeBranchSession?.rootDropId)
@@ -213,23 +260,20 @@ const EditorPage: React.FC = () => {
   const setAllowedUrls = useDropStore((state) => state.setAllowedUrls);
   const [modeSwitching, setModeSwitching] = useState(false);
 
-  const setDraftContent = useCallback(
-    (value: string) => {
-      if (ignoreDraftLoadRef.current) return;
-      if (!value) {
-        editor.reset();
-        return;
-      }
-      if (!editor.getCurrentSnapshotId()) {
-        editor.seedSnapshot(value);
-      } else {
-        const diffs = computeDiffOps(bufferRef.current, value);
-        editor.addDiffs(diffs);
-      }
-      bufferRef.current = value;
-    },
-    [editor],
-  );
+  const syncLabel =
+    syncState.mode === "synced"
+      ? "Synced"
+      : syncState.mode === "syncing"
+        ? `Syncing ${syncState.pendingCount}`
+        : syncState.mode === "offline"
+          ? `Saved locally${syncState.pendingCount ? ` ${syncState.pendingCount}` : ""}`
+          : syncState.mode === "retrying"
+            ? `Retrying ${syncState.pendingCount}`
+            : syncState.mode === "blocked"
+              ? "Sync conflict"
+              : syncState.mode === "observer"
+                ? "Viewing"
+                : null;
 
   const { clearDraft: clearDraftStorage, load: loadDraftStorage } =
     useDraftStorage(draftStorageKey, markdown, setDraftContent);
@@ -240,6 +284,7 @@ const EditorPage: React.FC = () => {
     setActiveRootDropId(null);
     setActiveBranchSession(null);
     setBaseDropId(null);
+    runtimePolicyRef.current = null;
     editor.reset();
     bufferRef.current = "";
     removeDraftLibraryEntry(draftStorageKey);
@@ -249,18 +294,29 @@ const EditorPage: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handleBufferChange = useCallback(
     (nextValue: string) => {
-      const prevValue = bufferRef.current;
-      if (nextValue === prevValue) return;
-      const diffs = computeDiffOps(prevValue, nextValue);
+      const previousValue = bufferRef.current;
+      if (nextValue === previousValue) return;
+      const diffs = computeDiffOps(previousValue, nextValue);
       if (!diffs.length) {
         bufferRef.current = nextValue;
         return;
       }
-      editor.addDiffs(diffs);
-      publishDiffs(diffs);
+      if (!shouldUseRemoteBranchDiff) {
+        editor.addDiffs(diffs);
+        bufferRef.current = nextValue;
+        void publishDiffs(diffs, { draftContent: nextValue });
+        return;
+      }
+      // Advance the local diff base before the async durable write so rapid input derives
+      // each event from the immediately preceding text instead of a stale buffer.
       bufferRef.current = nextValue;
+      editor.addDiffs(diffs);
+      void publishDiffs(diffs, { draftContent: nextValue })
+        .catch(() => {
+          // Keep the visible local text intact; the branch hook switches this editor read-only.
+        });
     },
-    [editor, publishDiffs],
+    [editor, publishDiffs, shouldUseRemoteBranchDiff],
   );
 
   useEffect(() => {
@@ -350,7 +406,7 @@ const EditorPage: React.FC = () => {
         let content = payload.content;
         let nextBranchSession: ActiveBranchSession | null = null;
 
-        if (!offlineMode && !isOfflineDropId(rootDropId)) {
+        if (!isOfflineDropId(rootDropId)) {
           try {
             const { accountId } = await getUnlockedVault();
             const branchClient = createBranchApiClient({
@@ -373,6 +429,7 @@ const EditorPage: React.FC = () => {
               branchId: branch.branchId,
               accountId,
               clientId: branchClientIdRef.current,
+              headEventSeq: branchContent.headEventSeq ?? -1,
             };
           } catch (branchError) {
             console.error(
@@ -385,7 +442,8 @@ const EditorPage: React.FC = () => {
         const shouldEditInPlace = ownedByCurrentAccount;
 
         editor.reset();
-        editor.setRuntimePolicy(resolveRootRuntimePolicy(payload.metadata));
+        runtimePolicyRef.current = resolveRootRuntimePolicy(payload.metadata);
+        editor.setRuntimePolicy(runtimePolicyRef.current);
         editor.setRuntimeCaller({
           dropId: rootDropId,
           branchId: nextBranchSession?.branchId,
@@ -513,11 +571,62 @@ const EditorPage: React.FC = () => {
       clientId: activeBranchSession.clientId,
       authTokenProvider,
     });
-    const promoted = await branchClient.promoteBranch(
-      activeBranchSession.rootDropId,
-      activeBranchSession.branchId,
-    );
-    return { url: promoted.url, offline: false };
+    const priorIntent = promotionIntentRef.current;
+    let promotionIntent =
+      priorIntent &&
+      priorIntent.rootDropId === activeBranchSession.rootDropId &&
+      priorIntent.branchId === activeBranchSession.branchId
+          ? priorIntent
+         : readBranchPromotionIntent(
+             activeBranchSession.rootDropId,
+             activeBranchSession.branchId,
+           );
+    if (!promotionIntent) {
+      const branchContent = await branchClient.getBranchContent(
+        activeBranchSession.rootDropId,
+        activeBranchSession.branchId,
+      );
+      promotionIntent = {
+        rootDropId: activeBranchSession.rootDropId,
+        branchId: activeBranchSession.branchId,
+        snapshotId: branchContent.snapshotId,
+        idempotencyKey:
+          typeof crypto !== "undefined" && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `promotion_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      };
+      writeBranchPromotionIntent(promotionIntent);
+    }
+    promotionIntentRef.current = promotionIntent;
+    try {
+      const promoted = await branchClient.promoteBranch(
+        activeBranchSession.rootDropId,
+        activeBranchSession.branchId,
+        {
+          expectedSnapshotId: promotionIntent.snapshotId,
+          idempotencyKey: promotionIntent.idempotencyKey,
+        },
+      );
+      promotionIntentRef.current = null;
+      clearBranchPromotionIntent(
+        activeBranchSession.rootDropId,
+        activeBranchSession.branchId,
+      );
+      return { url: promoted.url, offline: false };
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message.includes("promotion_head_mismatch") ||
+          error.message.includes("\"code\":\"promotion_head_mismatch\""))
+      ) {
+        promotionIntentRef.current = null;
+        clearBranchPromotionIntent(
+          activeBranchSession.rootDropId,
+          activeBranchSession.branchId,
+        );
+      }
+      throw error;
+    }
   }, [
     activeBranchSession,
     authTokenProvider,
@@ -542,6 +651,48 @@ const EditorPage: React.FC = () => {
     buildDraftPack,
     publishBranch: shouldUseRemoteBranchDiff ? publishActiveBranch : undefined,
   });
+
+  const recoverWithRemoteBranch = useCallback(() => {
+    if (!activeBranchSession) return;
+
+    void (async () => {
+      try {
+        const branchClient = createBranchApiClient({
+          baseUrl: "",
+          accountId: activeBranchSession.accountId,
+          clientId: activeBranchSession.clientId,
+          authTokenProvider,
+        });
+        const branch = await branchClient.getBranchContent(
+          activeBranchSession.rootDropId,
+          activeBranchSession.branchId,
+        );
+        await discardSyncConflict();
+        editor.reset();
+        editor.setRuntimePolicy(runtimePolicyRef.current);
+        editor.setRuntimeCaller({
+          dropId: activeBranchSession.rootDropId,
+          branchId: activeBranchSession.branchId,
+        });
+        editor.seedSnapshot(branch.content);
+        bufferRef.current = branch.content;
+        setActiveBranchSession((current) =>
+            current
+            ? {
+                ...current,
+                headEventSeq: branch.headEventSeq ?? -1,
+              }
+            : current,
+        );
+      } catch (recoveryError) {
+        setError(
+          recoveryError instanceof Error
+            ? recoveryError.message
+            : "Unable to load the current remote branch.",
+        );
+      }
+    })();
+  }, [activeBranchSession, authTokenProvider, discardSyncConflict, editor, setError]);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -1096,6 +1247,9 @@ const EditorPage: React.FC = () => {
         isTransitioning={isTransitioning}
         offlineMode={offlineMode}
         shareVisibility={shareVisibility}
+        syncLabel={syncLabel}
+        syncTitle={syncState.message}
+        canTakeOverBranch={syncState.mode === "observer"}
         shareLabel={
           shouldUseRemoteBranchDiff ? "Publish Branch" : "Share to the Void"
         }
@@ -1109,6 +1263,15 @@ const EditorPage: React.FC = () => {
         onOpenLibrary={openLibrary}
         onOpenBranches={() => setBranchActivityOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onTakeOverBranch={() => {
+          void takeOverEditing().catch((takeOverError) => {
+            setError(
+              takeOverError instanceof Error
+                ? takeOverError.message
+                : "Unable to take over this branch.",
+            );
+          });
+        }}
         onShare={shareDrop}
       />
 
@@ -1143,10 +1306,20 @@ const EditorPage: React.FC = () => {
 
       <div className="flex-1 relative" style={{ height: "calc(100vh - 65px)" }}>
         {error && <ErrorBanner message={error} />}
+        <BranchSyncBanner
+          state={syncState}
+          onUseRemoteBranch={recoverWithRemoteBranch}
+        />
 
         <EditorPane
           visible={showSourceEditor}
-          editorState={{ editorHidden }}
+          editorState={{
+            editorHidden,
+            syncReadOnly: Boolean(
+              activeBranchSession &&
+                (syncState.mode === "inactive" || !syncState.canEdit),
+            ),
+          }}
           markdown={markdown}
           showPreview={showPreview}
           textareaRef={textareaRef}

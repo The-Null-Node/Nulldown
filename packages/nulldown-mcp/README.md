@@ -40,6 +40,10 @@ Use `nulldown-mcp` as a stdio MCP command. For example:
 
 Add `ND_TOKEN` when the target API requires a bearer session. Protected diff writes may also require `ND_DIFF_AUTH_TOKEN`, exported with `nd diff token export`; `DIFF_WEBHOOK_SECRET` is supported for webhook-style signing.
 
+For an exact `diff_apply` retry, provide `eventId` and `createdAt` together with
+the original operations and metadata. The tool rejects partial identities before
+network I/O and treats a missing or mismatched acknowledgement as unconfirmed.
+
 ## Tool Groups
 
 | Group | Purpose |

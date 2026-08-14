@@ -225,10 +225,17 @@ export const createHttpNulldownRuntime = (
       );
       return response.data;
     },
-    async promote(rootId, branchId) {
+    async promote(input) {
       const response = await dependencies.request(
-        `${branchPath(rootId, branchId)}/promote`,
-        { method: "POST" },
+        `${branchPath(input.rootId, input.branchId)}/promote`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expectedSnapshotId: input.expectedSnapshotId,
+            idempotencyKey: input.idempotencyKey,
+          }),
+        },
       );
       return response.data;
     },

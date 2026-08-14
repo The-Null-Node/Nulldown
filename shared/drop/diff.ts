@@ -108,6 +108,34 @@ export interface DropDiffEvent {
   metadata?: DropDiffEventMetadata;
 }
 
+/** Server acknowledgement for one accepted or idempotently replayed diff event. */
+export interface DropDiffEventAcknowledgement {
+  /** Writer-supplied stable event identity. */
+  eventId: string;
+  /** Durable branch sequence assigned to the event. */
+  seq: number;
+  /** Snapshot that contains the event. */
+  snapshotId: number;
+  /** Whether this request appended the event or replayed an existing event. */
+  status: "accepted" | "duplicate";
+}
+
+/** Response returned after a diff envelope is accepted by the branch transport. */
+export interface DropDiffAppendResponse {
+  /** Number of new events appended by the request. */
+  accepted: number;
+  /** Number of input events ignored because their identities already existed. */
+  deduplicated: number;
+  /** Branch that accepted or acknowledged the events. */
+  branchId: string;
+  /** Current branch head snapshot after processing the request. */
+  snapshotId: number;
+  /** Total number of stored branch events after processing the request. */
+  totalStored: number;
+  /** Per-event acknowledgement, including durable sequence information. */
+  acknowledgements: DropDiffEventAcknowledgement[];
+}
+
 /** Renderable stable reference to a branch diff event. */
 export type DropDiffRenderableRef = `<diff:${string}>`;
 
@@ -171,6 +199,40 @@ const isString = (value: unknown): value is string => typeof value === "string";
 
 const isNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+
+const isAcknowledgement = (
+  value: unknown,
+): value is DropDiffEventAcknowledgement => {
+  if (!isRecord(value)) return false;
+  return (
+    isString(value.eventId) &&
+    Number.isInteger(value.seq) &&
+    value.seq >= 0 &&
+    Number.isInteger(value.snapshotId) &&
+    value.snapshotId >= 0 &&
+    (value.status === "accepted" || value.status === "duplicate")
+  );
+};
+
+/** Returns true when a response contains validated durable event acknowledgements. */
+export const isDropDiffAppendResponse = (
+  value: unknown,
+): value is DropDiffAppendResponse => {
+  if (!isRecord(value)) return false;
+  return (
+    Number.isInteger(value.accepted) &&
+    value.accepted >= 0 &&
+    Number.isInteger(value.deduplicated) &&
+    value.deduplicated >= 0 &&
+    isString(value.branchId) &&
+    Number.isInteger(value.snapshotId) &&
+    value.snapshotId >= 0 &&
+    Number.isInteger(value.totalStored) &&
+    value.totalStored >= 0 &&
+    Array.isArray(value.acknowledgements) &&
+    value.acknowledgements.every(isAcknowledgement)
+  );
+};
 
 /** Checks whether a value is a branch-local, cursor-addressable runtime fact. */
 export const isDropBranchRuntimeFact = (

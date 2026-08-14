@@ -114,8 +114,13 @@ export interface BranchRuntime {
   contentOrNull(rootId: string, branchId: string): Promise<unknown | null>;
   /** Lists snapshots for a branch. */
   snapshots(rootId: string, branchId: string): Promise<unknown | null>;
-  /** Promotes a branch into a new drop. */
-  promote(rootId: string, branchId: string): Promise<unknown | null>;
+  /** Promotes one observed branch snapshot into a retry-safe new drop. */
+  promote(input: {
+    rootId: string;
+    branchId: string;
+    expectedSnapshotId: number;
+    idempotencyKey: string;
+  }): Promise<unknown | null>;
 }
 
 /** Request for polling drop diff events. */

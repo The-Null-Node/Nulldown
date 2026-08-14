@@ -17,6 +17,9 @@ interface EditorToolbarProps {
   isTransitioning: boolean;
   offlineMode: boolean;
   shareVisibility: "private" | "unlisted" | "public";
+  syncLabel?: string | null;
+  syncTitle?: string | null;
+  canTakeOverBranch?: boolean;
   shareLabel?: string;
   sharingLabel?: string;
   sharing: boolean;
@@ -26,6 +29,7 @@ interface EditorToolbarProps {
   onOpenLibrary: () => void;
   onOpenBranches?: () => void;
   onOpenSettings: () => void;
+  onTakeOverBranch?: () => void;
   onShare: () => void;
 }
 
@@ -35,6 +39,9 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
   isTransitioning,
   offlineMode,
   shareVisibility,
+  syncLabel,
+  syncTitle,
+  canTakeOverBranch = false,
   shareLabel = "Share to the Void",
   sharingLabel = "Sharing...",
   sharing,
@@ -44,6 +51,7 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onOpenLibrary,
   onOpenBranches,
   onOpenSettings,
+  onTakeOverBranch,
   onShare,
 }) => {
   const visibilityLabel =
@@ -94,6 +102,20 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           )}
           {modeSwitching ? "Switching..." : offlineMode ? "Offline" : "Online"}
         </Button>
+        {syncLabel ? (
+          <span
+            className="hidden rounded-full border border-border px-2 py-1 text-xs text-muted sm:inline-flex"
+            title={syncTitle ?? undefined}
+            aria-label={syncTitle ?? syncLabel}
+          >
+            {syncLabel}
+          </span>
+        ) : null}
+        {canTakeOverBranch && onTakeOverBranch ? (
+          <Button type="button" size="sm" variant="outline" onClick={onTakeOverBranch}>
+            Take over
+          </Button>
+        ) : null}
 
         <Button
           type="button"

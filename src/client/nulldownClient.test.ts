@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { jest } from "@jest/globals";
 import {
   DIFF_CLIENT_ID_HEADER,
   DIFF_SECRET_KID_HEADER,
@@ -7,7 +8,7 @@ import {
   DIFF_TIMESTAMP_HEADER,
   buildDiffSigningPayload,
 } from "../../shared/drop/diffAuth";
-import { createNulldownClient } from "./nulldownClient";
+import { createNulldownClient, NulldownClientError } from "./nulldownClient";
 import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../shared/nullplug/registry";
 
 const base64UrlEncode = (value: string): string =>
@@ -47,15 +48,38 @@ describe("NulldownClient", () => {
       fetch: async (url, init) => {
         captured.url = String(url);
         captured.init = init;
-        return Response.json({ accepted: 1 });
+         return Response.json({
+           accepted: 1,
+           deduplicated: 0,
+           branchId: "branch-1",
+           snapshotId: 1,
+           totalStored: 1,
+           acknowledgements: [
+             {
+               eventId: "stable-event-1",
+               seq: 0,
+               snapshotId: 1,
+               status: "accepted",
+             },
+           ],
+         });
       },
     });
 
-    await client.applyDiff({
+    const result = await client.applyDiff({
       dropId: "route-drop",
       branchId: "branch-1",
       eventDropId: "drop-canonical",
+      eventId: "stable-event-1",
+      createdAt: 1_725_000_000_000,
       ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
+    });
+
+    expect(result?.acknowledgements[0]).toEqual({
+      eventId: "stable-event-1",
+      seq: 0,
+      snapshotId: 1,
+      status: "accepted",
     });
 
     const headers = new Headers(captured.init?.headers);
@@ -88,10 +112,204 @@ describe("NulldownClient", () => {
           expect.objectContaining({
             dropId: "drop-canonical",
             sourceClientId: "nulldown-mcp",
+            eventId: "stable-event-1",
+            createdAt: 1_725_000_000_000,
           }),
         ],
       }),
     );
+  });
+
+  it("rejects incomplete retry identities before sending a diff", async () => {
+    const fetch = jest.fn<typeof globalThis.fetch>();
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch,
+    });
+
+    await expect(
+      client.applyDiff({
+        dropId: "drop-1",
+        eventId: "stable-event-1",
+        ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "diff_retry_identity_incomplete",
+    } satisfies Partial<NulldownClientError>);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { eventId: "stable-event-1" },
+    { createdAt: 1 },
+    { eventId: " retry-event", createdAt: 1 },
+    { eventId: "stable-event-1", createdAt: -1 },
+  ])("rejects invalid retry identity before sending $eventId $createdAt", async (identity) => {
+    const fetch = jest.fn<typeof globalThis.fetch>();
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch,
+    });
+
+    await expect(
+      client.applyDiff({
+        dropId: "drop-1",
+        ...identity,
+        ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
+      }),
+    ).rejects.toMatchObject({
+      code: identity.eventId === undefined || identity.createdAt === undefined
+        ? "diff_retry_identity_incomplete"
+        : "diff_retry_identity_invalid",
+    } satisfies Partial<NulldownClientError>);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("reuses the exact event body while refreshing diff authentication", async () => {
+    const token = `ndauth.v1.${base64UrlEncode(
+      JSON.stringify({
+        version: 1,
+        kind: "nulldown.diff-auth.v1",
+        createdAt: 1,
+        keys: null,
+        credentials: {
+          "drop-1": {
+            version: 1,
+            dropId: "drop-1",
+            branchId: "branch-1",
+            baseUrl: "https://nulldown.test",
+            clientId: "client-1",
+            kid: "kid-1",
+            secret: "secret-1",
+            createdAt: 1,
+            expiresAt: null,
+          },
+        },
+      }),
+    )}`;
+    const requests: RequestInit[] = [];
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      diffAuthToken: token,
+      fetch: async (_url, init) => {
+        requests.push(init ?? {});
+        if (requests.length === 1) throw new Error("response lost");
+        return Response.json({
+          accepted: 0,
+          deduplicated: 1,
+          branchId: "branch-1",
+          snapshotId: 1,
+          totalStored: 1,
+          acknowledgements: [
+            {
+              eventId: "stable-event-1",
+              seq: 0,
+              snapshotId: 1,
+              status: "duplicate",
+            },
+          ],
+        });
+      },
+    });
+    const request = {
+      dropId: "drop-1",
+      branchId: "branch-1",
+      eventId: "stable-event-1",
+      createdAt: 1_725_000_000_000,
+      ops: [{ type: "insert" as const, start: 0, end: 0, text: "hello" }],
+    };
+
+    const now = jest.spyOn(Date, "now").mockReturnValueOnce(101).mockReturnValueOnce(202);
+    try {
+      await expect(client.applyDiff(request)).rejects.toThrow("response lost");
+      await expect(client.applyDiff(request)).resolves.toMatchObject({
+        acknowledgements: [{ eventId: "stable-event-1", status: "duplicate" }],
+      });
+      expect(requests).toHaveLength(2);
+      expect(requests.map((entry) => entry.body)).toEqual([
+        requests[0]?.body,
+        requests[0]?.body,
+      ]);
+      expect(new Headers(requests[0]?.headers).get(DIFF_TIMESTAMP_HEADER)).toBe("101");
+      expect(new Headers(requests[1]?.headers).get(DIFF_TIMESTAMP_HEADER)).toBe("202");
+      expect(new Headers(requests[0]?.headers).get(DIFF_SIGNATURE_HEADER)).not.toBe(
+        new Headers(requests[1]?.headers).get(DIFF_SIGNATURE_HEADER),
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("rejects successful responses without a durable diff receipt", async () => {
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async () => Response.json({ accepted: 1 }),
+    });
+
+    await expect(
+      client.applyDiff({
+        dropId: "drop-1",
+        ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
+      }),
+    ).rejects.toMatchObject({ code: "diff_receipt_unconfirmed" });
+  });
+
+  it("rejects a receipt that does not acknowledge the submitted event", async () => {
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async () =>
+        Response.json({
+          accepted: 1,
+          deduplicated: 0,
+          branchId: "branch-1",
+          snapshotId: 1,
+          totalStored: 1,
+          acknowledgements: [
+            {
+              eventId: "other-event",
+              seq: 0,
+              snapshotId: 1,
+              status: "accepted",
+            },
+          ],
+        }),
+    });
+
+    await expect(
+      client.applyDiff({
+        dropId: "drop-1",
+        eventId: "submitted-event",
+        createdAt: 1,
+        ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
+      }),
+    ).rejects.toMatchObject({ code: "diff_receipt_unconfirmed" });
+  });
+
+  it("rejects a receipt for a different requested branch", async () => {
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async () =>
+        Response.json({
+          accepted: 1,
+          deduplicated: 0,
+          branchId: "branch-other",
+          snapshotId: 1,
+          totalStored: 1,
+          acknowledgements: [
+            { eventId: "submitted-event", seq: 0, snapshotId: 1, status: "accepted" },
+          ],
+        }),
+    });
+
+    await expect(
+      client.applyDiff({
+        dropId: "drop-1",
+        branchId: "branch-requested",
+        eventId: "submitted-event",
+        createdAt: 1,
+        ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
+      }),
+    ).rejects.toMatchObject({ code: "diff_receipt_unconfirmed" });
   });
 
   it("calls typed nullplug provider runtime routes", async () => {

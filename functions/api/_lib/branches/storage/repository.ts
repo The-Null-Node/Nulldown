@@ -34,8 +34,13 @@ export interface BranchRepository {
     rootDropId: string,
     branchId: string,
   ): Promise<DropBranchRecord | null>;
+  /** Reads a branch record and its canonical R2 revision. */
+  readBranchWithEtag(
+    rootDropId: string,
+    branchId: string,
+  ): Promise<{ branch: DropBranchRecord; etag: string } | null>;
   /** Writes a branch record to durable storage. */
-  writeBranch(branch: DropBranchRecord): Promise<void>;
+  writeBranch(branch: DropBranchRecord, expectedEtag?: string): Promise<boolean>;
   /** Reads a snapshot record by root, branch, and snapshot id. */
   readSnapshot(
     rootDropId: string,
@@ -150,37 +155,65 @@ export const readBranch = async (
   rootDropId: string,
   branchId: string,
   db?: VoidSqlStore,
-): Promise<DropBranchRecord | null> =>
-  db
-    ? (parseJsonColumn(
-        (
-          await db
-            .prepare(
-              `SELECT record_json FROM branches WHERE root_drop_id = ? AND branch_id = ?`,
-            )
-            .bind(rootDropId, branchId)
-            .first<{ record_json: string }>()
-        )?.record_json,
-        isDropBranchRecord,
-      ) ??
-      (await readR2Json(
-        bucket,
-        createBranchKey(rootDropId, branchId),
-        isDropBranchRecord,
-      )))
-    : readR2Json(
-        bucket,
-        createBranchKey(rootDropId, branchId),
-        isDropBranchRecord,
-      );
+): Promise<DropBranchRecord | null> => {
+  const canonical = await readR2Json(
+    bucket,
+    createBranchKey(rootDropId, branchId),
+    isDropBranchRecord,
+  );
+  if (canonical || !db) return canonical;
+  try {
+    return parseJsonColumn(
+      (
+        await db
+          .prepare(
+            `SELECT record_json FROM branches WHERE root_drop_id = ? AND branch_id = ?`,
+          )
+          .bind(rootDropId, branchId)
+          .first<{ record_json: string }>()
+      )?.record_json,
+      isDropBranchRecord,
+    );
+  } catch {
+    return null;
+  }
+};
+
+/** Reads a canonical R2 branch record with the ETag required for fenced publication. */
+export const readBranchWithEtag = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+): Promise<{ branch: DropBranchRecord; etag: string } | null> => {
+  const object = await bucket.get(createBranchKey(rootDropId, branchId));
+  const etag = object?.etag ?? object?.httpEtag;
+  if (!object || !etag) return null;
+  try {
+    const branch = await object.json<unknown>();
+    return isDropBranchRecord(branch) ? { branch, etag } : null;
+  } catch {
+    return null;
+  }
+};
 
 /** Writes a branch record to D1 and its canonical R2 fallback key. */
 export const writeBranch = async (
   bucket: VoidBlobStore,
   branch: DropBranchRecord,
   db?: VoidSqlStore,
-): Promise<void> => {
+  expectedEtag?: string,
+): Promise<boolean> => {
+  const written = await bucket.put(
+    createBranchKey(branch.rootDropId, branch.branchId),
+    JSON.stringify(branch),
+    {
+      httpMetadata: { contentType: "application/json" },
+      ...(expectedEtag ? { onlyIf: { etagMatches: expectedEtag } } : {}),
+    },
+  );
+  if (!written) return false;
   if (db) {
+    try {
     await db
       .prepare(
         `INSERT INTO branches (
@@ -220,12 +253,11 @@ export const writeBranch = async (
         JSON.stringify(branch),
       )
       .run();
+    } catch {
+      // R2 is canonical; a failed D1 branch projection is rebuilt later.
+    }
   }
-  await writeR2Json(
-    bucket,
-    createBranchKey(branch.rootDropId, branch.branchId),
-    branch,
-  );
+  return true;
 };
 
 /** Reads a snapshot record by root, branch, and snapshot id. */
@@ -235,31 +267,31 @@ export const readSnapshot = async (
   branchId: string,
   snapshotId: number,
   db?: VoidSqlStore,
-): Promise<DropSnapshotRecord | null> =>
-  db
-    ? (parseJsonColumn(
-        (
-          await db
-            .prepare(
-              `SELECT record_json
-               FROM branch_snapshots
-               WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ?`,
-            )
-            .bind(rootDropId, branchId, snapshotId)
-            .first<{ record_json: string }>()
-        )?.record_json,
-        isDropSnapshotRecord,
-      ) ??
-      (await readR2Json(
-        bucket,
-        createSnapshotKey(rootDropId, branchId, snapshotId),
-        isDropSnapshotRecord,
-      )))
-    : readR2Json(
-        bucket,
-        createSnapshotKey(rootDropId, branchId, snapshotId),
-        isDropSnapshotRecord,
-      );
+): Promise<DropSnapshotRecord | null> => {
+  const canonical = await readR2Json(
+    bucket,
+    createSnapshotKey(rootDropId, branchId, snapshotId),
+    isDropSnapshotRecord,
+  );
+  if (canonical || !db) return canonical;
+  try {
+    return parseJsonColumn(
+      (
+        await db
+          .prepare(
+            `SELECT record_json
+             FROM branch_snapshots
+             WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ?`,
+          )
+          .bind(rootDropId, branchId, snapshotId)
+          .first<{ record_json: string }>()
+      )?.record_json,
+      isDropSnapshotRecord,
+    );
+  } catch {
+    return null;
+  }
+};
 
 /** Writes a snapshot record to D1 and its canonical R2 fallback key. */
 export const writeSnapshot = async (
@@ -267,7 +299,13 @@ export const writeSnapshot = async (
   snapshot: DropSnapshotRecord,
   db?: VoidSqlStore,
 ): Promise<void> => {
+  await writeR2Json(
+    bucket,
+    createSnapshotKey(snapshot.rootDropId, snapshot.branchId, snapshot.snapshotId),
+    snapshot,
+  );
   if (db) {
+    try {
     await db
       .prepare(
         `INSERT INTO branch_snapshots (
@@ -300,16 +338,10 @@ export const writeSnapshot = async (
         JSON.stringify(snapshot),
       )
       .run();
+    } catch {
+      // R2 is canonical; a failed D1 snapshot projection is rebuilt later.
+    }
   }
-  await writeR2Json(
-    bucket,
-    createSnapshotKey(
-      snapshot.rootDropId,
-      snapshot.branchId,
-      snapshot.snapshotId,
-    ),
-    snapshot,
-  );
 };
 
 /** Resolves a snapshot checkpoint key, honoring explicit historical keys. */
@@ -376,34 +408,26 @@ export const listSnapshotsForBranch = async (
   branchId: string,
   db?: VoidSqlStore,
 ): Promise<DropSnapshotRecord[]> => {
-  if (db) {
-    const rows = await db
-      .prepare(
-        `SELECT record_json
-         FROM branch_snapshots
-         WHERE root_drop_id = ? AND branch_id = ?
-         ORDER BY snapshot_id ASC`,
-      )
-      .bind(rootDropId, branchId)
-      .all<{ record_json: string }>();
-    const snapshots = (rows.results ?? [])
-      .map((row) => parseJsonColumn(row.record_json, isDropSnapshotRecord))
-      .filter((entry): entry is DropSnapshotRecord => Boolean(entry));
-    if (snapshots.length > 0) return snapshots;
-  }
-
-  const listed = await bucket.list({
-    prefix: `${SNAPSHOT_KEY_PREFIX}${rootDropId}/${branchId}/`,
-    limit: 1000,
-  });
-  const snapshots = await Promise.all(
-    listed.objects.map((entry) =>
-      readR2Json(bucket, entry.key, isDropSnapshotRecord),
-    ),
-  );
+  const snapshots: DropSnapshotRecord[] = [];
+  let cursor: string | undefined;
+  do {
+    const listed = await bucket.list({
+      prefix: `${SNAPSHOT_KEY_PREFIX}${rootDropId}/${branchId}/`,
+      cursor,
+      limit: 1000,
+    });
+    const page = await Promise.all(
+      listed.objects.map((entry) =>
+        readR2Json(bucket, entry.key, isDropSnapshotRecord),
+      ),
+    );
+    snapshots.push(
+      ...page.filter((entry): entry is DropSnapshotRecord => Boolean(entry)),
+    );
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
 
   return snapshots
-    .filter((entry): entry is DropSnapshotRecord => Boolean(entry))
     .sort((a, b) => a.snapshotId - b.snapshotId);
 };
 
@@ -413,22 +437,6 @@ export const listBranchesForRoot = async (
   rootDropId: string,
   db?: VoidSqlStore,
 ): Promise<DropBranchRecord[]> => {
-  if (db) {
-    const rows = await db
-      .prepare(
-        `SELECT record_json
-         FROM branches
-         WHERE root_drop_id = ?
-         ORDER BY created_at ASC`,
-      )
-      .bind(rootDropId)
-      .all<{ record_json: string }>();
-    const branches = (rows.results ?? [])
-      .map((row) => parseJsonColumn(row.record_json, isDropBranchRecord))
-      .filter((entry): entry is DropBranchRecord => Boolean(entry));
-    if (branches.length > 0) return branches;
-  }
-
   const listed = await bucket.list({
     prefix: `${BRANCH_KEY_PREFIX}${rootDropId}/`,
     limit: 1000,
@@ -456,34 +464,6 @@ export const listBranchesForRootPage = async (
   cursor: string | null;
   truncated: boolean;
 }> => {
-  if (db) {
-    const offset = cursor ? Math.max(0, Number.parseInt(cursor, 10) || 0) : 0;
-    const normalizedLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
-    const rows = await db
-      .prepare(
-        `SELECT record_json
-         FROM branches
-         WHERE root_drop_id = ?
-         ORDER BY created_at ASC
-         LIMIT ? OFFSET ?`,
-      )
-      .bind(rootDropId, normalizedLimit + 1, offset)
-      .all<{ record_json: string }>();
-    const parsed = (rows.results ?? [])
-      .map((row) => parseJsonColumn(row.record_json, isDropBranchRecord))
-      .filter((entry): entry is DropBranchRecord => Boolean(entry));
-    if (parsed.length > 0) {
-      return {
-        branches: parsed.slice(0, normalizedLimit),
-        cursor:
-          parsed.length > normalizedLimit
-            ? String(offset + normalizedLimit)
-            : null,
-        truncated: parsed.length > normalizedLimit,
-      };
-    }
-  }
-
   const listed = await bucket.list({
     prefix: `${BRANCH_KEY_PREFIX}${rootDropId}/`,
     limit: Math.max(1, Math.min(1000, Math.floor(limit))),
@@ -511,7 +491,10 @@ export const createBranchRepository = ({
 }: BranchRepositoryPorts): BranchRepository => ({
   readBranch: (rootDropId, branchId) =>
     readBranch(blobs, rootDropId, branchId, sql),
-  writeBranch: (branch) => writeBranch(blobs, branch, sql),
+  readBranchWithEtag: (rootDropId, branchId) =>
+    readBranchWithEtag(blobs, rootDropId, branchId),
+  writeBranch: (branch, expectedEtag) =>
+    writeBranch(blobs, branch, sql, expectedEtag),
   readSnapshot: (rootDropId, branchId, snapshotId) =>
     readSnapshot(blobs, rootDropId, branchId, snapshotId, sql),
   writeSnapshot: (snapshot) => writeSnapshot(blobs, snapshot, sql),

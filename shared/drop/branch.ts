@@ -113,6 +113,8 @@ export interface DropBranchContentResponse {
   branchId: string;
   /** Materialized snapshot id. */
   snapshotId: number;
+  /** Durable event cursor represented by the returned snapshot, when available. */
+  headEventSeq?: number | null;
   /** Snapshot content. */
   content: string;
 }
@@ -139,6 +141,14 @@ export interface DropBranchPromoteResponse {
   branchId: string;
   /** Promoted snapshot id. */
   snapshotId: number;
+}
+
+/** Immutable promotion intent fenced to one observed branch head. */
+export interface DropBranchPromoteRequest {
+  /** Branch snapshot observed by the caller after its local queue drained. */
+  expectedSnapshotId: number;
+  /** Stable client-generated key reused if the promotion response is lost. */
+  idempotencyKey: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

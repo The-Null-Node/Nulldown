@@ -53,6 +53,14 @@ const readTextContent = (result: Awaited<ReturnType<Client["callTool"]>>): strin
   return first.text;
 };
 
+const requireInputValidationError = (
+  result: Awaited<ReturnType<Client["callTool"]>>,
+): void => {
+  if (!result.isError || !readTextContent(result).includes("Input validation error")) {
+    fail("MCP diff_apply accepted an incomplete retry identity.", { result });
+  }
+};
+
 const main = async () => {
   const { command, args } = parseArgs();
   const transport = new StdioClientTransport({
@@ -77,6 +85,22 @@ const main = async () => {
     const missingTools = expectedTools.filter((tool) => !toolNames.includes(tool));
     if (missingTools.length > 0) {
       fail("MCP tools/list missed expected tools.", { missingTools, toolNames });
+    }
+
+    for (const identity of [{ eventId: "retry-1" }, { createdAt: 1 }]) {
+      requireInputValidationError(
+        await withTimeout(
+          client.callTool({
+            name: "diff_apply",
+            arguments: {
+              dropId: "retry-validation-only",
+              ops: [{ type: "insert", start: 0, end: 0, text: "x" }],
+              ...identity,
+            },
+          }),
+          "MCP diff_apply retry identity validation",
+        ),
+      );
     }
 
     const queryResult = await withTimeout(

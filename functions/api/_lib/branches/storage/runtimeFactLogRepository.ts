@@ -138,7 +138,7 @@ export const appendBranchRuntimeFact = async (
   db?: VoidSqlStore,
 ): Promise<{ event: DropBranchRuntimeFact; appended: boolean }> => {
   const factId = nullplugUiRuntimeFactId(fact);
-  return withBranchMutationLock(bucket, rootDropId, branchId, async () => {
+  return withBranchMutationLock(bucket, rootDropId, branchId, async (lock) => {
     const existing = await readExistingFact(
       bucket,
       rootDropId,
@@ -147,6 +147,7 @@ export const appendBranchRuntimeFact = async (
       db,
     );
     if (existing) {
+      await lock.beginCommit();
       await Promise.all([
         writeR2Json(
           bucket,
@@ -172,6 +173,7 @@ export const appendBranchRuntimeFact = async (
       fact,
     };
 
+    await lock.beginCommit();
     if (db) {
       await db
         .prepare(

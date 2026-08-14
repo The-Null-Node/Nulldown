@@ -165,43 +165,82 @@ const walkKeys = async (rootDir: string, currentDir = rootDir): Promise<string[]
 /** Creates a local filesystem-backed `VoidBlobStore` for Bun/local server adapters. */
 export const createFilesystemBlobStore = ({
   rootDir,
-}: FilesystemBlobStoreOptions): VoidBlobStore => ({
-  get: async (key) => blobObject(key, filePathForKey(rootDir, key)),
-  head: async (key) => objectMetadata(key, filePathForKey(rootDir, key)),
-  put: async (key, value, options) => {
-    const filePath = filePathForKey(rootDir, key);
-    if (!await conditionAllowsWrite(key, filePath, options)) return null;
-    const bytes = await toUint8Array(value);
-    await mkdir(dirname(filePath), { recursive: true });
-    await writeFile(filePath, bytes);
-    await writeSidecar(filePath, options);
-    return objectMetadata(key, filePath);
-  },
-  delete: async (keys) => {
-    for (const key of Array.isArray(keys) ? keys : [keys]) {
-      const filePath = filePathForKey(rootDir, key);
-      await Promise.all([
-        rm(filePath, { force: true }),
-        rm(metadataPathForFile(filePath), { force: true }),
-      ]);
+}: FilesystemBlobStoreOptions): VoidBlobStore => {
+  const pendingConditionalWrites = new Map<string, Promise<void>>();
+
+  const withConditionalWriteLock = async <T>(
+    key: string,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = pendingConditionalWrites.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => gate);
+    pendingConditionalWrites.set(key, queued);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (pendingConditionalWrites.get(key) === queued) {
+        pendingConditionalWrites.delete(key);
+      }
     }
-  },
-  list: async (options?: VoidBlobListOptions): Promise<VoidBlobListResult> => {
-    const limit = Math.max(1, Math.min(options?.limit ?? 1000, 1000));
-    const offset = options?.cursor ? Math.max(0, Number.parseInt(options.cursor, 10) || 0) : 0;
-    const keys = (await walkKeys(rootDir))
-      .filter((key) => !options?.prefix || key.startsWith(options.prefix))
-      .filter((key) => !options?.startAfter || key > options.startAfter)
-      .sort();
-    const page = keys.slice(offset, offset + limit);
-    const objects = (
-      await Promise.all(page.map((key) => objectMetadata(key, filePathForKey(rootDir, key))))
-    ).filter((entry): entry is VoidBlobObjectMetadata => Boolean(entry));
-    const nextOffset = offset + limit;
-    return {
-      objects,
-      truncated: nextOffset < keys.length,
-      cursor: nextOffset < keys.length ? String(nextOffset) : undefined,
-    };
-  },
-});
+  };
+
+  return {
+    get: async (key) => blobObject(key, filePathForKey(rootDir, key)),
+    head: async (key) => objectMetadata(key, filePathForKey(rootDir, key)),
+    put: async (key, value, options) => {
+      const filePath = filePathForKey(rootDir, key);
+      const write = async () => {
+        if (!(await conditionAllowsWrite(key, filePath, options))) return null;
+        const bytes = await toUint8Array(value);
+        await mkdir(dirname(filePath), { recursive: true });
+        await writeFile(filePath, bytes);
+        await writeSidecar(filePath, options);
+        return objectMetadata(key, filePath);
+      };
+      return options?.onlyIf
+        ? withConditionalWriteLock(key, write)
+        : write();
+    },
+    delete: async (keys) => {
+      await Promise.all(
+        (Array.isArray(keys) ? keys : [keys]).map((key) =>
+          withConditionalWriteLock(key, async () => {
+            const filePath = filePathForKey(rootDir, key);
+            await Promise.all([
+              rm(filePath, { force: true }),
+              rm(metadataPathForFile(filePath), { force: true }),
+            ]);
+          }),
+        ),
+      );
+    },
+    list: async (options?: VoidBlobListOptions): Promise<VoidBlobListResult> => {
+      const limit = Math.max(1, Math.min(options?.limit ?? 1000, 1000));
+      const offset = options?.cursor
+        ? Math.max(0, Number.parseInt(options.cursor, 10) || 0)
+        : 0;
+      const keys = (await walkKeys(rootDir))
+        .filter((key) => !options?.prefix || key.startsWith(options.prefix))
+        .filter((key) => !options?.startAfter || key > options.startAfter)
+        .sort();
+      const page = keys.slice(offset, offset + limit);
+      const objects = (
+        await Promise.all(
+          page.map((key) => objectMetadata(key, filePathForKey(rootDir, key))),
+        )
+      ).filter((entry): entry is VoidBlobObjectMetadata => Boolean(entry));
+      const nextOffset = offset + limit;
+      return {
+        objects,
+        truncated: nextOffset < keys.length,
+        cursor: nextOffset < keys.length ? String(nextOffset) : undefined,
+      };
+    },
+  };
+};

@@ -204,10 +204,12 @@ bun run nd -- branch snapshots <rootId> <branchId> --json
 Use promotion when branch content should become a new shareable drop.
 
 ```bash
-bun run nd -- branch promote <rootId> <branchId> --token <account-session-token> --json
+bun run nd -- branch promote <rootId> <branchId> --expected-snapshot <n> --idempotency-key <key> --token <account-session-token> --json
 ```
 
-Promotion requires account auth and branch owner/writer permission.
+Promotion requires account auth and branch owner/writer permission. Reuse the
+same snapshot/key pair if the response is lost; refresh and use a new pair only
+after `promotion_head_mismatch`.
 
 ## Metadata State Pattern
 

@@ -154,12 +154,12 @@ Branch commands:
   branch priority <rootId> <branchId> --priority <n> [--node <id>|--heap|--diff <eventId>] [--reason <text>]
   branch priority list <rootId> <branchId> [--target-kind <kind>] [--target <id>]
   branch priority delete <rootId> <branchId> <factId>
-  branch promote <rootId> <branchId>
+  branch promote <rootId> <branchId> --expected-snapshot <n> --idempotency-key <key>
 
 Diff commands:
   diff poll <dropId> [--cursor <n>] [--limit <n>]
   diff latest <dropId>
-  diff apply <dropId> --branch <branchId> [--metadata-file <file>] [--insert pos:text] [--delete start:end]
+  diff apply <dropId> --branch <branchId> [--metadata-file <file>] [--event-id <id> --created-at <ms>] [--insert pos:text] [--delete start:end]
   diff replace <dropId> --branch <branchId> --to-file <file> [--from-file <file>] [--metadata-file <file>]
   diff batch <dropId> --branch <branchId> --body-file <file|->
   diff event <dropId> --body-file <file|->

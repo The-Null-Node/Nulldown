@@ -107,4 +107,40 @@ describe("branch api client", () => {
     expect(headers.get("authorization")).toBe("Bearer session-token");
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(fact);
   });
+
+  it("forwards the fenced promotion identity as JSON", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = createBranchApiClient({
+      baseUrl: "https://nulldown.test/",
+      accountId: "acct-1",
+      fetchImpl: (async (input, init) => {
+        calls.push({ url: String(input), init });
+        return Response.json({
+          dropId: "promoted-1",
+          url: "https://nulldown.test/d/promot",
+          rootDropId: "root-1",
+          branchId: "branch-1",
+          snapshotId: 4,
+        });
+      }) as typeof fetch,
+    });
+
+    await expect(
+      client.promoteBranch("root-1", "branch-1", {
+        expectedSnapshotId: 4,
+        idempotencyKey: "promotion-1",
+      }),
+    ).resolves.toEqual(expect.objectContaining({ dropId: "promoted-1" }));
+    expect(calls[0]?.url).toBe(
+      "https://nulldown.test/api/branches/root-1/branch-1/promote",
+    );
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(new Headers(calls[0]?.init?.headers).get("content-type")).toBe(
+      "application/json",
+    );
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      expectedSnapshotId: 4,
+      idempotencyKey: "promotion-1",
+    });
+  });
 });

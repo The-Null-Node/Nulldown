@@ -3,6 +3,7 @@ import {
   NULLDOWN_ACCOUNT_ID_HEADER,
   type DropBranchContentResponse,
   type DropBranchPromoteResponse,
+  type DropBranchPromoteRequest,
   type DropBranchResolveResponse,
   type DropSnapshotListResponse,
 } from "./branch";
@@ -268,12 +269,16 @@ export const createBranchApiClient = (options: BranchApiClientOptions) => {
     async promoteBranch(
       rootDropId: string,
       branchId: string,
+      promotion: DropBranchPromoteRequest,
     ): Promise<DropBranchPromoteResponse> {
       const response = await fetchImpl(
         `${baseUrl}/api/branches/${encodeURIComponent(rootDropId)}/${encodeURIComponent(branchId)}/promote`,
         {
           method: "POST",
-          headers: await withHeaders(options),
+          headers: await withHeaders(options, {
+            "Content-Type": "application/json",
+          }),
+          body: JSON.stringify(promotion),
         },
       );
       return readJson<DropBranchPromoteResponse>(response);

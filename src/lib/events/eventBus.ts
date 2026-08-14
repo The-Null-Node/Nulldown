@@ -21,7 +21,7 @@ class EventBus {
   private channelName = "nulldown_events";
 
   constructor() {
-    if (typeof BroadcastChannel !== "undefined") {
+    if (typeof window !== "undefined" && typeof BroadcastChannel !== "undefined") {
       this.broadcastChannel = new BroadcastChannel(this.channelName);
       this.broadcastChannel.onmessage = (event) => {
         const data = event.data as NulldownEvent;

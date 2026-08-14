@@ -63,6 +63,17 @@ nd diff apply <rootId> --branch <branchId> --insert '0:# Updated title\n\n' --js
 nd branch query <rootId> <branchId> --query "updated title" --top 1 --json
 ```
 
+When retrying `nd diff apply` after an ambiguous network failure, reuse both the
+original event identity and creation time. A successful response includes the
+durable event receipt; do not retry with a new identity until the original outcome
+is known. For a generated `diff replace`, save the generated envelope and retry it
+with `diff event` or `diff batch`; replacement re-computes its operations from live
+branch content and is not an exact replay surface.
+
+```bash
+nd diff apply <rootId> --branch <branchId> --event-id retry-1 --created-at 1770000000000 --insert '0:retry\n' --json
+```
+
 Run against a local or preview API:
 
 ```bash

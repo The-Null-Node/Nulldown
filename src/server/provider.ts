@@ -2,7 +2,10 @@ import type {
   DropBranchRecord,
   DropSnapshotRecord,
 } from "../../shared/drop/branch";
-import type { DropDiffEvent } from "../../shared/drop/diff";
+import type {
+  DropDiffEvent,
+  DropDiffEventAcknowledgement,
+} from "../../shared/drop/diff";
 import type {
   NulleditSnapshotter,
   NulleditSnapshotterDispatchOptions,
@@ -44,6 +47,8 @@ export interface VoidProviderNulleditAppendResult {
   content: string;
   /** Events accepted during this append with durable sequence numbers assigned. */
   acceptedEvents: DropDiffEvent[];
+  /** Acknowledgements for new and idempotently replayed input events. */
+  acknowledgements: DropDiffEventAcknowledgement[];
   /** Number of input events ignored because they were duplicates. */
   deduplicatedCount: number;
   /** Total number of branch events stored after the append. */

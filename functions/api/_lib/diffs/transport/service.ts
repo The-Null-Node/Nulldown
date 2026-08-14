@@ -6,6 +6,7 @@ branch credentials, an environment webhook secret, or unauthenticated local deve
 
 import { z } from "zod";
 import {
+  type DropDiffAppendResponse,
   type DropDiffEvent,
   type DropDiffPollResponse,
 } from "../../../../../shared/drop/diff";
@@ -29,6 +30,7 @@ import {
 import {
   createBranchRuntimeFactLogRepository,
 } from "../../branches/storage/runtimeFactLogRepository";
+import { BranchMutationLockError } from "../../branches/storage/mutationLock";
 import { resolveBranchForActor } from "../../branches/lifecycle/service";
 import { createBranchRepository } from "../../branches/storage/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
@@ -38,6 +40,7 @@ import { createRequestLogger, toLogRef } from "../../core/logging/logger";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
+  jsonErrorResponse,
   jsonResponse,
   parseJsonTextWithSchema,
   parseWithSchema,
@@ -191,6 +194,15 @@ const resolveBranchForDiffRequest = async (
   return resolved.branch;
 };
 
+const canWriteBranch = (
+  branch: DropBranchRecord,
+  accountId: string | null,
+): boolean =>
+  Boolean(
+    accountId &&
+      (accountId === branch.ownerAccountId || accountId === branch.writerAccountId),
+  );
+
 /** Appends posted diff events to the resolved branch. */
 export const postDiffEvents = async (
   env: DiffTransportEnv,
@@ -252,6 +264,22 @@ export const postDiffEvents = async (
 
     const branch = await resolveBranchForDiffRequest(env, id, request, auth);
 
+    if (auth.mode === "account") {
+      const accountId = await resolveAuthenticatedAccountId(request, env);
+      if (!canWriteBranch(branch, accountId)) {
+        logger.logEnd(403, {
+          reason: "branch_write_forbidden",
+          dropRef: toLogRef(id),
+          branchRef: toLogRef(branch.branchId),
+        });
+        return jsonErrorResponse(
+          403,
+          "branch_write_forbidden",
+          "You are not allowed to write to this branch.",
+        );
+      }
+    }
+
     const mismatch = parsed.events.find((event) => event.dropId !== id);
     if (mismatch) {
       logger.logEnd(400, { reason: "drop_id_mismatch", dropRef: toLogRef(id) });
@@ -287,10 +315,12 @@ export const postDiffEvents = async (
 
     return jsonResponse({
       accepted: appended.acceptedEvents.length,
+      deduplicated: appended.deduplicatedCount,
       branchId: branch.branchId,
       snapshotId,
       totalStored: appended.totalStored,
-    });
+      acknowledgements: appended.acknowledgements,
+    } satisfies DropDiffAppendResponse);
   } catch (error: unknown) {
     if (isApiHttpError(error)) {
       logger.logEnd(error.status, {
@@ -300,11 +330,70 @@ export const postDiffEvents = async (
       return apiHttpErrorResponse(error);
     }
 
+    if (error instanceof BranchMutationLockError) {
+      const status =
+        error.code === "branch_lock_timeout"
+          ? 503
+          : error.outcome === "not_committed"
+            ? 409
+            : 503;
+      const message =
+        error.code === "branch_lock_timeout"
+          ? "Branch is busy. Retry shortly."
+          : error.outcome === "not_committed"
+          ? "Branch lock was not held before commit. Refresh and retry."
+          : "Branch mutation outcome could not be confirmed. Retry the exact same event.";
+      logger.logEnd(status, { reason: error.code });
+      return jsonErrorResponse(status, error.code, message);
+    }
+
     const message = error instanceof Error ? error.message : String(error);
 
     if (message === "branch_lock_timeout") {
       logger.logEnd(409, { reason: "branch_busy" });
       return new Response("Branch is busy. Retry shortly.", { status: 409 });
+    }
+
+    if (message === "diff_predecessor_mismatch") {
+      logger.logEnd(409, { reason: message });
+      return jsonErrorResponse(
+        409,
+        message,
+        "Branch diff predecessor no longer matches the current head. Refresh and try again.",
+      );
+    }
+
+    if (message === "diff_event_id_reused") {
+      logger.logEnd(409, { reason: message });
+      return new Response(
+        "A diff event id was already used for different event data.",
+        { status: 409 },
+      );
+    }
+
+    if (message === "diff_event_ack_missing") {
+      logger.logEnd(500, { reason: message });
+      return new Response("Stored diff event acknowledgement is missing.", {
+        status: 500,
+      });
+    }
+
+    if (message === "diff_event_outcome_unknown") {
+      logger.logEnd(503, { reason: message });
+      return jsonErrorResponse(
+        503,
+        message,
+        "Diff commit outcome could not be confirmed. Retry the exact same event.",
+      );
+    }
+
+    if (message === "diff_event_identity_invalid") {
+      logger.logEnd(500, { reason: message });
+      return jsonErrorResponse(
+        500,
+        message,
+        "Stored diff event identity is inconsistent. Do not retry with a new event.",
+      );
     }
 
     logger.logError("diff.post.unhandled_error", error, {
