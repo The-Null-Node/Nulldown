@@ -1,4 +1,6 @@
 import { jest } from "@jest/globals";
+import { indexedDB } from "fake-indexeddb";
+import { resetNulldownDatabaseForTests, setKvValue } from "../../indexedDb";
 import {
   PASSKEY_PROTECTION_STORAGE_KEY,
   PasskeyVault,
@@ -40,6 +42,32 @@ const installWindow = (localStorage: LocalStorageMock) => {
   });
 };
 
+const installIndexedDbWindow = (localStorage: LocalStorageMock) => {
+  Object.defineProperty(globalThis, "window", {
+    value: {
+      indexedDB,
+      isSecureContext: true,
+      localStorage,
+      PublicKeyCredential: class {},
+    },
+    configurable: true,
+  });
+};
+
+const installCredentials = (credentials: {
+  create: () => Promise<PublicKeyCredential | null>;
+  get: () => Promise<PublicKeyCredential | null>;
+}) => {
+  Object.defineProperty(globalThis, "navigator", {
+    value: { credentials },
+    configurable: true,
+  });
+};
+
+let storageKeyCounter = 0;
+const nextStorageKey = () =>
+  `vault-idb-test-${Date.now()}-${(storageKeyCounter += 1)}`;
+
 const unlockLeaseKeyForStorage = (storageKey: string) =>
   `${storageKey}_unlock_lease_v1`;
 
@@ -57,9 +85,14 @@ const ensureVaultUnlocked = async (
 
 describe("passkey vault", () => {
   const originalWindow = (globalThis as { window?: unknown }).window;
+  const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "navigator",
+  );
 
-  afterEach(() => {
+  afterEach(async () => {
     jest.restoreAllMocks();
+    await resetNulldownDatabaseForTests();
 
     if (typeof originalWindow === "undefined") {
       Reflect.deleteProperty(globalThis, "window");
@@ -70,6 +103,12 @@ describe("passkey vault", () => {
       value: originalWindow,
       configurable: true,
     });
+
+    if (originalNavigatorDescriptor) {
+      Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "navigator");
+    }
   });
 
   it("creates a PasskeyVault instance with createPasskeyVault", () => {
@@ -239,5 +278,81 @@ describe("passkey vault", () => {
     expect(parsedLease.accountId).toBe("account-1");
 
     nowSpy.mockRestore();
+  });
+
+  it("persists one generated vault identity in IndexedDB across instances without a localStorage fallback", async () => {
+    const storageKey = nextStorageKey();
+    const localStorage = createLocalStorageMock();
+    installIndexedDbWindow(localStorage);
+
+    const firstVault = createPasskeyVault({ storageKey });
+    const first = await firstVault.getUnlockedVault();
+
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({ accountId: "local-storage-account" }),
+    );
+    jest.clearAllMocks();
+
+    const secondVault = createPasskeyVault({ storageKey });
+    const second = await secondVault.getUnlockedVault();
+
+    expect(second.accountId).toBe(first.accountId);
+    expect(second.encryptionKid).toBe(first.encryptionKid);
+    expect(second.signingKid).toBe(first.signingKid);
+    expect(localStorage.getItem).not.toHaveBeenCalledWith(storageKey);
+    expect(localStorage.setItem).not.toHaveBeenCalledWith(
+      storageKey,
+      expect.any(String),
+    );
+  });
+
+  it("enrolls one passkey on the next unlock after IndexedDB protection is enabled", async () => {
+    const storageKey = nextStorageKey();
+    const localStorage = createLocalStorageMock();
+    const create = jest.fn(async () => ({
+      rawId: new Uint8Array([1, 2, 3]).buffer,
+    })) as unknown as () => Promise<PublicKeyCredential | null>;
+    const get = jest.fn(async () => ({})) as unknown as () => Promise<
+      PublicKeyCredential | null
+    >;
+    installIndexedDbWindow(localStorage);
+    installCredentials({ create, get });
+    localStorage.setItem(PASSKEY_PROTECTION_STORAGE_KEY, "0");
+
+    const firstVault = createPasskeyVault({ storageKey });
+    const first = await firstVault.getUnlockedVault();
+    expect(create).not.toHaveBeenCalled();
+
+    await setKvValue(PASSKEY_PROTECTION_STORAGE_KEY, "1");
+
+    const secondVault = createPasskeyVault({ storageKey });
+    const second = await secondVault.getUnlockedVault();
+    const thirdVault = createPasskeyVault({ storageKey });
+    await thirdVault.getUnlockedVault();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(second.accountId).toBe(first.accountId);
+    expect(second.encryptionKid).toBe(first.encryptionKid);
+    expect(second.signingKid).toBe(first.signingKid);
+  });
+
+  it("uses an IndexedDB passkey preference instead of a conflicting localStorage preference", async () => {
+    const storageKey = nextStorageKey();
+    const localStorage = createLocalStorageMock();
+    const create = jest.fn(async () => ({
+      rawId: new Uint8Array([1, 2, 3]).buffer,
+    })) as unknown as () => Promise<PublicKeyCredential | null>;
+    const get = jest.fn(async () => ({})) as unknown as () => Promise<
+      PublicKeyCredential | null
+    >;
+    installIndexedDbWindow(localStorage);
+    installCredentials({ create, get });
+    localStorage.setItem(PASSKEY_PROTECTION_STORAGE_KEY, "1");
+    await setKvValue(PASSKEY_PROTECTION_STORAGE_KEY, "0");
+
+    await createPasskeyVault({ storageKey }).getUnlockedVault();
+
+    expect(create).not.toHaveBeenCalled();
   });
 });

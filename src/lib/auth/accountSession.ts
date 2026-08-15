@@ -148,7 +148,8 @@ export const getAccountSessionToken = async (
     if (
       typeof payload.token !== "string" ||
       typeof payload.expiresAt !== "number" ||
-      typeof payload.accountId !== "string"
+      typeof payload.accountId !== "string" ||
+      payload.accountId !== vault.accountId
     ) {
       return null;
     }
