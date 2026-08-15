@@ -16,18 +16,28 @@ flowchart LR
 
 Most systems repeatedly translate the same work between documents, prompts, databases, memory, and component state. Nulldown keeps those uses connected to readable Markdown and inspectable state.
 
-## Start Here
+## Start In A Minute
 
-The canonical documentation lives in Nulldown:
+Install the Bun-native CLI. [Install Bun](https://bun.sh) first if it is not already on your `PATH`.
 
-- [Documentation index](https://nulldown.app/d/vjdL1x)
-- [Why Nulldown: deterministic structure for Markdown](https://nulldown.app/d/q2BylK)
-- [State model](https://nulldown.app/d/H305WE)
-- [Agents, retrieval, and memory](https://nulldown.app/d/TwPp4l)
-- [Documents as interfaces](https://nulldown.app/d/SqO1St)
-- [Privacy and trust boundaries](https://nulldown.app/d/9a7WcT)
-- [Build with Nulldown](https://nulldown.app/d/hCPw9B)
-- [Status and direction](https://nulldown.app/d/OXIC7z)
+```bash
+bun install -g @thenullnode/nulldown
+nd --version
+printf '%s\n' '# Hello from Nulldown' '' 'This is a disposable sample.' | nd create - --json
+nd get <id-from-create> --raw
+```
+
+`nd create --json` returns the canonical `id` and a `url`. Use the `id` in later CLI commands and open the `url` to view the drop. This sends plaintext to `https://nulldown.app`; anyone with the returned URL can access it, so use only non-sensitive sample content.
+
+Choose the surface that fits your work:
+
+| Need | Start with |
+| --- | --- |
+| Read and author documents | [nulldown.app](https://nulldown.app) |
+| Automate documents and branches | [CLI and API guide](docs/NULDOWN_API.md) |
+| Connect an agent | [MCP server](packages/nulldown-mcp/README.md) |
+| Run a local API | [Self-hosting](#self-host) |
+| Understand the model | [Nulldown documentation](https://nulldown.app/d/vjdL1x) |
 
 ## What Exists Today
 
@@ -39,28 +49,15 @@ The canonical documentation lives in Nulldown:
 | Trust                | Public plaintext, client-sealed, provider-assisted, and self-hosted workflows with different explicit trust properties.                                 |
 | Deployment           | Cloudflare Pages/R2/D1 plus a self-hostable Bun API backend using filesystem blobs and SQLite metadata.                                                 |
 
-## Nullplug Providers
+## Authenticated Branch Workflow
 
-`VoidProvider.nullplug` is the common invocation boundary for trusted built-ins and registered remote HTTP nullplugs. The runtime resolves a plugin, normalizes its return into `NullplugInvokeResponse`, applies the configured policy validator, and preserves structured results for editor and public render surfaces.
-
-Remote manifests declare the versioned invocation media type `application/vnd.nulldown.nullplug.invoke+json;version=1`. Provider invocation rechecks the endpoint allowlist, narrows capabilities to the manifest permissions, enforces a timeout and response-size limit, and rejects non-conforming responses. It never imports code from manifest URLs.
-
-## Quick Start
-
-Install the CLI:
+Creating and reading plaintext drops does not require an account session. Resolving branches, promoting changes, and protected diff writes do. Set `ND_TOKEN` to an account session token before using those operations. `ND_ACCOUNT_ID` is only for local development against a server that explicitly enables its insecure account header.
 
 ```bash
-bun install -g @thenullnode/nulldown
-nd --help
-```
-
-Create a document, edit its branch, and retrieve the changed structure:
-
-```bash
-nd create README.md --json
+export ND_TOKEN='<account-session-token>'
 nd branch resolve <rootId> --json
-nd diff apply <rootId> --branch <branchId> --insert '0:# Updated title\n\n' --json
-nd branch query <rootId> <branchId> --query "updated title" --top 1 --json
+nd branch content <rootId> <branchId> --json
+nd branch query <rootId> <branchId> --query "important section" --top 3 --json
 ```
 
 When retrying `nd diff apply` after an ambiguous network failure, reuse both the
@@ -71,7 +68,7 @@ with `diff event` or `diff batch`; replacement re-computes its operations from l
 branch content and is not an exact replay surface.
 
 ```bash
-nd diff apply <rootId> --branch <branchId> --event-id retry-1 --created-at 1770000000000 --insert '0:retry\n' --json
+nd diff apply <rootId> --branch <branchId> --event-id retry-1 --created-at 1770000000000 --insert '0:retry' --json
 ```
 
 Run against a local or preview API:
@@ -86,10 +83,30 @@ Use the separate MCP package to let agents retrieve structure, manage branch dif
 
 ```bash
 bun install -g @thenullnode/nulldown-mcp
-nulldown-mcp
 ```
 
-Configure `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment as needed. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
+`nulldown-mcp` is a stdio server configured by an MCP client, not an interactive terminal program. Configure `ND_BASE_URL` for a non-production target and `ND_TOKEN` for authenticated operations. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
+
+## Documentation
+
+The canonical conceptual documentation lives in Nulldown:
+
+- [Documentation index](https://nulldown.app/d/vjdL1x)
+- [Why Nulldown: deterministic structure for Markdown](https://nulldown.app/d/q2BylK)
+- [State model](https://nulldown.app/d/H305WE)
+- [Agents, retrieval, and memory](https://nulldown.app/d/TwPp4l)
+- [Documents as interfaces](https://nulldown.app/d/SqO1St)
+- [Privacy and trust boundaries](https://nulldown.app/d/9a7WcT)
+- [Build with Nulldown](https://nulldown.app/d/hCPw9B)
+- [Status and direction](https://nulldown.app/d/OXIC7z)
+
+The local [`docs/`](docs/README.md) directory contains source-coupled API and operational references.
+
+## Nullplug Providers
+
+`VoidProvider.nullplug` is the common invocation boundary for trusted built-ins and registered remote HTTP nullplugs. The runtime resolves a plugin, normalizes its return into `NullplugInvokeResponse`, applies the configured policy validator, and preserves structured results for editor and public render surfaces.
+
+Remote manifests declare the versioned invocation media type `application/vnd.nulldown.nullplug.invoke+json;version=1`. Provider invocation rechecks the endpoint allowlist, narrows capabilities to the manifest permissions, enforces a timeout and response-size limit, and rejects non-conforming responses. It never imports code from manifest URLs.
 
 ## Interactive Approval
 
