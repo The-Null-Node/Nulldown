@@ -3,6 +3,7 @@ import {
   issueAccountSessionToken,
   putAccountRecord,
   readAccountRecord,
+  reserveAccountRecord,
   sanitizeAccountId,
   verifyAccountProof,
   type AccountAuthEnv,
@@ -80,17 +81,25 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   }
 
   const now = Date.now();
-  await putAccountRecord(
-    env.R2_BUCKET,
-    {
-      version: 1,
-      accountId,
-      signingPublicJwk: expectedPublicJwk,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    },
-    env.DB,
-  );
+  const record = {
+    version: 1 as const,
+    accountId,
+    signingPublicJwk: expectedPublicJwk,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  if (existing) {
+    await putAccountRecord(env.R2_BUCKET, record, env.DB);
+  } else {
+    const persisted = await reserveAccountRecord(env.R2_BUCKET, record, env.DB);
+    if (
+      !persisted ||
+      persisted.signingPublicJwk.x !== expectedPublicJwk.x ||
+      persisted.signingPublicJwk.y !== expectedPublicJwk.y
+    ) {
+      return new Response("Account proof verification failed.", { status: 401 });
+    }
+  }
 
   const issued = await issueAccountSessionToken(accountId, env);
   return new Response(

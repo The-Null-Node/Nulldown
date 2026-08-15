@@ -112,6 +112,12 @@ const isEcP256PublicJwk = (value: unknown): value is JsonWebKey => {
   );
 };
 
+const samePublicSigningKey = (left: JsonWebKey, right: JsonWebKey): boolean =>
+  left.kty === right.kty &&
+  left.crv === right.crv &&
+  left.x === right.x &&
+  left.y === right.y;
+
 /** Returns true when a value is a persisted account auth record. */
 export const isAccountRecord = (value: unknown): value is AccountRecordV1 => {
   if (!isRecord(value)) return false;
@@ -242,7 +248,12 @@ export const verifyAccountSessionToken = async (
 
   const signingInput = `${ACCOUNT_TOKEN_PREFIX}.${encodedPayload}`;
   const expectedSignature = await signAccountTokenDigest(secret, signingInput);
-  const providedSignature = fromBase64Url(encodedSignature);
+  let providedSignature: Uint8Array;
+  try {
+    providedSignature = fromBase64Url(encodedSignature);
+  } catch {
+    return null;
+  }
 
   if (!timingSafeEqual(expectedSignature, providedSignature)) {
     return null;
@@ -306,7 +317,7 @@ export const readAccountRecord = async (
         };
         if (isAccountRecord(record)) return record;
       } catch {
-        return null;
+        // A corrupt D1 projection must not hide a valid R2 account record.
       }
     }
   }
@@ -358,6 +369,52 @@ export const putAccountRecord = async (
   });
 };
 
+/** Reserves an account's first signing key without allowing a competing key to replace it. */
+export const reserveAccountRecord = async (
+  bucket: VoidBlobStore,
+  record: AccountRecordV1,
+  db?: VoidSqlStore,
+): Promise<AccountRecordV1 | null> => {
+  if (db) {
+    await db
+      .prepare(
+        `INSERT INTO accounts (account_id, signing_public_jwk, created_at, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_id) DO NOTHING`,
+      )
+      .bind(
+        record.accountId,
+        JSON.stringify(record.signingPublicJwk),
+        record.createdAt,
+        record.updatedAt,
+      )
+      .run();
+
+    const persisted = await readAccountRecord(bucket, record.accountId, db);
+    if (
+      !persisted ||
+      !samePublicSigningKey(persisted.signingPublicJwk, record.signingPublicJwk)
+    ) {
+      return persisted;
+    }
+
+    await bucket.put(accountRecordKey(record.accountId), JSON.stringify(persisted), {
+      httpMetadata: { contentType: "application/json" },
+    });
+    return persisted;
+  }
+
+  const created = await bucket.put(accountRecordKey(record.accountId), JSON.stringify(record), {
+    httpMetadata: { contentType: "application/json" },
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  if (created) {
+    return record;
+  }
+
+  return readAccountRecord(bucket, record.accountId);
+};
+
 /** Verifies a signed account proof against the account public key. */
 export const verifyAccountProof = async (input: {
   accountId: string;
@@ -374,32 +431,29 @@ export const verifyAccountProof = async (input: {
     return false;
   }
 
-  const key = await crypto.subtle.importKey(
-    "jwk",
-    input.signingPublicJwk,
-    {
-      name: "ECDSA",
-      namedCurve: "P-256",
-    },
-    false,
-    ["verify"],
-  );
-
-  const message = `nulldown-account-auth\n${input.accountId}\n${input.signedAt}`;
-  let signatureBytes: Uint8Array;
   try {
-    signatureBytes = fromBase64Url(input.signature);
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      input.signingPublicJwk,
+      {
+        name: "ECDSA",
+        namedCurve: "P-256",
+      },
+      false,
+      ["verify"],
+    );
+    const signatureBytes = fromBase64Url(input.signature);
+    const message = `nulldown-account-auth\n${input.accountId}\n${input.signedAt}`;
+    return await crypto.subtle.verify(
+      {
+        name: "ECDSA",
+        hash: "SHA-256",
+      },
+      key,
+      signatureBytes,
+      textEncoder.encode(message),
+    );
   } catch {
     return false;
   }
-
-  return crypto.subtle.verify(
-    {
-      name: "ECDSA",
-      hash: "SHA-256",
-    },
-    key,
-    signatureBytes,
-    textEncoder.encode(message),
-  );
 };
