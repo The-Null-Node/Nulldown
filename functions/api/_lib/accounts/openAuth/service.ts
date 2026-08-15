@@ -6,6 +6,7 @@ import {
   appendOpenAuthTransactionClearCookie,
   appendOpenAuthTransactionCookie,
   readOpenAuthAccessCookie,
+  readOpenAuthRefreshCookie,
   readOpenAuthTransactionCookie,
 } from "./cookies";
 import {
@@ -267,11 +268,18 @@ export const readOpenAuthPrincipal = async (
 
   const accessToken = readOpenAuthAccessCookie(request);
   if (!accessToken) return responseJson({ authenticated: false }, 200);
+  const refreshToken = readOpenAuthRefreshCookie(request);
 
   try {
-    const verified = await config.authority.verifyAccessToken(accessToken);
+    const verified = await config.authority.verifyAccessToken(accessToken, refreshToken ?? undefined);
     const userId = verified ? await readOpenAuthUser(config.db, verified) : null;
-    if (userId) return responseJson({ authenticated: true, userId }, 200);
+    if (userId) {
+      const headers = new Headers();
+      if (verified?.refreshedTokens) {
+        appendOpenAuthSessionCookies(headers, verified.refreshedTokens);
+      }
+      return responseJson({ authenticated: true, userId }, 200, headers);
+    }
   } catch {
     // This foundation has no refresh adapter. Invalid, expired, or unreachable authority state is anonymous.
   }

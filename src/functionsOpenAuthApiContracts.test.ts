@@ -103,7 +103,9 @@ class MemoryR2Bucket {
 class FakeOpenAuthFetcher {
   readonly requests: Array<{ url: string; authorization: string | null }> = [];
   readonly exchanges: Array<{ code: string; redirectUri: string; verifier: string }> = [];
+  readonly refreshes: string[] = [];
   private readonly codes = new Map<string, { access: string; refresh: string; expiresIn: number }>();
+  private readonly refreshTokens = new Map<string, { access: string; refresh: string; expiresIn: number }>();
 
   private constructor(
     private readonly privateKey: KeyLike | CryptoKey,
@@ -146,6 +148,15 @@ class FakeOpenAuthFetcher {
     this.codes.set(code, { access, refresh, expiresIn });
   }
 
+  queueRefresh(
+    refresh: string,
+    access: string,
+    nextRefresh = `next-${refresh}`,
+    expiresIn = 300,
+  ): void {
+    this.refreshTokens.set(refresh, { access, refresh: nextRefresh, expiresIn });
+  }
+
   async fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = new URL(input instanceof Request ? input.url : input.toString());
     this.requests.push({
@@ -163,6 +174,19 @@ class FakeOpenAuthFetcher {
     }
 
     const params = new URLSearchParams(String(init.body));
+    if (params.get("grant_type") === "refresh_token") {
+      const refresh = params.get("refresh_token") ?? "";
+      this.refreshes.push(refresh);
+      const tokens = this.refreshTokens.get(refresh);
+      return tokens
+        ? Response.json({
+            access_token: tokens.access,
+            refresh_token: tokens.refresh,
+            expires_in: tokens.expiresIn,
+          })
+        : Response.json({ error: "invalid_grant" }, { status: 400 });
+    }
+
     const code = params.get("code") ?? "";
     this.exchanges.push({
       code,
@@ -477,6 +501,45 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ authenticated: false });
     expect(response.headers.get("Set-Cookie")).not.toContain("secret-refresh");
+  });
+
+  it("refreshes an expired access cookie server-side and rotates only BFF cookies", async () => {
+    const database = new MemoryD1Database();
+    database.users.add("user_recoverable");
+    const authority = await FakeOpenAuthFetcher.create();
+    const env = createEnv(database, authority);
+    const expiredAccess = await authority.issueAccessToken("user_recoverable", {
+      expiresAt: Math.floor(Date.now() / 1000) - 1,
+    });
+    const refreshedAccess = await authority.issueAccessToken("user_recoverable");
+    authority.queueRefresh("refresh-before", refreshedAccess, "refresh-after");
+
+    const response = await principal(
+      routeContext(
+        new Request(`${appOrigin}/api/auth/open/principal`, {
+          headers: {
+            Cookie: `${accessCookieName}=${expiredAccess}; ${refreshCookieName}=refresh-before`,
+          },
+        }),
+        env,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      authenticated: true,
+      userId: "user_recoverable",
+    });
+    expect(authority.refreshes).toEqual(["refresh-before"]);
+    expect(setCookies(response)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`${accessCookieName}=${refreshedAccess}`),
+        expect.stringContaining(`${refreshCookieName}=refresh-after`),
+        expect.stringContaining("Max-Age=31536000"),
+      ]),
+    );
+    expect(database.principalWriteCount).toBe(0);
+    expect(database.legacyWriteCount).toBe(0);
   });
 
   it("rejects an issuer subject for an unknown internal user without writes", async () => {

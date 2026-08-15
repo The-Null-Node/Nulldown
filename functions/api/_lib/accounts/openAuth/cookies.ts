@@ -2,6 +2,7 @@ const ACCESS_COOKIE = "__Host-nulldown-open-auth-access";
 const REFRESH_COOKIE = "__Host-nulldown-open-auth-refresh";
 const TRANSACTION_COOKIE = "__Host-nulldown-open-auth-transaction";
 const COOKIE_ATTRIBUTES = "Path=/; Secure; HttpOnly; SameSite=Lax";
+const SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 
 /** Raw, short-lived authorization flow values kept only in an HttpOnly BFF cookie. */
 export interface OpenAuthTransactionCookie {
@@ -85,6 +86,10 @@ const clearCookie = (name: string): string =>
 export const readOpenAuthAccessCookie = (request: Request): string | null =>
   readCookie(request, ACCESS_COOKIE);
 
+/** Reads the BFF-only refresh credential without exposing it to route responses. */
+export const readOpenAuthRefreshCookie = (request: Request): string | null =>
+  readCookie(request, REFRESH_COOKIE);
+
 /** Reads the BFF-only transaction cookie. */
 export const readOpenAuthTransactionCookie = (
   request: Request,
@@ -108,8 +113,10 @@ export const appendOpenAuthSessionCookies = (
   headers: Headers,
   tokens: Readonly<{ access: string; refresh: string; expiresIn: number }>,
 ): void => {
-  headers.append("Set-Cookie", setCookie(ACCESS_COOKIE, tokens.access, Math.floor(tokens.expiresIn)));
-  headers.append("Set-Cookie", setCookie(REFRESH_COOKIE, tokens.refresh, 60 * 60 * 24 * 365));
+  // The issuer validates the access-token expiry; retaining it lets the BFF use the paired
+  // refresh cookie after browser restarts instead of silently losing the session at expiry.
+  headers.append("Set-Cookie", setCookie(ACCESS_COOKIE, tokens.access, SESSION_COOKIE_MAX_AGE_SECONDS));
+  headers.append("Set-Cookie", setCookie(REFRESH_COOKIE, tokens.refresh, SESSION_COOKIE_MAX_AGE_SECONDS));
 };
 
 /** Clears only the one-time authorization transaction cookie. */

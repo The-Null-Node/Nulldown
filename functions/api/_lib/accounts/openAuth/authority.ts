@@ -45,6 +45,7 @@ export interface OpenAuthTokens {
 export interface VerifiedOpenAuthPrincipal {
   issuer: string;
   principal: NulldownUserPrincipalV1;
+  refreshedTokens?: OpenAuthTokens;
 }
 
 /** Narrow BFF port. It never adapts OpenAuth credentials into legacy bearer headers. */
@@ -55,7 +56,10 @@ export interface OpenAuthAuthority {
     redirectUri: string;
     verifier: string;
   }>): Promise<OpenAuthTokens | null>;
-  verifyAccessToken(accessToken: string): Promise<VerifiedOpenAuthPrincipal | null>;
+  verifyAccessToken(
+    accessToken: string,
+    refreshToken?: string,
+  ): Promise<VerifiedOpenAuthPrincipal | null>;
 }
 
 const normalizeIssuer = (value: string | undefined): string | null => {
@@ -146,12 +150,20 @@ export const createOpenAuthAuthority = (
       const exchanged = await client.exchange(input.code, input.redirectUri, input.verifier);
       return exchanged.err ? null : isTokens(exchanged.tokens) ? exchanged.tokens : null;
     },
-    async verifyAccessToken(accessToken) {
-      const verified = await client.verify(openAuthSubjects as never, accessToken);
+    async verifyAccessToken(accessToken, refreshToken) {
+      const verified = await client.verify(
+        openAuthSubjects as never,
+        accessToken,
+        refreshToken ? { refresh: refreshToken } : undefined,
+      );
       if ("err" in verified || verified.aud !== audience) return null;
 
       const principal = parseNulldownUserPrincipal(verified.subject);
-      return principal ? { issuer, principal } : null;
+      const refreshedTokens =
+        "tokens" in verified && isTokens(verified.tokens)
+          ? verified.tokens
+          : undefined;
+      return principal ? { issuer, principal, refreshedTokens } : null;
     },
   };
 };

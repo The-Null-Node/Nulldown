@@ -17,7 +17,7 @@ const redirectUri = "https://app.test/auth/callback";
 
 interface EmailMessage {
   to: string;
-  from: string;
+  from: { email: string; name: string };
   subject: string;
   html: string;
   text: string;
@@ -409,7 +409,7 @@ describe("Nulldown OpenAuth Worker foundation", () => {
 
       expect(flow.message).toEqual({
         to: "user@example.test",
-        from: "noreply@example.test",
+        from: { email: "noreply@example.test", name: "Nulldown" },
         subject: "Your Nulldown verification code",
         text: expect.stringContaining(flow.code),
         html: expect.stringContaining(`<strong>${flow.code}</strong>`),
@@ -448,6 +448,32 @@ describe("Nulldown OpenAuth Worker foundation", () => {
       callback: expect.any(URL),
       code: expect.any(String),
     });
+  });
+
+  it("refreshes a native issuer session without changing the resolved user", async () => {
+    const harness = createWorkerHarness();
+    const flow = await startWorkerCodeFlow(harness);
+    const callback = await verifyWorkerCodeFlow(harness, flow);
+    const exchanged = await harness.client.exchange(
+      callback.code,
+      redirectUri,
+      flow.authorization.challenge.verifier,
+    );
+    expect(exchanged.err).toBe(false);
+    if (exchanged.err) throw exchanged.err;
+
+    const refreshed = await harness.client.refresh(exchanged.tokens.refresh);
+    expect(refreshed.err).toBe(false);
+    if (refreshed.err || !refreshed.tokens) throw new Error("Expected refreshed OpenAuth tokens.");
+
+    const verified = await harness.client.verify(
+      nulldownOpenAuthSubjects,
+      refreshed.tokens.access,
+    );
+    expect(verified).not.toHaveProperty("err");
+    if ("err" in verified) throw verified.err;
+    expect(verified.subject.properties.userId).toMatch(/^user_[A-Za-z0-9_-]+$/u);
+    expect(harness.database.users).toEqual(new Set([verified.subject.properties.userId]));
   });
 
   it("reuses the same D1 identity after the cooldown expires", async () => {
