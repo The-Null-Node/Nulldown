@@ -45,9 +45,9 @@ class MemoryD1Statement {
 class MemoryD1Database {
   readonly sqlLog: string[] = [];
   readonly users = new Set<string>();
-  readonly identities = new Map<string, string>();
   readonly transactions = new Map<string, CallbackTransactionRow>();
   legacyWriteCount = 0;
+  principalWriteCount = 0;
 
   prepare(sql: string): MemoryD1Statement {
     return new MemoryD1Statement(this, sql);
@@ -66,12 +66,12 @@ class MemoryD1Database {
       return;
     }
     if (sql.includes("INSERT INTO auth_users")) {
+      this.principalWriteCount += 1;
       this.users.add(String(params[0]));
       return;
     }
     if (sql.includes("INSERT INTO auth_external_identities")) {
-      const key = [params[0], params[1], params[2]].map(String).join("\u0000");
-      if (!this.identities.has(key)) this.identities.set(key, String(params[3]));
+      this.principalWriteCount += 1;
     }
   }
 
@@ -83,10 +83,9 @@ class MemoryD1Database {
       this.transactions.delete(stateHash);
       return { return_to: transaction.return_to };
     }
-    if (sql.includes("FROM auth_external_identities")) {
-      const key = [params[0], params[1], params[2]].map(String).join("\u0000");
-      const userId = this.identities.get(key);
-      return userId ? { user_id: userId } : null;
+    if (sql.includes("FROM auth_users")) {
+      const userId = String(params[0]);
+      return this.users.has(userId) ? { user_id: userId } : null;
     }
     return null;
   }
@@ -322,8 +321,9 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     expect(database.transactions.size).toBe(1);
   });
 
-  it("exchanges a one-time code, maps a stable identity, and exposes only the internal principal", async () => {
+  it("exchanges a one-time code for an existing internal user and exposes only that principal", async () => {
     const database = new MemoryD1Database();
+    database.users.add("user_recoverable");
     const bucket = new MemoryR2Bucket();
     const authority = await FakeOpenAuthFetcher.create();
     const env = createEnv(database, authority, bucket);
@@ -359,7 +359,7 @@ describe("functions OpenAuth Pages BFF contracts", () => {
       expect(value).not.toContain("Domain=");
     }
     expect(database.users).toEqual(new Set(["user_recoverable"]));
-    expect(database.identities.size).toBe(1);
+    expect(database.principalWriteCount).toBe(0);
     expect(database.legacyWriteCount).toBe(0);
     expect(bucket.writeCount).toBe(0);
     expect(authority.requests.every((request) => request.authorization === null)).toBe(true);
@@ -379,8 +379,9 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     });
   });
 
-  it("maps the same verified external identity to the same user id across callbacks", async () => {
+  it("accepts the same pre-existing internal user across callbacks without creating records", async () => {
     const database = new MemoryD1Database();
+    database.users.add("user_same_identity");
     const authority = await FakeOpenAuthFetcher.create();
     const env = createEnv(database, authority);
     const first = await loginFlow(env);
@@ -400,11 +401,30 @@ describe("functions OpenAuth Pages BFF contracts", () => {
       ).status,
     ).toBe(302);
     expect(database.users).toEqual(new Set(["user_same_identity"]));
-    expect(database.identities.size).toBe(1);
+    expect(database.principalWriteCount).toBe(0);
+  });
+
+  it("rejects an unknown issuer subject during callback without manufacturing user records", async () => {
+    const database = new MemoryD1Database();
+    const authority = await FakeOpenAuthFetcher.create();
+    const env = createEnv(database, authority);
+    const flow = await loginFlow(env);
+    authority.queueCode("code-unknown-user", await authority.issueAccessToken("user_unknown"));
+
+    const response = await callback(
+      routeContext(callbackRequest("code-unknown-user", flow.state, flow.transactionCookie), env),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_principal" });
+    expect(database.users).toEqual(new Set());
+    expect(database.principalWriteCount).toBe(0);
+    expect(database.legacyWriteCount).toBe(0);
   });
 
   it("consumes each callback transaction before exchange so replay cannot call the authority twice", async () => {
     const database = new MemoryD1Database();
+    database.users.add("user_01");
     const authority = await FakeOpenAuthFetcher.create();
     const env = createEnv(database, authority);
     const flow = await loginFlow(env);
@@ -435,7 +455,7 @@ describe("functions OpenAuth Pages BFF contracts", () => {
 
     expect(response.status).toBe(401);
     expect(database.users.size).toBe(0);
-    expect(database.identities.size).toBe(0);
+    expect(database.principalWriteCount).toBe(0);
     expect(setCookies(response)).toEqual(
       expect.arrayContaining([expect.stringContaining(`${transactionCookieName}=; Max-Age=0`)]),
     );
@@ -457,6 +477,28 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ authenticated: false });
     expect(response.headers.get("Set-Cookie")).not.toContain("secret-refresh");
+  });
+
+  it("rejects an issuer subject for an unknown internal user without writes", async () => {
+    const database = new MemoryD1Database();
+    const authority = await FakeOpenAuthFetcher.create();
+    const env = createEnv(database, authority);
+    const token = await authority.issueAccessToken("user_unknown");
+
+    const response = await principal(
+      routeContext(
+        new Request(`${appOrigin}/api/auth/open/principal`, {
+          headers: { Cookie: `${accessCookieName}=${token}` },
+        }),
+        env,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ authenticated: false });
+    expect(database.users).toEqual(new Set());
+    expect(database.principalWriteCount).toBe(0);
+    expect(database.legacyWriteCount).toBe(0);
   });
 
   it("requires same-origin POST logout and clears only BFF cookies", async () => {

@@ -13,7 +13,7 @@ import {
   type OpenAuthAuthority,
   type OpenAuthAuthorityEnvironment,
 } from "./authority";
-import { readOpenAuthUser, resolveOrCreateOpenAuthUser } from "./principals";
+import { readOpenAuthUser } from "./principals";
 import {
   consumeOpenAuthCallbackTransaction,
   createOpenAuthCallbackTransaction,
@@ -244,7 +244,7 @@ export const completeOpenAuthCallback = async (
   if (!verified) return callbackError("invalid_access_token", 401);
 
   try {
-    if (!(await resolveOrCreateOpenAuthUser(config.db, verified))) {
+    if (!(await readOpenAuthUser(config.db, verified))) {
       return callbackError("invalid_principal", 401);
     }
   } catch {
