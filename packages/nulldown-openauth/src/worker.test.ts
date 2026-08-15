@@ -17,7 +17,7 @@ const redirectUri = "https://app.test/auth/callback";
 
 interface EmailMessage {
   to: string;
-  from: { email: string; name: string };
+  from: string;
   subject: string;
   html: string;
   text: string;
@@ -409,7 +409,7 @@ describe("Nulldown OpenAuth Worker foundation", () => {
 
       expect(flow.message).toEqual({
         to: "user@example.test",
-        from: { email: "noreply@example.test", name: "Nulldown" },
+        from: "noreply@example.test",
         subject: "Your Nulldown verification code",
         text: expect.stringContaining(flow.code),
         html: expect.stringContaining(`<strong>${flow.code}</strong>`),

@@ -20,7 +20,7 @@ interface UserIdRow {
 
 interface TransactionalEmailMessage {
   to: string;
-  from: { email: string; name: string };
+  from: string;
   subject: string;
   html: string;
   text: string;
@@ -234,7 +234,7 @@ const createEmailCodeDelivery = (
     try {
       await email.send({
         to: normalizedAddress,
-        from: { email: from, name: "Nulldown" },
+        from,
         subject: "Your Nulldown verification code",
         text: `Your Nulldown verification code is ${code}. It expires when this sign-in session expires.`,
         html: `<p>Your Nulldown verification code is <strong>${safeCode}</strong>.</p><p>It expires when this sign-in session expires.</p>`,

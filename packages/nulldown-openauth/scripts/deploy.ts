@@ -14,8 +14,11 @@ if (!(await config.exists())) {
 const source = await config.text();
 for (const binding of [
   "OPENAUTH_KV",
-  "OPENAUTH_CODE_DELIVERY",
-  "OPENAUTH_IDENTITY_RESOLVER",
+  "DB",
+  "EMAIL",
+  "OPENAUTH_ISSUER_URL",
+  "OPENAUTH_EMAIL_FROM",
+  "OPENAUTH_CLIENTS_JSON",
 ]) {
   if (!source.includes(binding)) {
     throw new Error(`OpenAuth Worker config must declare ${binding}.`);
