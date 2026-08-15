@@ -10,6 +10,7 @@ import {
   Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import OpenAuthAccountControl from "./OpenAuthAccountControl";
 
 interface EditorToolbarProps {
   canOpenBranches?: boolean;
@@ -149,6 +150,7 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           <Search className="h-4 w-4" aria-hidden="true" />
           Search
         </Button>
+        <OpenAuthAccountControl />
         {canOpenBranches && onOpenBranches ? (
           <Button
             type="button"
