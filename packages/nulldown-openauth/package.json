@@ -1,0 +1,26 @@
+{
+  "name": "@thenullnode/nulldown-openauth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Provider-neutral OpenAuth Worker foundation for Nulldown",
+  "type": "module",
+  "files": [
+    "src/",
+    "scripts/",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "bunx --bun tsc --project tsconfig.json",
+    "test": "bun test src",
+    "deploy": "bun run scripts/deploy.ts"
+  },
+  "dependencies": {
+    "@openauthjs/openauth": "0.4.3",
+    "arctic": "2.2.2",
+    "hono": "4.12.5",
+    "valibot": "1.0.0-beta.15"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260103.0"
+  }
+}

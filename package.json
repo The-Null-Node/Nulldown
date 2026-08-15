@@ -161,5 +161,8 @@
     "vite": "^5.0.0",
     "wrangler": "^3.0.0",
     "zustand": "^4.0.0"
+  },
+  "patchedDependencies": {
+    "@openauthjs/openauth@0.4.3": "packages/nulldown-openauth/patches/@openauthjs%2Fopenauth@0.4.3.patch"
   }
 }

@@ -1,0 +1,54 @@
+diff --git a/dist/esm/issuer.js b/dist/esm/issuer.js
+index 1b18009bfeaa09f2222e9df760dde0e4eb1d4326..61489d77c3407fc0c978d18b7f2e19393e81439b 100644
+--- a/dist/esm/issuer.js
++++ b/dist/esm/issuer.js
+@@ -1,6 +1,5 @@
+ // src/issuer.ts
+ import { Hono } from "hono/tiny";
+-import { handle as awsHandle } from "hono/aws-lambda";
+ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+ import {
+   MissingParameterError,
+@@ -15,11 +14,10 @@ import { validatePKCE } from "./pkce.js";
+ import { Select } from "./ui/select.js";
+ import { setTheme } from "./ui/theme.js";
+ import { getRelativeUrl, isDomainMatch, lazy } from "./util.js";
+-import { DynamoStorage } from "./storage/dynamo.js";
+-import { MemoryStorage } from "./storage/memory.js";
+ import { cors } from "hono/cors";
+-import { logger } from "hono/logger";
+-var aws = awsHandle;
++var aws = () => {
++  throw new Error("The AWS Lambda adapter is unavailable in the Workers build.");
++};
+ function issuer(input) {
+   const error = input.error ?? function(err) {
+     return new Response(err.message, {
+@@ -47,17 +45,8 @@ function issuer(input) {
+     return isDomainMatch(redir, host);
+   }));
+   let storage = input.storage;
+-  if (process.env.OPENAUTH_STORAGE) {
+-    const parsed = JSON.parse(process.env.OPENAUTH_STORAGE);
+-    if (parsed.type === "dynamo")
+-      storage = DynamoStorage(parsed.options);
+-    if (parsed.type === "memory")
+-      storage = MemoryStorage();
+-    if (parsed.type === "cloudflare")
+-      throw new Error("Cloudflare storage cannot be configured through env because it requires bindings.");
+-  }
+   if (!storage)
+-    throw new Error("Store is not configured. Either set the `storage` option or set `OPENAUTH_STORAGE` environment variable.");
++    throw new Error("Store is not configured.");
+   const allSigning = lazy(() => Promise.all([signingKeys(storage), legacySigningKeys(storage)]).then(([a, b]) => [...a, ...b]));
+   const allEncryption = lazy(() => encryptionKeys(storage));
+   const signingKey = lazy(() => allSigning().then((all) => all[0]));
+@@ -197,7 +186,7 @@ function issuer(input) {
+   function issuer2(ctx) {
+     return new URL(getRelativeUrl(ctx, "/")).origin;
+   }
+-  const app = new Hono().use(logger());
++  const app = new Hono();
+   for (const [name, value] of Object.entries(input.providers)) {
+     const route = new Hono;
+     route.use(async (c, next) => {
