@@ -1204,6 +1204,90 @@ describe("D1 metadata contracts", () => {
     );
   });
 
+  it("limits anonymous NullMem queries to explicitly public records", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const branch = createBranch();
+    const env = { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database };
+    const params = { rootId: branch.rootDropId, branchId: branch.branchId };
+    const authenticatedHeaders = {
+      "Content-Type": "application/json",
+      [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+    };
+
+    await bucket.put(branch.rootDropId, JSON.stringify({ content: "# Memory Root" }));
+    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+
+    const privateFact = await createNullMemFact(
+      env,
+      params,
+      new Request("https://example.test/api/memory/facts", {
+        method: "POST",
+        headers: authenticatedHeaders,
+        body: JSON.stringify({
+          title: "Private memory",
+          text: "This record must remain authenticated-only.",
+          labels: ["account-recovery"],
+        }),
+      }),
+    );
+    expect(privateFact.status).toBe(201);
+
+    const publicFact = await createNullMemFact(
+      env,
+      params,
+      new Request("https://example.test/api/memory/facts", {
+        method: "POST",
+        headers: authenticatedHeaders,
+        body: JSON.stringify({
+          title: "Public memory",
+          text: "This record is safe for unauthenticated agent retrieval.",
+          labels: ["account-recovery", "public-memory"],
+        }),
+      }),
+    );
+    const publicBody = (await publicFact.json()) as {
+      record: { recordId: string };
+    };
+
+    const anonymousQuery = await queryNullMem(
+      env,
+      params,
+      new Request("https://example.test/api/memory/query?query=record"),
+    );
+    const anonymousBody = (await anonymousQuery.json()) as {
+      query: { labels: string[] };
+      records: Array<{ recordId: string }>;
+    };
+
+    expect(anonymousQuery.status).toBe(200);
+    expect(anonymousBody.query.labels).toEqual(["public-memory"]);
+    expect(anonymousBody.records).toEqual([
+      expect.objectContaining({ recordId: publicBody.record.recordId }),
+    ]);
+
+    const anonymousWrite = await createNullMemFact(
+      env,
+      params,
+      new Request("https://example.test/api/memory/facts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "Unauthenticated writes remain forbidden." }),
+      }),
+    );
+    expect(anonymousWrite.status).toBe(401);
+
+    const anonymousDelete = await deleteNullMemRecord(
+      env,
+      { ...params, recordId: publicBody.record.recordId },
+      new Request(
+        `https://example.test/api/memory/${encodeURIComponent(publicBody.record.recordId)}`,
+        { method: "DELETE" },
+      ),
+    );
+    expect(anonymousDelete.status).toBe(401);
+  });
+
   it("uses freshness watermarks before falling back to branch heads", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();

@@ -76,6 +76,11 @@ interface NullMemHttpServices {
 }
 
 const NULLMEM_BODY_MAX_BYTES = 256_000;
+const PUBLIC_MEMORY_LABEL = "public-memory";
+
+interface NullMemAccess {
+  isAnonymous: boolean;
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -229,9 +234,12 @@ const authorizeNullMemAccess = async (
   env: NullMemEnv,
   branch: { ownerAccountId?: string | null; writerAccountId?: string | null },
   action: "query" | "create" | "delete",
-): Promise<Response | null> => {
+): Promise<NullMemAccess | Response> => {
   const accountId = await resolveAuthenticatedAccountId(request, env);
   if (!accountId) {
+    if (action === "query") {
+      return { isAnonymous: true };
+    }
     return jsonErrorResponse(
       401,
       "account_required",
@@ -250,7 +258,7 @@ const authorizeNullMemAccess = async (
     );
   }
 
-  return null;
+  return { isAnonymous: false };
 };
 
 const createNullMemHttpServices = (
@@ -286,13 +294,13 @@ export const queryNullMem = async (
   try {
     const target = await resolveNullMemTarget(env, params);
     if ("error" in target) return target.error;
-    const authError = await authorizeNullMemAccess(
+    const access = await authorizeNullMemAccess(
       request,
       env,
       target.branch,
       "query",
     );
-    if (authError) return authError;
+    if (access instanceof Response) return access;
 
     const url = new URL(request.url);
     const kind = url.searchParams.get("kind") as NullMemRecord["kind"] | null;
@@ -310,9 +318,12 @@ export const queryNullMem = async (
     }
     const q =
       url.searchParams.get("q") ?? url.searchParams.get("query") ?? undefined;
-    const labels = parseLabelsParam(
+    const requestedLabels = parseLabelsParam(
       url.searchParams.get("labels") ?? url.searchParams.get("label"),
     );
+    const labels = access.isAnonymous
+      ? [...new Set([...requestedLabels, PUBLIC_MEMORY_LABEL])]
+      : requestedLabels;
     const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
     const procedureId =
       url.searchParams.get("procedureId") ??
@@ -385,13 +396,13 @@ export const createNullMemFact = async (
   try {
     const target = await resolveNullMemTarget(env, params);
     if ("error" in target) return target.error;
-    const authError = await authorizeNullMemAccess(
+    const access = await authorizeNullMemAccess(
       request,
       env,
       target.branch,
       "create",
     );
-    if (authError) return authError;
+    if (access instanceof Response) return access;
 
     const parsed = parseFactRequest(await parseJsonBody(request));
     if (!parsed?.text) {
@@ -434,13 +445,13 @@ export const createNullMemProcedure = async (
   try {
     const target = await resolveNullMemTarget(env, params);
     if ("error" in target) return target.error;
-    const authError = await authorizeNullMemAccess(
+    const access = await authorizeNullMemAccess(
       request,
       env,
       target.branch,
       "create",
     );
-    if (authError) return authError;
+    if (access instanceof Response) return access;
 
     const parsed = parseProcedureRequest(await parseJsonBody(request));
     if (!parsed?.goal || !parsed.summary) {
@@ -483,13 +494,13 @@ export const deleteNullMemRecord = async (
   try {
     const target = await resolveNullMemTarget(env, params);
     if ("error" in target) return target.error;
-    const authError = await authorizeNullMemAccess(
+    const access = await authorizeNullMemAccess(
       request,
       env,
       target.branch,
       "delete",
     );
-    if (authError) return authError;
+    if (access instanceof Response) return access;
 
     const encodedRecordId = resolveParam(params.recordId);
     const recordId = encodedRecordId ? decodePathParam(encodedRecordId) : null;

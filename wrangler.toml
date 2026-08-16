@@ -19,4 +19,10 @@ database_id = "f5ed3a68-61ca-403d-9eb8-6c5fdc0369a6"
 preview_database_id = "DB"
 migrations_dir = "migrations"
 
+[vars]
+OPENAUTH_ISSUER_URL = "https://auth.nulldown.app"
+OPENAUTH_CLIENT_ID = "nulldown-browser-v1"
+OPENAUTH_AUDIENCE = "nulldown-browser-v1"
+OPENAUTH_BFF_ORIGIN = "https://nulldown.app"
+
 # 272f4fd9d668c5b64f0fe15702351709
