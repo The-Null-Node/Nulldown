@@ -1,4 +1,10 @@
 import type { DropDiffEnvelope } from "../../../shared/drop/diff";
+import type {
+  CliCredentialBundleV1,
+  CliDevicePollResponse,
+  CliDeviceStartResponse,
+  CliEncryptionPublicJwk,
+} from "../../../shared/auth/cliDevice";
 
 /** Result returned by a drop read operation. */
 export interface DropReadResult {
@@ -171,10 +177,44 @@ export interface AuthSessionRequest {
   proof: Record<string, unknown>;
 }
 
+/** Request for starting browser-mediated CLI authorization. */
+export interface AuthDeviceRequest {
+  /** Ephemeral public key that receives the one-time credential envelope. */
+  publicKey: CliEncryptionPublicJwk;
+  /** Optional human-readable CLI/device name. */
+  clientName?: string | null;
+}
+
+/** Request for polling a pending CLI authorization. */
+export interface AuthDevicePollRequest {
+  /** Private device code returned by the start endpoint. */
+  deviceCode: string;
+}
+
+/** Request for rotating a persisted CLI refresh credential. */
+export interface AuthRefreshRequest {
+  /** Current refresh credential. */
+  refreshToken: string;
+}
+
+/** Request for revoking a persisted CLI refresh credential. */
+export interface AuthRevokeRequest {
+  /** Refresh credential to revoke. */
+  refreshToken: string;
+}
+
 /** Runtime facade for auth commands. */
 export interface AuthRuntime {
   /** Creates an authenticated account session. */
   session(request: AuthSessionRequest): Promise<unknown | null>;
+  /** Starts browser-mediated CLI authorization. */
+  device(request: AuthDeviceRequest): Promise<CliDeviceStartResponse | null>;
+  /** Polls browser-mediated CLI authorization. */
+  poll(request: AuthDevicePollRequest): Promise<CliDevicePollResponse | null>;
+  /** Rotates a CLI refresh credential. */
+  refresh(request: AuthRefreshRequest): Promise<CliCredentialBundleV1 | null>;
+  /** Revokes a CLI refresh credential. */
+  revoke(request: AuthRevokeRequest): Promise<unknown | null>;
 }
 
 /** Supported admin backfill jobs. */

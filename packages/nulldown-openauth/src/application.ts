@@ -18,6 +18,7 @@ const ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const CLIENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~-]{2,127}$/u;
 const STATE_PATTERN = /^[A-Za-z0-9_-]{16,512}$/u;
 const PKCE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43,128}$/u;
+const ACCESS_TOKEN_TTL_SECONDS = 5 * 60;
 
 type CodeProviderState =
   | { type: "start" }
@@ -297,6 +298,7 @@ export const createNulldownOpenAuthApplication = (
   const app = issuer({
     storage: options.storage,
     subjects: nulldownOpenAuthSubjects,
+    ttl: { access: ACCESS_TOKEN_TTL_SECONDS },
     providers: {
       code: WorkerCodeProvider<{ address: string }>({
         request: createCodeUi,

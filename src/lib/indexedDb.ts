@@ -148,6 +148,35 @@ export const getKvValue = async <T>(key: string): Promise<T | null> => {
   return result as T;
 };
 
+/** Atomically writes several KV values in one IndexedDB transaction. */
+export const setKvValues = async (
+  entries: readonly { key: string; value: unknown }[],
+  canWrite: () => boolean = () => true,
+  guard?: { key: string; expectedValue: unknown },
+): Promise<void> => {
+  const db = await openNulldownDatabase();
+  if (!canWrite()) {
+    throw new Error("IndexedDB write was cancelled.");
+  }
+  const transaction = db.transaction(KV_STORE, "readwrite");
+  const completion = waitForTransaction(transaction);
+  const store = transaction.objectStore(KV_STORE);
+  if (guard) {
+    const currentValue = await requestToPromise<unknown>(
+      store.get(guard.key),
+      `Failed to read write guard "${guard.key}"`,
+    );
+    if ((currentValue ?? null) !== (guard.expectedValue ?? null) || !canWrite()) {
+      transaction.abort();
+      await completion;
+    }
+  }
+  for (const entry of entries) {
+    store.put(entry.value, entry.key);
+  }
+  await completion;
+};
+
 export const setKvItem = async (key: string, value: string): Promise<void> => {
   await setKvValue(key, value);
 };

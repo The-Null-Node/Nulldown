@@ -1,11 +1,12 @@
 import { jest } from "@jest/globals";
 import { indexedDB } from "fake-indexeddb";
-import { resetNulldownDatabaseForTests, setKvValue } from "../../indexedDb";
+import { getKvValue, resetNulldownDatabaseForTests, setKvValue } from "../../indexedDb";
 import {
   PASSKEY_PROTECTION_STORAGE_KEY,
   PasskeyVault,
   createPasskeyVault,
   getUnlockedVault,
+  setActiveVaultUser,
   type UnlockedVault,
 } from "./passkeyVault";
 
@@ -92,6 +93,7 @@ describe("passkey vault", () => {
 
   afterEach(async () => {
     jest.restoreAllMocks();
+    setActiveVaultUser(null);
     await resetNulldownDatabaseForTests();
 
     if (typeof originalWindow === "undefined") {
@@ -354,5 +356,149 @@ describe("passkey vault", () => {
     await createPasskeyVault({ storageKey }).getUnlockedVault();
 
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("does not create an account while checking or exporting an empty recovery slot", async () => {
+    const storageKey = nextStorageKey();
+    installIndexedDbWindow(createLocalStorageMock());
+    const vault = createPasskeyVault({ storageKey });
+
+    await expect(vault.hasVaultRecord()).resolves.toBe(false);
+    await expect(vault.getAccountId()).resolves.toBeNull();
+    await expect(vault.exportRecoveryPayload()).rejects.toThrow(
+      "No local account is available to sync",
+    );
+    await expect(vault.hasVaultRecord()).resolves.toBe(false);
+  });
+
+  it("atomically preserves a different local account before activating recovered V1 keys", async () => {
+    const localStorage = createLocalStorageMock();
+    installIndexedDbWindow(localStorage);
+    const targetStorageKey = nextStorageKey();
+    const sourceStorageKey = nextStorageKey();
+    const target = createPasskeyVault({ storageKey: targetStorageKey });
+    const source = createPasskeyVault({ storageKey: sourceStorageKey });
+    const original = await target.getUnlockedVault();
+    const recoveredPayload = await source.exportRecoveryPayload().catch(async () => {
+      await source.getUnlockedVault();
+      return source.exportRecoveryPayload();
+    });
+
+    const installed = await target.installRecoveryPayload(recoveredPayload);
+
+    expect(installed).toEqual({
+      accountId: recoveredPayload.accountId,
+      preservedAccountId: original.accountId,
+    });
+    await expect(target.getAccountId()).resolves.toBe(recoveredPayload.accountId);
+    await expect(
+      getKvValue<{ accountId: string }>(
+        `${targetStorageKey}:account:${original.accountId}`,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ accountId: original.accountId }));
+  });
+
+  it("does not activate synced local keys for a different OpenAuth user", async () => {
+    installIndexedDbWindow(createLocalStorageMock());
+    const vault = createPasskeyVault({ storageKey: nextStorageKey() });
+    const original = await vault.getUnlockedVault();
+    const payload = await vault.exportRecoveryPayload();
+    setActiveVaultUser("user-1");
+    await vault.installRecoveryPayload(payload, "user-1");
+    await expect(vault.getUnlockedVault()).resolves.toEqual(
+      expect.objectContaining({ accountId: original.accountId }),
+    );
+
+    setActiveVaultUser("user-2");
+    await expect(vault.getUnlockedVault()).rejects.toThrow(
+      "Sign in as the account owner",
+    );
+  });
+
+  it("does not replace the active account when recovery is cancelled at commit", async () => {
+    installIndexedDbWindow(createLocalStorageMock());
+    const target = createPasskeyVault({ storageKey: nextStorageKey() });
+    const source = createPasskeyVault({ storageKey: nextStorageKey() });
+    const original = await target.getUnlockedVault();
+    await source.getUnlockedVault();
+    const recoveredPayload = await source.exportRecoveryPayload();
+
+    await expect(
+      target.installRecoveryPayload(recoveredPayload, "user-1", () => false),
+    ).rejects.toThrow("cancelled");
+    await expect(target.getAccountId()).resolves.toBe(original.accountId);
+  });
+
+  it("orders recovery replacement after the durable logout guard", async () => {
+    installIndexedDbWindow(createLocalStorageMock());
+    const target = createPasskeyVault({ storageKey: nextStorageKey() });
+    const source = createPasskeyVault({ storageKey: nextStorageKey() });
+    const original = await target.getUnlockedVault();
+    await source.getUnlockedVault();
+    const recoveredPayload = await source.exportRecoveryPayload();
+    await setKvValue("logout-guard", "new-logout");
+
+    await expect(
+      target.installRecoveryPayload(
+        recoveredPayload,
+        "user-1",
+        () => true,
+        { key: "logout-guard", expectedValue: "old-logout" },
+      ),
+    ).rejects.toThrow("transaction aborted");
+    await expect(target.getAccountId()).resolves.toBe(original.accountId);
+  });
+
+  it("allows guarded recovery before the first logout marker exists", async () => {
+    installIndexedDbWindow(createLocalStorageMock());
+    const target = createPasskeyVault({ storageKey: nextStorageKey() });
+    const source = createPasskeyVault({ storageKey: nextStorageKey() });
+    await source.getUnlockedVault();
+    const recoveredPayload = await source.exportRecoveryPayload();
+
+    await expect(
+      target.installRecoveryPayload(
+        recoveredPayload,
+        "user-1",
+        () => true,
+        { key: "missing-logout-guard", expectedValue: null },
+      ),
+    ).resolves.toEqual({
+      accountId: recoveredPayload.accountId,
+      preservedAccountId: null,
+    });
+  });
+
+  it("fails closed for malformed localStorage vault state", async () => {
+    const localStorage = createLocalStorageMock();
+    localStorage.setItem("malformed-vault", "{");
+    installWindow(localStorage);
+
+    await expect(
+      createPasskeyVault({ storageKey: "malformed-vault" }).getAccountSummary(),
+    ).rejects.toThrow("Local account vault is unreadable");
+  });
+
+  it("fails closed when IndexedDB vault state cannot be read", async () => {
+    const localStorage = createLocalStorageMock();
+    localStorage.setItem(
+      "vault-read-failure",
+      JSON.stringify({ accountId: "fallback-account" }),
+    );
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        indexedDB: {
+          open: () => {
+            throw new Error("read unavailable");
+          },
+        },
+        localStorage,
+      },
+      configurable: true,
+    });
+    const vault = createPasskeyVault({ storageKey: "vault-read-failure" });
+
+    await expect(vault.getAccountSummary()).rejects.toThrow("read unavailable");
+    installIndexedDbWindow(localStorage);
   });
 });

@@ -1263,6 +1263,7 @@ const EditorPage: React.FC = () => {
         onOpenLibrary={openLibrary}
         onOpenBranches={() => setBranchActivityOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onSyncReady={() => window.location.reload()}
         onTakeOverBranch={() => {
           void takeOverEditing().catch((takeOverError) => {
             setError(

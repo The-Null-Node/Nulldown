@@ -9,17 +9,26 @@ import {
   getKvValue,
   isIndexedDbSupported,
   setKvValue,
+  setKvValues,
 } from "../../indexedDb";
+import {
+  ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
+  parseAccountRecoveryPayload,
+  type AccountRecoveryPayloadV1,
+} from "../../../../shared/auth/recovery";
 import { fromBase64, toBase64 } from "../crypto/base64";
 
 const DEFAULT_VAULT_RECORD_KEY = "nulldown_account_vault_v1";
 const DEFAULT_UNLOCK_TTL_MS = 8 * 60 * 60 * 1000;
 const UNLOCK_LEASE_SUFFIX = "_unlock_lease_v1";
 export const PASSKEY_PROTECTION_STORAGE_KEY = "nulldown_passkey_protection";
+export const LOCAL_ACCOUNT_VAULT_CHANGED_EVENT =
+  "nulldown:local-account-vault-changed";
 
 interface VaultRecordV1 {
   version: 1;
   accountId: string;
+  ownerUserId?: string;
   encryptionKid: string;
   signingKid: string;
   passkeyCredentialId?: string;
@@ -30,6 +39,64 @@ interface VaultRecordV1 {
   createdAt: number;
   updatedAt: number;
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isBase64Url = (value: unknown, minimumLength: number): value is string =>
+  typeof value === "string" &&
+  value.length >= minimumLength &&
+  /^[A-Za-z0-9_-]+$/u.test(value);
+
+const isRsaPublicJwk = (value: unknown): value is JsonWebKey =>
+  isRecord(value) &&
+  value.kty === "RSA" &&
+  isBase64Url(value.n, 300) &&
+  isBase64Url(value.e, 3);
+
+const isRsaPrivateJwk = (value: unknown): value is JsonWebKey =>
+  isRsaPublicJwk(value) &&
+  isBase64Url(value.d, 300) &&
+  isBase64Url(value.p, 150) &&
+  isBase64Url(value.q, 150) &&
+  isBase64Url(value.dp, 150) &&
+  isBase64Url(value.dq, 150) &&
+  isBase64Url(value.qi, 150);
+
+const isEcPublicJwk = (value: unknown): value is JsonWebKey =>
+  isRecord(value) &&
+  value.kty === "EC" &&
+  value.crv === "P-256" &&
+  isBase64Url(value.x, 43) &&
+  value.x.length === 43 &&
+  isBase64Url(value.y, 43) &&
+  value.y.length === 43;
+
+const isEcPrivateJwk = (value: unknown): value is JsonWebKey =>
+  isEcPublicJwk(value) && isBase64Url(value.d, 43) && value.d.length === 43;
+
+const isVaultRecord = (value: unknown): value is VaultRecordV1 =>
+  isRecord(value) &&
+  value.version === 1 &&
+  typeof value.accountId === "string" &&
+  Boolean(value.accountId) &&
+  (value.ownerUserId === undefined || typeof value.ownerUserId === "string") &&
+  typeof value.encryptionKid === "string" &&
+  Boolean(value.encryptionKid) &&
+  typeof value.signingKid === "string" &&
+  Boolean(value.signingKid) &&
+  (value.passkeyCredentialId === undefined ||
+    typeof value.passkeyCredentialId === "string") &&
+  isRsaPublicJwk(value.encryptionPublicJwk) &&
+  isRsaPrivateJwk(value.encryptionPrivateJwk) &&
+  isEcPublicJwk(value.signingPublicJwk) &&
+  isEcPrivateJwk(value.signingPrivateJwk) &&
+  typeof value.createdAt === "number" &&
+  Number.isSafeInteger(value.createdAt) &&
+  value.createdAt >= 0 &&
+  typeof value.updatedAt === "number" &&
+  Number.isSafeInteger(value.updatedAt) &&
+  value.updatedAt >= 0;
 
 interface UnlockLeaseV1 {
   version: 1;
@@ -54,7 +121,21 @@ export interface PasskeyVaultOptions {
   unlockTtlMs?: number;
 }
 
-const textEncoder = new TextEncoder();
+let activeOpenAuthUserId: string | null = null;
+
+/** Sets the browser user allowed to activate user-bound local V1 key material. */
+export const setActiveVaultUser = (userId: string | null): void => {
+  activeOpenAuthUserId = userId;
+};
+
+/** Returns the OpenAuth user currently allowed to activate user-bound local keys. */
+export const getActiveVaultUser = (): string | null => activeOpenAuthUserId;
+
+const notifyLocalAccountVaultChanged = (): void => {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new Event(LOCAL_ACCOUNT_VAULT_CHANGED_EVENT));
+  }
+};
 
 export class PasskeyVault {
   private readonly storageKey: string;
@@ -74,6 +155,7 @@ export class PasskeyVault {
 
   async getUnlockedVault(): Promise<UnlockedVault> {
     const record = await this.ensureVaultRecord();
+    this.assertRecordOwner(record);
     const unlockedRecord = await this.ensureVaultUnlocked(record);
 
     const [
@@ -101,6 +183,135 @@ export class PasskeyVault {
     };
   }
 
+  /** Reports whether this storage slot exists without creating or unlocking an account. */
+  async hasVaultRecord(): Promise<boolean> {
+    return (await this.loadVaultRecord()) !== null;
+  }
+
+  /** Reads the current account id without creating or unlocking a vault. */
+  async getAccountId(): Promise<string | null> {
+    return (await this.loadVaultRecord())?.accountId ?? null;
+  }
+
+  /** Reads non-secret ownership metadata without creating or unlocking a vault. */
+  async getAccountSummary(): Promise<{ accountId: string; ownerUserId: string | null } | null> {
+    const record = await this.loadVaultRecord();
+    return record
+      ? { accountId: record.accountId, ownerUserId: record.ownerUserId ?? null }
+      : null;
+  }
+
+  /** Marks an existing V1 account as locally activatable only by its bound user. */
+  async assignOwner(userId: string, accountId: string): Promise<boolean> {
+    const record = await this.loadVaultRecord();
+    if (!record || record.accountId !== accountId) {
+      throw new Error("Current account changed during sync setup.");
+    }
+    if (activeOpenAuthUserId !== userId) {
+      throw new Error("Signed-in user changed during sync setup.");
+    }
+    if (record.ownerUserId && record.ownerUserId !== userId) {
+      throw new Error("Local account belongs to a different signed-in user.");
+    }
+    if (record.ownerUserId === userId) return false;
+    await this.saveVaultRecordStrict({
+      ...record,
+      ownerUserId: userId,
+      updatedAt: Date.now(),
+    });
+    return true;
+  }
+
+  /** Exports current V1 key material only after applying the existing local unlock gate. */
+  async exportRecoveryPayload(): Promise<AccountRecoveryPayloadV1> {
+    const record = await this.loadVaultRecord();
+    if (!record) throw new Error("No local account is available to sync.");
+    this.assertRecordOwner(record);
+    const unlocked = await this.ensureVaultUnlocked(record);
+    return {
+      schema: ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
+      version: 1,
+      accountId: unlocked.accountId,
+      encryptionKid: unlocked.encryptionKid,
+      signingKid: unlocked.signingKid,
+      encryptionPublicJwk: unlocked.encryptionPublicJwk,
+      encryptionPrivateJwk: unlocked.encryptionPrivateJwk,
+      signingPublicJwk: unlocked.signingPublicJwk,
+      signingPrivateJwk: unlocked.signingPrivateJwk,
+      createdAt: unlocked.createdAt,
+    };
+  }
+
+  /** Installs validated recovery data while preserving any different existing account. */
+  async installRecoveryPayload(
+    value: unknown,
+    ownerUserId?: string,
+    canInstall: () => boolean = () => true,
+    indexedDbGuard?: { key: string; expectedValue: unknown },
+  ): Promise<{ accountId: string; preservedAccountId: string | null }> {
+    const payload = parseAccountRecoveryPayload(value);
+    if (!payload) throw new TypeError("Recovered account data is invalid.");
+    await Promise.all([
+      this.importRsaPublicKey(payload.encryptionPublicJwk),
+      this.importRsaPrivateKey(payload.encryptionPrivateJwk),
+      this.importSigningPublicKey(payload.signingPublicJwk),
+      this.importSigningPrivateKey(payload.signingPrivateJwk),
+    ]);
+
+    const existing = await this.loadVaultRecord();
+    const now = Date.now();
+    const record: VaultRecordV1 = {
+      version: 1,
+      accountId: payload.accountId,
+      ...(ownerUserId ? { ownerUserId } : {}),
+      encryptionKid: payload.encryptionKid,
+      signingKid: payload.signingKid,
+      encryptionPublicJwk: payload.encryptionPublicJwk,
+      encryptionPrivateJwk: payload.encryptionPrivateJwk,
+      signingPublicJwk: payload.signingPublicJwk,
+      signingPrivateJwk: payload.signingPrivateJwk,
+      createdAt: payload.createdAt,
+      updatedAt: now,
+    };
+    const preservedAccountId =
+      existing && existing.accountId !== payload.accountId ? existing.accountId : null;
+
+    if (isIndexedDbSupported()) {
+      const entries = [{ key: this.storageKey, value: record }];
+      if (preservedAccountId && existing) {
+        entries.unshift({
+          key: `${this.storageKey}:account:${preservedAccountId}`,
+          value: existing,
+        });
+      }
+      await setKvValues(entries, canInstall, indexedDbGuard);
+    } else {
+      if (typeof window === "undefined") {
+        throw new Error("Browser storage is unavailable for account recovery.");
+      }
+      if (preservedAccountId && existing) {
+        if (!canInstall()) throw new Error("Account recovery was cancelled.");
+        window.localStorage.setItem(
+          `${this.storageKey}:account:${preservedAccountId}`,
+          JSON.stringify(existing),
+        );
+      }
+      if (!canInstall()) throw new Error("Account recovery was cancelled.");
+      window.localStorage.setItem(this.storageKey, JSON.stringify(record));
+    }
+
+    this.unlockState = null;
+    this.clearUnlockLease();
+    notifyLocalAccountVaultChanged();
+    return { accountId: payload.accountId, preservedAccountId };
+  }
+
+  private assertRecordOwner(record: VaultRecordV1): void {
+    if (record.ownerUserId && record.ownerUserId !== activeOpenAuthUserId) {
+      throw new Error("Sign in as the account owner to unlock synced content.");
+    }
+  }
+
   private supportsPasskeys() {
     if (typeof window === "undefined") return false;
     if (!window.isSecureContext) return false;
@@ -126,7 +337,7 @@ export class PasskeyVault {
       );
     }
 
-    const userBytes = textEncoder.encode(accountId.slice(0, 63));
+    const userBytes = new TextEncoder().encode(accountId.slice(0, 63));
 
     const credential = (await navigator.credentials.create({
       publicKey: {
@@ -244,14 +455,18 @@ export class PasskeyVault {
 
   private loadRecordFromLocalStorage(): VaultRecordV1 | null {
     if (typeof window === "undefined") return null;
-
+    const raw = window.localStorage.getItem(this.storageKey);
+    if (!raw) return null;
+    let value: unknown;
     try {
-      const raw = window.localStorage.getItem(this.storageKey);
-      if (!raw) return null;
-      return JSON.parse(raw) as VaultRecordV1;
+      value = JSON.parse(raw);
     } catch {
-      return null;
+      throw new Error("Local account vault is unreadable.");
     }
+    if (!isVaultRecord(value)) {
+      throw new Error("Local account vault is invalid.");
+    }
+    return value;
   }
 
   private isValidUnlockLease(value: unknown): value is UnlockLeaseV1 {
@@ -387,11 +602,12 @@ export class PasskeyVault {
 
   private async loadVaultRecord(): Promise<VaultRecordV1 | null> {
     if (isIndexedDbSupported()) {
-      try {
-        const record = await getKvValue<VaultRecordV1>(this.storageKey);
-        if (record) return record;
-      } catch (error) {
-        console.error("Failed to load account vault from IndexedDB:", error);
+      const record = await getKvValue<VaultRecordV1>(this.storageKey);
+      if (record) {
+        if (!isVaultRecord(record)) {
+          throw new Error("IndexedDB account vault is invalid.");
+        }
+        return record;
       }
     }
 
@@ -402,6 +618,7 @@ export class PasskeyVault {
     if (isIndexedDbSupported()) {
       try {
         await setKvValue(this.storageKey, record);
+        notifyLocalAccountVaultChanged();
         return;
       } catch (error) {
         console.error("Failed to persist account vault to IndexedDB:", error);
@@ -409,6 +626,20 @@ export class PasskeyVault {
     }
 
     this.saveRecordToLocalStorage(record);
+    notifyLocalAccountVaultChanged();
+  }
+
+  private async saveVaultRecordStrict(record: VaultRecordV1): Promise<void> {
+    if (isIndexedDbSupported()) {
+      await setKvValue(this.storageKey, record);
+      notifyLocalAccountVaultChanged();
+      return;
+    }
+    if (typeof window === "undefined") {
+      throw new Error("Browser storage is unavailable.");
+    }
+    window.localStorage.setItem(this.storageKey, JSON.stringify(record));
+    notifyLocalAccountVaultChanged();
   }
 
   private async ensureVaultRecord(): Promise<VaultRecordV1> {
@@ -540,3 +771,28 @@ export const createPasskeyVault = (options: PasskeyVaultOptions = {}) =>
 const defaultPasskeyVault = createPasskeyVault();
 
 export const getUnlockedVault = () => defaultPasskeyVault.getUnlockedVault();
+
+export const hasLocalAccountVault = () => defaultPasskeyVault.hasVaultRecord();
+
+export const getLocalAccountId = () => defaultPasskeyVault.getAccountId();
+
+export const getLocalAccountSummary = () => defaultPasskeyVault.getAccountSummary();
+
+export const assignLocalAccountOwner = (userId: string, accountId: string) =>
+  defaultPasskeyVault.assignOwner(userId, accountId);
+
+export const exportLocalAccountRecoveryPayload = () =>
+  defaultPasskeyVault.exportRecoveryPayload();
+
+export const installLocalAccountRecoveryPayload = (
+  payload: unknown,
+  ownerUserId?: string,
+  canInstall?: () => boolean,
+  indexedDbGuard?: { key: string; expectedValue: unknown },
+) =>
+  defaultPasskeyVault.installRecoveryPayload(
+    payload,
+    ownerUserId,
+    canInstall,
+    indexedDbGuard,
+  );

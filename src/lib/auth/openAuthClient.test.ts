@@ -5,7 +5,9 @@ import {
   beginOpenAuthLogin,
   getOpenAuthPrincipal,
   getOpenAuthReturnTo,
+  getOpenAuthSessionState,
   logoutOpenAuth,
+  OPEN_AUTH_LOGOUT_STORAGE_KEY,
   type OpenAuthBrowserLocation,
 } from "./openAuthClient";
 
@@ -35,6 +37,7 @@ const locationAt = (
 describe("OpenAuth browser client", () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    window.localStorage.clear();
     if (originalFetchDescriptor) {
       Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
     } else {
@@ -65,6 +68,7 @@ describe("OpenAuth browser client", () => {
     const failedFetch = jest.fn().mockResolvedValue({ ok: false });
     installFetch(failedFetch);
     await expect(getOpenAuthPrincipal()).resolves.toBeNull();
+    await expect(getOpenAuthSessionState()).resolves.toEqual({ status: "unavailable" });
 
     const malformedFetch = jest.fn().mockResolvedValue({
       ok: true,
@@ -118,6 +122,7 @@ describe("OpenAuth browser client", () => {
       credentials: "same-origin",
       cache: "no-store",
     });
+    expect(window.localStorage.getItem(OPEN_AUTH_LOGOUT_STORAGE_KEY)).not.toBeNull();
 
     const failedFetch = jest.fn().mockRejectedValue(new Error("offline"));
     installFetch(failedFetch);

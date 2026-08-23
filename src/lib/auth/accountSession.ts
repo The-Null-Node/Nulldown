@@ -1,23 +1,42 @@
-import { getUnlockedVault } from "../void/vault/passkeyVault";
+import {
+  getActiveVaultUser,
+  getLocalAccountSummary,
+  getUnlockedVault,
+} from "../void/vault/passkeyVault";
 
-interface AccountSessionResponse {
+export interface AccountSessionCredentials {
   token: string;
   expiresAt: number;
   accountId: string;
+  ownerUserId?: string | null;
 }
 
-interface CachedAccountSession {
-  token: string;
-  expiresAt: number;
-  accountId: string;
-}
+type CachedAccountSession = AccountSessionCredentials;
 
 const ACCOUNT_SESSION_STORAGE_KEY = "nulldown_account_session_v1";
-const textEncoder = new TextEncoder();
-
 let memorySession: CachedAccountSession | null = null;
 let nextSessionFetchAllowedAt = 0;
 let inFlightSessionTokenPromise: Promise<string | null> | null = null;
+let sessionGeneration = 0;
+
+/** Clears the V1 bearer cache after account replacement or explicit user sign-out. */
+export const clearAccountSession = (): void => {
+  sessionGeneration += 1;
+  memorySession = null;
+  nextSessionFetchAllowedAt = 0;
+  inFlightSessionTokenPromise = null;
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(ACCOUNT_SESSION_STORAGE_KEY);
+  } catch {
+    // A stale entry is still account-checked by the server and expires normally.
+  }
+};
+
+/** Activates a session proven before an atomic local account replacement. */
+export const activateAccountSession = (session: AccountSessionCredentials): void => {
+  writeStoredSession(session);
+};
 
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
@@ -54,6 +73,8 @@ const readStoredSession = (): CachedAccountSession | null => {
       token: parsed.token,
       expiresAt: parsed.expiresAt,
       accountId: parsed.accountId,
+      ownerUserId:
+        typeof parsed.ownerUserId === "string" ? parsed.ownerUserId : null,
     };
   } catch {
     return null;
@@ -81,6 +102,62 @@ const isSessionFresh = (session: CachedAccountSession | null): boolean => {
   return session.expiresAt - Date.now() > 30_000;
 };
 
+/** Requests a V1 bearer for explicit key material without changing the local vault. */
+export const authenticateAccountSigningKey = async (input: Readonly<{
+  accountId: string;
+  signingPrivateKey: CryptoKey;
+  signingPublicJwk: JsonWebKey;
+  ownerUserId?: string | null;
+}>): Promise<AccountSessionCredentials | null> => {
+  const signedAt = Date.now();
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    input.signingPrivateKey,
+    new TextEncoder().encode(
+      `nulldown-account-auth\n${input.accountId}\n${signedAt}`,
+    ),
+  );
+  const response = await fetch("/api/auth/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      accountId: input.accountId,
+      signingPublicJwk: input.signingPublicJwk,
+      signedAt,
+      signature: toBase64Url(new Uint8Array(signature)),
+    }),
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as Partial<AccountSessionCredentials>;
+  if (
+    typeof payload.token !== "string" ||
+    typeof payload.expiresAt !== "number" ||
+    payload.accountId !== input.accountId
+  ) {
+    return null;
+  }
+  return {
+    token: payload.token,
+    expiresAt: payload.expiresAt,
+    accountId: payload.accountId,
+    ...(input.ownerUserId ? { ownerUserId: input.ownerUserId } : {}),
+  };
+};
+
+const sessionMatchesLocalAccount = (
+  session: CachedAccountSession | null,
+  localAccount: { accountId: string; ownerUserId: string | null } | null,
+): boolean => {
+  if (!session || !localAccount || session.accountId !== localAccount.accountId) {
+    return false;
+  }
+  if (!localAccount.ownerUserId) return !session.ownerUserId;
+  return (
+    session.ownerUserId === localAccount.ownerUserId &&
+    getActiveVaultUser() === localAccount.ownerUserId
+  );
+};
+
 export const getAccountSessionToken = async (
   options: { forceRefresh?: boolean } = {},
 ): Promise<string | null> => {
@@ -88,13 +165,22 @@ export const getAccountSessionToken = async (
     return null;
   }
 
+  const localAccount = await getLocalAccountSummary();
+  if (
+    localAccount?.ownerUserId &&
+    getActiveVaultUser() !== localAccount.ownerUserId
+  ) {
+    clearAccountSession();
+    return null;
+  }
+
   if (!options.forceRefresh) {
-    if (isSessionFresh(memorySession)) {
+    if (isSessionFresh(memorySession) && sessionMatchesLocalAccount(memorySession, localAccount)) {
       return memorySession?.token ?? null;
     }
 
     const stored = readStoredSession();
-    if (isSessionFresh(stored)) {
+    if (isSessionFresh(stored) && sessionMatchesLocalAccount(stored, localAccount)) {
       memorySession = stored;
       return stored?.token ?? null;
     }
@@ -105,6 +191,7 @@ export const getAccountSessionToken = async (
   }
 
   const requestToken = async (): Promise<string | null> => {
+    const requestGeneration = sessionGeneration;
     let vault;
     try {
       vault = await getUnlockedVault();
@@ -112,55 +199,20 @@ export const getAccountSessionToken = async (
       return null;
     }
 
-    const signedAt = Date.now();
-    const message = `nulldown-account-auth\n${vault.accountId}\n${signedAt}`;
-    const signature = await crypto.subtle.sign(
-      {
-        name: "ECDSA",
-        hash: "SHA-256",
-      },
-      vault.signingPrivateKey,
-      textEncoder.encode(message),
-    );
-
-    const response = await fetch("/api/auth/session", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        accountId: vault.accountId,
-        signingPublicJwk: vault.signingPublicJwk,
-        signedAt,
-        signature: toBase64Url(new Uint8Array(signature)),
-      }),
+    const session = await authenticateAccountSigningKey({
+      accountId: vault.accountId,
+      signingPrivateKey: vault.signingPrivateKey,
+      signingPublicJwk: vault.signingPublicJwk,
+      ownerUserId: localAccount?.ownerUserId,
     });
-
-    if (!response.ok) {
-      nextSessionFetchAllowedAt =
-        Date.now() + (response.status === 503 ? 5 * 60_000 : 60_000);
+    if (!session) {
+      nextSessionFetchAllowedAt = Date.now() + 60_000;
       return null;
     }
-
+    if (requestGeneration !== sessionGeneration) return null;
     nextSessionFetchAllowedAt = 0;
-
-    const payload = (await response.json()) as AccountSessionResponse;
-    if (
-      typeof payload.token !== "string" ||
-      typeof payload.expiresAt !== "number" ||
-      typeof payload.accountId !== "string" ||
-      payload.accountId !== vault.accountId
-    ) {
-      return null;
-    }
-
-    writeStoredSession({
-      token: payload.token,
-      expiresAt: payload.expiresAt,
-      accountId: payload.accountId,
-    });
-
-    return payload.token;
+    writeStoredSession(session);
+    return session.token;
   };
 
   const promise = requestToken().finally(() => {

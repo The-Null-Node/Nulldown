@@ -476,6 +476,22 @@ describe("Nulldown OpenAuth Worker foundation", () => {
     expect(harness.database.users).toEqual(new Set([verified.subject.properties.userId]));
   });
 
+  it("issues short-lived access tokens so the BFF can exercise refresh rotation", async () => {
+    const harness = createWorkerHarness();
+    const flow = await startWorkerCodeFlow(harness);
+    const callback = await verifyWorkerCodeFlow(harness, flow);
+    const exchanged = await harness.client.exchange(
+      callback.code,
+      redirectUri,
+      flow.authorization.challenge.verifier,
+    );
+
+    expect(exchanged.err).toBe(false);
+    if (exchanged.err) throw exchanged.err;
+    expect(exchanged.tokens.expiresIn).toBeGreaterThan(295);
+    expect(exchanged.tokens.expiresIn).toBeLessThanOrEqual(300);
+  });
+
   it("reuses the same D1 identity after the cooldown expires", async () => {
     const harness = createWorkerHarness();
     const first = await startWorkerCodeFlow(harness);

@@ -37,6 +37,14 @@ interface OpenAuthBffConfig {
   callbackUri: string;
 }
 
+/** Verified cookie-backed user context used by account-owned Pages services. */
+export interface OpenAuthRequestIdentity {
+  db: D1Database;
+  userId: string;
+  origin: string;
+  responseHeaders: Headers;
+}
+
 const textEncoder = new TextEncoder();
 
 const responseJson = (body: unknown, status: number, headers?: HeadersInit): Response => {
@@ -137,17 +145,49 @@ const callbackRedirect = (location: string): Response => {
   return new Response(null, { status: 302, headers });
 };
 
-const sameOriginLogoutRequest = (request: Request): boolean => {
-  const origin = new URL(request.url).origin;
+/** Rejects cross-origin unsafe requests even when BFF cookies are attached. */
+export const isSameOriginOpenAuthRequest = (
+  request: Request,
+  expectedOrigin = new URL(request.url).origin,
+): boolean => {
   const requestOrigin = request.headers.get("Origin");
-  if (requestOrigin !== null) return requestOrigin === origin;
+  if (requestOrigin !== null) return requestOrigin === expectedOrigin;
 
   const referer = request.headers.get("Referer");
   if (!referer) return false;
   try {
-    return new URL(referer).origin === origin;
+    return new URL(referer).origin === expectedOrigin;
   } catch {
     return false;
+  }
+};
+
+/** Resolves a real internal user from BFF cookies without exposing either credential. */
+export const resolveOpenAuthRequestIdentity = async (
+  env: OpenAuthBffEnvironment,
+  request: Request,
+): Promise<OpenAuthRequestIdentity | Response> => {
+  const config = resolveConfig(env, request);
+  if (!isConfig(config)) return config;
+
+  const accessToken = readOpenAuthAccessCookie(request);
+  if (!accessToken) return responseJson({ error: "open_auth_required" }, 401);
+
+  try {
+    const verified = await config.authority.verifyAccessToken(
+      accessToken,
+      readOpenAuthRefreshCookie(request) ?? undefined,
+    );
+    const userId = verified ? await readOpenAuthUser(config.db, verified) : null;
+    if (!userId) return responseJson({ error: "open_auth_required" }, 401);
+
+    const responseHeaders = new Headers();
+    if (verified?.refreshedTokens) {
+      appendOpenAuthSessionCookies(responseHeaders, verified.refreshedTokens);
+    }
+    return { db: config.db, userId, origin: config.origin, responseHeaders };
+  } catch {
+    return unavailable("authority_unavailable");
   }
 };
 
@@ -296,7 +336,7 @@ export const logoutOpenAuth = async (
 ): Promise<Response> => {
   const config = resolveConfig(env, request);
   if (!isConfig(config)) return config;
-  if (!sameOriginLogoutRequest(request)) {
+  if (!isSameOriginOpenAuthRequest(request, config.origin)) {
     return responseJson({ error: "invalid_logout_origin" }, 403);
   }
 

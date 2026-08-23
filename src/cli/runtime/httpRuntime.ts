@@ -9,6 +9,10 @@ import type {
   BranchPriorityListRequest,
   BranchResolvedQueryRequest,
   BranchResolvedUpdateRequest,
+  AuthDevicePollRequest,
+  AuthDeviceRequest,
+  AuthRefreshRequest,
+  AuthRevokeRequest,
   AuthSessionRequest,
   DiffEnvelopeHeadersRequest,
   DiffEnvelopePostRequest,
@@ -24,6 +28,11 @@ import type {
   DropUpdateResult,
   NulldownRuntime,
 } from "./types";
+import type {
+  CliCredentialBundleV1,
+  CliDevicePollResponse,
+  CliDeviceStartResponse,
+} from "../../../shared/auth/cliDevice";
 
 const encodeBranchPathSegment = (value: string): string =>
   encodeURIComponent(value).replace(/%3A/gi, ":");
@@ -276,6 +285,38 @@ export const createHttpNulldownRuntime = (
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountId: request.accountId, ...request.proof }),
+      });
+      return response.data;
+    },
+    async device(request: AuthDeviceRequest) {
+      const response = await dependencies.request<CliDeviceStartResponse>("/api/auth/cli/device", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.data;
+    },
+    async poll(request: AuthDevicePollRequest) {
+      const response = await dependencies.request<CliDevicePollResponse>("/api/auth/cli/poll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.data;
+    },
+    async refresh(request: AuthRefreshRequest) {
+      const response = await dependencies.request<CliCredentialBundleV1>("/api/auth/cli/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.data;
+    },
+    async revoke(request: AuthRevokeRequest) {
+      const response = await dependencies.request("/api/auth/cli/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
       });
       return response.data;
     },

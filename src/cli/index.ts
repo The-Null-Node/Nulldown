@@ -20,6 +20,8 @@ import {
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved/constants";
+import type { CliCredentialBundleV1 } from "../../shared/auth/cliDevice";
+import { isCliCredentialBundle } from "../../shared/auth/cliDevice";
 import { createAdminCommand } from "./commands/admin";
 import { createAuthCommand } from "./commands/auth";
 import { createBranchCommand } from "./commands/branches";
@@ -28,6 +30,12 @@ import { createDoctorCommand } from "./commands/doctor";
 import { createDropCommands } from "./commands/drops";
 import { createServeCommand } from "./commands/serve";
 import { createSmokeCommand } from "./commands/smoke";
+import {
+  clearCliCredential,
+  isCliCredentialForBaseUrl,
+  readCliCredential,
+  writeCliCredential,
+} from "./auth";
 import { flagString, hasFlag, parseArgs, type ParsedArgs } from "./core/args";
 import { findCliCommand, type CliCommand } from "./core/command";
 import { createHttpNulldownRuntime } from "./runtime/httpRuntime";
@@ -63,6 +71,9 @@ interface CliConfig {
   diffAuthDir: string;
   diffAuthToken: string | null;
   diffAuthTokenPath: string;
+  authFilePath: string;
+  authCredential: CliCredentialBundleV1 | null;
+  authRefreshPromise: Promise<boolean> | null;
   json: boolean;
   quiet: boolean;
   verbose: boolean;
@@ -171,6 +182,8 @@ Diff commands:
 
 Auth and admin:
   auth session --account <id> --proof <file|->
+  auth login [--no-browser] [--name <name>]
+  auth status | refresh | logout
   admin branch-backfill <rootId>
   admin index-backfill
   admin metadata-backfill
@@ -187,6 +200,7 @@ Global flags:
   --client <id>      Stable client ID
   --config <file>    JSON config file
   --config-dir <dir> Config directory (default: ~/.config/nulldown)
+  --auth-file <file> Credential file (default: ~/.config/nulldown/auth.json)
   --diff-auth-token <token>
                      Inline diff auth token
   --quiet            Reduce human output
@@ -233,14 +247,22 @@ const resolveConfig = async (args: ParsedArgs): Promise<CliConfig> => {
     fileConfig.baseUrl ||
     DEFAULT_BASE_URL
   ).replace(/\/$/, "");
+  const authFilePath = resolve(
+    flagString(args, "auth-file") ||
+      process.env.ND_AUTH_FILE ||
+      fileConfig.authFilePath ||
+      join(configDir, "auth.json"),
+  );
+  const directToken =
+    flagString(args, "token") || process.env.ND_TOKEN || fileConfig.token || null;
+  const storedCredential = await readCliCredential(authFilePath);
+  const authCredential = isCliCredentialForBaseUrl(storedCredential, baseUrl)
+    ? storedCredential
+    : null;
 
   return {
     baseUrl,
-    token:
-      flagString(args, "token") ||
-      process.env.ND_TOKEN ||
-      fileConfig.token ||
-      null,
+    token: directToken || authCredential?.accessToken || null,
     accountId:
       flagString(args, "account") ||
       process.env.ND_ACCOUNT_ID ||
@@ -264,6 +286,9 @@ const resolveConfig = async (args: ParsedArgs): Promise<CliConfig> => {
         fileConfig.diffAuthTokenPath ||
         join(configDir, DEFAULT_DIFF_AUTH_TOKEN_FILE),
     ),
+    authFilePath,
+    authCredential: directToken ? null : authCredential,
+    authRefreshPromise: null,
     json: hasFlag(args, "json") || Boolean(fileConfig.json),
     quiet: hasFlag(args, "quiet") || Boolean(fileConfig.quiet),
     verbose: hasFlag(args, "verbose") || Boolean(fileConfig.verbose),
@@ -318,47 +343,103 @@ const parseJsonLoose = (text: string): unknown | null => {
   }
 };
 
+const refreshStoredCliCredential = async (config: CliConfig): Promise<boolean> => {
+  if (!config.authCredential) return false;
+  if (config.authRefreshPromise) return config.authRefreshPromise;
+
+  const current = config.authCredential;
+  const promise = (async (): Promise<boolean> => {
+    try {
+      const response = await fetch(`${config.baseUrl}/api/auth/cli/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: current.refreshToken }),
+      });
+      const parsed = parseJsonLoose(await response.text());
+      if (
+        !response.ok ||
+        !isCliCredentialBundle(parsed) ||
+        !isCliCredentialForBaseUrl(parsed, config.baseUrl)
+      ) {
+        return false;
+      }
+      const refreshed = parsed as CliCredentialBundleV1;
+      await writeCliCredential(config.authFilePath, refreshed);
+      if (config.authCredential === current) {
+        config.authCredential = refreshed;
+        config.token = refreshed.accessToken;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  config.authRefreshPromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (config.authRefreshPromise === promise) config.authRefreshPromise = null;
+  }
+};
+
 const request = async <T = unknown>(
   config: CliConfig,
   path: string,
   options: RequestInit = {},
 ): Promise<ApiResponse<T>> => {
-  const headers = new Headers(options.headers);
-  if (config.token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${config.token}`);
-  }
-  if (config.accountId && !headers.has(NULLDOWN_ACCOUNT_ID_HEADER)) {
-    headers.set(NULLDOWN_ACCOUNT_ID_HEADER, config.accountId);
-  }
-  if (config.clientId && !headers.has(DIFF_CLIENT_ID_HEADER)) {
-    headers.set(DIFF_CLIENT_ID_HEADER, config.clientId);
+  const canRefresh =
+    path !== "/api/auth/cli/refresh" &&
+    path !== "/api/auth/cli/revoke" &&
+    config.authCredential !== null;
+  if (canRefresh && (config.authCredential?.accessExpiresAt ?? 0) - Date.now() <= 30_000) {
+    await refreshStoredCliCredential(config);
   }
 
-  const response = await fetch(`${config.baseUrl}${path}`, {
-    ...options,
-    headers,
-  });
-  const text = await response.text();
-  const data = parseJsonLoose(text) as T | null;
+  const perform = async (): Promise<ApiResponse<T>> => {
+    const headers = new Headers(options.headers);
+    if (config.token && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${config.token}`);
+    }
+    if (config.accountId && !headers.has(NULLDOWN_ACCOUNT_ID_HEADER)) {
+      headers.set(NULLDOWN_ACCOUNT_ID_HEADER, config.accountId);
+    }
+    if (config.clientId && !headers.has(DIFF_CLIENT_ID_HEADER)) {
+      headers.set(DIFF_CLIENT_ID_HEADER, config.clientId);
+    }
 
-  if (!response.ok) {
-    const message =
-      data && typeof data === "object" && "error" in data
-        ? String((data as { error: unknown }).error)
-        : text || `${response.status} ${response.statusText}`;
-    const code =
-      data && typeof data === "object" && "code" in data
-        ? String((data as { code: unknown }).code)
-        : undefined;
-    throw new CliError(message, { status: response.status, code });
-  }
-
-  return {
-    status: response.status,
-    headers: response.headers,
-    text,
-    data,
+    const response = await fetch(`${config.baseUrl}${path}`, {
+      ...options,
+      headers,
+    });
+    const text = await response.text();
+    return {
+      status: response.status,
+      headers: response.headers,
+      text,
+      data: parseJsonLoose(text) as T | null,
+    };
   };
+
+  let result = await perform();
+  if (result.status === 401) {
+    if (canRefresh && (await refreshStoredCliCredential(config))) {
+      result = await perform();
+    }
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    const message =
+      result.data && typeof result.data === "object" && "error" in result.data
+        ? String((result.data as { error: unknown }).error)
+        : result.text || `${result.status}`;
+    const code =
+      result.data && typeof result.data === "object" && "code" in result.data
+        ? String((result.data as { code: unknown }).code)
+        : undefined;
+    throw new CliError(message, { status: result.status, code });
+  }
+
+  return result;
 };
 
 const readDrop = async (
@@ -650,6 +731,21 @@ const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 };
 
+const openBrowser = async (url: string): Promise<void> => {
+  const command =
+    process.platform === "darwin"
+      ? ["open", url]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", "", url]
+        : ["xdg-open", url];
+  try {
+    const child = Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
+    void child.exited;
+  } catch {
+    // The verification URI is printed regardless of local browser availability.
+  }
+};
+
 const createRegisteredCommands = (config: CliConfig): CliCommand<CliConfig>[] => {
   const runtime = createCliRuntime(config);
   const resolveAdminToken = (
@@ -724,6 +820,24 @@ const createRegisteredCommands = (config: CliConfig): CliCommand<CliConfig>[] =>
       runtime,
       print: (value, human) => print(config, value, human),
       readInput,
+      baseUrl: () => config.baseUrl,
+      authFilePath: () => config.authFilePath,
+      readCredential: async () => {
+        const credential = config.authCredential ?? await readCliCredential(config.authFilePath);
+        return isCliCredentialForBaseUrl(credential, config.baseUrl) ? credential : null;
+      },
+      writeCredential: async (credential) => {
+        await writeCliCredential(config.authFilePath, credential);
+        config.authCredential = credential;
+        config.token = credential.accessToken;
+      },
+      clearCredential: async () => {
+        await clearCliCredential(config.authFilePath);
+        config.authCredential = null;
+        config.token = null;
+      },
+      openBrowser,
+      sleep,
     }),
     createAdminCommand<CliConfig>({
       runtime,

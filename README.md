@@ -37,6 +37,7 @@ The canonical documentation lives in Nulldown:
 | Retrieval and memory | Structural document/runtime queries, source references, priority overlays, and optional NullMem facts, procedures, capabilities, and freshness signals. |
 | Interfaces           | Native Nulldown composition, nullplug runtime contracts, runtime facts, and policy-controlled proposed mutations.                                       |
 | Trust                | Public plaintext, client-sealed, provider-assisted, and self-hosted workflows with different explicit trust properties.                                 |
+| Account continuity   | OpenAuth can bind a current V1 account and store a browser-encrypted key package for recovery of known private links on another signed-in browser.       |
 | Deployment           | Cloudflare Pages/R2/D1 plus a self-hostable Bun API backend using filesystem blobs and SQLite metadata.                                                 |
 
 ## Nullplug Providers
@@ -62,6 +63,20 @@ nd branch resolve <rootId> --json
 nd diff apply <rootId> --branch <branchId> --insert '0:# Updated title\n\n' --json
 nd branch query <rootId> <branchId> --query "updated title" --top 1 --json
 ```
+
+Authorize the CLI through the signed-in browser and keep the refreshable
+credential in the default private config directory:
+
+```bash
+nd auth login
+nd auth status
+nd auth logout
+```
+
+Use `--no-browser` to print the verification URL without opening it. Set
+`ND_AUTH_FILE` or pass `--auth-file` to select another credential file. Direct
+`--token` and `ND_TOKEN` values still take precedence over the stored CLI
+credential.
 
 When retrying `nd diff apply` after an ambiguous network failure, reuse both the
 original event identity and creation time. A successful response includes the

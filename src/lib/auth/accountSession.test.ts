@@ -10,9 +10,13 @@ interface StorageMock {
 }
 
 const getUnlockedVault = jest.fn();
+const getLocalAccountSummary = jest.fn();
+const getActiveVaultUser = jest.fn();
 
 jest.unstable_mockModule("../void/vault/passkeyVault", () => ({
   getUnlockedVault,
+  getLocalAccountSummary,
+  getActiveVaultUser,
 }));
 
 const createStorageMock = (): StorageMock => {
@@ -66,6 +70,13 @@ describe("account session", () => {
 
   beforeEach(() => {
     getUnlockedVault.mockReset();
+    getLocalAccountSummary.mockReset();
+    getActiveVaultUser.mockReset();
+    getLocalAccountSummary.mockResolvedValue({
+      accountId: vault.accountId,
+      ownerUserId: null,
+    });
+    getActiveVaultUser.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -175,6 +186,8 @@ describe("account session", () => {
     const first = getAccountSessionToken();
     const second = getAccountSessionToken();
 
+    await Promise.resolve();
+    await Promise.resolve();
     expect(getUnlockedVault).toHaveBeenCalledTimes(1);
     resolveVault(vault);
     await expect(Promise.all([first, second])).resolves.toEqual([
@@ -182,6 +195,43 @@ describe("account session", () => {
       "issued-token",
     ]);
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards an old in-flight response after account-session state is cleared", async () => {
+    const sessionStorage = createStorageMock();
+    installWindow(sessionStorage);
+    getUnlockedVault.mockResolvedValue(vault);
+    Object.defineProperty(globalThis, "crypto", {
+      value: { subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) } },
+      configurable: true,
+    });
+    let completeFetch: ((value: unknown) => void) | undefined;
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn(
+        () =>
+          new Promise((resolve) => {
+            completeFetch = resolve;
+          }),
+      ),
+      configurable: true,
+    });
+
+    const { clearAccountSession, getAccountSessionToken } = await loadAccountSession();
+    const pending = getAccountSessionToken();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(completeFetch).toBeDefined();
+    clearAccountSession();
+    completeFetch?.({
+      ok: true,
+      json: async () => ({
+        token: "stale-token",
+        expiresAt: Date.now() + 60_000,
+        accountId: vault.accountId,
+      }),
+    });
+
+    await expect(pending).resolves.toBeNull();
+    expect(sessionStorage.getItem(ACCOUNT_SESSION_STORAGE_KEY)).toBeNull();
   });
 
   it("signs canonical account proof bytes and posts the exact session request", async () => {
@@ -301,7 +351,32 @@ describe("account session", () => {
     await expect(getAccountSessionToken()).resolves.toBeNull();
     expect(sessionStorage.getItem(ACCOUNT_SESSION_STORAGE_KEY)).toBeNull();
     await expect(getAccountAuthHeaders()).resolves.toEqual({});
-    expect(getUnlockedVault).toHaveBeenCalledTimes(2);
+    expect(getUnlockedVault).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an owner-bound bearer after the active OpenAuth user changes", async () => {
+    const sessionStorage = createStorageMock();
+    installWindow(sessionStorage);
+    getLocalAccountSummary.mockResolvedValue({
+      accountId: vault.accountId,
+      ownerUserId: "user-1",
+    });
+    getActiveVaultUser.mockReturnValue("user-2");
+    sessionStorage.setItem(
+      ACCOUNT_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        token: "user-1-token",
+        expiresAt: Date.now() + 60_000,
+        accountId: vault.accountId,
+        ownerUserId: "user-1",
+      }),
+    );
+
+    const { getAccountSessionToken } = await loadAccountSession();
+
+    await expect(getAccountSessionToken()).resolves.toBeNull();
+    expect(sessionStorage.getItem(ACCOUNT_SESSION_STORAGE_KEY)).toBeNull();
+    expect(getUnlockedVault).not.toHaveBeenCalled();
   });
 
   it("returns Authorization only when a session token is available", async () => {

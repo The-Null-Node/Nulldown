@@ -1,6 +1,13 @@
+import { isIndexedDbSupported, setKvValue } from "../indexedDb";
+
 export interface OpenAuthPrincipal {
   userId: string;
 }
+
+export type OpenAuthSessionState =
+  | { status: "authenticated"; principal: OpenAuthPrincipal }
+  | { status: "anonymous" }
+  | { status: "unavailable" };
 
 export interface OpenAuthBrowserLocation {
   pathname: string;
@@ -12,6 +19,7 @@ export interface OpenAuthBrowserLocation {
 const OPEN_AUTH_PRINCIPAL_PATH = "/api/auth/open/principal";
 const OPEN_AUTH_LOGIN_PATH = "/api/auth/open/login";
 const OPEN_AUTH_LOGOUT_PATH = "/api/auth/open/logout";
+export const OPEN_AUTH_LOGOUT_STORAGE_KEY = "nulldown_openauth_logout_v1";
 
 const isSafePathname = (pathname: string): boolean =>
   pathname.startsWith("/") &&
@@ -32,21 +40,29 @@ const asPrincipal = (value: unknown): OpenAuthPrincipal | null => {
   return { userId: (value as { userId: string }).userId };
 };
 
-/** Returns the minimal OpenAuth principal or anonymous state from the same-origin BFF. */
-export const getOpenAuthPrincipal = async (): Promise<OpenAuthPrincipal | null> => {
+/** Distinguishes a real anonymous session from an unavailable account authority. */
+export const getOpenAuthSessionState = async (): Promise<OpenAuthSessionState> => {
   try {
     const response = await fetch(OPEN_AUTH_PRINCIPAL_PATH, {
       credentials: "same-origin",
       cache: "no-store",
     });
     if (!response.ok) {
-      return null;
+      return { status: "unavailable" };
     }
-
-    return asPrincipal(await response.json());
+    const principal = asPrincipal(await response.json());
+    return principal
+      ? { status: "authenticated", principal }
+      : { status: "anonymous" };
   } catch {
-    return null;
+    return { status: "unavailable" };
   }
+};
+
+/** Returns the minimal principal for controls that already have an availability boundary. */
+export const getOpenAuthPrincipal = async (): Promise<OpenAuthPrincipal | null> => {
+  const state = await getOpenAuthSessionState();
+  return state.status === "authenticated" ? state.principal : null;
 };
 
 /** Builds a BFF-safe post-login destination from the browser's current location. */
@@ -78,7 +94,24 @@ export const logoutOpenAuth = async (): Promise<boolean> => {
       credentials: "same-origin",
       cache: "no-store",
     });
-    return response.ok;
+    if (!response.ok) return false;
+    const logoutVersion = `${Date.now()}:${crypto.randomUUID?.() ?? Math.random()}`;
+    if (isIndexedDbSupported()) {
+      try {
+        await setKvValue(OPEN_AUTH_LOGOUT_STORAGE_KEY, logoutVersion);
+      } catch {
+        // localStorage still broadcasts logout and invalidates the active tab.
+      }
+    }
+    try {
+      window.localStorage.setItem(
+        OPEN_AUTH_LOGOUT_STORAGE_KEY,
+        logoutVersion,
+      );
+    } catch {
+      // The current tab still signs out even if cross-tab notification is unavailable.
+    }
+    return true;
   } catch {
     return false;
   }
