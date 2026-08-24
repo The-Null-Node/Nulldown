@@ -1,6 +1,8 @@
+import { exportJWK, generateKeyPair, SignJWT, type KeyLike } from "jose";
 import type { D1Database } from "@cloudflare/workers-types";
 
 import {
+  approveCliDeviceResponse,
   createCliDeviceResponse,
   pollCliDeviceResponse,
   refreshCliCredentialResponse,
@@ -8,7 +10,17 @@ import {
   type CliAuthEnvironment,
 } from "../functions/api/_lib/accounts/cliAuth/service";
 import { generateCliDeviceKeyPair, decryptCliCredentialEnvelope } from "./cli/auth";
-import type { CliCredentialBundleV1 } from "../shared/auth/cliDevice";
+import {
+  CLI_CREDENTIAL_KIND_V1,
+  isCliCredentialBundle,
+  type CliCredentialBundleV1,
+  type CliDeviceStartResponse,
+} from "../shared/auth/cliDevice";
+
+const appOrigin = "https://nulldown.app";
+const issuer = "https://issuer.test";
+const openAuthClientId = "nulldown-cli-test";
+const accessCookieName = "__Host-nulldown-open-auth-access";
 
 interface Ticket {
   ticket_id: string;
@@ -61,6 +73,8 @@ class MemoryStatement {
 class MemoryDatabase {
   readonly tickets = new Map<string, Ticket>();
   readonly credentials = new Map<string, Credential>();
+  readonly users = new Set<string>();
+  readonly accountBindings = new Map<string, string>();
 
   prepare(sql: string): MemoryStatement {
     return new MemoryStatement(this, sql);
@@ -136,6 +150,39 @@ class MemoryDatabase {
   }
 
   first(sql: string, params: unknown[]): unknown {
+    if (sql.includes("SET approved_user_id")) {
+      const ticket = this.tickets.get(String(params[3]));
+      const approvedAt = Number(params[4]);
+      if (
+        !ticket ||
+        ticket.approved_at !== null ||
+        ticket.redeemed_at !== null ||
+        ticket.expires_at <= approvedAt
+      ) {
+        return null;
+      }
+      ticket.approved_user_id = String(params[0]);
+      ticket.approved_account_id = String(params[1]);
+      ticket.approved_at = approvedAt;
+      return { ticket_id: ticket.ticket_id };
+    }
+    if (sql.includes("FROM auth_users")) {
+      const userId = String(params[0]);
+      return this.users.has(userId) ? { user_id: userId } : null;
+    }
+    if (sql.includes("FROM auth_account_bindings")) {
+      const accountId = String(params[0]);
+      const userId = this.accountBindings.get(accountId);
+      return userId
+        ? {
+            account_id: accountId,
+            user_id: userId,
+            signing_key_fingerprint: "test-fingerprint",
+            created_at: 1,
+            updated_at: 1,
+          }
+        : null;
+    }
     if (sql.includes("FROM auth_cli_device_tickets")) {
       const value = String(params[0]);
       return [...this.tickets.values()].find(
@@ -176,94 +223,212 @@ class MemoryDatabase {
   }
 }
 
+class FakeOpenAuthAuthority {
+  private constructor(
+    private readonly privateKey: KeyLike | CryptoKey,
+    private readonly jwk: JsonWebKey,
+  ) {}
+
+  static async create(): Promise<FakeOpenAuthAuthority> {
+    const pair = await generateKeyPair("ES256");
+    const jwk = await exportJWK(pair.publicKey);
+    jwk.kid = "test-key";
+    jwk.alg = "ES256";
+    return new FakeOpenAuthAuthority(pair.privateKey, jwk);
+  }
+
+  async issueAccessToken(userId: string): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      mode: "access",
+      type: "nulldown-user",
+      properties: { version: 1, userId },
+    })
+      .setProtectedHeader({ alg: "ES256", kid: "test-key", typ: "JWT" })
+      .setIssuer(issuer)
+      .setAudience(openAuthClientId)
+      .setIssuedAt(now)
+      .setExpirationTime(now + 300)
+      .sign(this.privateKey);
+  }
+
+  async fetch(input: RequestInfo | URL): Promise<Response> {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      return Response.json({ jwks_uri: `${issuer}/.well-known/jwks.json` });
+    }
+    if (url.pathname === "/.well-known/jwks.json") {
+      return Response.json({ keys: [this.jwk] });
+    }
+    return new Response("Not Found", { status: 404 });
+  }
+}
+
 const responseJson = async <T>(response: Response): Promise<T> =>
   (await response.json()) as T;
 
 describe("CLI auth Pages service", () => {
-  it("issues a pending ticket, redeems approval once, rotates, and revokes", async () => {
+  it("issues isolated tickets, approves through OpenAuth, redeems once, rotates, and revokes", async () => {
     const database = new MemoryDatabase();
-    const keyPair = await generateCliDeviceKeyPair();
+    database.users.add("user-1");
+    database.accountBindings.set("account-1", "user-1");
+    const authority = await FakeOpenAuthAuthority.create();
+    const accessToken = await authority.issueAccessToken("user-1");
+    const firstKeyPair = await generateCliDeviceKeyPair();
+    const secondKeyPair = await generateCliDeviceKeyPair();
     const env = {
       DB: database as unknown as D1Database,
       ACCOUNT_AUTH_SECRET: "account-secret-for-cli-tests",
+      OPENAUTH_ISSUER_URL: issuer,
+      OPENAUTH_CLIENT_ID: openAuthClientId,
+      OPENAUTH_AUDIENCE: openAuthClientId,
+      OPENAUTH_BFF_ORIGIN: appOrigin,
+      OPENAUTH_AUTHORITY: authority,
     } satisfies CliAuthEnvironment;
-    const started = await createCliDeviceResponse(
+    const firstStarted = await createCliDeviceResponse(
       env,
-      new Request("https://nulldown.app/api/auth/cli/device", {
+      new Request(`${appOrigin}/api/auth/cli/device`, {
         method: "POST",
-        body: JSON.stringify({ publicKey: keyPair.publicKey, clientName: "test-cli" }),
+        body: JSON.stringify({ publicKey: firstKeyPair.publicKey, clientName: "test-cli" }),
       }),
     );
-    expect(started.status).toBe(201);
-    const device = await responseJson<{
-      deviceCode: string;
-      userCode: string;
-    }>(started);
+    expect(firstStarted.status).toBe(201);
+    const firstDevice = await responseJson<CliDeviceStartResponse>(firstStarted);
+    const secondStarted = await createCliDeviceResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/device`, {
+        method: "POST",
+        body: JSON.stringify({ publicKey: secondKeyPair.publicKey, clientName: "second-cli" }),
+      }),
+    );
+    expect(secondStarted.status).toBe(201);
+    const secondDevice = await responseJson<CliDeviceStartResponse>(secondStarted);
+    expect(firstDevice.verificationUri).toBe(`${appOrigin}/auth/cli`);
+    expect(secondDevice.verificationUri).toBe(`${appOrigin}/auth/cli`);
+    expect(firstDevice.verificationUri).not.toContain("code");
+    expect(secondDevice.verificationUri).not.toContain("code");
+
+    const approve = (userCode: string): Promise<Response> =>
+      approveCliDeviceResponse(
+        env,
+        new Request(`${appOrigin}/api/auth/cli/approve`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `${accessCookieName}=${accessToken}`,
+            Origin: appOrigin,
+          },
+          body: JSON.stringify({ userCode, accountId: "account-1" }),
+        }),
+      );
+
+    const mutatedCode = `${firstDevice.userCode.slice(0, -1)}${
+      firstDevice.userCode.endsWith("2") ? "3" : "2"
+    }`;
+    const mutated = await approve(mutatedCode);
+    expect(mutated.status).toBe(409);
+    await expect(mutated.json()).resolves.toEqual({ error: "invalid_or_expired_cli_code" });
+    expect([...database.tickets.values()].every((ticket) => ticket.approved_at === null)).toBe(true);
+
+    const approved = await approve(firstDevice.userCode);
+    expect(approved.status).toBe(200);
+    await expect(approved.json()).resolves.toEqual({ approved: true, accountId: "account-1" });
+    const tickets = [...database.tickets.values()];
+    expect(tickets[0]?.approved_user_id).toBe("user-1");
+    expect(tickets[1]?.approved_at).toBeNull();
+
     const pending = await pollCliDeviceResponse(
       env,
       new Request("https://nulldown.app/api/auth/cli/poll", {
         method: "POST",
-        body: JSON.stringify({ deviceCode: device.deviceCode }),
+        body: JSON.stringify({ deviceCode: secondDevice.deviceCode }),
       }),
     );
     expect(await responseJson(pending)).toEqual(expect.objectContaining({ status: "pending" }));
 
-    const ticket = [...database.tickets.values()][0]!;
-    ticket.approved_user_id = "user-1";
-    ticket.approved_account_id = "account-1";
-    ticket.approved_at = Date.now();
-    const approved = await pollCliDeviceResponse(
+    const secondTicket = tickets[1]!;
+    secondTicket.expires_at = Date.now();
+    const expired = await approve(secondDevice.userCode);
+    expect(expired.status).toBe(409);
+    await expect(expired.json()).resolves.toEqual({ error: "invalid_or_expired_cli_code" });
+    expect(secondTicket.approved_at).toBeNull();
+
+    const approvedPoll = await pollCliDeviceResponse(
       env,
-      new Request("https://nulldown.app/api/auth/cli/poll", {
+      new Request(`${appOrigin}/api/auth/cli/poll`, {
         method: "POST",
-        body: JSON.stringify({ deviceCode: device.deviceCode }),
+        body: JSON.stringify({ deviceCode: firstDevice.deviceCode }),
       }),
     );
     const approvedBody = await responseJson<{
       status: "approved";
       envelope: Parameters<typeof decryptCliCredentialEnvelope>[0];
-    }>(approved);
+    }>(approvedPoll);
     expect(approvedBody.status).toBe("approved");
     const credential = await decryptCliCredentialEnvelope(
       approvedBody.envelope,
-      keyPair.privateKey,
+      firstKeyPair.privateKey,
     );
     expect(credential.accountId).toBe("account-1");
     expect(credential.accessToken).toMatch(/^ndacc\.v1\./);
 
     const replay = await pollCliDeviceResponse(
       env,
-      new Request("https://nulldown.app/api/auth/cli/poll", {
+      new Request(`${appOrigin}/api/auth/cli/poll`, {
         method: "POST",
-        body: JSON.stringify({ deviceCode: device.deviceCode }),
+        body: JSON.stringify({ deviceCode: firstDevice.deviceCode }),
       }),
     );
     expect(replay.status).toBe(409);
 
     const refreshed = await refreshCliCredentialResponse(
       env,
-      new Request("https://nulldown.app/api/auth/cli/refresh", {
+      new Request(`${appOrigin}/api/auth/cli/refresh`, {
         method: "POST",
         body: JSON.stringify({ refreshToken: credential.refreshToken }),
       }),
     );
+    expect(refreshed.status).toBe(200);
     const refreshedBody = await responseJson<CliCredentialBundleV1>(refreshed);
+    expect(refreshedBody.kind).toBe(CLI_CREDENTIAL_KIND_V1);
+    expect(refreshedBody.version).toBe(1);
+    expect(isCliCredentialBundle(refreshedBody)).toBe(true);
     expect(refreshedBody.refreshToken).not.toBe(credential.refreshToken);
     expect(refreshedBody.accountId).toBe("account-1");
 
-    const revoked = await revokeCliCredentialResponse(
+    const staleRefresh = await refreshCliCredentialResponse(
       env,
-      new Request("https://nulldown.app/api/auth/cli/revoke", {
+      new Request(`${appOrigin}/api/auth/cli/refresh`, {
+        method: "POST",
+        body: JSON.stringify({ refreshToken: credential.refreshToken }),
+      }),
+    );
+    expect(staleRefresh.status).toBe(401);
+
+    const refreshedAgain = await refreshCliCredentialResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/refresh`, {
         method: "POST",
         body: JSON.stringify({ refreshToken: refreshedBody.refreshToken }),
+      }),
+    );
+    expect(refreshedAgain.status).toBe(200);
+    const refreshedAgainBody = await responseJson<CliCredentialBundleV1>(refreshedAgain);
+    expect(isCliCredentialBundle(refreshedAgainBody)).toBe(true);
+
+    const revoked = await revokeCliCredentialResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/revoke`, {
+        method: "POST",
+        body: JSON.stringify({ refreshToken: refreshedAgainBody.refreshToken }),
       }),
     );
     expect(revoked.status).toBe(204);
     const afterRevoke = await refreshCliCredentialResponse(
       env,
-      new Request("https://nulldown.app/api/auth/cli/refresh", {
+      new Request(`${appOrigin}/api/auth/cli/refresh`, {
         method: "POST",
-        body: JSON.stringify({ refreshToken: refreshedBody.refreshToken }),
+        body: JSON.stringify({ refreshToken: refreshedAgainBody.refreshToken }),
       }),
     );
     expect(afterRevoke.status).toBe(401);

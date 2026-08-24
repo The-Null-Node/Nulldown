@@ -1,6 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 
 import {
+  CLI_CREDENTIAL_KIND_V1,
   CLI_CREDENTIAL_ENVELOPE_KIND_V1,
   formatCliUserCode,
   isCliEncryptionPublicJwk,
@@ -193,7 +194,7 @@ const issueBundle = async (
   const credentialId = randomToken(16);
   const access = await issueCliAccessToken(env, ticket.approved_account_id);
   const bundle: CliCredentialBundleV1 = {
-    kind: "nulldown.cli-credential.v1",
+    kind: CLI_CREDENTIAL_KIND_V1,
     version: 1,
     baseUrl: new URL(request.url).origin,
     userId: ticket.approved_user_id,
@@ -264,7 +265,7 @@ export const createCliDeviceResponse = async (
       kind: "nulldown.cli-device.v1",
       deviceCode,
       userCode: formatCliUserCode(userCode),
-      verificationUri: `${new URL(request.url).origin}/auth/cli?code=${encodeURIComponent(formatCliUserCode(userCode))}`,
+      verificationUri: `${new URL(request.url).origin}/auth/cli`,
       expiresAt,
       interval,
     },
@@ -402,6 +403,8 @@ export const refreshCliCredentialResponse = async (
     const access = await issueCliAccessToken(env, credential.account_id);
     return responseJson(
       {
+        kind: CLI_CREDENTIAL_KIND_V1,
+        version: 1,
         credentialId: credential.credential_id,
         userId: credential.user_id,
         accountId: credential.account_id,

@@ -8,9 +8,7 @@ import {
   type OpenAuthSessionState,
 } from "@/lib/auth/openAuthClient";
 import { getAccountSyncState } from "@/lib/auth/accountSyncClient";
-
-const readUserCode = (): string =>
-  new URLSearchParams(window.location.search).get("code")?.trim().toUpperCase() ?? "";
+import { normalizeCliUserCode } from "../../shared/auth/cliDevice";
 
 const approvalMessage = (error: string): string => {
   switch (error) {
@@ -31,11 +29,22 @@ const approvalMessage = (error: string): string => {
 const CliAuthPage: React.FC = () => {
   const [session, setSession] = useState<OpenAuthSessionState | null>(null);
   const [principal, setPrincipal] = useState<OpenAuthPrincipal | null>(null);
+  const [userCode, setUserCode] = useState("");
   const [accountId, setAccountId] = useState("");
   const [pending, setPending] = useState(false);
   const [approved, setApproved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const userCode = readUserCode();
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("code")) return;
+    url.searchParams.delete("code");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -57,8 +66,21 @@ const CliAuthPage: React.FC = () => {
     };
   }, []);
 
+  const normalizedUserCode = normalizeCliUserCode(userCode);
+
+  const signIn = (): void => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("code");
+    beginOpenAuthLogin({
+      pathname: url.pathname,
+      search: url.search,
+      hash: url.hash,
+      assign: (destination) => window.location.assign(destination),
+    });
+  };
+
   const approve = async (): Promise<void> => {
-    if (!principal || !userCode || !accountId.trim() || pending) return;
+    if (!principal || !normalizedUserCode || !accountId.trim() || pending) return;
     setPending(true);
     setError(null);
     try {
@@ -67,7 +89,7 @@ const CliAuthPage: React.FC = () => {
         credentials: "same-origin",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userCode, accountId: accountId.trim() }),
+        body: JSON.stringify({ userCode: normalizedUserCode, accountId: accountId.trim() }),
       });
       const body = (await response.json().catch(() => null)) as {
         error?: unknown;
@@ -84,26 +106,15 @@ const CliAuthPage: React.FC = () => {
     }
   };
 
-  if (!userCode) {
-    return (
-      <main className="flex min-h-dvh items-center justify-center bg-background p-6 text-foreground">
-        <section className="w-full max-w-md space-y-3 rounded-lg border border-border p-6">
-          <h1 className="text-xl font-semibold">Authorize CLI</h1>
-          <p className="text-sm text-muted">The authorization code is missing.</p>
-        </section>
-      </main>
-    );
-  }
-
   if (session?.status === "anonymous") {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-background p-6 text-foreground">
         <section className="w-full max-w-md space-y-4 rounded-lg border border-border p-6">
           <h1 className="text-xl font-semibold">Authorize CLI</h1>
           <p className="text-sm text-muted">
-            Sign in to approve CLI access for code <code>{userCode}</code>.
+            Sign in to approve CLI access. You will enter the authorization code from your terminal after signing in.
           </p>
-          <Button type="button" onClick={() => beginOpenAuthLogin()}>
+          <Button type="button" onClick={signIn}>
             Sign in
           </Button>
         </section>
@@ -138,14 +149,29 @@ const CliAuthPage: React.FC = () => {
           <p className="text-sm text-muted">
             Approve one CLI credential for the account connected to this user.
           </p>
-          <code className="block rounded bg-muted/30 p-2 text-sm">{userCode}</code>
         </div>
         {approved ? (
           <p role="status" className="text-sm text-green-600">
             CLI authorized. Return to your terminal.
           </p>
         ) : (
-          <>
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void approve();
+            }}
+          >
+            <label className="block space-y-2 text-sm" htmlFor="cli-user-code">
+              Authorization code
+              <Input
+                id="cli-user-code"
+                value={userCode}
+                onChange={(event) => setUserCode(event.target.value)}
+                placeholder="ABCD-EFGH-JKLM"
+                autoComplete="off"
+              />
+            </label>
             <label className="block space-y-2 text-sm" htmlFor="cli-account-id">
               Account ID
               <Input
@@ -162,13 +188,12 @@ const CliAuthPage: React.FC = () => {
               </p>
             ) : null}
             <Button
-              type="button"
-              onClick={() => void approve()}
-              disabled={pending || !accountId.trim()}
+              type="submit"
+              disabled={pending || !principal || !normalizedUserCode || !accountId.trim()}
             >
               {pending ? "Authorizing..." : "Authorize CLI"}
             </Button>
-          </>
+          </form>
         )}
       </section>
     </main>

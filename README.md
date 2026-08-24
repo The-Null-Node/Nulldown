@@ -64,8 +64,9 @@ nd diff apply <rootId> --branch <branchId> --insert '0:# Updated title\n\n' --js
 nd branch query <rootId> <branchId> --query "updated title" --top 1 --json
 ```
 
-Authorize the CLI through the signed-in browser and keep the refreshable
-credential in the default private config directory:
+Authorize the CLI through the signed-in browser by opening the printed
+verification URL and entering the printed authorization code. The refreshable
+credential is kept in the default private config directory:
 
 ```bash
 nd auth login
@@ -73,7 +74,8 @@ nd auth status
 nd auth logout
 ```
 
-Use `--no-browser` to print the verification URL without opening it. Set
+Use `--no-browser` to print the verification URL and authorization code
+without opening it. Set
 `ND_AUTH_FILE` or pass `--auth-file` to select another credential file. Direct
 `--token` and `ND_TOKEN` values still take precedence over the stored CLI
 credential.

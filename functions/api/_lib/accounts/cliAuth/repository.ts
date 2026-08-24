@@ -107,9 +107,10 @@ export const approveCliDeviceTicket = (
       `UPDATE auth_cli_device_tickets
        SET approved_user_id = ?, approved_account_id = ?, approved_at = ?
        WHERE ticket_id = ? AND approved_at IS NULL AND redeemed_at IS NULL
+         AND expires_at > ?
        RETURNING ticket_id`,
     )
-    .bind(input.userId, input.accountId, input.approvedAt, input.ticketId)
+    .bind(input.userId, input.accountId, input.approvedAt, input.ticketId, input.approvedAt)
     .first<{ ticket_id: string }>();
 
 /** Inserts the first credential for a device ticket and atomically redeems it. */
