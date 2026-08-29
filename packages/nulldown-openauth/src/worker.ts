@@ -11,6 +11,7 @@ import {
 
 const CODE_EMAIL_COOLDOWN_SECONDS = 60;
 const CODE_EMAIL_COOLDOWN_PREFIX = "openauth:code-email:";
+const DISCOVERY_PATH = "/.well-known/oauth-authorization-server";
 const EMAIL_IDENTITY_PROVIDER_KEY = "email";
 const textEncoder = new TextEncoder();
 
@@ -296,7 +297,31 @@ export interface NulldownOpenAuthWorkerEnvironment {
 }
 
 const unavailable = (reason: string) =>
-  new Response(`OpenAuth service unavailable: ${reason}`, { status: 503 });
+  new Response(`OpenAuth service unavailable: ${reason}`, {
+    status: 503,
+    headers: { "Cache-Control": "no-store" },
+  });
+
+const cacheResponse = (request: Request, response: Response): Response => {
+  const url = new URL(request.url);
+  const cacheSeconds =
+    request.method === "GET" &&
+    response.status === 200 &&
+    !request.url.includes("?") &&
+    url.pathname === DISCOVERY_PATH
+      ? 3600
+      : null;
+  const headers = new Headers(response.headers);
+  headers.set(
+    "Cache-Control",
+    cacheSeconds === null ? "no-store" : `public, max-age=${cacheSeconds}`,
+  );
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+};
 
 const parseClients = (value: string | undefined) => {
   if (!value) return null;
@@ -353,7 +378,7 @@ export const fetchOpenAuthWorker = async (
   try {
     const cooldown = await codeEmailCooldownResponse(request, env.OPENAUTH_KV);
     if (cooldown) return cooldown;
-    return await app.fetch(request);
+    return cacheResponse(request, await app.fetch(request));
   } catch (error) {
     if (error instanceof CodeEmailCooldownError) {
       return new Response("Too many verification code requests. Please wait before trying again.", {

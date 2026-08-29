@@ -52,3 +52,73 @@ index 1b18009bfeaa09f2222e9df760dde0e4eb1d4326..61489d77c3407fc0c978d18b7f2e1939
    for (const [name, value] of Object.entries(input.providers)) {
      const route = new Hono;
      route.use(async (c, next) => {
+diff --git a/dist/esm/keys.js b/dist/esm/keys.js
+--- a/dist/esm/keys.js
++++ b/dist/esm/keys.js
+@@ -68,7 +68,19 @@ async function signingKeys(storage) {
+     alg: signingAlg
+   };
+   await Storage.set(storage, ["signing:key", serialized.id], serialized);
+-  return signingKeys(storage);
++  const privateKey = await importPKCS8(serialized.privateKey, signingAlg);
++  const jwk = await exportJWK(key.publicKey);
++  jwk.kid = serialized.id;
++  jwk.use = "sig";
++  return [{
++    id: serialized.id,
++    alg: signingAlg,
++    created: new Date(serialized.created),
++    expired: void 0,
++    public: key.publicKey,
++    private: privateKey,
++    jwk
++  }, ...results];
+ }
+ async function encryptionKeys(storage) {
+   const results = [];
+@@ -104,7 +116,18 @@ async function encryptionKeys(storage) {
+     alg: encryptionAlg
+   };
+   await Storage.set(storage, ["encryption:key", serialized.id], serialized);
+-  return encryptionKeys(storage);
++  const privateKey = await importPKCS8(serialized.privateKey, encryptionAlg);
++  const jwk = await exportJWK(key.publicKey);
++  jwk.kid = serialized.id;
++  return [{
++    id: serialized.id,
++    alg: encryptionAlg,
++    created: new Date(serialized.created),
++    expired: void 0,
++    public: key.publicKey,
++    private: privateKey,
++    jwk
++  }, ...results];
+ }
+ export {
+   signingKeys,
+diff --git a/dist/esm/storage/cloudflare.js b/dist/esm/storage/cloudflare.js
+--- a/dist/esm/storage/cloudflare.js
++++ b/dist/esm/storage/cloudflare.js
+@@ -23,9 +23,20 @@ function CloudflareStorage(options) {
+           prefix: joinKey([...prefix, ""]),
+           cursor
+         });
++        const names = result.keys.map((key) => key.name);
++        const reads = [];
++        for (let offset = 0; offset < names.length; offset += 100) {
++          reads.push(options.namespace.get(names.slice(offset, offset + 100), "json"));
++        }
++        const values = new Map;
++        for (const chunk of await Promise.all(reads)) {
++          for (const [name, value] of chunk) {
++            values.set(name, value);
++          }
++        }
+         for (const key of result.keys) {
+-          const value = await options.namespace.get(key.name, "json");
+-          if (value !== null) {
++          const value = values.get(key.name);
++          if (value !== null && value !== void 0) {
+             yield [splitKey(key.name), value];
+           }
+         }

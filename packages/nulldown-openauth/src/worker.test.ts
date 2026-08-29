@@ -28,7 +28,12 @@ class MemoryKv {
   private readonly values = new Map<string, { value: string; expiresAt: number | null }>();
   private now = Date.now();
 
-  async get(key: string, type?: "json"): Promise<unknown> {
+  async get(key: string | string[], type?: "json"): Promise<unknown> {
+    if (Array.isArray(key)) {
+      return new Map(
+        await Promise.all(key.map(async (name) => [name, await this.get(name, type)] as const)),
+      );
+    }
     const entry = this.values.get(key);
     if (!entry) return null;
     if (entry.expiresAt !== null && entry.expiresAt <= this.now) {
@@ -490,6 +495,61 @@ describe("Nulldown OpenAuth Worker foundation", () => {
     if (exchanged.err) throw exchanged.err;
     expect(exchanged.tokens.expiresIn).toBeGreaterThan(295);
     expect(exchanged.tokens.expiresIn).toBeLessThanOrEqual(300);
+  });
+
+  it("caches only exact successful discovery responses", async () => {
+    const harness = createWorkerHarness();
+    const discovery = await harness.dispatch(
+      new Request(`${issuerUrl}/.well-known/oauth-authorization-server`),
+    );
+    expect(discovery.status).toBe(200);
+    expect(discovery.headers.get("Cache-Control")).toBe("public, max-age=3600");
+
+    const jwks = await harness.dispatch(new Request(`${issuerUrl}/.well-known/jwks.json`));
+    expect(jwks.status).toBe(200);
+    expect(jwks.headers.get("Cache-Control")).toBe("no-store");
+
+    const discoveryWithQuery = await harness.dispatch(
+      new Request(`${issuerUrl}/.well-known/oauth-authorization-server?cache-bust=1`),
+    );
+    expect(discoveryWithQuery.status).toBe(200);
+    expect(discoveryWithQuery.headers.get("Cache-Control")).toBe("no-store");
+
+    const discoveryWithEmptyQuery = await harness.dispatch(
+      new Request(`${issuerUrl}/.well-known/oauth-authorization-server?`),
+    );
+    expect(discoveryWithEmptyQuery.status).toBe(200);
+    expect(discoveryWithEmptyQuery.headers.get("Cache-Control")).toBe("no-store");
+
+    const authorization = await harness.client.authorize(redirectUri, "code", { pkce: true });
+    const authorize = await harness.dispatch(authorization.url);
+    expect(authorize.status).toBe(302);
+    expect(authorize.headers.get("Cache-Control")).toBe("no-store");
+
+    const provider = await harness.dispatch(
+      new Request(`${issuerUrl}${authorize.headers.get("location")}`, {
+        headers: { cookie: cookieFrom(authorize) },
+      }),
+    );
+    expect(provider.status).toBe(200);
+    expect(provider.headers.get("Cache-Control")).toBe("no-store");
+
+    const tokenError = await harness.dispatch(
+      new Request(`${issuerUrl}/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "authorization_code", code: "unknown" }),
+      }),
+    );
+    expect(tokenError.status).toBe(400);
+    expect(tokenError.headers.get("Cache-Control")).toBe("no-store");
+
+    const unavailable = await openAuthWorker.fetch(
+      new Request(`${issuerUrl}/.well-known/oauth-authorization-server`),
+      {},
+    );
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("reuses the same D1 identity after the cooldown expires", async () => {
