@@ -8,7 +8,20 @@ import {
   type OpenAuthSessionState,
 } from "@/lib/auth/openAuthClient";
 import { getAccountSyncState } from "@/lib/auth/accountSyncClient";
+import { signLocalDeviceDelegation } from "@/lib/void/vault/passkeyVault";
 import { normalizeCliUserCode } from "../../shared/auth/cliDevice";
+
+interface PreparedAuthoringTicket {
+  credentialId: string;
+  expiresAt: number;
+  delegateSigningPublicJwk: JsonWebKey;
+}
+
+interface PreparedCliTicket {
+  accountId: string;
+  clientName: string | null;
+  authoring: PreparedAuthoringTicket | null;
+}
 
 const approvalMessage = (error: string): string => {
   switch (error) {
@@ -20,6 +33,8 @@ const approvalMessage = (error: string): string => {
       return "This CLI authorization code was already approved for another account.";
     case "cli_code_redeemed":
       return "This CLI authorization code has already been used.";
+    case "invalid_cli_delegation":
+      return "The CLI authoring approval could not be verified. Start nd auth login again.";
     default:
       return "The CLI authorization could not be completed.";
   }
@@ -32,6 +47,7 @@ const CliAuthPage: React.FC = () => {
   const [userCode, setUserCode] = useState("");
   const [accountId, setAccountId] = useState("");
   const [pending, setPending] = useState(false);
+  const [prepared, setPrepared] = useState<PreparedCliTicket | null>(null);
   const [approved, setApproved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,28 +95,69 @@ const CliAuthPage: React.FC = () => {
     });
   };
 
-  const approve = async (): Promise<void> => {
+  const prepare = async (): Promise<void> => {
     if (!principal || !normalizedUserCode || !accountId.trim() || pending) return;
     setPending(true);
     setError(null);
     try {
-      const response = await fetch("/api/auth/cli/approve", {
+      const response = await fetch("/api/auth/cli/prepare", {
         method: "POST",
         credentials: "same-origin",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userCode: normalizedUserCode, accountId: accountId.trim() }),
       });
-      const body = (await response.json().catch(() => null)) as {
-        error?: unknown;
-      } | null;
+      const body = (await response.json().catch(() => null)) as
+        | (PreparedCliTicket & { error?: unknown })
+        | null;
+      if (!response.ok) {
+        setError(approvalMessage(typeof body?.error === "string" ? body.error : ""));
+        return;
+      }
+      if (body?.accountId !== accountId.trim()) {
+        setError("The CLI authorization could not be completed.");
+        return;
+      }
+      setPrepared(body);
+    } catch {
+      setError("The authorization service is unavailable. Try again.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const approve = async (): Promise<void> => {
+    if (!principal || !prepared || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const delegation = prepared.authoring
+        ? await signLocalDeviceDelegation({
+            accountId: prepared.accountId,
+            credentialId: prepared.authoring.credentialId,
+            delegateSigningPublicJwk: prepared.authoring.delegateSigningPublicJwk,
+            expiresAt: prepared.authoring.expiresAt,
+          })
+        : undefined;
+      const response = await fetch("/api/auth/cli/approve", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userCode: normalizedUserCode,
+          accountId: prepared.accountId,
+          ...(delegation ? { delegation } : {}),
+        }),
+      });
+      const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
       if (!response.ok) {
         setError(approvalMessage(typeof body?.error === "string" ? body.error : ""));
         return;
       }
       setApproved(true);
-    } catch {
-      setError("The authorization service is unavailable. Try again.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The CLI authorization could not be completed.");
     } finally {
       setPending(false);
     }
@@ -159,7 +216,7 @@ const CliAuthPage: React.FC = () => {
             className="space-y-4"
             onSubmit={(event) => {
               event.preventDefault();
-              void approve();
+              void (prepared ? approve() : prepare());
             }}
           >
             <label className="block space-y-2 text-sm" htmlFor="cli-user-code">
@@ -167,7 +224,10 @@ const CliAuthPage: React.FC = () => {
               <Input
                 id="cli-user-code"
                 value={userCode}
-                onChange={(event) => setUserCode(event.target.value)}
+                onChange={(event) => {
+                  setUserCode(event.target.value);
+                  setPrepared(null);
+                }}
                 placeholder="ABCD-EFGH-JKLM"
                 autoComplete="off"
               />
@@ -177,7 +237,10 @@ const CliAuthPage: React.FC = () => {
               <Input
                 id="cli-account-id"
                 value={accountId}
-                onChange={(event) => setAccountId(event.target.value)}
+                onChange={(event) => {
+                  setAccountId(event.target.value);
+                  setPrepared(null);
+                }}
                 placeholder="Account ID"
                 autoComplete="off"
               />
@@ -187,11 +250,23 @@ const CliAuthPage: React.FC = () => {
                 {error}
               </p>
             ) : null}
+            {prepared ? (
+              <div className="space-y-1 rounded-md border border-border p-3 text-sm">
+                <p>
+                  CLI: <strong>{prepared.clientName || "Unnamed CLI"}</strong>
+                </p>
+                {prepared.authoring ? (
+                  <p>This CLI will receive delegated authoring access from the unlocked local vault.</p>
+                ) : (
+                  <p>This CLI requested read-only access.</p>
+                )}
+              </div>
+            ) : null}
             <Button
               type="submit"
               disabled={pending || !principal || !normalizedUserCode || !accountId.trim()}
             >
-              {pending ? "Authorizing..." : "Authorize CLI"}
+              {pending ? "Authorizing..." : prepared ? "Authorize CLI" : "Review CLI"}
             </Button>
           </form>
         )}

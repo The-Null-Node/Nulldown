@@ -17,6 +17,13 @@ import {
   type AccountRecoveryPayloadV1,
 } from "../../../../shared/auth/recovery";
 import { fromBase64, toBase64 } from "../crypto/base64";
+import {
+  DROP_DEVICE_DELEGATION_SCHEMA,
+  DROP_DEVICE_DELEGATION_VERSION,
+  isDropDelegateSigningPublicJwk,
+  serializeDropDeviceDelegationForSignature,
+  type DropDeviceDelegation,
+} from "../../../../shared/drop/deviceDelegation";
 
 const DEFAULT_VAULT_RECORD_KEY = "nulldown_account_vault_v1";
 const DEFAULT_UNLOCK_TTL_MS = 8 * 60 * 60 * 1000;
@@ -121,6 +128,14 @@ export interface PasskeyVaultOptions {
   unlockTtlMs?: number;
 }
 
+/** Public ticket details the unlocked account vault signs for a CLI device. */
+export interface DeviceDelegationRequest {
+  accountId: string;
+  credentialId: string;
+  delegateSigningPublicJwk: JsonWebKey;
+  expiresAt: number;
+}
+
 let activeOpenAuthUserId: string | null = null;
 
 /** Sets the browser user allowed to activate user-bound local V1 key material. */
@@ -180,6 +195,55 @@ export class PasskeyVault {
       encryptionPrivateKey,
       signingPublicKey,
       signingPrivateKey,
+    };
+  }
+
+  /** Signs a bounded CLI delegation without exporting either account private key. */
+  async signDeviceDelegation(
+    input: DeviceDelegationRequest,
+  ): Promise<DropDeviceDelegation> {
+    if (!isDropDelegateSigningPublicJwk(input.delegateSigningPublicJwk)) {
+      throw new Error("CLI authoring key is invalid.");
+    }
+    if (!Number.isFinite(input.expiresAt) || input.expiresAt <= Date.now()) {
+      throw new Error("CLI authorization has expired.");
+    }
+
+    const record = await this.loadVaultRecord();
+    if (!record) throw new Error("Unlock the matching local account vault to authorize this CLI.");
+    this.assertRecordOwner(record);
+    const unlockedRecord = await this.ensureVaultUnlocked(record);
+    if (unlockedRecord.accountId !== input.accountId) {
+      throw new Error("The unlocked local vault does not match this CLI account.");
+    }
+
+    const signingPrivateKey = await this.importSigningPrivateKey(
+      unlockedRecord.signingPrivateJwk,
+    );
+    const issuedAt = Date.now();
+    const signable = {
+      schema: DROP_DEVICE_DELEGATION_SCHEMA,
+      version: DROP_DEVICE_DELEGATION_VERSION,
+      accountId: unlockedRecord.accountId,
+      credentialId: input.credentialId,
+      delegateSigningPublicJwk: input.delegateSigningPublicJwk,
+      encryptionKid: unlockedRecord.encryptionKid,
+      encryptionPublicJwk: unlockedRecord.encryptionPublicJwk,
+      issuedAt,
+      expiresAt: input.expiresAt,
+    };
+    const signature = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      signingPrivateKey,
+      new TextEncoder().encode(serializeDropDeviceDelegationForSignature(signable)),
+    );
+    return {
+      ...signable,
+      signature: {
+        kid: unlockedRecord.signingKid,
+        alg: "ECDSA_P256_SHA256",
+        sig: toBase64(signature),
+      },
     };
   }
 
@@ -771,6 +835,10 @@ export const createPasskeyVault = (options: PasskeyVaultOptions = {}) =>
 const defaultPasskeyVault = createPasskeyVault();
 
 export const getUnlockedVault = () => defaultPasskeyVault.getUnlockedVault();
+
+/** Signs a CLI delegation with the current unlocked local account vault. */
+export const signLocalDeviceDelegation = (input: DeviceDelegationRequest) =>
+  defaultPasskeyVault.signDeviceDelegation(input);
 
 export const hasLocalAccountVault = () => defaultPasskeyVault.hasVaultRecord();
 

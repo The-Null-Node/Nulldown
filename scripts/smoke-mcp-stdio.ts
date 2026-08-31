@@ -86,6 +86,13 @@ const main = async () => {
     if (missingTools.length > 0) {
       fail("MCP tools/list missed expected tools.", { missingTools, toolNames });
     }
+    const dropCreate = listed.tools.find((tool) => tool.name === "drop_create");
+    if (
+      !dropCreate?.description?.includes("ND_AUTH_FILE") ||
+      !dropCreate.description.includes("legacyPlaintext")
+    ) {
+      fail("MCP drop_create did not expose account-authoring guidance.", { dropCreate });
+    }
 
     for (const identity of [{ eventId: "retry-1" }, { createdAt: 1 }]) {
       requireInputValidationError(
@@ -214,8 +221,8 @@ const main = async () => {
         name: "branch_content",
         arguments: {
           baseUrl: process.env.ND_BASE_URL ?? "https://nulldown.app",
-          rootId: "UubhvMyw6N3a",
-          branchId: "clone_account:91c993ac-2c8c-46d6-aaec-5d31e610a2b7",
+          rootId: "ofBVsjWZ1Lc3",
+          branchId: "clone_account:2d89645f-f4b5-40be-a890-9e279ff4c46b",
           format: "full",
           maxTokens: 8000,
         },

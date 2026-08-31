@@ -30,15 +30,27 @@ Use `nulldown-mcp` as a stdio MCP command. For example:
       "command": "nulldown-mcp",
       "env": {
         "ND_BASE_URL": "https://nulldown.app",
-        "ND_ACCOUNT_ID": "<account-id>",
-        "ND_CLIENT_ID": "<stable-client-id>"
+        "ND_AUTH_FILE": "/absolute/path/to/opencode-mcp-auth.json",
+        "ND_MCP_LOG_LEVEL": "info"
       }
     }
   }
 }
 ```
 
-Add `ND_TOKEN` when the target API requires a bearer session. Protected diff writes may also require `ND_DIFF_AUTH_TOKEN`, exported with `nd diff token export`; `DIFF_WEBHOOK_SECRET` is supported for webhook-style signing.
+Create the dedicated credential while the MCP server is stopped:
+
+```bash
+env -u ND_TOKEN nd --auth-file /absolute/path/to/opencode-mcp-auth.json auth login --name opencode-nulldown-mcp
+```
+
+The credential directory is private (`0700`) and the credential file is private (`0600`). One MCP process must own each credential file because refresh-token rotation is single-use. `ND_TOKEN` remains an authentication-only compatibility option; it cannot create an account-owned sealed drop. `ND_ACCOUNT_ID` is only for local or development APIs that explicitly enable the insecure account header. `ND_MCP_LOG_LEVEL` accepts `silent`, `error`, `warn`, `info`, or `debug`; stdio reserves stdout for JSON-RPC and diagnostics use stderr only.
+
+## Account-Owned Creation
+
+With an authoring-capable `ND_AUTH_FILE`, `drop_create` seals a delegated account-owned envelope by default. Its `visibility` input accepts `private`, `unlisted`, or `public` and defaults to `unlisted`; public and unlisted envelopes use the public-only `VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK` escrow configuration. Never set that variable to a private JWK.
+
+An older auth file without local authoring material fails deterministically with a request to run `nd auth login` again. `ND_TOKEN` alone is not authoring authority and receives the same error. For a deliberate legacy plaintext write, set `legacyPlaintext: true`; MCP emits a stderr warning and the resulting authenticated plaintext drop will not enter Remote Library.
 
 For an exact `diff_apply` retry, provide `eventId` and `createdAt` together with
 the original operations and metadata. The tool rejects partial identities before

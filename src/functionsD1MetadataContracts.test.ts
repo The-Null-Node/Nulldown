@@ -2,7 +2,17 @@ import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { NULLDOWN_ACCOUNT_ID_HEADER, type DropBranchRecord, type DropSnapshotRecord } from "../shared/drop/branch";
 import type { DropDiffEvent } from "../shared/drop/diff";
 import type { NullplugUiResponseFact } from "../shared/nullplug/ui";
-import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
+import {
+  DROP_ENVELOPE_SCHEMA_V1,
+  serializeDropEnvelopeForDeviceSignature,
+  toDropEnvelopeSignable,
+  type DropEnvelopeV1,
+} from "../shared/drop/types";
+import {
+  serializeDropDeviceDelegationForSignature,
+  toDropDeviceDelegationSignable,
+  type DropDeviceDelegation,
+} from "../shared/drop/deviceDelegation";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
 import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
@@ -111,6 +121,94 @@ class MemoryR2Bucket {
   }
 }
 
+const toBase64Url = (bytes: ArrayBuffer): string => {
+  let binary = "";
+  new Uint8Array(bytes).forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+};
+
+const createMismatchedDelegatedEnvelope = async (): Promise<{
+  envelope: DropEnvelopeV1;
+  accountPublicJwk: JsonWebKey;
+  encryptionPublicJwk: JsonWebKey;
+}> => {
+  const accountPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const delegatePair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const encryptionPair = await crypto.subtle.generateKey(
+    {
+      name: "RSA-OAEP",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["encrypt", "decrypt"],
+  );
+  const accountPublicJwk = await crypto.subtle.exportKey("jwk", accountPair.publicKey);
+  const delegateSigningPublicJwk = await crypto.subtle.exportKey("jwk", delegatePair.publicKey);
+  const exportedEncryptionPublicJwk = await crypto.subtle.exportKey("jwk", encryptionPair.publicKey);
+  const encryptionPublicJwk = {
+    kty: exportedEncryptionPublicJwk.kty,
+    n: exportedEncryptionPublicJwk.n,
+    e: exportedEncryptionPublicJwk.e,
+  };
+  const delegation: DropDeviceDelegation = {
+    schema: "nulldown.drop-device-delegation.v1",
+    version: 1,
+    accountId: "account_a",
+    credentialId: "A".repeat(22),
+    delegateSigningPublicJwk,
+    encryptionKid: "enc_a",
+    encryptionPublicJwk: { kty: "RSA", n: "A".repeat(342), e: "AQAB" },
+    issuedAt: Date.now() - 1,
+    expiresAt: Date.now() + 60_000,
+    signature: { kid: "account_a", alg: "ECDSA_P256_SHA256", sig: "placeholder" },
+  };
+  delegation.signature.sig = toBase64Url(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      accountPair.privateKey,
+      new TextEncoder().encode(
+        serializeDropDeviceDelegationForSignature(toDropDeviceDelegationSignable(delegation)),
+      ),
+    ),
+  );
+  const envelope: DropEnvelopeV1 = {
+    schema: DROP_ENVELOPE_SCHEMA_V1,
+    version: 1,
+    createdAt: Date.now(),
+    accountId: "account_a",
+    visibility: "private",
+    cipher: { alg: "A256GCM", iv: "iv", ciphertext: "ciphertext-secret" },
+    keyEnvelope: { mode: "account-vault-rsa-oaep", kid: "enc_a", wrappedKey: "wrapped-secret" },
+    deviceSignerPublicJwk: delegateSigningPublicJwk,
+    deviceDelegation: delegation,
+    signatures: {
+      device: { kid: "delegate", alg: "ECDSA_P256_SHA256", sig: "placeholder" },
+    },
+  };
+  envelope.signatures.device.sig = toBase64Url(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      delegatePair.privateKey,
+      new TextEncoder().encode(
+        serializeDropEnvelopeForDeviceSignature(toDropEnvelopeSignable(envelope)),
+      ),
+    ),
+  );
+  return { envelope, accountPublicJwk, encryptionPublicJwk };
+};
+
 class MemoryD1Statement {
   private params: unknown[] = [];
 
@@ -152,7 +250,15 @@ class MemoryD1Database {
   readonly priorityFacts = new Map<string, { fact_json: string; root_drop_id: string; branch_id: string; resolver_id: string; created_at: number }>();
   readonly nullmemRecords = new Map<string, { record_json: string; root_drop_id: string; branch_id: string; record_kind: string; created_at: number; priority: number }>();
   readonly aliases = new Map<string, { full_id: string }>();
-  readonly drops = new Map<string, { id: string; visibility: string }>();
+  readonly drops = new Map<string, { id: string; visibility: string; owner_account_id: string | null }>();
+  readonly accounts = new Map<string, {
+    account_id: string;
+    signing_public_jwk: string;
+    encryption_kid: string | null;
+    encryption_public_jwk: string | null;
+    created_at: number;
+    updated_at: number;
+  }>();
   readonly publicDrops = new Map<string, { id: string; created_at: number; updated_at: number }>();
   readonly writers = new Map<string, { branch_id: string }>();
 
@@ -184,6 +290,7 @@ class MemoryD1Database {
       this.drops.set(String(params[0]), {
         id: String(params[0]),
         visibility: String(params[5]),
+        owner_account_id: params[4] === null ? null : String(params[4]),
       });
       return;
     }
@@ -337,6 +444,10 @@ class MemoryD1Database {
   }
 
   first(sql: string, params: unknown[]): Record<string, unknown> | null {
+    if (sql.includes("FROM accounts")) {
+      return this.accounts.get(String(params[0])) ?? null;
+    }
+
     if (sql.includes("FROM branches")) {
       return this.branches.get(`${params[0]}/${params[1]}`) ?? null;
     }
@@ -386,6 +497,17 @@ class MemoryD1Database {
   }
 
   all(sql: string, params: unknown[]): Record<string, unknown>[] {
+    if (sql.includes("FROM drops") && sql.includes("owner_account_id IS NOT NULL")) {
+      const afterId = sql.includes("id > ?") ? String(params[0]) : null;
+      const limit = Number(params.at(-1));
+      return [...this.drops.values()]
+        .filter((drop) => drop.owner_account_id !== null)
+        .filter((drop) => !afterId || drop.id > afterId)
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .slice(0, limit)
+        .map((drop) => ({ id: drop.id }));
+    }
+
     if (sql.includes("FROM branch_snapshots")) {
       return [...this.snapshots.entries()]
         .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/`))
@@ -1532,6 +1654,117 @@ describe("D1 metadata contracts", () => {
     expect(db.writers.get(`${rootDropId}/account:acct_1`)?.branch_id).toBe(
       branch.branchId,
     );
+  });
+
+  it("backfills only account-owned rows for the account-library projection", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const rootDropId = createBranch().rootDropId;
+
+    await bucket.put(
+      rootDropId,
+      JSON.stringify({
+        schema: DROP_ENVELOPE_SCHEMA_V1,
+        version: 1,
+        createdAt: 1000,
+        accountId: "acct_1",
+        visibility: "unlisted",
+        metadata: { topic: "library" },
+        cipher: { alg: "A256GCM", iv: "iv", ciphertext: "ciphertext" },
+        keyEnvelope: {
+          mode: "account-vault-rsa-oaep",
+          kid: "kid_1",
+          wrappedKey: "wrapped",
+        },
+        signatures: {
+          device: { kid: "kid_1", alg: "ECDSA_P256_SHA256", sig: "sig" },
+        },
+      }),
+      { httpMetadata: { contentType: "application/json" } },
+    );
+    db.drops.set(rootDropId, {
+      id: rootDropId,
+      visibility: "unlisted",
+      owner_account_id: "acct_1",
+    });
+
+    const response = await backfillD1Metadata(
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        METADATA_BACKFILL_TOKEN: "secret",
+      },
+      new Request(
+        "https://example.test/api/metadata/backfill?mode=account-library&limit=1",
+        {
+          method: "POST",
+          headers: { Authorization: "Bearer secret" },
+        },
+      ),
+    );
+    const body = (await response.json()) as {
+      mode: string;
+      stats: Record<string, number>;
+      cursor: string | null;
+      truncated: boolean;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.mode).toBe("account-library");
+    expect(body.stats.scanned).toBe(1);
+    expect(body.stats.skipped).toBe(1);
+    expect(body.cursor).toBe(rootDropId);
+    expect(body.truncated).toBe(true);
+  });
+
+  it("skips a backfill envelope whose delegated recipient differs from the account pin without disclosing sealed data", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const { envelope, accountPublicJwk, encryptionPublicJwk } =
+      await createMismatchedDelegatedEnvelope();
+    const dropId = "RecipientMismatch123";
+
+    await bucket.put(dropId, JSON.stringify(envelope), {
+      httpMetadata: { contentType: "application/json" },
+    });
+    db.drops.set(dropId, {
+      id: dropId,
+      visibility: "private",
+      owner_account_id: "account_a",
+    });
+    db.accounts.set("account_a", {
+      account_id: "account_a",
+      signing_public_jwk: JSON.stringify(accountPublicJwk),
+      encryption_kid: "enc_a",
+      encryption_public_jwk: JSON.stringify(encryptionPublicJwk),
+      created_at: 1,
+      updated_at: 1,
+    });
+
+    const response = await backfillD1Metadata(
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        METADATA_BACKFILL_TOKEN: "secret",
+      },
+      new Request(
+        "https://example.test/api/metadata/backfill?mode=account-library",
+        {
+          method: "POST",
+          headers: { Authorization: "Bearer secret" },
+        },
+      ),
+    );
+    const body = (await response.json()) as {
+      stats: { accountLibraryUpserted: number; accountLibrarySkipped: Record<string, number> };
+    };
+    const serialized = JSON.stringify(body);
+
+    expect(response.status).toBe(200);
+    expect(body.stats.accountLibraryUpserted).toBe(0);
+    expect(body.stats.accountLibrarySkipped.expired_or_untrusted).toBe(1);
+    expect(serialized).not.toContain("ciphertext-secret");
+    expect(serialized).not.toContain("wrapped-secret");
   });
 
   it("backfills R2 resolved heap sidecars into compact v2 D1 rows", async () => {

@@ -9,6 +9,10 @@ import {
   setActiveVaultUser,
   type UnlockedVault,
 } from "./passkeyVault";
+import {
+  serializeDropDeviceDelegationForSignature,
+  toDropDeviceDelegationSignable,
+} from "../../../../shared/drop/deviceDelegation";
 
 interface LocalStorageMock {
   getItem: (key: string) => string | null;
@@ -369,6 +373,49 @@ describe("passkey vault", () => {
       "No local account is available to sync",
     );
     await expect(vault.hasVaultRecord()).resolves.toBe(false);
+  });
+
+  it("signs a cryptographically valid delegation only for the matching unlocked vault", async () => {
+    installIndexedDbWindow(createLocalStorageMock());
+    const vault = createPasskeyVault({ storageKey: nextStorageKey() });
+    const unlocked = await vault.getUnlockedVault();
+    const delegate = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    )) as CryptoKeyPair;
+    const delegateSigningPublicJwk = await crypto.subtle.exportKey("jwk", delegate.publicKey);
+    const delegation = await vault.signDeviceDelegation({
+      accountId: unlocked.accountId,
+      credentialId: "credential-1",
+      delegateSigningPublicJwk,
+      expiresAt: Date.now() + 60_000,
+    });
+    const signature = Uint8Array.from(atob(delegation.signature.sig), (value) =>
+      value.charCodeAt(0),
+    );
+
+    await expect(
+      crypto.subtle.verify(
+        { name: "ECDSA", hash: "SHA-256" },
+        unlocked.signingPublicKey,
+        signature,
+        new TextEncoder().encode(
+          serializeDropDeviceDelegationForSignature(
+            toDropDeviceDelegationSignable(delegation),
+          ),
+        ),
+      ),
+    ).resolves.toBe(true);
+    expect(JSON.stringify(delegation)).not.toContain('"d"');
+    await expect(
+      vault.signDeviceDelegation({
+        accountId: "foreign-account",
+        credentialId: "credential-1",
+        delegateSigningPublicJwk,
+        expiresAt: Date.now() + 60_000,
+      }),
+    ).rejects.toThrow("does not match");
   });
 
   it("atomically preserves a different local account before activating recovered V1 keys", async () => {

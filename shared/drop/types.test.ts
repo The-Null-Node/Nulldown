@@ -5,7 +5,9 @@ import {
   isDropEnvelopeV1,
   isDropPayload,
   serializeCanonicalJson,
+  serializeDropEnvelopeForDeviceSignature,
   serializeDropEnvelopeForProviderSignature,
+  toDropEnvelopeSignable,
   type DropEnvelopeV1,
 } from "./types";
 
@@ -131,6 +133,42 @@ describe("drop types", () => {
     };
 
     expect(serializeCanonicalJson(value)).toBe('{"a":{"c":3,"d":2},"b":1}');
+  });
+
+  it("preserves direct envelope signature bytes when delegation is absent", () => {
+    const envelope: DropEnvelopeV1 = {
+      schema: DROP_ENVELOPE_SCHEMA_V1,
+      version: DROP_ENVELOPE_VERSION_V1,
+      createdAt: 123,
+      accountId: "account-1",
+      cipher: { alg: "A256GCM", iv: "iv", ciphertext: "cipher" },
+      keyEnvelope: {
+        mode: "account-vault-rsa-oaep",
+        kid: "enc-1",
+        wrappedKey: "wrapped",
+      },
+      deviceSignerPublicJwk: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+      signatures: {
+        device: { kid: "sig-1", alg: "ECDSA_P256_SHA256", sig: "signature" },
+      },
+    };
+    const legacyBytes = serializeCanonicalJson({
+      schema: "nmdn.drop.v1",
+      version: 1,
+      createdAt: 123,
+      accountId: "account-1",
+      cipher: { alg: "A256GCM", iv: "iv", ciphertext: "cipher" },
+      keyEnvelope: {
+        mode: "account-vault-rsa-oaep",
+        kid: "enc-1",
+        wrappedKey: "wrapped",
+      },
+      deviceSignerPublicJwk: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+    });
+
+    expect(serializeDropEnvelopeForDeviceSignature(toDropEnvelopeSignable(envelope))).toBe(
+      legacyBytes,
+    );
   });
 
   it("provider signature payload includes only device signature", () => {

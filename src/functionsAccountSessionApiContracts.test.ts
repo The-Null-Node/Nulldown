@@ -8,12 +8,27 @@ import {
   resolveAuthenticatedAccountId,
   verifyAccountSessionToken,
 } from "../functions/api/_lib/accounts/session/auth";
+import { serializeCanonicalJson } from "../shared/drop/types";
 
 const crypto = webcrypto;
 const textEncoder = new TextEncoder();
 const accountId = "acct-session-contract";
 const accountRecordKey = `${ACCOUNT_RECORD_PREFIX}${accountId}.json`;
 const accountSecret = "account-session-contract-secret";
+
+const signAccountToken = async (payload: Record<string, unknown>): Promise<string> => {
+  const encodedPayload = toBase64Url(textEncoder.encode(JSON.stringify(payload)));
+  const signingInput = `ndacc.v1.${encodedPayload}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    textEncoder.encode(accountSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, textEncoder.encode(signingInput));
+  return `${signingInput}.${toBase64Url(new Uint8Array(signature))}`;
+};
 
 interface StoredObject {
   value: string;
@@ -75,6 +90,8 @@ class MemoryR2Bucket {
 interface AccountRow {
   account_id: string;
   signing_public_jwk: string;
+  encryption_kid?: string | null;
+  encryption_public_jwk?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -126,6 +143,19 @@ class MemoryD1Database {
   }
 
   run(sql: string, params: unknown[]): void {
+    if (sql.includes("UPDATE accounts")) {
+      const account = String(params[3]);
+      const existing = this.accounts.get(account);
+      if (existing && !existing.encryption_kid && !existing.encryption_public_jwk) {
+        this.accounts.set(account, {
+          ...existing,
+          encryption_kid: String(params[0]),
+          encryption_public_jwk: String(params[1]),
+          updated_at: Number(params[2]),
+        });
+      }
+      return;
+    }
     if (!sql.includes("INSERT INTO accounts")) return;
 
     const account = String(params[0]);
@@ -137,8 +167,10 @@ class MemoryD1Database {
     this.accounts.set(account, {
       account_id: account,
       signing_public_jwk: String(params[1]),
-      created_at: Number(params[2]),
-      updated_at: Number(params[3]),
+      encryption_kid: params[2] === null ? null : String(params[2]),
+      encryption_public_jwk: params[3] === null ? null : String(params[3]),
+      created_at: Number(params[4]),
+      updated_at: Number(params[5]),
     });
   }
 
@@ -150,8 +182,14 @@ class MemoryD1Database {
 
 interface AccountProof {
   publicJwk: JsonWebKey;
+  keyPair: CryptoKeyPair;
   signedAt: number;
   signature: string;
+}
+
+interface EncryptionRecipient {
+  encryptionKid: string;
+  encryptionPublicJwk: JsonWebKey;
 }
 
 const toBase64Url = (input: Uint8Array): string => {
@@ -165,13 +203,17 @@ const toBase64Url = (input: Uint8Array): string => {
 const createProof = async (
   proofAccountId = accountId,
   signedAt = Date.now(),
+  recipient?: EncryptionRecipient,
+  keyPair?: CryptoKeyPair,
 ): Promise<AccountProof> => {
-  const pair = await crypto.subtle.generateKey(
+  const pair = keyPair ?? (await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
     ["sign", "verify"],
-  );
-  const message = `nulldown-account-auth\n${proofAccountId}\n${signedAt}`;
+  )) as CryptoKeyPair;
+  const message = recipient
+    ? `nulldown-account-auth\n${proofAccountId}\n${signedAt}\n${serializeCanonicalJson(recipient)}`
+    : `nulldown-account-auth\n${proofAccountId}\n${signedAt}`;
   const signature = await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     pair.privateKey,
@@ -180,8 +222,27 @@ const createProof = async (
 
   return {
     publicJwk: await crypto.subtle.exportKey("jwk", pair.publicKey),
+    keyPair: pair,
     signedAt,
     signature: toBase64Url(new Uint8Array(signature)),
+  };
+};
+
+const createRecipient = async (kid = "enc_recipient"): Promise<EncryptionRecipient> => {
+  const pair = (await crypto.subtle.generateKey(
+    {
+      name: "RSA-OAEP",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["encrypt", "decrypt"],
+  )) as CryptoKeyPair;
+  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  return {
+    encryptionKid: kid,
+    encryptionPublicJwk: { kty: "RSA", n: publicJwk.n, e: publicJwk.e },
   };
 };
 
@@ -208,11 +269,16 @@ const postSession = async (
     env: createEnv(bucket, database),
   } as unknown as Parameters<typeof onRequestPost>[0]);
 
-const requestBody = (proof: AccountProof, requestAccountId = accountId) => ({
+const requestBody = (
+  proof: AccountProof,
+  requestAccountId = accountId,
+  recipient?: EncryptionRecipient,
+) => ({
   accountId: requestAccountId,
   signingPublicJwk: proof.publicJwk,
   signedAt: proof.signedAt,
   signature: proof.signature,
+  ...(recipient ? recipient : {}),
 });
 
 describe("functions account session API contracts", () => {
@@ -221,7 +287,10 @@ describe("functions account session API contracts", () => {
     const database = new MemoryD1Database();
     const proof = await createProof();
 
-    const response = await postSession(bucket, database, requestBody(proof));
+    const response = await postSession(bucket, database, {
+      ...requestBody(proof),
+      credentialId: "AAAAAAAAAAAAAAAAAAAAAA",
+    });
     const body = (await response.json()) as { accountId: string; token: string };
     const r2Record = JSON.parse(bucket.text(accountRecordKey) ?? "null");
     const d1Record = database.account(accountId);
@@ -229,9 +298,11 @@ describe("functions account session API contracts", () => {
     expect(response.status).toBe(200);
     expect(body.accountId).toBe(accountId);
     expect(body.token).toMatch(/^ndacc\.v1\./);
-    await expect(
-      verifyAccountSessionToken(body.token, { ACCOUNT_AUTH_SECRET: accountSecret }),
-    ).resolves.toMatchObject({ accountId });
+    const issuedPayload = await verifyAccountSessionToken(body.token, {
+      ACCOUNT_AUTH_SECRET: accountSecret,
+    });
+    expect(issuedPayload).toMatchObject({ accountId });
+    expect(issuedPayload?.credentialId).toBeUndefined();
     expect(r2Record).toEqual(
       expect.objectContaining({ accountId, signingPublicJwk: proof.publicJwk }),
     );
@@ -252,6 +323,135 @@ describe("functions account session API contracts", () => {
     expect(response.status).toBe(401);
     expect(bucket.text(accountRecordKey)).toBe(originalR2);
     expect(database.account(accountId)?.signing_public_jwk).toBe(originalD1);
+  });
+
+  it("persists a signed canonical encryption recipient in D1 and R2", async () => {
+    const bucket = new MemoryR2Bucket();
+    const database = new MemoryD1Database();
+    const recipient = await createRecipient();
+    const proof = await createProof(accountId, Date.now(), recipient);
+
+    const response = await postSession(bucket, database, requestBody(proof, accountId, recipient));
+    const r2Record = JSON.parse(bucket.text(accountRecordKey) ?? "null");
+    const d1Record = database.account(accountId);
+
+    expect(response.status).toBe(200);
+    expect(r2Record).toEqual(expect.objectContaining(recipient));
+    expect(d1Record?.encryption_kid).toBe(recipient.encryptionKid);
+    expect(JSON.parse(d1Record?.encryption_public_jwk ?? "null")).toEqual(
+      recipient.encryptionPublicJwk,
+    );
+  });
+
+  it("rejects tampered recipient material and preserves an existing pin", async () => {
+    const bucket = new MemoryR2Bucket();
+    const database = new MemoryD1Database();
+    const recipient = await createRecipient();
+    const proof = await createProof(accountId, Date.now(), recipient);
+    await postSession(bucket, database, requestBody(proof, accountId, recipient));
+    const original = bucket.text(accountRecordKey);
+
+    const response = await postSession(bucket, database, requestBody(proof, accountId, {
+      ...recipient,
+      encryptionKid: "enc_tampered",
+    }));
+
+    expect(response.status).toBe(401);
+    expect(bucket.text(accountRecordKey)).toBe(original);
+  });
+
+  it("does not let a different signing key update a pinned recipient", async () => {
+    const bucket = new MemoryR2Bucket();
+    const database = new MemoryD1Database();
+    const recipient = await createRecipient();
+    const proof = await createProof(accountId, Date.now(), recipient);
+    await postSession(bucket, database, requestBody(proof, accountId, recipient));
+    const original = bucket.text(accountRecordKey);
+    const competingRecipient = await createRecipient("enc_competing");
+    const competingProof = await createProof(accountId, Date.now(), competingRecipient);
+
+    const response = await postSession(
+      bucket,
+      database,
+      requestBody(competingProof, accountId, competingRecipient),
+    );
+
+    expect(response.status).toBe(401);
+    expect(bucket.text(accountRecordKey)).toBe(original);
+  });
+
+  it("rejects private recipient JWK material before it reaches account storage", async () => {
+    const bucket = new MemoryR2Bucket();
+    const recipient = await createRecipient();
+    const proof = await createProof();
+
+    const response = await postSession(bucket, undefined, {
+      ...requestBody(proof),
+      encryptionKid: recipient.encryptionKid,
+      encryptionPublicJwk: { ...recipient.encryptionPublicJwk, d: "secret" },
+    });
+
+    expect(response.status).toBe(400);
+    expect(bucket.text(accountRecordKey)).toBeNull();
+  });
+
+  it("accepts the unchanged pin but rejects signed replacement attempts", async () => {
+    const bucket = new MemoryR2Bucket();
+    const database = new MemoryD1Database();
+    const recipient = await createRecipient();
+    const first = await createProof(accountId, Date.now(), recipient);
+    const replacement = await createRecipient("enc_replacement");
+    const replacementProof = await createProof(
+      accountId,
+      Date.now(),
+      replacement,
+      first.keyPair,
+    );
+
+    expect(
+      (await postSession(bucket, database, requestBody(first, accountId, recipient))).status,
+    ).toBe(200);
+    expect(
+      (await postSession(bucket, database, requestBody(first, accountId, recipient))).status,
+    ).toBe(200);
+    expect(
+      (await postSession(
+        bucket,
+        database,
+        requestBody(replacementProof, accountId, replacement),
+      )).status,
+    ).toBe(409);
+    expect(JSON.parse(bucket.text(accountRecordKey) ?? "null")).toEqual(
+      expect.objectContaining(recipient),
+    );
+  });
+
+  it("reads pre-recipient D1 and R2 account records for legacy proofs", async () => {
+    const bucket = new MemoryR2Bucket();
+    const database = new MemoryD1Database();
+    const proof = await createProof();
+    const legacyRecord = {
+      version: 1,
+      accountId,
+      signingPublicJwk: proof.publicJwk,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    bucket.seed(accountRecordKey, JSON.stringify(legacyRecord));
+    database.seedAccount({
+      account_id: accountId,
+      signing_public_jwk: JSON.stringify(proof.publicJwk),
+      created_at: 1,
+      updated_at: 2,
+    });
+
+    const response = await postSession(bucket, database, requestBody(proof));
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(bucket.text(accountRecordKey) ?? "null")).not.toHaveProperty(
+      "encryptionPublicJwk",
+    );
+    expect(database.account(accountId)?.encryption_public_jwk).toBeNull();
   });
 
   it("allows only one concurrent first proof to reserve an account", async () => {
@@ -410,6 +610,44 @@ describe("functions account session API contracts", () => {
       }),
     ).resolves.toBeNull();
     now.mockRestore();
+  });
+
+  it("retains only server-issued CLI credential claims and rejects malformed signed claims", async () => {
+    const credentialId = "AAAAAAAAAAAAAAAAAAAAAA";
+    const cli = await issueAccountSessionToken(
+      accountId,
+      { ACCOUNT_AUTH_SECRET: accountSecret },
+      { credentialId },
+    );
+    const browser = await issueAccountSessionToken(accountId, {
+      ACCOUNT_AUTH_SECRET: accountSecret,
+    });
+    const malformed = await signAccountToken({
+      version: 1,
+      accountId,
+      credentialId: 1,
+      iat: Date.now(),
+      exp: Date.now() + 60_000,
+    });
+
+    await expect(
+      verifyAccountSessionToken(cli.token, { ACCOUNT_AUTH_SECRET: accountSecret }),
+    ).resolves.toEqual(expect.objectContaining({ accountId, credentialId }));
+    const browserPayload = await verifyAccountSessionToken(browser.token, {
+      ACCOUNT_AUTH_SECRET: accountSecret,
+    });
+    expect(browserPayload).toMatchObject({ accountId });
+    expect(browserPayload?.credentialId).toBeUndefined();
+    await expect(
+      verifyAccountSessionToken(malformed, { ACCOUNT_AUTH_SECRET: accountSecret }),
+    ).resolves.toBeNull();
+    await expect(
+      issueAccountSessionToken(
+        accountId,
+        { ACCOUNT_AUTH_SECRET: accountSecret },
+        { credentialId: "caller-chosen" },
+      ),
+    ).rejects.toThrow("credential id is invalid");
   });
 
   it("rejects insecure account headers when a secret is configured unless the explicit escape is enabled", async () => {

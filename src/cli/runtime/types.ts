@@ -1,4 +1,5 @@
 import type { DropDiffEnvelope } from "../../../shared/drop/diff";
+import type { DropEnvelopeV1 } from "../../../shared/drop/types";
 import type {
   CliCredentialBundleV1,
   CliDevicePollResponse,
@@ -28,6 +29,8 @@ export interface DropCreateRequest {
   content: string;
   /** Optional drop metadata. */
   metadata?: Record<string, unknown> | null;
+  /** Optional account-owned envelope to send instead of plaintext fields. */
+  envelope?: DropEnvelopeV1;
 }
 
 /** Result returned after creating a drop. */
@@ -48,6 +51,8 @@ export interface DropUpdateRequest {
   metadata: Record<string, unknown>;
   /** Optional expected root revision for optimistic concurrency. */
   expectedRevision?: string | null;
+  /** Optional account-owned envelope to send instead of plaintext fields. */
+  envelope?: DropEnvelopeV1;
 }
 
 /** Result returned after updating a drop. */
@@ -235,6 +240,8 @@ export interface AdminBackfillRequest {
   limit: string;
   /** Optional pagination cursor. */
   cursor?: string | null;
+  /** Restricts metadata backfill to verified account-library projection rows. */
+  accountLibraryOnly?: boolean;
 }
 
 /** Runtime facade for admin commands. */

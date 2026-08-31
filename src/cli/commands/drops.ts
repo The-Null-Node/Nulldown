@@ -2,6 +2,10 @@ import { flagString, hasFlag } from "../core/args";
 import type { ParsedArgs } from "../core/args";
 import type { CliCommand } from "../core/command";
 import type { NulldownRuntime } from "../runtime/types";
+import type { CliCredentialBundleV1 } from "../../../shared/auth/cliDevice";
+import { sealDropForAuthoring } from "../../../shared/drop/authoringCrypto";
+import { isDropEncryptionPublicJwk } from "../../../shared/drop/deviceDelegation";
+import type { DropEnvelopeV1, DropVisibility } from "../../../shared/drop/types";
 import {
   buildSeedCreateOutput,
   buildSeedDropContent,
@@ -22,6 +26,103 @@ const getDropMetadata = (body: unknown): Record<string, unknown> | undefined =>
     ? ((body as { metadata?: unknown }).metadata as Record<string, unknown> | undefined)
     : undefined;
 
+const AUTHORING_REENROLL_MESSAGE =
+  "Run nd auth login again to enable account-owned authoring.";
+
+const LEGACY_PLAINTEXT_WARNING =
+  "warning: --legacy-plaintext stores an authenticated plaintext drop and it will not enter Remote Library.";
+
+interface DropAuthoringConfig {
+  token?: string | null;
+  authCredential?: CliCredentialBundleV1 | null;
+}
+
+const resolveVisibility = (args: ParsedArgs): DropVisibility => {
+  const visibility = flagString(args, "visibility") ?? "unlisted";
+  if (visibility === "private" || visibility === "unlisted" || visibility === "public") {
+    return visibility;
+  }
+  throw new Error("--visibility must be private, unlisted, or public.");
+};
+
+const importEncryptionKey = async (jwk: JsonWebKey): Promise<CryptoKey> =>
+  await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    { name: "RSA-OAEP", hash: "SHA-256" },
+    false,
+    ["encrypt"],
+  );
+
+const getProviderEncryption = async (): Promise<
+  { kid: string; publicKey: CryptoKey } | undefined
+> => {
+  const raw = process.env.VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK;
+  if (!raw) {
+    throw new Error(
+      "Provider unlock policy requires VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK.",
+    );
+  }
+  let jwk: JsonWebKey;
+  try {
+    jwk = JSON.parse(raw) as JsonWebKey;
+  } catch {
+    throw new Error("VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK must contain a public RSA JWK.");
+  }
+  if (!isDropEncryptionPublicJwk(jwk)) {
+    throw new Error("VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK must contain a public RSA JWK.");
+  }
+  const source = jwk as Record<string, unknown>;
+  return {
+    kid: typeof source.kid === "string" ? source.kid : "provider",
+    publicKey: await importEncryptionKey(jwk),
+  };
+};
+
+const sealAccountDrop = async (
+  credential: CliCredentialBundleV1 | null | undefined,
+  content: string,
+  metadata: Record<string, unknown>,
+  visibility: DropVisibility,
+): Promise<DropEnvelopeV1> => {
+  const authoring = credential?.authoring;
+  if (!credential || !authoring) throw new Error(AUTHORING_REENROLL_MESSAGE);
+  const accountEncryption = authoring.deviceDelegation.encryptionPublicJwk;
+  if (!isDropEncryptionPublicJwk(accountEncryption)) {
+    throw new Error(AUTHORING_REENROLL_MESSAGE);
+  }
+  const [encryptionPublicKey, signingPrivateKey, providerEncryption] = await Promise.all([
+    importEncryptionKey(accountEncryption),
+    crypto.subtle.importKey(
+      "jwk",
+      authoring.signingPrivateJwk,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"],
+    ),
+    visibility === "private" ? Promise.resolve(undefined) : getProviderEncryption(),
+  ]);
+  return await sealDropForAuthoring({
+    payload: { content, metadata },
+    accountEncryption: {
+      accountId: credential.accountId,
+      encryptionKid: authoring.deviceDelegation.encryptionKid,
+      encryptionPublicJwk: accountEncryption,
+      encryptionPublicKey,
+    },
+    delegateSigning: {
+      signingKid: authoring.signingKid,
+      signingPublicJwk: authoring.signingPublicJwk,
+      signingPrivateKey,
+      deviceDelegation: authoring.deviceDelegation,
+    },
+    providerEncryption,
+    visibility,
+    unlockPolicy: visibility === "private" ? "vault-only" : "provider-escrow",
+    metadata,
+  });
+};
+
 /** Dependencies used by modular drop read commands. */
 export interface DropCommandDependencies {
   /** Runtime facade for drop operations. */
@@ -41,12 +142,12 @@ export interface DropCommandDependencies {
 }
 
 /** Creates modular drop commands. */
-export const createDropCommands = <TConfig>(
+export const createDropCommands = <TConfig extends DropAuthoringConfig>(
   dependencies: DropCommandDependencies,
 ): CliCommand<TConfig>[] => [
   {
     name: "create",
-    async run({ args }) {
+    async run({ config, args }) {
       const seed = isSeedCreateArgs(args);
       const source = args.positionals[1] ?? "-";
       const metadataOverride = await dependencies.parseMetadata(args);
@@ -61,7 +162,12 @@ export const createDropCommands = <TConfig>(
       const metadata = seed
         ? buildSeedDropMetadata(labels, metadataOverride)
         : (metadataOverride ?? { themeId: "system" });
-      const drop = await dependencies.runtime.drops.create({ content, metadata });
+      const legacyPlaintext = hasFlag(args, "legacy-plaintext");
+      if (legacyPlaintext && config.token) console.error(LEGACY_PLAINTEXT_WARNING);
+      const envelope = config.token && !legacyPlaintext
+        ? await sealAccountDrop(config.authCredential, content, metadata, resolveVisibility(args))
+        : undefined;
+      const drop = await dependencies.runtime.drops.create({ content, metadata, envelope });
       if (!seed) {
         dependencies.print(drop, `created ${drop.url}`);
         return;
@@ -92,7 +198,7 @@ export const createDropCommands = <TConfig>(
   },
   {
     name: "update",
-    async run({ args }) {
+    async run({ config, args }) {
       const id = args.positionals[1];
       const source = args.positionals[2] ?? "-";
       if (!id) throw new Error("Usage: nd update <id> <file|->");
@@ -103,11 +209,17 @@ export const createDropCommands = <TConfig>(
       const metadata = metadataOverride
         ? { ...(currentMetadata ?? {}), ...metadataOverride }
         : (currentMetadata ?? { themeId: "system" });
+      const legacyPlaintext = hasFlag(args, "legacy-plaintext");
+      if (legacyPlaintext && config.token) console.error(LEGACY_PLAINTEXT_WARNING);
+      const envelope = config.token && !legacyPlaintext
+        ? await sealAccountDrop(config.authCredential, content, metadata, resolveVisibility(args))
+        : undefined;
       const response = await dependencies.runtime.drops.update({
         id: current.id,
         content,
         metadata,
         expectedRevision: hasFlag(args, "force") ? null : current.revision,
+        envelope,
       });
       dependencies.print(response, `updated ${response.url}`);
     },

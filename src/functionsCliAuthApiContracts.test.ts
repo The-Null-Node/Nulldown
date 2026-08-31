@@ -5,10 +5,12 @@ import {
   approveCliDeviceResponse,
   createCliDeviceResponse,
   pollCliDeviceResponse,
+  prepareCliDeviceResponse,
   refreshCliCredentialResponse,
   revokeCliCredentialResponse,
   type CliAuthEnvironment,
 } from "../functions/api/_lib/accounts/cliAuth/service";
+import { verifyAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
 import { generateCliDeviceKeyPair, decryptCliCredentialEnvelope } from "./cli/auth";
 import {
   CLI_CREDENTIAL_KIND_V1,
@@ -16,6 +18,12 @@ import {
   type CliCredentialBundleV1,
   type CliDeviceStartResponse,
 } from "../shared/auth/cliDevice";
+import {
+  DROP_DEVICE_DELEGATION_SCHEMA,
+  DROP_DEVICE_DELEGATION_VERSION,
+  serializeDropDeviceDelegationForSignature,
+  type DropDeviceDelegation,
+} from "../shared/drop/deviceDelegation";
 
 const appOrigin = "https://nulldown.app";
 const issuer = "https://issuer.test";
@@ -28,6 +36,11 @@ interface Ticket {
   user_code_hash: string;
   client_public_jwk_json: string;
   client_name: string | null;
+  authoring_requested: number;
+  delegate_signing_public_jwk_json: string | null;
+  credential_id: string | null;
+  credential_expires_at: number | null;
+  device_delegation_json: string | null;
   created_at: number;
   expires_at: number;
   approved_user_id: string | null;
@@ -75,6 +88,7 @@ class MemoryDatabase {
   readonly credentials = new Map<string, Credential>();
   readonly users = new Set<string>();
   readonly accountBindings = new Map<string, string>();
+  readonly accountSigningKeys = new Map<string, JsonWebKey>();
 
   prepare(sql: string): MemoryStatement {
     return new MemoryStatement(this, sql);
@@ -94,8 +108,13 @@ class MemoryDatabase {
         user_code_hash: String(params[2]),
         client_public_jwk_json: String(params[3]),
         client_name: params[4] === null ? null : String(params[4]),
-        created_at: Number(params[5]),
-        expires_at: Number(params[6]),
+        authoring_requested: Number(params[5]),
+        delegate_signing_public_jwk_json: params[6] === null ? null : String(params[6]),
+        credential_id: params[7] === null ? null : String(params[7]),
+        credential_expires_at: params[8] === null ? null : Number(params[8]),
+        device_delegation_json: null,
+        created_at: Number(params[9]),
+        expires_at: Number(params[10]),
         approved_user_id: null,
         approved_account_id: null,
         approved_at: null,
@@ -105,28 +124,31 @@ class MemoryDatabase {
       return 1;
     }
     if (sql.includes("INSERT OR IGNORE INTO auth_cli_credentials")) {
-      const ticket = this.tickets.get(String(params[5]));
+      const ticket = this.tickets.get(String(params[3]));
       if (
         !ticket ||
-        ticket.device_code_hash !== String(params[6]) ||
+        ticket.device_code_hash !== String(params[4]) ||
         ticket.approved_user_id === null ||
         ticket.approved_account_id === null ||
         ticket.approved_at === null ||
         ticket.redeemed_at !== null ||
-        ticket.expires_at <= Number(params[7]) ||
-        this.credentials.has(String(params[0]))
+        ticket.expires_at <= Number(params[5]) ||
+        ticket.credential_expires_at === null ||
+        ticket.credential_expires_at <= Number(params[6]) ||
+        !ticket.credential_id ||
+        this.credentials.has(ticket.credential_id)
       ) {
         return 0;
       }
       const credential: Credential = {
-        credential_id: String(params[0]),
+        credential_id: ticket.credential_id,
         ticket_id: ticket.ticket_id,
         user_id: ticket.approved_user_id,
         account_id: ticket.approved_account_id,
-        refresh_token_hash: String(params[1]),
+        refresh_token_hash: String(params[0]),
         created_at: Number(params[2]),
-        expires_at: Number(params[3]),
-        last_used_at: Number(params[4]),
+        expires_at: ticket.credential_expires_at,
+        last_used_at: Number(params[2]),
         revoked_at: null,
       };
       this.credentials.set(credential.credential_id, credential);
@@ -151,8 +173,8 @@ class MemoryDatabase {
 
   first(sql: string, params: unknown[]): unknown {
     if (sql.includes("SET approved_user_id")) {
-      const ticket = this.tickets.get(String(params[3]));
-      const approvedAt = Number(params[4]);
+      const ticket = this.tickets.get(String(params[4]));
+      const approvedAt = Number(params[5]);
       if (
         !ticket ||
         ticket.approved_at !== null ||
@@ -164,6 +186,7 @@ class MemoryDatabase {
       ticket.approved_user_id = String(params[0]);
       ticket.approved_account_id = String(params[1]);
       ticket.approved_at = approvedAt;
+      ticket.device_delegation_json = params[3] === null ? null : String(params[3]);
       return { ticket_id: ticket.ticket_id };
     }
     if (sql.includes("FROM auth_users")) {
@@ -178,6 +201,18 @@ class MemoryDatabase {
             account_id: accountId,
             user_id: userId,
             signing_key_fingerprint: "test-fingerprint",
+            created_at: 1,
+            updated_at: 1,
+          }
+        : null;
+    }
+    if (sql.includes("FROM accounts")) {
+      const accountId = String(params[0]);
+      const signingPublicJwk = this.accountSigningKeys.get(accountId);
+      return signingPublicJwk
+        ? {
+            account_id: accountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
             created_at: 1,
             updated_at: 1,
           }
@@ -267,7 +302,196 @@ class FakeOpenAuthAuthority {
 const responseJson = async <T>(response: Response): Promise<T> =>
   (await response.json()) as T;
 
+const toBase64 = (bytes: ArrayBuffer): string =>
+  btoa(String.fromCharCode(...new Uint8Array(bytes)));
+
+const signDelegation = async (
+  rootKey: CryptoKey,
+  input: Omit<DropDeviceDelegation, "signature">,
+): Promise<DropDeviceDelegation> => ({
+  ...input,
+  signature: {
+    kid: "account-signing-kid",
+    alg: "ECDSA_P256_SHA256",
+    sig: toBase64(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        rootKey,
+        new TextEncoder().encode(serializeDropDeviceDelegationForSignature(input)),
+      ),
+    ),
+  },
+});
+
 describe("CLI auth Pages service", () => {
+  it("prepares and cryptographically approves a public delegated authoring ticket", async () => {
+    const database = new MemoryDatabase();
+    database.users.add("user-1");
+    database.accountBindings.set("account-1", "user-1");
+    const rootPair = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    )) as CryptoKeyPair;
+    database.accountSigningKeys.set(
+      "account-1",
+      await crypto.subtle.exportKey("jwk", rootPair.publicKey),
+    );
+    const authority = await FakeOpenAuthAuthority.create();
+    const accessToken = await authority.issueAccessToken("user-1");
+    const env = {
+      DB: database as unknown as D1Database,
+      ACCOUNT_AUTH_SECRET: "account-secret-for-cli-tests",
+      OPENAUTH_ISSUER_URL: issuer,
+      OPENAUTH_CLIENT_ID: openAuthClientId,
+      OPENAUTH_AUDIENCE: openAuthClientId,
+      OPENAUTH_BFF_ORIGIN: appOrigin,
+      OPENAUTH_AUTHORITY: authority,
+    } satisfies CliAuthEnvironment;
+    const device = await generateCliDeviceKeyPair(true);
+    const started = await createCliDeviceResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/device`, {
+        method: "POST",
+        body: JSON.stringify({
+          publicKey: device.publicKey,
+          delegateSigningPublicJwk: device.authoring!.signingPublicJwk,
+          clientName: "authoring-cli",
+        }),
+      }),
+    );
+    const start = await responseJson<CliDeviceStartResponse>(started);
+    const ticket = [...database.tickets.values()][0]!;
+    expect(ticket.credential_id).toBeTruthy();
+    expect(ticket.credential_expires_at).toBeGreaterThan(Date.now());
+    expect(JSON.stringify(ticket)).not.toContain('"d"');
+
+    const browserRequest = (url: string, accountId = "account-1", origin = appOrigin) =>
+      new Request(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${accessCookieName}=${accessToken}`,
+          Origin: origin,
+        },
+        body: JSON.stringify({ userCode: start.userCode, accountId }),
+      });
+    const prepared = await prepareCliDeviceResponse(
+      env,
+      browserRequest(`${appOrigin}/api/auth/cli/prepare`),
+    );
+    expect(prepared.status).toBe(200);
+    await expect(prepared.json()).resolves.toEqual({
+      accountId: "account-1",
+      clientName: "authoring-cli",
+      authoring: {
+        credentialId: ticket.credential_id,
+        expiresAt: ticket.credential_expires_at,
+        delegateSigningPublicJwk: device.authoring!.signingPublicJwk,
+      },
+    });
+    expect(
+      await prepareCliDeviceResponse(
+        env,
+        browserRequest(`${appOrigin}/api/auth/cli/prepare`, "foreign-account"),
+      ),
+    ).toHaveProperty("status", 403);
+    expect(
+      await prepareCliDeviceResponse(
+        env,
+        browserRequest(`${appOrigin}/api/auth/cli/prepare`, "account-1", "https://evil.test"),
+      ),
+    ).toHaveProperty("status", 403);
+
+    const delegation = await signDelegation(rootPair.privateKey, {
+      schema: DROP_DEVICE_DELEGATION_SCHEMA,
+      version: DROP_DEVICE_DELEGATION_VERSION,
+      accountId: "account-1",
+      credentialId: ticket.credential_id!,
+      delegateSigningPublicJwk: device.authoring!.signingPublicJwk,
+      encryptionKid: "enc-kid",
+      encryptionPublicJwk: { kty: "RSA", n: "n", e: "AQAB" },
+      issuedAt: Date.now(),
+      expiresAt: ticket.credential_expires_at!,
+    });
+    const forged = await approveCliDeviceResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${accessCookieName}=${accessToken}`,
+          Origin: appOrigin,
+        },
+        body: JSON.stringify({
+          userCode: start.userCode,
+          accountId: "account-1",
+          delegation: {
+            ...delegation,
+            signature: { ...delegation.signature, sig: `${delegation.signature.sig}A` },
+          },
+        }),
+      }),
+    );
+    expect(forged.status).toBe(400);
+    const changedSigner = await generateCliDeviceKeyPair(true);
+    const rejected = await approveCliDeviceResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${accessCookieName}=${accessToken}`,
+          Origin: appOrigin,
+        },
+        body: JSON.stringify({
+          userCode: start.userCode,
+          accountId: "account-1",
+          delegation: {
+            ...delegation,
+            delegateSigningPublicJwk: changedSigner.authoring!.signingPublicJwk,
+          },
+        }),
+      }),
+    );
+    expect(rejected.status).toBe(400);
+
+    const approved = await approveCliDeviceResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${accessCookieName}=${accessToken}`,
+          Origin: appOrigin,
+        },
+        body: JSON.stringify({ userCode: start.userCode, accountId: "account-1", delegation }),
+      }),
+    );
+    expect(approved.status).toBe(200);
+    expect(await approved.text()).not.toContain('"d"');
+    const polled = await pollCliDeviceResponse(
+      env,
+      new Request(`${appOrigin}/api/auth/cli/poll`, {
+        method: "POST",
+        body: JSON.stringify({ deviceCode: start.deviceCode }),
+      }),
+    );
+    const body = await responseJson<{
+      status: "approved";
+      envelope: Parameters<typeof decryptCliCredentialEnvelope>[0];
+    }>(polled);
+    const credential = await decryptCliCredentialEnvelope(
+      body.envelope,
+      device.privateKey,
+      device.authoring,
+    );
+    expect(credential.authoring?.deviceDelegation).toEqual(delegation);
+    expect(JSON.stringify([...database.tickets.values(), ...database.credentials.values()])).not.toContain(
+      '"d"',
+    );
+  });
+
   it("issues isolated tickets, approves through OpenAuth, redeems once, rotates, and revokes", async () => {
     const database = new MemoryDatabase();
     database.users.add("user-1");
@@ -371,6 +595,13 @@ describe("CLI auth Pages service", () => {
     );
     expect(credential.accountId).toBe("account-1");
     expect(credential.accessToken).toMatch(/^ndacc\.v1\./);
+    await expect(
+      verifyAccountSessionToken(credential.accessToken, {
+        ACCOUNT_AUTH_SECRET: "account-secret-for-cli-tests",
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ credentialId: credential.credentialId }),
+    );
 
     const replay = await pollCliDeviceResponse(
       env,
@@ -395,6 +626,13 @@ describe("CLI auth Pages service", () => {
     expect(isCliCredentialBundle(refreshedBody)).toBe(true);
     expect(refreshedBody.refreshToken).not.toBe(credential.refreshToken);
     expect(refreshedBody.accountId).toBe("account-1");
+    await expect(
+      verifyAccountSessionToken(refreshedBody.accessToken, {
+        ACCOUNT_AUTH_SECRET: "account-secret-for-cli-tests",
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ credentialId: refreshedBody.credentialId }),
+    );
 
     const staleRefresh = await refreshCliCredentialResponse(
       env,

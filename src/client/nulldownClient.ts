@@ -8,6 +8,7 @@ import {
   buildDiffSigningPayload,
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
+import type { DropEnvelopeV1, DropMetadata } from "../../shared/drop/types";
 import type {
   DropDiffAppendResponse,
   DropDiffEnvelope,
@@ -42,12 +43,37 @@ export type NulldownJsonValue =
 /** Default production API base URL used by CLI and MCP clients. */
 export const DEFAULT_NULLDOWN_BASE_URL = "https://nulldown.app";
 
+/** Input supplied when resolving a dynamic account bearer. */
+export interface NulldownBearerRequest {
+  /** True when the preceding request was rejected with a 401 response. */
+  forceRefresh?: boolean;
+  /** Bearer used by the rejected request, when available. */
+  rejectedToken?: string | null;
+}
+
+/** Resolves an account bearer immediately before an HTTP request. */
+export type NulldownBearerProvider = (
+  request: NulldownBearerRequest,
+) => Promise<string | null>;
+
+/** Seals plaintext content before the client sends a drop-store request. */
+export interface NulldownEnvelopeProvider {
+  seal(input: {
+    content: string;
+    metadata: DropMetadata;
+  }): Promise<DropEnvelopeV1>;
+}
+
 /** Configuration used to call a Nulldown API. */
 export interface NulldownClientConfig {
   /** API base URL, without a trailing slash. */
   baseUrl: string;
   /** Optional bearer account token. */
   token?: string | null;
+  /** Optional dynamic bearer resolver used when no static token is configured. */
+  bearerProvider?: NulldownBearerProvider;
+  /** Optional client-side sealer for account-owned drop requests. */
+  envelopeProvider?: NulldownEnvelopeProvider;
   /** Optional development account id header. */
   accountId?: string | null;
   /** Optional stable client id for branch and diff operations. */
@@ -406,13 +432,20 @@ const appendParam = (
 const normalizeBaseUrl = (baseUrl?: string | null): string =>
   (baseUrl || DEFAULT_NULLDOWN_BASE_URL).replace(/\/$/, "");
 
+const isReplayableRequestBody = (body: RequestInit["body"]): boolean =>
+  body === undefined || body === null || typeof body === "string" || body instanceof URLSearchParams;
+
 /** Creates Nulldown client configuration from options and `ND_*` environment variables. */
 export const createNulldownClientConfig = (
   options: CreateNulldownClientOptions = {},
 ): NulldownClientConfig => ({
   baseUrl: normalizeBaseUrl(options.baseUrl ?? process.env.ND_BASE_URL),
-  token: options.token ?? process.env.ND_TOKEN ?? null,
-  accountId: options.accountId ?? process.env.ND_ACCOUNT_ID ?? null,
+  token: Object.hasOwn(options, "token") ? options.token : process.env.ND_TOKEN ?? null,
+  bearerProvider: options.bearerProvider,
+  envelopeProvider: options.envelopeProvider,
+  accountId: Object.hasOwn(options, "accountId")
+    ? options.accountId
+    : process.env.ND_ACCOUNT_ID ?? null,
   clientId: options.clientId ?? process.env.ND_CLIENT_ID ?? null,
   diffAuthToken:
     options.diffAuthToken ?? process.env.ND_DIFF_AUTH_TOKEN ?? null,
@@ -436,21 +469,40 @@ export class NulldownClient {
     path: string,
     options: RequestInit = {},
   ): Promise<NulldownApiResponse<T>> {
-    const headers = new Headers(options.headers);
-    if (this.config.token && !headers.has("Authorization")) {
-      headers.set("Authorization", `Bearer ${this.config.token}`);
-    }
-    if (this.config.accountId && !headers.has(NULLDOWN_ACCOUNT_ID_HEADER)) {
-      headers.set(NULLDOWN_ACCOUNT_ID_HEADER, this.config.accountId);
-    }
-    if (this.config.clientId && !headers.has(DIFF_CLIENT_ID_HEADER)) {
-      headers.set(DIFF_CLIENT_ID_HEADER, this.config.clientId);
-    }
+    const explicitAuthorization = new Headers(options.headers).has("Authorization");
+    const bearerProvider =
+      !explicitAuthorization && this.config.token === null
+        ? this.config.bearerProvider
+        : undefined;
+    const perform = async (bearer: string | null): Promise<Response> => {
+      const headers = new Headers(options.headers);
+      if (bearer && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${bearer}`);
+      }
+      if (this.config.accountId && !headers.has(NULLDOWN_ACCOUNT_ID_HEADER)) {
+        headers.set(NULLDOWN_ACCOUNT_ID_HEADER, this.config.accountId);
+      }
+      if (this.config.clientId && !headers.has(DIFF_CLIENT_ID_HEADER)) {
+        headers.set(DIFF_CLIENT_ID_HEADER, this.config.clientId);
+      }
+      return await this.fetchImpl(`${this.config.baseUrl}${path}`, {
+        ...options,
+        headers,
+      });
+    };
 
-    const response = await this.fetchImpl(`${this.config.baseUrl}${path}`, {
-      ...options,
-      headers,
-    });
+    let bearer = bearerProvider ? await bearerProvider({}) : this.config.token ?? null;
+    let response = await perform(bearer);
+    if (
+      response.status === 401 &&
+      bearerProvider &&
+      bearer &&
+      isReplayableRequestBody(options.body)
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      bearer = await bearerProvider({ forceRefresh: true, rejectedToken: bearer });
+      response = await perform(bearer);
+    }
     const text = await response.text();
     const data = parseJsonLoose(text) as T | null;
 
@@ -495,12 +547,23 @@ export class NulldownClient {
 
   /** Creates a new drop or revision-safe root upsert. */
   async createDrop(request: NulldownCreateDropRequest): Promise<unknown> {
+    const metadata = request.metadata ?? { themeId: "system" };
+    const envelope = await this.config.envelopeProvider?.seal({
+      content: request.content,
+      metadata,
+    });
     const response = await this.request("/api/store", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ...request,
-        metadata: request.metadata ?? { themeId: "system" },
+        ...(envelope
+          ? {
+              envelope,
+              id: request.id,
+              upsert: request.upsert,
+              expectedRevision: request.expectedRevision,
+            }
+          : { ...request, metadata }),
       }),
     });
     return response.data;
@@ -710,10 +773,12 @@ export class NulldownClient {
           code: "diff_retry_identity_invalid",
         });
       }
+      const createdAt = request.createdAt;
       if (
-        !Number.isFinite(request.createdAt) ||
-        !Number.isInteger(request.createdAt) ||
-        request.createdAt < 0
+        createdAt === undefined ||
+        !Number.isFinite(createdAt) ||
+        !Number.isInteger(createdAt) ||
+        createdAt < 0
       ) {
         throw new NulldownClientError("Diff retry createdAt is invalid.", {
           code: "diff_retry_identity_invalid",

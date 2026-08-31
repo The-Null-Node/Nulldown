@@ -8,7 +8,12 @@ import {
   DIFF_TIMESTAMP_HEADER,
   buildDiffSigningPayload,
 } from "../../shared/drop/diffAuth";
-import { createNulldownClient, NulldownClientError } from "./nulldownClient";
+import {
+  createNulldownClient,
+  NulldownClientError,
+  type NulldownEnvelopeProvider,
+} from "./nulldownClient";
+import type { DropEnvelopeV1 } from "../../shared/drop/types";
 import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../shared/nullplug/registry";
 
 const base64UrlEncode = (value: string): string =>
@@ -19,6 +24,56 @@ const base64UrlEncode = (value: string): string =>
     .replace(/=+$/g, "");
 
 describe("NulldownClient", () => {
+  it("sends only a sealed envelope and store preconditions when configured", async () => {
+    const envelope = { schema: "nmdn.drop.v1", version: 1 } as DropEnvelopeV1;
+    const seal = jest.fn(async () => envelope);
+    const captured: { body?: string } = {};
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      envelopeProvider: { seal } satisfies NulldownEnvelopeProvider,
+      fetch: async (_url, init) => {
+        captured.body = String(init?.body);
+        return Response.json({ id: "drop-1" });
+      },
+    });
+
+    await client.createDrop({
+      content: "sealed content",
+      id: "drop-1",
+      upsert: true,
+      expectedRevision: "revision-1",
+    });
+
+    expect(seal).toHaveBeenCalledWith({
+      content: "sealed content",
+      metadata: { themeId: "system" },
+    });
+    expect(JSON.parse(captured.body!)).toEqual({
+      envelope,
+      id: "drop-1",
+      upsert: true,
+      expectedRevision: "revision-1",
+    });
+  });
+
+  it("retains the plaintext create request when no envelope provider exists", async () => {
+    const captured: { body?: string } = {};
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async (_url, init) => {
+        captured.body = String(init?.body);
+        return Response.json({ id: "drop-1" });
+      },
+    });
+
+    await client.createDrop({ content: "plaintext", metadata: { themeId: "dark" } });
+
+    expect(JSON.parse(captured.body!)).toEqual({
+      content: "plaintext",
+      metadata: { themeId: "dark" },
+    });
+  });
+
   it("signs diff_apply requests with exported diff auth tokens", async () => {
     const token = `ndauth.v1.${base64UrlEncode(
       JSON.stringify({
@@ -430,5 +485,83 @@ describe("NulldownClient", () => {
     expect(calls[0]?.url).toBe(
       "https://nulldown.test/api/branches/root-1/branch:1/memory/query?procedureId=memproc%3A1&afterStep=0&stepLimit=1&includeRecords=false",
     );
+  });
+
+  it("refreshes a dynamic bearer once after a 401 and preserves the request body", async () => {
+    const bearerProvider = jest
+      .fn(async () => "first-bearer")
+      .mockResolvedValueOnce("first-bearer")
+      .mockResolvedValueOnce("second-bearer");
+    const calls: Array<{ authorization: string | null; body: RequestInit["body"] }> = [];
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      token: null,
+      bearerProvider,
+      fetch: async (_url, init) => {
+        calls.push({
+          authorization: new Headers(init?.headers).get("Authorization"),
+          body: init?.body,
+        });
+        return calls.length === 1
+          ? new Response("unauthorized", { status: 401 })
+          : Response.json({ ok: true });
+      },
+    });
+
+    await expect(
+      client.request("/api/protected", {
+        method: "POST",
+        body: JSON.stringify({ value: "preserved" }),
+      }),
+    ).resolves.toMatchObject({ data: { ok: true } });
+
+    expect(calls).toEqual([
+      { authorization: "Bearer first-bearer", body: '{"value":"preserved"}' },
+      { authorization: "Bearer second-bearer", body: '{"value":"preserved"}' },
+    ]);
+    expect(bearerProvider).toHaveBeenNthCalledWith(1, {});
+    expect(bearerProvider).toHaveBeenNthCalledWith(2, {
+      forceRefresh: true,
+      rejectedToken: "first-bearer",
+    });
+  });
+
+  it("does not retry a second 401 or caller-supplied authorization", async () => {
+    const bearerProvider = jest.fn(async () => "provider-bearer");
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      token: null,
+      bearerProvider,
+      fetch: async () => new Response("unauthorized", { status: 401 }),
+    });
+
+    await expect(client.request("/api/protected")).rejects.toMatchObject({ status: 401 });
+    expect(bearerProvider).toHaveBeenCalledTimes(2);
+
+    await expect(
+      client.request("/api/protected", {
+        headers: { Authorization: "Bearer caller-supplied" },
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(bearerProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a non-replayable request body", async () => {
+    const bearerProvider = jest.fn(async () => "provider-bearer");
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      token: null,
+      bearerProvider,
+      fetch: async () => new Response("unauthorized", { status: 401 }),
+    });
+
+    await expect(
+      client.request("/api/protected", {
+        method: "POST",
+        body: new ReadableStream(),
+        duplex: "half",
+      } as RequestInit),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(bearerProvider).toHaveBeenCalledTimes(1);
   });
 });

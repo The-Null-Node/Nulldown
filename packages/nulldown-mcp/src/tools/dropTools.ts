@@ -31,11 +31,15 @@ export const registerDropTools = (server: McpServer): void => {
     {
       title: "Create Drop",
       description:
-        "Create a plaintext Nulldown drop. Authenticated APIs use ND_TOKEN from the MCP environment.",
+        "Create a Nulldown drop. ND_AUTH_FILE creates a sealed account-owned envelope by default; ND_TOKEN authenticates only. Plaintext creation with account authentication requires legacyPlaintext=true and is not added to Remote Library.",
       inputSchema: {
         ...clientArgsSchema,
         content: z.string().describe("Markdown content to store."),
         metadata: jsonRecordSchema.optional(),
+        visibility: z.enum(["private", "unlisted", "public"]).optional().default("unlisted")
+          .describe("Envelope visibility. Defaults to unlisted when ND_AUTH_FILE is used."),
+        legacyPlaintext: z.boolean().optional()
+          .describe("Explicitly store plaintext for legacy compatibility. Authenticated plaintext drops are not added to Remote Library."),
         id: z.string().optional(),
         upsert: z.boolean().optional(),
         expectedRevision: z.string().optional(),
@@ -43,7 +47,10 @@ export const registerDropTools = (server: McpServer): void => {
     },
     async (args) =>
       asJsonText(
-        await createClient(args).createDrop({
+        await createClient(args, {
+          visibility: args.visibility,
+          legacyPlaintext: args.legacyPlaintext,
+        }).createDrop({
           content: args.content,
           metadata: args.metadata,
           id: args.id,

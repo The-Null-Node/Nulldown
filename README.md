@@ -74,6 +74,28 @@ nd auth status
 nd auth logout
 ```
 
+An authoring-capable login seals authenticated `create` and `update` content in
+the CLI before it is sent to the API. Use `--visibility private|unlisted|public`
+to select sharing behavior; it defaults to `unlisted`. Private drops are
+vault-only, while unlisted and public drops use provider escrow for recovery.
+The CLI reads the public `VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK` setting for that
+escrow path and never needs a provider private key. Older credentials must run
+`nd auth login` again before account-owned authoring. Use `--legacy-plaintext`
+only for intentional compatibility: it stores plaintext and does not enter
+Remote Library.
+
+MCP integrations can seal account-owned drops through the stable root export:
+
+```ts
+import {
+  sealDropForAuthoring,
+  type DropAccountEncryptionMaterial,
+  type DropDelegateSigningMaterial,
+  type DropProviderEncryptionMaterial,
+  type SealDropForAuthoringInput,
+} from "@thenullnode/nulldown/drop/authoring";
+```
+
 Use `--no-browser` to print the verification URL and authorization code
 without opening it. Set
 `ND_AUTH_FILE` or pass `--auth-file` to select another credential file. Direct

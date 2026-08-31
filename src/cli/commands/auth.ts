@@ -7,6 +7,7 @@ import {
   isCliCredentialForBaseUrl,
   type CliDeviceKeyPair,
 } from "../auth";
+import { mergeCliCredentialAuthoring } from "../cliCredential";
 import type { CliCredentialBundleV1 } from "../../../shared/auth/cliDevice";
 import type { NulldownRuntime } from "../runtime/types";
 
@@ -74,6 +75,7 @@ const createDeviceCredential = async (
       const credential = await decryptCliCredentialEnvelope(
         response.envelope,
         keyPair.privateKey,
+        keyPair.authoring,
       );
       if (!isCliCredentialForBaseUrl(credential, dependencies.baseUrl())) {
         throw new Error("CLI credential was issued for a different API origin.");
@@ -120,8 +122,9 @@ export const createAuthCommand = <TConfig>(
       if (!isCliCredentialForBaseUrl(refreshed, dependencies.baseUrl())) {
         throw new Error("CLI credential was issued for a different API origin.");
       }
-      await dependencies.writeCredential(refreshed);
-      dependencies.print(credentialStatus(refreshed));
+      const replacement = mergeCliCredentialAuthoring(current, refreshed);
+      await dependencies.writeCredential(replacement);
+      dependencies.print(credentialStatus(replacement));
       return;
     }
 
@@ -145,12 +148,17 @@ export const createAuthCommand = <TConfig>(
     }
 
     if (subcommand === "login") {
-      const keyPair = await generateCliDeviceKeyPair();
+      const readOnly = hasFlag(args, "read-only");
+      const keyPair = await generateCliDeviceKeyPair(!readOnly);
+      const deviceRequest = {
+        publicKey: keyPair.publicKey,
+        clientName: flagString(args, "name"),
+        ...(keyPair.authoring
+          ? { delegateSigningPublicJwk: keyPair.authoring.signingPublicJwk }
+          : {}),
+      };
       const started = requireResponse(
-        await dependencies.runtime.auth.device({
-          publicKey: keyPair.publicKey,
-          clientName: flagString(args, "name"),
-        }),
+        await dependencies.runtime.auth.device(deviceRequest),
         "CLI authorization could not start.",
       );
       const display = {
@@ -178,7 +186,7 @@ export const createAuthCommand = <TConfig>(
     }
 
     throw new Error(
-      "Usage: nd auth login [--no-browser] [--name <name>] | status | refresh | logout | session --account <id> --proof <file|->",
+      "Usage: nd auth login [--read-only] [--no-browser] [--name <name>] | status | refresh | logout | session --account <id> --proof <file|->",
     );
   },
 });

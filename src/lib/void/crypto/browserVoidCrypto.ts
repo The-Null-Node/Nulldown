@@ -5,8 +5,6 @@ escrow is only used as a fallback when the local vault cannot unwrap the stored 
 */
 
 import {
-  DROP_ENVELOPE_SCHEMA_V1,
-  DROP_ENVELOPE_VERSION_V1,
   isDropDraftPackV1,
   serializeDropEnvelopeForDeviceSignature,
   serializeDropEnvelopeForProviderSignature,
@@ -17,7 +15,8 @@ import {
   type DropUnlockPolicy,
   type DropVisibility,
 } from "../../../../shared/drop/types";
-import { fromBase64, toBase64 } from "./base64";
+import { sealDropForAuthoring } from "../../../../shared/drop/authoringCrypto";
+import { fromBase64 } from "./base64";
 import {
   createPasskeyVault,
   type PasskeyVault,
@@ -132,134 +131,38 @@ export class BrowserVoidCrypto implements VoidCrypto {
     const vault = await this.vault.getUnlockedVault();
     const visibility = options.visibility ?? "unlisted";
     const unlockPolicy = options.unlockPolicy ?? "vault-only";
-
-    const contentKey = await crypto.subtle.generateKey(
-      {
-        name: "AES-GCM",
-        length: 256,
-      },
-      true,
-      ["encrypt", "decrypt"],
-    );
-
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt(
-      {
-        name: "AES-GCM",
-        iv,
-      },
-      contentKey,
-      textEncoder.encode(payload.content),
-    );
-
-    let draftCipher:
-      | {
-          alg: "A256GCM";
-          iv: string;
-          ciphertext: string;
-        }
+    let providerEncryption:
+      | { key: CryptoKey; kid: string }
+      | null
       | undefined;
-
-    if (payload.draftPack) {
-      // Draft history is encrypted with the same content key so it travels with the document atomically.
-      const draftIv = crypto.getRandomValues(new Uint8Array(12));
-      const draftCiphertext = await crypto.subtle.encrypt(
-        {
-          name: "AES-GCM",
-          iv: draftIv,
-        },
-        contentKey,
-        textEncoder.encode(JSON.stringify(payload.draftPack)),
-      );
-
-      draftCipher = {
-        alg: "A256GCM",
-        iv: toBase64(draftIv),
-        ciphertext: toBase64(draftCiphertext),
-      };
-    }
-
-    const rawContentKey = await crypto.subtle.exportKey("raw", contentKey);
-    const wrappedKey = await crypto.subtle.encrypt(
-      {
-        name: "RSA-OAEP",
-      },
-      vault.encryptionPublicKey,
-      rawContentKey,
-    );
-
-    let providerEscrow:
-      | { mode: "provider-rsa-oaep"; kid: string; wrappedKey: string }
-      | undefined;
-
     if (unlockPolicy === "provider-escrow") {
-      const providerEncryption = await this.getProviderEncryptionKey();
+      providerEncryption = await this.getProviderEncryptionKey();
       if (!providerEncryption) {
         throw new Error(
           "Provider unlock policy requires VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK.",
         );
       }
-
-      const escrowWrappedKey = await crypto.subtle.encrypt(
-        {
-          name: "RSA-OAEP",
-        },
-        providerEncryption.key,
-        rawContentKey,
-      );
-
-      providerEscrow = {
-        mode: "provider-rsa-oaep",
-        kid: providerEncryption.kid,
-        wrappedKey: toBase64(escrowWrappedKey),
-      };
     }
-
-    const signableEnvelope = {
-      schema: DROP_ENVELOPE_SCHEMA_V1,
-      version: DROP_ENVELOPE_VERSION_V1,
-      createdAt: Date.now(),
-      accountId: vault.accountId,
+    return sealDropForAuthoring({
+      payload,
+      accountEncryption: {
+        accountId: vault.accountId,
+        encryptionKid: vault.encryptionKid,
+        encryptionPublicJwk: vault.encryptionPublicJwk,
+        encryptionPublicKey: vault.encryptionPublicKey,
+      },
+      delegateSigning: {
+        signingKid: vault.signingKid,
+        signingPublicJwk: vault.signingPublicJwk,
+        signingPrivateKey: vault.signingPrivateKey,
+      },
+      providerEncryption: providerEncryption
+        ? { kid: providerEncryption.kid, publicKey: providerEncryption.key }
+        : undefined,
       visibility,
       unlockPolicy,
       metadata: cloneMetadata(payload.metadata),
-      cipher: {
-        alg: "A256GCM" as const,
-        iv: toBase64(iv),
-        ciphertext: toBase64(ciphertext),
-      },
-      draftCipher,
-      keyEnvelope: {
-        mode: "account-vault-rsa-oaep" as const,
-        kid: vault.encryptionKid,
-        wrappedKey: toBase64(wrappedKey),
-      },
-      deviceSignerPublicJwk: vault.signingPublicJwk,
-      providerEscrow,
-    };
-
-    const signablePayload =
-      serializeDropEnvelopeForDeviceSignature(signableEnvelope);
-
-    const signature = await crypto.subtle.sign(
-      {
-        name: "ECDSA",
-        hash: "SHA-256",
-      },
-      vault.signingPrivateKey,
-      textEncoder.encode(signablePayload),
-    );
-
-    return {
-      ...signableEnvelope,
-      signatures: {
-        device: {
-          kid: vault.signingKid,
-          alg: "ECDSA_P256_SHA256",
-          sig: toBase64(signature),
-        },
-      },
-    };
+    });
   }
 
   async open(

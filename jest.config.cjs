@@ -17,6 +17,8 @@ module.exports = {
     "^(\\.{1,2}/.*)\\.js$": "$1",
     "^@/(.*)$": "<rootDir>/src/$1",
     "^@thenullnode/nulldown/client$": "<rootDir>/src/client/nulldownClient.ts",
+    "^@thenullnode/nulldown/drop/authoring$": "<rootDir>/shared/drop/authoringCrypto.ts",
+    "^@thenullnode/nulldown/auth/cliCredential$": "<rootDir>/src/cli/cliCredential.ts",
     "^@thenullnode/nulldown/drop/diff$": "<rootDir>/shared/drop/diff.ts",
     "^@thenullnode/nulldown/nulledit/types$": "<rootDir>/shared/nulledit/types.ts",
   },

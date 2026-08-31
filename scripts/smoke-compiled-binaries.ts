@@ -63,7 +63,7 @@ if (parsed.rootDropId !== "1wrhjx8Wzk67" || !Array.isArray(parsed.nodes)) {
   fail("Compiled CLI branch query returned unexpected payload.", { parsed });
 }
 
-run("bun", ["run", "scripts/smoke-mcp-stdio.ts", mcpPath]);
+run("bun", ["run", "scripts/smoke-mcp-stdio.ts", `./${mcpPath}`]);
 
 console.log(
   JSON.stringify(

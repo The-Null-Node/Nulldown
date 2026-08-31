@@ -2,10 +2,14 @@ import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-ty
 import { removePublicDropIndexEntry } from "../_lib/drops/index/repository";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
+import { readAccountLibraryEntry, tombstoneAccountLibraryEntry } from "../_lib/accounts/library/repository";
+import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/auth";
 
 interface Env {
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
+  ACCOUNT_AUTH_SECRET?: string;
+  ALLOW_INSECURE_ACCOUNT_HEADER?: string;
 }
 
 const jsonErrorResponse = (
@@ -84,6 +88,16 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       return jsonErrorResponse(400, "invalid_drop_id", "Drop ID is required.");
     }
 
+    const ownedEntry = env.DB ? await readAccountLibraryEntry(env.DB, id) : null;
+    // Preserve legacy private deletion behavior until backfill can prove the owner.
+    if (ownedEntry) {
+      const accountId = await resolveAuthenticatedAccountId(request, env);
+      if (!accountId || !ownedEntry || ownedEntry.account_id !== accountId || ownedEntry.deleted_at !== null) {
+        logger.logEnd(404, { reason: "owned_drop_not_found", canonicalDropRef: toLogRef(id) });
+        return jsonErrorResponse(404, "drop_not_found", "Drop not found.");
+      }
+    }
+
     const expectedRevisionHeader = request.headers.get("If-Match")?.trim() || null;
     if (expectedRevisionHeader) {
       const object = await env.R2_BUCKET.get(id);
@@ -128,6 +142,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       env.DB
         ? env.DB.prepare("DELETE FROM drops WHERE id = ?").bind(id).run()
         : Promise.resolve(),
+      env.DB ? tombstoneAccountLibraryEntry(env.DB, id, Date.now()) : Promise.resolve(),
     ]);
 
     logger.logEnd(204, {

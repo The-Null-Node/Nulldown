@@ -186,7 +186,7 @@ Auth and admin:
   auth status | refresh | logout
   admin branch-backfill <rootId>
   admin index-backfill
-  admin metadata-backfill
+  admin metadata-backfill [--account-library-only]
   serve [--host <host>] [--port <port>] [--data-dir <dir>] [--migrations-dir <dir>] [--no-sqlite]
   doctor
   smoke diff

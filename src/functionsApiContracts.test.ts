@@ -3,6 +3,7 @@ import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import { onRequestDelete } from "../functions/api/delete/[id]";
+import { onRequestGet } from "../functions/api/get/[id]";
 import { onRequestPost as onStorePost } from "../functions/api/store";
 import type { DropEnvelopeV1 } from "../shared/drop/types";
 
@@ -340,5 +341,36 @@ describe("functions api conflict contracts", () => {
     expect(body.code).toBe("revision_precondition_failed");
     expect(body.error).toContain("Refresh and try again");
     expect(await bucket.get(id)).not.toBeNull();
+  });
+
+  it("keeps projected public and unlisted links readable while private links remain account-gated", async () => {
+    const bucket = new MemoryR2Bucket();
+    bucket.seed("PublicLink123", "public body", "text/plain");
+
+    const read = async (visibility: "private" | "unlisted" | "public") => {
+      const db = {
+        prepare: jest.fn(() => ({
+          bind: jest.fn().mockReturnThis(),
+          first: jest.fn().mockResolvedValue({
+            entry_seq: 1,
+            drop_id: "PublicLink123",
+            account_id: "account-1",
+            visibility,
+            created_at: 1,
+            updated_at: 1,
+            deleted_at: null,
+          }),
+        })),
+      };
+      return onRequestGet({
+        request: new Request("https://nulldown.test/api/get/PublicLink123"),
+        env: { R2_BUCKET: bucket as unknown as R2Bucket, DB: db },
+        params: { id: "PublicLink123" },
+      } as unknown as Parameters<typeof onRequestGet>[0]);
+    };
+
+    await expect(read("public")).resolves.toHaveProperty("status", 200);
+    await expect(read("unlisted")).resolves.toHaveProperty("status", 200);
+    await expect(read("private")).resolves.toHaveProperty("status", 404);
   });
 });

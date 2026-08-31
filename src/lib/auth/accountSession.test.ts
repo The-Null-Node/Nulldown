@@ -40,6 +40,8 @@ const vault = {
   accountId: "account-1",
   signingPrivateKey: { kind: "signing-private-key" } as CryptoKey,
   signingPublicJwk: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+  encryptionKid: "enc_test",
+  encryptionPublicJwk: { kty: "RSA", n: "n".repeat(342), e: "AQAB" },
 };
 
 const installWindow = (sessionStorage: StorageMock) => {
@@ -268,7 +270,7 @@ describe("account session", () => {
     );
     const signedBytes = sign.mock.calls[0]?.[2] as Uint8Array;
     expect(new TextDecoder().decode(signedBytes)).toBe(
-      `nulldown-account-auth\n${vault.accountId}\n${signedAt}`,
+      `nulldown-account-auth\n${vault.accountId}\n${signedAt}\n{"encryptionKid":"${vault.encryptionKid}","encryptionPublicJwk":{"e":"AQAB","kty":"RSA","n":"${"n".repeat(342)}"}}`,
     );
     expect(fetch).toHaveBeenCalledWith("/api/auth/session", {
       method: "POST",
@@ -276,6 +278,8 @@ describe("account session", () => {
       body: JSON.stringify({
         accountId: vault.accountId,
         signingPublicJwk: vault.signingPublicJwk,
+        encryptionKid: vault.encryptionKid,
+        encryptionPublicJwk: vault.encryptionPublicJwk,
         signedAt,
         signature: "AP8E",
       }),

@@ -23,6 +23,8 @@ import {
   isAccountRecord,
   putAccountRecord,
 } from "../../accounts/session/auth";
+import { verifyAccountLibraryEnvelopeOwnership } from "../../accounts/library/service";
+import { upsertAccountLibraryEntry } from "../../accounts/library/repository";
 import {
   createDropIdentityRepository,
   REMOTE_DROP_ALIAS_PREFIX,
@@ -90,6 +92,8 @@ export interface MetadataBackfillStats {
   nullplugFactsUpserted: number;
   resolvedHeapsUpserted: number;
   searchIndexUpserted: number;
+  accountLibraryUpserted: number;
+  accountLibrarySkipped: Record<string, number>;
 }
 
 const DEFAULT_LIMIT = 500;
@@ -113,7 +117,14 @@ const createStats = (): MetadataBackfillStats => ({
   nullplugFactsUpserted: 0,
   resolvedHeapsUpserted: 0,
   searchIndexUpserted: 0,
+  accountLibraryUpserted: 0,
+  accountLibrarySkipped: {},
 });
+
+const skipAccountLibrary = (stats: MetadataBackfillStats, reason: string): void => {
+  stats.skipped += 1;
+  stats.accountLibrarySkipped[reason] = (stats.accountLibrarySkipped[reason] ?? 0) + 1;
+};
 
 const parseLimit = (value: string | null): number => {
   if (!value) return DEFAULT_LIMIT;
@@ -122,6 +133,9 @@ const parseLimit = (value: string | null): number => {
     ? Math.max(1, Math.min(MAX_LIMIT, parsed))
     : DEFAULT_LIMIT;
 };
+
+const isAccountLibraryOnly = (value: string | null): boolean =>
+  value === "account-library";
 
 const stripSuffix = (value: string, suffix: string): string =>
   value.endsWith(suffix) ? value.slice(0, -suffix.length) : value;
@@ -145,6 +159,107 @@ const readObjectJson = async <T>(
   } catch {
     return null;
   }
+};
+
+interface AccountOwnedDropRow {
+  id: string;
+}
+
+const backfillAccountLibraryObject = async (
+  env: Pick<MetadataBackfillEnv, "R2_BUCKET" | "DB">,
+  id: string,
+  stats: MetadataBackfillStats,
+): Promise<void> => {
+  const object = await env.R2_BUCKET.get(id);
+  if (!object || !env.DB) {
+    skipAccountLibrary(stats, "malformed");
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = await object.json<unknown>();
+  } catch {
+    skipAccountLibrary(stats, "malformed");
+    return;
+  }
+  if (isDropPayload(parsed)) {
+    skipAccountLibrary(stats, "plaintext");
+    return;
+  }
+  if (!isDropEnvelopeV1(parsed)) {
+    skipAccountLibrary(stats, "malformed");
+    return;
+  }
+  const verified = await verifyAccountLibraryEnvelopeOwnership(
+    env,
+    parsed,
+    null,
+    null,
+  );
+  if (!verified.accountId) {
+    skipAccountLibrary(
+      stats,
+      verified.reason === "account_mismatch" ? "foreign" : "expired_or_untrusted",
+    );
+    return;
+  }
+
+  await upsertAccountLibraryEntry(env.DB, {
+    dropId: id,
+    accountId: verified.accountId,
+    visibility: parsed.visibility ?? "unlisted",
+    createdAt: parsed.createdAt,
+    updatedAt: object?.uploaded?.getTime() ?? Date.now(),
+  });
+  stats.accountLibraryUpserted += 1;
+};
+
+const backfillAccountLibrary = async (
+  env: MetadataBackfillEnv,
+  cursor: string | undefined,
+  limit: number,
+  logger?: RequestLogger,
+): Promise<Response> => {
+  if (cursor && !isDropIdToken(cursor)) {
+    return jsonErrorResponse(400, "invalid_cursor", "Invalid account-library cursor.");
+  }
+
+  const statement = cursor
+    ? env.DB!.prepare(
+        `SELECT id FROM drops
+         WHERE owner_account_id IS NOT NULL AND id > ?
+         ORDER BY id ASC
+         LIMIT ?`,
+      ).bind(cursor, limit)
+    : env.DB!.prepare(
+        `SELECT id FROM drops
+         WHERE owner_account_id IS NOT NULL
+         ORDER BY id ASC
+         LIMIT ?`,
+      ).bind(limit);
+  const rows = (await statement.all<AccountOwnedDropRow>()).results ?? [];
+  const stats = createStats();
+
+  for (const row of rows) {
+    stats.scanned += 1;
+    try {
+      await backfillAccountLibraryObject(env, row.id, stats);
+    } catch (error) {
+      stats.failed += 1;
+      logger?.warn("metadata.account_library_backfill.object_failed", {
+        keyRef: toLogRef(row.id),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const nextCursor = rows.length === limit ? rows.at(-1)?.id ?? null : null;
+  return jsonResponse({
+    mode: "account-library",
+    stats,
+    cursor: nextCursor,
+    truncated: nextCursor !== null,
+  });
 };
 
 const upsertDropMetadataFromObject = async (
@@ -172,7 +287,6 @@ const upsertDropMetadataFromObject = async (
     }
 
     if (isDropEnvelopeV1(parsed)) {
-      ownerAccountId = parsed.accountId;
       visibility = parsed.visibility ?? "unlisted";
       metadataJson = JSON.stringify(parsed.metadata);
     } else if (isDropPayload(parsed)) {
@@ -478,6 +592,36 @@ const handleBackfillObject = async (
 
   stats.dropsUpserted += 1;
 
+  // Project only envelopes that pass the same direct/delegated ownership verification.
+  const envelope = await readObjectJson(
+    await env.R2_BUCKET.get(key),
+    isDropEnvelopeV1,
+  );
+  if (envelope) {
+    const verified = await verifyAccountLibraryEnvelopeOwnership(
+      env,
+      envelope,
+      null,
+      null,
+    );
+    if (verified.accountId) {
+      await env.DB
+        .prepare("UPDATE drops SET owner_account_id = ? WHERE id = ?")
+        .bind(verified.accountId, key)
+        .run();
+      await upsertAccountLibraryEntry(env.DB, {
+        dropId: key,
+        accountId: verified.accountId,
+        visibility: envelope.visibility ?? "unlisted",
+        createdAt: envelope.createdAt,
+        updatedAt: object.uploaded?.getTime() ?? Date.now(),
+      });
+      stats.accountLibraryUpserted += 1;
+    } else {
+      skipAccountLibrary(stats, "expired_or_untrusted");
+    }
+  }
+
   if (visibility === "public") {
     await upsertPublicDropIndexEntry(
       env.R2_BUCKET,
@@ -570,6 +714,9 @@ export const backfillD1Metadata = async (
   const url = new URL(request.url);
   const cursor = url.searchParams.get("cursor") ?? undefined;
   const limit = parseLimit(url.searchParams.get("limit"));
+  if (isAccountLibraryOnly(url.searchParams.get("mode"))) {
+    return backfillAccountLibrary(env, cursor, limit, logger);
+  }
   const listed = await env.R2_BUCKET.list({ limit, cursor });
   const stats = createStats();
 

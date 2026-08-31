@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 
 import { runNulldownMcpServer } from "../src/mcp/server";
+import { mcpLog } from "../src/mcp/logging";
 
 const main = async () => {
   await runNulldownMcpServer();
 };
 
-main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
+main().catch(() => {
+  mcpLog("mcp.server.fatal", "error");
   process.exitCode = 1;
 });

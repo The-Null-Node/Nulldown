@@ -25,6 +25,12 @@ import {
 } from "../storage/objectRepository";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
 import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
+import {
+  AccountLibraryError,
+  projectAccountLibraryEnvelope,
+  verifyAccountLibraryEnvelope,
+} from "../../accounts/library/service";
+import { readAccountLibraryEntry } from "../../accounts/library/repository";
 
 /** Environment required by the store route service. */
 export interface StoreServiceEnv extends ProviderSigningEnv {
@@ -145,6 +151,7 @@ const upsertDropMetadata = async (input: {
   id: string;
   contentType: string;
   envelope: DropEnvelopeV1 | null;
+  verifiedAccountId: string | null;
   updatedAt: number;
 }): Promise<void> => {
   if (!input.db) return;
@@ -166,7 +173,7 @@ const upsertDropMetadata = async (input: {
       input.id,
       input.contentType,
       toShortDropId(input.id),
-      input.envelope?.accountId ?? null,
+      input.verifiedAccountId,
       input.envelope?.visibility ?? "unlisted",
       input.updatedAt,
       input.updatedAt,
@@ -243,6 +250,7 @@ export const storeDrop = async ({
     let payloadKind: "plain_text" | "drop_payload" | "drop_envelope" =
       "plain_text";
     let storedEnvelope: DropEnvelopeV1 | null = null;
+    let verifiedAccountId: string | null = null;
     let allocationAttempts = 0;
     let aliasConflictCount = 0;
     let objectConflictCount = 0;
@@ -284,6 +292,26 @@ export const storeDrop = async ({
           env,
           logger,
         );
+        try {
+          verifiedAccountId = await verifyAccountLibraryEnvelope(
+            request,
+            { ...env, R2_BUCKET: env.blobs, DB: env.sql },
+            signedEnvelope,
+          );
+          if (requestedId && verifiedAccountId && env.sql) {
+            const existing = await readAccountLibraryEntry(env.sql, requestedId);
+            if (existing && existing.account_id !== verifiedAccountId) {
+              throw new AccountLibraryError(403, "account_mismatch", "The drop is owned by a different account.");
+            }
+          }
+        } catch (error) {
+          if (error instanceof AccountLibraryError) {
+            logger.warn("store.account_library_rejected", { code: error.code });
+            logger.logEnd(error.status, { reason: error.code });
+            return jsonErrorResponse(error.status, error.code, error.message);
+          }
+          throw error;
+        }
         storedEnvelope = signedEnvelope;
         storedPayload = JSON.stringify(signedEnvelope);
       } else if (isDropPayload(parsedRequest.payload)) {
@@ -512,8 +540,18 @@ export const storeDrop = async ({
       id,
       contentType: storedContentType,
       envelope: storedEnvelope,
+      verifiedAccountId,
       updatedAt,
     });
+    if (verifiedAccountId && storedEnvelope && env.sql) {
+      await projectAccountLibraryEnvelope(
+        env.sql,
+        id,
+        verifiedAccountId,
+        storedEnvelope,
+        updatedAt,
+      );
+    }
 
     if (payloadKind !== "drop_envelope") {
       const indexContent = payloadKind === "plain_text"

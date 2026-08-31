@@ -47,6 +47,10 @@ describe("CliAuthPage", () => {
       .mockResolvedValueOnce({ ok: false, status: 404 })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({ accountId: "account-1", clientName: "test-cli", authoring: null }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ approved: true, accountId: "account-1" }),
       });
     Object.defineProperty(globalThis, "fetch", { value: fetch, configurable: true });
@@ -55,13 +59,16 @@ describe("CliAuthPage", () => {
 
     const userCode = await screen.findByLabelText("Authorization code");
     const input = await screen.findByLabelText("Account ID");
-    const submit = screen.getByRole("button", { name: "Authorize CLI" });
+    const submit = screen.getByRole("button", { name: "Review CLI" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(input, { target: { value: "account-1" } });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(userCode, { target: { value: "abcdefghjklm" } });
     expect((submit as HTMLButtonElement).disabled).toBe(false);
     fireEvent.submit(userCode.closest("form") as HTMLFormElement);
+
+    const approve = await screen.findByRole("button", { name: "Authorize CLI" });
+    fireEvent.click(approve);
 
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toContain(
@@ -87,6 +94,10 @@ describe("CliAuthPage", () => {
       })
       .mockResolvedValueOnce({ ok: false, status: 404 })
       .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ accountId: "account-1", clientName: "test-cli", authoring: null }),
+      })
+      .mockResolvedValueOnce({
         ok: false,
         status: 409,
         json: async () => ({ error: "invalid_or_expired_cli_code" }),
@@ -104,7 +115,9 @@ describe("CliAuthPage", () => {
     fireEvent.change(screen.getByLabelText("Account ID"), {
       target: { value: "account-1" },
     });
-    const submit = screen.getByRole("button", { name: "Authorize CLI" });
+    fireEvent.click(screen.getByRole("button", { name: "Review CLI" }));
+
+    const submit = await screen.findByRole("button", { name: "Authorize CLI" });
     fireEvent.click(submit);
 
     await waitFor(() => {

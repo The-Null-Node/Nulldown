@@ -33,6 +33,22 @@ export const readAccountBinding = (
     .bind(accountId)
     .first<AccountBindingRow>();
 
+/** Lists every account explicitly bound to one authenticated OpenAuth user. */
+export const listAccountBindingsForUser = (
+  db: D1Database,
+  userId: string,
+): Promise<AccountBindingRow[]> =>
+  db
+    .prepare(
+      `SELECT account_id, user_id, signing_key_fingerprint, created_at, updated_at
+       FROM auth_account_bindings
+       WHERE user_id = ?
+       ORDER BY account_id ASC`,
+    )
+    .bind(userId)
+    .all<AccountBindingRow>()
+    .then((result) => result.results ?? []);
+
 export const createAccountBindingChallenge = async (
   db: D1Database,
   row: AccountBindingChallengeRow,

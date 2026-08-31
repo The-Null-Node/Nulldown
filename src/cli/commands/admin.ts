@@ -1,4 +1,4 @@
-import { flagString, type ParsedArgs } from "../core/args";
+import { flagString, hasFlag, type ParsedArgs } from "../core/args";
 import type { CliCommand } from "../core/command";
 import type { AdminBackfillTarget, NulldownRuntime } from "../runtime/types";
 
@@ -60,6 +60,10 @@ export const createAdminCommand = <TConfig>(
     }
 
     const limit = flagString(args, "limit") || defaultLimit(target);
+    const accountLibraryOnly = hasFlag(args, "account-library-only");
+    if (accountLibraryOnly && target !== "metadata-backfill") {
+      throw new Error("--account-library-only requires admin metadata-backfill.");
+    }
     const maxBatches = Number.parseInt(
       flagString(args, "max-batches") || "1000",
       10,
@@ -83,6 +87,7 @@ export const createAdminCommand = <TConfig>(
         token,
         limit,
         cursor,
+        accountLibraryOnly,
       });
       batches.push(response);
       cursor = nextCursor(response);

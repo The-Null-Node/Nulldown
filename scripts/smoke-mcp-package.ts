@@ -5,6 +5,17 @@ import { join } from "node:path";
 
 const repoRoot = process.cwd();
 const packageDir = join(repoRoot, "packages", "nulldown-mcp");
+const packageSmokeEnvironment = { ...process.env };
+for (const name of [
+  "ND_AUTH_FILE",
+  "ND_TOKEN",
+  "ND_DIFF_AUTH_TOKEN",
+  "DIFF_WEBHOOK_SECRET",
+  "VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK",
+]) {
+  delete packageSmokeEnvironment[name];
+}
+packageSmokeEnvironment.ND_BASE_URL ??= "https://nulldown.app";
 
 const fail = (message: string, details: Record<string, unknown> = {}): never => {
   console.error(message);
@@ -16,7 +27,7 @@ const run = (command: string, args: string[], cwd: string) => {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ND_BASE_URL: process.env.ND_BASE_URL ?? "https://nulldown.app" },
+    env: packageSmokeEnvironment,
   });
   if (result.status !== 0) {
     fail("Command failed.", {

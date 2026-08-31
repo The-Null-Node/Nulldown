@@ -138,8 +138,9 @@ export const createHttpNulldownRuntime = (
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: request.content,
-          metadata: request.metadata,
+          ...(request.envelope
+            ? { envelope: request.envelope }
+            : { content: request.content, metadata: request.metadata }),
         }),
       });
       if (!response.data) throw new Error("Create response did not include a drop.");
@@ -149,8 +150,9 @@ export const createHttpNulldownRuntime = (
       const body: Record<string, unknown> = {
         id: request.id,
         upsert: true,
-        content: request.content,
-        metadata: request.metadata,
+        ...(request.envelope
+          ? { envelope: request.envelope }
+          : { content: request.content, metadata: request.metadata }),
       };
       if (request.expectedRevision) body.expectedRevision = request.expectedRevision;
       const response = await dependencies.request<DropUpdateResult>("/api/store", {
@@ -325,6 +327,7 @@ export const createHttpNulldownRuntime = (
     async backfill(request: AdminBackfillRequest) {
       const params = new URLSearchParams({ limit: request.limit });
       if (request.cursor) params.set("cursor", request.cursor);
+      if (request.accountLibraryOnly) params.set("mode", "account-library");
       const path =
         request.target === "branch-backfill"
           ? `/api/branches/backfill/${encodeURIComponent(request.rootId || "")}?${params}`

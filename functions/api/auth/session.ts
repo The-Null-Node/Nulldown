@@ -1,6 +1,8 @@
 import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
+  canonicalizeAccountEncryptionRecipient,
   issueAccountSessionToken,
+  pinAccountEncryptionRecipient,
   putAccountRecord,
   readAccountRecord,
   reserveAccountRecord,
@@ -17,6 +19,8 @@ interface Env extends AccountAuthEnv {
 interface AccountSessionRequest {
   accountId?: string;
   signingPublicJwk?: JsonWebKey;
+  encryptionKid?: string;
+  encryptionPublicJwk?: JsonWebKey;
   signedAt?: number;
   signature?: string;
 }
@@ -66,6 +70,18 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     );
   }
 
+  const hasRecipient =
+    body.encryptionKid !== undefined || body.encryptionPublicJwk !== undefined;
+  const recipient = hasRecipient
+    ? await canonicalizeAccountEncryptionRecipient({
+        encryptionKid: body.encryptionKid,
+        encryptionPublicJwk: body.encryptionPublicJwk,
+      })
+    : null;
+  if (hasRecipient && !recipient) {
+    return new Response("Valid public encryption recipient is required.", { status: 400 });
+  }
+
   const existing = await readAccountRecord(env.R2_BUCKET, accountId, env.DB);
   const expectedPublicJwk = existing?.signingPublicJwk ?? body.signingPublicJwk;
 
@@ -74,6 +90,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     signingPublicJwk: expectedPublicJwk,
     signedAt: body.signedAt,
     signature: body.signature,
+    ...(recipient ? { recipient } : {}),
   });
 
   if (!validProof) {
@@ -85,19 +102,47 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     version: 1 as const,
     accountId,
     signingPublicJwk: expectedPublicJwk,
+    ...(recipient
+      ? recipient
+      : existing?.encryptionKid && existing.encryptionPublicJwk
+        ? {
+            encryptionKid: existing.encryptionKid,
+            encryptionPublicJwk: existing.encryptionPublicJwk,
+          }
+        : {}),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
+  let persisted = record;
   if (existing) {
-    await putAccountRecord(env.R2_BUCKET, record, env.DB);
+    if (recipient) {
+      const pinned = await pinAccountEncryptionRecipient(
+        env.R2_BUCKET,
+        existing,
+        recipient,
+        env.DB,
+      );
+      if (!pinned) {
+        return new Response("Account encryption recipient is immutable.", { status: 409 });
+      }
+      persisted = pinned;
+    } else {
+      await putAccountRecord(env.R2_BUCKET, record, env.DB);
+    }
   } else {
-    const persisted = await reserveAccountRecord(env.R2_BUCKET, record, env.DB);
+    const reserved = await reserveAccountRecord(env.R2_BUCKET, record, env.DB);
     if (
-      !persisted ||
-      persisted.signingPublicJwk.x !== expectedPublicJwk.x ||
-      persisted.signingPublicJwk.y !== expectedPublicJwk.y
+      !reserved ||
+      reserved.signingPublicJwk.x !== expectedPublicJwk.x ||
+      reserved.signingPublicJwk.y !== expectedPublicJwk.y
     ) {
       return new Response("Account proof verification failed.", { status: 401 });
+    }
+    persisted = recipient
+      ? await pinAccountEncryptionRecipient(env.R2_BUCKET, reserved, recipient, env.DB)
+      : reserved;
+    if (!persisted) {
+      return new Response("Account encryption recipient is immutable.", { status: 409 });
     }
   }
 

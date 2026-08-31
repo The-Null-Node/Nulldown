@@ -3,6 +3,7 @@ import {
   getLocalAccountSummary,
   getUnlockedVault,
 } from "../void/vault/passkeyVault";
+import { serializeCanonicalJson } from "../../../shared/drop/types";
 
 export interface AccountSessionCredentials {
   token: string;
@@ -47,6 +48,29 @@ const toBase64Url = (bytes: Uint8Array): string => {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
+};
+
+const canonicalizeEncryptionRecipient = (input: {
+  encryptionKid?: string;
+  encryptionPublicJwk?: JsonWebKey;
+}) => {
+  if (
+    typeof input.encryptionKid !== "string" ||
+    !input.encryptionPublicJwk ||
+    input.encryptionPublicJwk.kty !== "RSA" ||
+    typeof input.encryptionPublicJwk.n !== "string" ||
+    typeof input.encryptionPublicJwk.e !== "string"
+  ) {
+    return null;
+  }
+  return {
+    encryptionKid: input.encryptionKid,
+    encryptionPublicJwk: {
+      kty: "RSA",
+      n: input.encryptionPublicJwk.n,
+      e: input.encryptionPublicJwk.e,
+    },
+  };
 };
 
 const readStoredSession = (): CachedAccountSession | null => {
@@ -107,14 +131,19 @@ export const authenticateAccountSigningKey = async (input: Readonly<{
   accountId: string;
   signingPrivateKey: CryptoKey;
   signingPublicJwk: JsonWebKey;
+  encryptionKid?: string;
+  encryptionPublicJwk?: JsonWebKey;
   ownerUserId?: string | null;
 }>): Promise<AccountSessionCredentials | null> => {
   const signedAt = Date.now();
+  const recipient = canonicalizeEncryptionRecipient(input);
   const signature = await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     input.signingPrivateKey,
     new TextEncoder().encode(
-      `nulldown-account-auth\n${input.accountId}\n${signedAt}`,
+      recipient
+        ? `nulldown-account-auth\n${input.accountId}\n${signedAt}\n${serializeCanonicalJson(recipient)}`
+        : `nulldown-account-auth\n${input.accountId}\n${signedAt}`,
     ),
   );
   const response = await fetch("/api/auth/session", {
@@ -123,6 +152,7 @@ export const authenticateAccountSigningKey = async (input: Readonly<{
     body: JSON.stringify({
       accountId: input.accountId,
       signingPublicJwk: input.signingPublicJwk,
+      ...(recipient ? recipient : {}),
       signedAt,
       signature: toBase64Url(new Uint8Array(signature)),
     }),
@@ -165,7 +195,13 @@ export const getAccountSessionToken = async (
     return null;
   }
 
-  const localAccount = await getLocalAccountSummary();
+  let localAccount: { accountId: string; ownerUserId: string | null } | null;
+  try {
+    localAccount = await getLocalAccountSummary();
+  } catch {
+    // Remote capability links must stay usable in non-browser and partial-browser runtimes.
+    return null;
+  }
   if (
     localAccount?.ownerUserId &&
     getActiveVaultUser() !== localAccount.ownerUserId
@@ -203,6 +239,8 @@ export const getAccountSessionToken = async (
       accountId: vault.accountId,
       signingPrivateKey: vault.signingPrivateKey,
       signingPublicJwk: vault.signingPublicJwk,
+      encryptionKid: vault.encryptionKid,
+      encryptionPublicJwk: vault.encryptionPublicJwk,
       ownerUserId: localAccount?.ownerUserId,
     });
     if (!session) {
