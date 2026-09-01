@@ -1,8 +1,4 @@
-import {
-  serializeCanonicalJson,
-  type DropEnvelopeV1,
-  type DropVisibility,
-} from "../../../../../shared/drop/types";
+import type { DropEnvelopeV1, DropVisibility } from "../../../../../shared/drop/types";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 import {
   readAccountRecord,
@@ -13,6 +9,7 @@ import {
 } from "../session/auth";
 import {
   sameDeviceSigningKey,
+  sameEncryptionRecipientKey,
   verifyDropDeviceDelegationSignature,
   verifyDropEnvelopeDeviceSignature,
 } from "../../crypto/envelopes/verification";
@@ -142,8 +139,10 @@ export const verifyAccountLibraryEnvelopeOwnership = async (
     !record.encryptionPublicJwk ||
     delegation.encryptionKid !== envelope.keyEnvelope.kid ||
     delegation.encryptionKid !== record.encryptionKid ||
-    serializeCanonicalJson(delegation.encryptionPublicJwk) !==
-      serializeCanonicalJson(record.encryptionPublicJwk) ||
+    !sameEncryptionRecipientKey(
+      delegation.encryptionPublicJwk,
+      record.encryptionPublicJwk,
+    ) ||
     !sameDeviceSigningKey(delegation.delegateSigningPublicJwk, envelope.deviceSignerPublicJwk) ||
     !(await verifyDropDeviceDelegationSignature(delegation, record.signingPublicJwk))
   ) {

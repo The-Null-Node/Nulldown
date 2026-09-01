@@ -30,6 +30,16 @@ export const sameDeviceSigningKey = (left: JsonWebKey, right: JsonWebKey): boole
   left.x === right.x &&
   left.y === right.y;
 
+/** Returns whether two RSA recipient JWKs identify the same public key. */
+export const sameEncryptionRecipientKey = (
+  left: JsonWebKey,
+  right: JsonWebKey,
+): boolean =>
+  left.kty === "RSA" &&
+  right.kty === "RSA" &&
+  left.n === right.n &&
+  left.e === right.e;
+
 /** Verifies a sealed envelope's device signature with the embedded signing key. */
 export const verifyDropEnvelopeDeviceSignature = async (
   envelope: DropEnvelopeV1,

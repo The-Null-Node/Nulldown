@@ -140,7 +140,7 @@ const signDelegatedEnvelope = async (): Promise<{
     credentialId,
     delegateSigningPublicJwk,
     encryptionKid: "enc_a",
-    encryptionPublicJwk,
+    encryptionPublicJwk: exportedEncryptionPublicJwk,
     issuedAt: Date.now() - 1,
     expiresAt: Date.now() + 60_000,
     signature: { kid: "account_a", alg: "ECDSA_P256_SHA256", sig: "placeholder" },
@@ -326,7 +326,7 @@ describe("account-library repository", () => {
     ).resolves.toBe(false);
   });
 
-  it("projects a valid pinned delegated envelope and requires a matching credential claim", async () => {
+  it("projects a full-JWK delegated envelope against a canonical recipient pin and requires its credential claim", async () => {
     const { envelope, accountPublicJwk, encryptionPublicJwk } = await signDelegatedEnvelope();
     const { DB, env } = createVerificationEnvironment(accountPublicJwk, {
       encryptionKid: "enc_a",
@@ -343,6 +343,14 @@ describe("account-library repository", () => {
       headers: new Headers({ Authorization: `Bearer ${token}` }),
     });
 
+    expect(envelope.deviceDelegation?.encryptionPublicJwk).toEqual(
+      expect.objectContaining({
+        ...encryptionPublicJwk,
+        alg: "RSA-OAEP-256",
+        ext: true,
+        key_ops: ["encrypt"],
+      }),
+    );
     await expect(
       verifyAccountLibraryEnvelopeOwnership(env, envelope, "account_a", credentialId),
     ).resolves.toEqual({ accountId: "account_a", reason: null });

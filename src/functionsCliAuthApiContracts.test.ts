@@ -22,6 +22,7 @@ import {
   DROP_DEVICE_DELEGATION_SCHEMA,
   DROP_DEVICE_DELEGATION_VERSION,
   serializeDropDeviceDelegationForSignature,
+  toDropDeviceDelegationSignable,
   type DropDeviceDelegation,
 } from "../shared/drop/deviceDelegation";
 
@@ -89,6 +90,10 @@ class MemoryDatabase {
   readonly users = new Set<string>();
   readonly accountBindings = new Map<string, string>();
   readonly accountSigningKeys = new Map<string, JsonWebKey>();
+  readonly accountEncryptionRecipients = new Map<
+    string,
+    { encryptionKid: string; encryptionPublicJwk: JsonWebKey }
+  >();
 
   prepare(sql: string): MemoryStatement {
     return new MemoryStatement(this, sql);
@@ -209,10 +214,15 @@ class MemoryDatabase {
     if (sql.includes("FROM accounts")) {
       const accountId = String(params[0]);
       const signingPublicJwk = this.accountSigningKeys.get(accountId);
+      const encryptionRecipient = this.accountEncryptionRecipients.get(accountId);
       return signingPublicJwk
         ? {
             account_id: accountId,
             signing_public_jwk: JSON.stringify(signingPublicJwk),
+            encryption_kid: encryptionRecipient?.encryptionKid ?? null,
+            encryption_public_jwk: encryptionRecipient
+              ? JSON.stringify(encryptionRecipient.encryptionPublicJwk)
+              : null,
             created_at: 1,
             updated_at: 1,
           }
@@ -337,6 +347,22 @@ describe("CLI auth Pages service", () => {
       "account-1",
       await crypto.subtle.exportKey("jwk", rootPair.publicKey),
     );
+    const recipientPair = (await crypto.subtle.generateKey(
+      {
+        name: "RSA-OAEP",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["encrypt", "decrypt"],
+    )) as CryptoKeyPair;
+    const recipientPublicJwk = await crypto.subtle.exportKey("jwk", recipientPair.publicKey);
+    const canonicalRecipientPublicJwk = {
+      kty: recipientPublicJwk.kty,
+      n: recipientPublicJwk.n,
+      e: recipientPublicJwk.e,
+    };
     const authority = await FakeOpenAuthAuthority.create();
     const accessToken = await authority.issueAccessToken("user-1");
     const env = {
@@ -410,10 +436,79 @@ describe("CLI auth Pages service", () => {
       credentialId: ticket.credential_id!,
       delegateSigningPublicJwk: device.authoring!.signingPublicJwk,
       encryptionKid: "enc-kid",
-      encryptionPublicJwk: { kty: "RSA", n: "n", e: "AQAB" },
+      encryptionPublicJwk: recipientPublicJwk,
       issuedAt: Date.now(),
       expiresAt: ticket.credential_expires_at!,
     });
+    expect(recipientPublicJwk).toEqual(
+      expect.objectContaining({
+        ...canonicalRecipientPublicJwk,
+        alg: "RSA-OAEP-256",
+        ext: true,
+        key_ops: ["encrypt"],
+      }),
+    );
+    const approveDelegation = (candidate: DropDeviceDelegation): Promise<Response> =>
+      approveCliDeviceResponse(
+        env,
+        new Request(`${appOrigin}/api/auth/cli/approve`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `${accessCookieName}=${accessToken}`,
+            Origin: appOrigin,
+          },
+          body: JSON.stringify({
+            userCode: start.userCode,
+            accountId: "account-1",
+            delegation: candidate,
+          }),
+        }),
+      );
+
+    const unpinned = await approveDelegation(delegation);
+    expect(unpinned.status).toBe(400);
+    await expect(unpinned.json()).resolves.toEqual({ error: "invalid_cli_delegation" });
+    expect(ticket.approved_at).toBeNull();
+    expect(database.credentials.size).toBe(0);
+    database.accountEncryptionRecipients.set("account-1", {
+      encryptionKid: "enc-kid",
+      encryptionPublicJwk: canonicalRecipientPublicJwk,
+    });
+
+    const mismatchedRecipientPair = (await crypto.subtle.generateKey(
+      {
+        name: "RSA-OAEP",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["encrypt", "decrypt"],
+    )) as CryptoKeyPair;
+    const mismatchedRecipient = await signDelegation(rootPair.privateKey, {
+      ...toDropDeviceDelegationSignable(delegation),
+      encryptionPublicJwk: await crypto.subtle.exportKey(
+        "jwk",
+        mismatchedRecipientPair.publicKey,
+      ),
+    });
+    const rejectedRecipient = await approveDelegation(mismatchedRecipient);
+    expect(rejectedRecipient.status).toBe(400);
+    await expect(rejectedRecipient.json()).resolves.toEqual({ error: "invalid_cli_delegation" });
+    expect(ticket.approved_at).toBeNull();
+    expect(database.credentials.size).toBe(0);
+
+    const mismatchedKid = await signDelegation(rootPair.privateKey, {
+      ...toDropDeviceDelegationSignable(delegation),
+      encryptionKid: "other-enc-kid",
+    });
+    const rejectedKid = await approveDelegation(mismatchedKid);
+    expect(rejectedKid.status).toBe(400);
+    await expect(rejectedKid.json()).resolves.toEqual({ error: "invalid_cli_delegation" });
+    expect(ticket.approved_at).toBeNull();
+    expect(database.credentials.size).toBe(0);
+
     const forged = await approveCliDeviceResponse(
       env,
       new Request(`${appOrigin}/api/auth/cli/approve`, {
@@ -456,18 +551,7 @@ describe("CLI auth Pages service", () => {
     );
     expect(rejected.status).toBe(400);
 
-    const approved = await approveCliDeviceResponse(
-      env,
-      new Request(`${appOrigin}/api/auth/cli/approve`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: `${accessCookieName}=${accessToken}`,
-          Origin: appOrigin,
-        },
-        body: JSON.stringify({ userCode: start.userCode, accountId: "account-1", delegation }),
-      }),
-    );
+    const approved = await approveDelegation(delegation);
     expect(approved.status).toBe(200);
     expect(await approved.text()).not.toContain('"d"');
     const polled = await pollCliDeviceResponse(

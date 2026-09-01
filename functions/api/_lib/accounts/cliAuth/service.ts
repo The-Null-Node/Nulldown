@@ -18,6 +18,7 @@ import {
   type DropDeviceDelegation,
 } from "../../../../../shared/drop/deviceDelegation";
 import { serializeCanonicalJson } from "../../../../../shared/drop/types";
+import { sameEncryptionRecipientKey } from "../../crypto/envelopes/verification";
 import {
   issueAccountSessionToken,
   readAccountRecord,
@@ -398,7 +399,17 @@ const verifiesTicketDelegation = async (
     return false;
   }
   const account = await readAccountRecord(env.R2_BUCKET, accountId, env.DB);
-  if (!account) return false;
+  if (
+    !account?.encryptionKid ||
+    !account.encryptionPublicJwk ||
+    delegation.encryptionKid !== account.encryptionKid ||
+    !sameEncryptionRecipientKey(
+      delegation.encryptionPublicJwk,
+      account.encryptionPublicJwk,
+    )
+  ) {
+    return false;
+  }
   try {
     const key = await crypto.subtle.importKey(
       "jwk",
