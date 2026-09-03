@@ -1,6 +1,6 @@
 {
   "name": "@thenullnode/nulldown-mcp",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "private": false,
   "description": "Stdio MCP access to Nulldown's deterministic Markdown state, retrieval, and memory",
   "type": "module",
@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@thenullnode/nulldown": ">=0.0.6 <0.1.0",
+    "@thenullnode/nulldown": ">=0.0.7 <0.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

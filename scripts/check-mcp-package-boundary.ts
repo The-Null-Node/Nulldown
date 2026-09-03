@@ -48,7 +48,7 @@ const missingDependencies = requiredDependencies.filter(
   (dependency) => !(dependency in (packageJson.dependencies ?? {})),
 );
 const requiresAuthoringExport =
-  packageJson.dependencies?.["@thenullnode/nulldown"] === ">=0.0.6 <0.1.0";
+  packageJson.dependencies?.["@thenullnode/nulldown"] === ">=0.0.7 <0.1.0";
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--json"], {
   cwd: packageDir,
