@@ -35,6 +35,8 @@ interface ResolvedTheme {
 
 interface ThemeState {
   themeId: ThemeId;
+  preferredThemeId: ThemeId;
+  documentThemeId: ThemeId | null;
   typefaceId: TypefaceId;
   systemMode: ThemeMode;
   providerId: string;
@@ -45,6 +47,9 @@ interface ThemeState {
   loadToken: number;
   hydrated: boolean;
   setThemeId: (id: ThemeId) => Promise<void>;
+  setPreferredThemeId: (id: ThemeId) => Promise<void>;
+  setDocumentThemeId: (id: ThemeId) => Promise<void>;
+  clearDocumentTheme: () => Promise<void>;
   setTypefaceId: (id: TypefaceId) => void;
   setSystemMode: (mode: ThemeMode) => void;
   setProviderId: (id: string) => void;
@@ -125,14 +130,24 @@ export const useThemeStore = create<ThemeState>((set, get) => {
   const typefaceId = getStoredTypeface();
   const systemMode = getSystemMode();
 
-  const setThemeId = async (id: ThemeId) => {
+  const loadTheme = async (
+    id: ThemeId,
+    options: { persist: boolean; preferredThemeId?: ThemeId; documentThemeId?: ThemeId | null },
+  ) => {
+    const { persist, ...themeState } = options;
     const nextId = id || "system";
-    if (typeof window !== "undefined") {
+    if (persist && typeof window !== "undefined") {
       window.localStorage.setItem(STORAGE_KEY, nextId);
     }
 
     const token = get().loadToken + 1;
-    set({ themeId: nextId, status: "loading", error: null, loadToken: token });
+    set({
+      themeId: nextId,
+      ...themeState,
+      status: "loading",
+      error: null,
+      loadToken: token,
+    });
 
     if (nextId === "system") {
       set({
@@ -155,11 +170,13 @@ export const useThemeStore = create<ThemeState>((set, get) => {
       if (get().loadToken !== token) return;
       const message =
         error instanceof Error ? error.message : "Failed to load theme.";
-      if (typeof window !== "undefined") {
+      if (persist && typeof window !== "undefined") {
         window.localStorage.setItem(STORAGE_KEY, "system");
       }
       set({
         themeId: "system",
+        preferredThemeId: persist ? "system" : get().preferredThemeId,
+        documentThemeId: null,
         activeTheme: null,
         resolvedTheme: resolveTheme(null, get().systemMode),
         status: "error",
@@ -168,8 +185,45 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     }
   };
 
+  const setThemeId = (id: ThemeId) =>
+    loadTheme(id, {
+      persist: true,
+      preferredThemeId: id || "system",
+      documentThemeId: null,
+    });
+
+  const setPreferredThemeId = async (id: ThemeId) => {
+    const nextId = id || "system";
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEY, nextId);
+    }
+    if (get().documentThemeId) {
+      set({ preferredThemeId: nextId });
+      return;
+    }
+    await loadTheme(nextId, {
+      persist: true,
+      preferredThemeId: nextId,
+      documentThemeId: null,
+    });
+  };
+
+  const setDocumentThemeId = (id: ThemeId) =>
+    loadTheme(id, {
+      persist: false,
+      documentThemeId: id || "system",
+    });
+
+  const clearDocumentTheme = () =>
+    loadTheme(get().preferredThemeId, {
+      persist: false,
+      documentThemeId: null,
+    });
+
   return {
     themeId,
+    preferredThemeId: themeId,
+    documentThemeId: null,
     typefaceId,
     systemMode,
     providerId: DEFAULT_PROVIDER_ID,
@@ -180,6 +234,9 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     loadToken: 0,
     hydrated: false,
     setThemeId,
+    setPreferredThemeId,
+    setDocumentThemeId,
+    clearDocumentTheme,
     setTypefaceId: (id: TypefaceId) => {
       if (typeof window !== "undefined") {
         window.localStorage.setItem(TYPEFACE_STORAGE_KEY, id);
@@ -296,6 +353,9 @@ export const useTheme = () =>
     themeId: state.themeId,
     typefaceId: state.typefaceId,
     setThemeId: state.setThemeId,
+    setPreferredThemeId: state.setPreferredThemeId,
+    setDocumentThemeId: state.setDocumentThemeId,
+    clearDocumentTheme: state.clearDocumentTheme,
     setTypefaceId: state.setTypefaceId,
     theme: state.resolvedTheme,
     status: state.status,

@@ -69,6 +69,7 @@ import type {
 } from "../../shared/nullplug/ui";
 import { getDefaultRemoteNullplugRuntime } from "../lib/nullplug/providerRuntime";
 import { resolveRootRuntimePolicy } from "../../shared/nullplug/policy";
+import { useAccountPreferencesStore } from "../stores/accountPreferencesStore";
 
 type PaletteAction =
   | { kind: "open-drop"; id: string; source: "owned" | "external" | "remote" }
@@ -253,7 +254,9 @@ const EditorPage: React.FC = () => {
   );
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
   const setMode = useDropStore((state) => state.setMode);
-  const setShareVisibility = useDropStore((state) => state.setShareVisibility);
+  const setAccountPreference = useAccountPreferencesStore(
+    (state) => state.setPreference,
+  );
   const getDrop = useDropStore((state) => state.getDrop);
   const resolveDropOwnership = useDropStore(
     (state) => state.resolveDropOwnership,
@@ -328,8 +331,11 @@ const EditorPage: React.FC = () => {
   }, [hydrateOfflineMode, hydrateSharePreferences, initializeStorage]);
 
   const handleToggleShareVisibility = useCallback(() => {
-    void setShareVisibility(nextVisibility(shareVisibility));
-  }, [setShareVisibility, shareVisibility]);
+    void setAccountPreference(
+      "shareVisibilityDefault",
+      nextVisibility(shareVisibility),
+    );
+  }, [setAccountPreference, shareVisibility]);
 
   const handleRequestAddNetworkHost = useCallback(
     (host: string) => {

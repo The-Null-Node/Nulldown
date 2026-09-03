@@ -45,7 +45,7 @@ const DropViewPage: React.FC = () => {
   );
   const [isExpanded, setIsExpanded] = useState(false);
   const [editHref, setEditHref] = useState<string>("/");
-  const { setThemeId } = useTheme();
+  const { setDocumentThemeId, clearDocumentTheme } = useTheme();
   const getDrop = useDropStore((state) => state.getDrop);
   const resolveDropOwnership = useDropStore(
     (state) => state.resolveDropOwnership,
@@ -116,7 +116,7 @@ const DropViewPage: React.FC = () => {
         setDropContent(payload.content);
         setRenderedContent(payload.content);
         setSourceAllowedUrls(resolveNetworkAllowlist(payload.metadata?.allowedUrls));
-        void setThemeId(payload.metadata?.themeId ?? "system");
+        void setDocumentThemeId(payload.metadata?.themeId ?? "system");
 
         if (!ownedByCurrentAccount) {
           upsertRecentExternalDrop({
@@ -138,7 +138,11 @@ const DropViewPage: React.FC = () => {
     };
 
     fetchDrop();
-  }, [getDrop, id, resolveDropOwnership, setThemeId]);
+  }, [getDrop, id, resolveDropOwnership, setDocumentThemeId]);
+
+  useEffect(() => () => {
+    void clearDocumentTheme();
+  }, [clearDocumentTheme]);
 
   useEffect(() => {
     if (!dropContent) {

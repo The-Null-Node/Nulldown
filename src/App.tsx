@@ -7,6 +7,7 @@ import { ThemeProvider } from "./theme/themeContext";
 import {
   getOpenAuthSessionState,
   OPEN_AUTH_LOGOUT_STORAGE_KEY,
+  type OpenAuthPrincipal,
 } from "./lib/auth/openAuthClient";
 import {
   cancelAccountSyncOperations,
@@ -15,6 +16,7 @@ import {
 import { clearAccountSession } from "./lib/auth/accountSession";
 import { setActiveVaultUser } from "./lib/void/vault/passkeyVault";
 import OpenAuthAccountControl from "./pages/editor/components/OpenAuthAccountControl";
+import { useAccountPreferencesSync } from "./lib/auth/useAccountPreferencesSync";
 
 // A simple 404 component
 const NotFoundPage: React.FC = () => {
@@ -34,6 +36,9 @@ const NotFoundPage: React.FC = () => {
 const App: React.FC = () => {
   const [accountReady, setAccountReady] = useState(false);
   const [restoreRequired, setRestoreRequired] = useState(false);
+  const [principal, setPrincipal] = useState<OpenAuthPrincipal | null>(null);
+
+  useAccountPreferencesSync(principal);
 
   useEffect(() => {
     const handleRemoteLogout = (event: StorageEvent): void => {
@@ -41,6 +46,7 @@ const App: React.FC = () => {
       cancelAccountSyncOperations();
       clearAccountSession();
       setActiveVaultUser(null);
+      setPrincipal(null);
       window.location.reload();
     };
     window.addEventListener("storage", handleRemoteLogout);
@@ -56,6 +62,7 @@ const App: React.FC = () => {
       if (session.status === "unavailable") {
         clearAccountSession();
         setActiveVaultUser(null);
+        setPrincipal(null);
         setAccountReady(true);
         return;
       }
@@ -63,6 +70,7 @@ const App: React.FC = () => {
         session.status === "authenticated" ? session.principal : null;
       clearAccountSession();
       setActiveVaultUser(principal?.userId ?? null);
+      setPrincipal(principal);
       if (principal) {
         try {
           const syncState = await getAccountSyncState(principal);
