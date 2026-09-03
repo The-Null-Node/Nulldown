@@ -66,14 +66,14 @@
     },
     "packages/nulldown-mcp": {
       "name": "@thenullnode/nulldown-mcp",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "bin": {
         "nd-mcp": "bin/nulldown-mcp",
         "nulldown-mcp": "bin/nulldown-mcp",
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
-        "@thenullnode/nulldown": ">=0.0.6 <0.1.0",
+        "@thenullnode/nulldown": ">=0.0.7 <0.1.0",
         "zod": "^4.4.3",
       },
       "devDependencies": {
@@ -762,7 +762,7 @@
 
     "@testing-library/react": ["@testing-library/react@16.3.2", "", { "dependencies": { "@babel/runtime": "^7.12.5" }, "peerDependencies": { "@testing-library/dom": "^10.0.0", "@types/react": "^18.0.0 || ^19.0.0", "@types/react-dom": "^18.0.0 || ^19.0.0", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" }, "optionalPeers": ["@types/react", "@types/react-dom"] }, "sha512-XU5/SytQM+ykqMnAnvB2umaJNIOsLF3PVv//1Ew4CTcpz0/BRyy/af40qqrt7SjKpDdT1saBMc42CUok5gaw+g=="],
 
-    "@thenullnode/nulldown": ["@thenullnode/nulldown@0.0.6", "", { "dependencies": { "@aws-sdk/client-s3": "^3.797.0", "nanoid": "^5.0.0", "zod": "^4.4.3" }, "bin": { "nd": "bin/nulldown", "nulldown": "bin/nulldown" } }, "sha512-nVLB333CDmUmBKoiiTlenr6Fpb+k7E4MJlBct2d0SXDFEqIp96r08vwv1Bx4+eo2jFZe5g2ayuHTXF+YYU+N2w=="],
+    "@thenullnode/nulldown": ["@thenullnode/nulldown@0.0.7", "", { "dependencies": { "@aws-sdk/client-s3": "^3.797.0", "nanoid": "^5.0.0", "zod": "^4.4.3" }, "bin": { "nd": "bin/nulldown", "nulldown": "bin/nulldown" } }, "sha512-FhLZSSQVg3F1/+3s3dUO+d/QNhibHRgSSPyiYJpz/VFwu9vJ4a5nHl6i9utXDta7niHPk7Kn1J2CLtGMfrjPIA=="],
 
     "@thenullnode/nulldown-mcp": ["@thenullnode/nulldown-mcp@workspace:packages/nulldown-mcp"],
 
