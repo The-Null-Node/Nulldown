@@ -24,6 +24,10 @@ import type {
   DropUpdateResult,
   NulldownRuntime,
 } from "./types";
+import {
+  hasConfirmedDropDiffAppendReceipt,
+  isDropDiffAppendResponse,
+} from "../../../shared/drop/diff";
 
 const encodeBranchPathSegment = (value: string): string =>
   encodeURIComponent(value).replace(/%3A/gi, ":");
@@ -225,10 +229,17 @@ export const createHttpNulldownRuntime = (
       );
       return response.data;
     },
-    async promote(rootId, branchId) {
+    async promote(input) {
       const response = await dependencies.request(
-        `${branchPath(rootId, branchId)}/promote`,
-        { method: "POST" },
+        `${branchPath(input.rootId, input.branchId)}/promote`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expectedSnapshotId: input.expectedSnapshotId,
+            idempotencyKey: input.idempotencyKey,
+          }),
+        },
       );
       return response.data;
     },
@@ -260,6 +271,21 @@ export const createHttpNulldownRuntime = (
         },
         body,
       });
+      if (!isDropDiffAppendResponse(response.data)) {
+        throw new Error(
+          "Diff response did not include a durable acknowledgement. Upgrade the server before retrying.",
+        );
+      }
+      if (
+        !hasConfirmedDropDiffAppendReceipt(response.data, {
+          branchId: request.branchId,
+          eventIds: request.envelope.events.map((event) => event.eventId),
+        })
+      ) {
+        throw new Error(
+          "Diff response did not confirm every submitted event. Retry the exact same event.",
+        );
+      }
       return response.data;
     },
   },

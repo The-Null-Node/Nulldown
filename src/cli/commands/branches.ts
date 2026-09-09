@@ -139,7 +139,19 @@ export const createBranchCommand = <TConfig>(
       if (!rootId || !branchId) {
         throw new Error("Usage: nd branch promote <rootId> <branchId>");
       }
-      const response = await dependencies.runtime.branches.promote(rootId, branchId);
+      const expectedSnapshotId = parseNumberFlag(args, "expected-snapshot");
+      const idempotencyKey = flagString(args, "idempotency-key");
+      if (!Number.isSafeInteger(expectedSnapshotId) || expectedSnapshotId! < 0 || !idempotencyKey) {
+        throw new Error(
+          "Usage: nd branch promote <rootId> <branchId> --expected-snapshot <n> --idempotency-key <key>",
+        );
+      }
+      const response = await dependencies.runtime.branches.promote({
+        rootId,
+        branchId,
+        expectedSnapshotId: expectedSnapshotId!,
+        idempotencyKey,
+      });
       const url =
         response && typeof response === "object" && "url" in response
           ? (response as { url?: string }).url

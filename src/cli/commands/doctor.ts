@@ -12,6 +12,7 @@ interface DoctorConfig {
   json: boolean;
   quiet: boolean;
   verbose: boolean;
+  requestTimeoutMs: number;
 }
 
 interface DoctorDiffAuthBundle {
@@ -42,6 +43,7 @@ export const createDoctorCommand = (
       configDir: config.configDir,
       diffAuthDir: config.diffAuthDir,
       diffAuthTokenPath: config.diffAuthTokenPath,
+      requestTimeoutMs: config.requestTimeoutMs,
       hasInlineDiffAuthToken: Boolean(config.diffAuthToken),
       hasDiffAuthKeys: Boolean(diffAuthBundle.keys),
       diffAuthCredentialDropIds: Object.keys(diffAuthBundle.credentials),

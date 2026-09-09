@@ -2,7 +2,11 @@ import type {
   DropBranchRecord,
   DropSnapshotRecord,
 } from "../../../../shared/drop/branch";
-import type { DropDiffEvent } from "../../../../shared/drop/diff";
+import type {
+  DropDiffEvent,
+  DropDiffEventAcknowledgement,
+} from "../../../../shared/drop/diff";
+import { serializeCanonicalJson } from "../../../../shared/drop/types";
 import type {
   VoidBlobStore,
   VoidDataKey,
@@ -53,6 +57,8 @@ export interface BranchAppendResult {
   snapshot: DropSnapshotRecord | null;
   content: string;
   acceptedEvents: DropDiffEvent[];
+  /** Acknowledgements for new and idempotently replayed input events. */
+  acknowledgements: DropDiffEventAcknowledgement[];
   deduplicatedCount: number;
   totalStored: number;
 }
@@ -176,6 +182,79 @@ const dispatchBranchAppendSnapshotters = async (
   });
 };
 
+const comparableEvent = (event: DropDiffEvent) => ({
+  eventId: event.eventId,
+  dropId: event.dropId,
+  sourceClientId: event.sourceClientId,
+  createdAt: event.createdAt,
+  ops: event.ops,
+  metadata: event.metadata,
+});
+
+const hasSameEventPayload = (
+  input: DropDiffEvent,
+  stored: DropDiffEvent,
+): boolean =>
+  serializeCanonicalJson(comparableEvent(input)) ===
+  serializeCanonicalJson(comparableEvent(stored));
+
+const committedAcknowledgementFor = async (
+  branchRepository: ReturnType<typeof createBranchRepository>,
+  branch: DropBranchRecord,
+  event: DropDiffEvent,
+): Promise<DropDiffEventAcknowledgement | null> => {
+  const headSeq =
+    typeof branch.headEventSeq === "number" ? branch.headEventSeq : -1;
+  if (event.seq < 0 || event.seq > headSeq) return null;
+
+  let snapshotId: number | null = branch.headSnapshotId;
+  const visited = new Set<number>();
+  while (snapshotId !== null) {
+    if (visited.has(snapshotId)) return null;
+    visited.add(snapshotId);
+    const snapshot = await branchRepository.readSnapshot(
+      branch.rootDropId,
+      branch.branchId,
+      snapshotId,
+    );
+    if (
+      !snapshot ||
+      snapshot.rootDropId !== branch.rootDropId ||
+      snapshot.branchId !== branch.branchId ||
+      snapshot.snapshotId !== snapshotId
+    ) {
+      return null;
+    }
+    if (snapshot.eventIds.includes(event.eventId)) {
+      if (
+        (event.snapshotId !== undefined && event.snapshotId !== snapshot.snapshotId) ||
+        (snapshot.patchStartSeq !== null &&
+          snapshot.patchStartSeq !== undefined &&
+          event.seq < snapshot.patchStartSeq) ||
+        (snapshot.patchEndSeq !== null &&
+          snapshot.patchEndSeq !== undefined &&
+          event.seq > snapshot.patchEndSeq)
+      ) {
+        return null;
+      }
+      return {
+        eventId: event.eventId,
+        seq: event.seq,
+        snapshotId: snapshot.snapshotId,
+        status: "duplicate",
+      };
+    }
+    if (
+      snapshot.parentSnapshotId !== null &&
+      snapshot.parentSnapshotId >= snapshot.snapshotId
+    ) {
+      return null;
+    }
+    snapshotId = snapshot.parentSnapshotId;
+  }
+  return null;
+};
+
 /** Appends deduplicated events to a branch and creates the next branch snapshot. */
 export const appendEventsToBranch = async (
   bucket: VoidBlobStore,
@@ -193,7 +272,7 @@ export const appendEventsToBranch = async (
     bucket,
     branch.rootDropId,
     branch.branchId,
-    async () => {
+    async (lock) => {
       const latestBranch = await branchRepository.readBranch(
         branch.rootDropId,
         branch.branchId,
@@ -214,35 +293,87 @@ export const appendEventsToBranch = async (
         throw new Error("Branch head content is missing.");
       }
 
-      const seenEventIds = new Set<string>();
-      const acceptedInput: Array<{ event: DropDiffEvent; dedupeKey: string }> =
-        [];
+      const seenEvents = new Map<string, DropDiffEvent>();
+      const uniqueInputEvents: DropDiffEvent[] = [];
+      const existingAcknowledgements = new Map<
+        string,
+        DropDiffEventAcknowledgement
+      >();
+      const acceptedInput: DropDiffEvent[] = [];
 
       for (const event of events) {
-        if (seenEventIds.has(event.eventId)) {
+        const priorInput = seenEvents.get(event.eventId);
+        if (priorInput) {
+          if (!hasSameEventPayload(event, priorInput)) {
+            throw new Error("diff_event_id_reused");
+          }
           continue;
         }
 
-        seenEventIds.add(event.eventId);
+        seenEvents.set(event.eventId, event);
+        uniqueInputEvents.push(event);
 
-        const dedupeKey = createBranchDiffEventIdKey(
+        const existing = await branchDiffRepository.lookupBranchDiffEventIdentity(
           upgradedBranch.rootDropId,
           upgradedBranch.branchId,
           event.eventId,
         );
 
-        const alreadyStored = await branchDiffRepository.hasBranchDiffEventId(
-          upgradedBranch.rootDropId,
-          upgradedBranch.branchId,
-          event.eventId,
-        );
+        if (existing.status === "invalid") {
+          throw new Error("diff_event_identity_invalid");
+        }
 
-        if (alreadyStored) {
+        if (existing.status === "found") {
+          if (!hasSameEventPayload(event, existing.event)) {
+            throw new Error("diff_event_id_reused");
+          }
+          const acknowledgement = await committedAcknowledgementFor(
+            branchRepository,
+            upgradedBranch,
+            existing.event,
+          );
+          if (!acknowledgement) {
+            throw new Error("diff_event_outcome_unknown");
+          }
+          existingAcknowledgements.set(event.eventId, acknowledgement);
+          await branchDiffRepository.writeBranchDiffEventIdMarker(
+            upgradedBranch.rootDropId,
+            upgradedBranch.branchId,
+            { ...existing.event, snapshotId: acknowledgement.snapshotId },
+          );
           continue;
         }
 
-        acceptedInput.push({ event, dedupeKey });
+        acceptedInput.push(event);
       }
+
+      const acknowledgementsFor = (
+        acceptedEvents: DropDiffEvent[],
+      ): DropDiffEventAcknowledgement[] => {
+        const acceptedAcknowledgements = new Map(
+          acceptedEvents.map((event) => [
+            event.eventId,
+            {
+              eventId: event.eventId,
+              seq: event.seq,
+              snapshotId: event.snapshotId ?? nextSnapshotId,
+              status: "accepted" as const,
+            },
+          ]),
+        );
+        return uniqueInputEvents
+          .map(
+            (event) =>
+              existingAcknowledgements.get(event.eventId) ??
+              acceptedAcknowledgements.get(event.eventId),
+          )
+          .filter(
+            (
+              acknowledgement,
+            ): acknowledgement is DropDiffEventAcknowledgement =>
+              Boolean(acknowledgement),
+          );
+      };
 
       if (acceptedInput.length === 0) {
         const headSeq =
@@ -254,18 +385,28 @@ export const appendEventsToBranch = async (
           snapshot: null,
           content: currentContent,
           acceptedEvents: [],
+          acknowledgements: acknowledgementsFor([]),
           deduplicatedCount: events.length,
           totalStored: headSeq + 1,
         };
       }
 
+      const headSeq =
+        typeof upgradedBranch.headEventSeq === "number"
+          ? upgradedBranch.headEventSeq
+          : -1;
+      for (const [index, event] of acceptedInput.entries()) {
+        const followsSeq = event.metadata?.followsSeq;
+        if (followsSeq !== undefined && followsSeq !== headSeq + index) {
+          throw new Error("diff_predecessor_mismatch");
+        }
+      }
+
       const nextSnapshotId = upgradedBranch.headSnapshotId + 1;
       const nextSeqStart =
-        typeof upgradedBranch.headEventSeq === "number"
-          ? upgradedBranch.headEventSeq + 1
-          : 0;
+        headSeq + 1;
 
-      const acceptedEvents = acceptedInput.map(({ event }, index) => ({
+      const acceptedEvents = acceptedInput.map((event, index) => ({
         ...event,
         seq: nextSeqStart + index,
         snapshotId: nextSnapshotId,
@@ -315,6 +456,7 @@ export const appendEventsToBranch = async (
         updatedAt: createdAt,
       };
 
+      await lock.beginCommit();
       await Promise.all(
         acceptedEvents.map((event) =>
           branchDiffRepository.writeBranchDiffEvent(
@@ -340,10 +482,28 @@ export const appendEventsToBranch = async (
       await branchRepository.writeBranch(nextBranch);
 
       await Promise.all(
-        acceptedInput.map(({ dedupeKey }, index) =>
-          bucket.put(dedupeKey, String(acceptedEvents[index].seq), {
-            httpMetadata: { contentType: "text/plain" },
-          }),
+        acceptedEvents.map((event) =>
+          branchDiffRepository.writeBranchDiffEventIdMarker(
+            upgradedBranch.rootDropId,
+            upgradedBranch.branchId,
+            event,
+          ),
+        ),
+      );
+      await Promise.all(
+        acceptedEvents.map((event) =>
+          bucket.put(
+            createBranchDiffEventIdKey(
+              upgradedBranch.rootDropId,
+              upgradedBranch.branchId,
+              event.eventId,
+            ),
+            String(event.seq),
+            {
+              httpMetadata: { contentType: "text/plain" },
+              onlyIf: { etagDoesNotMatch: "*" },
+            },
+          ),
         ),
       );
 
@@ -352,6 +512,7 @@ export const appendEventsToBranch = async (
         snapshot,
         content: nextContent,
         acceptedEvents,
+        acknowledgements: acknowledgementsFor(acceptedEvents),
         deduplicatedCount: events.length - acceptedEvents.length,
         totalStored: patchEndSeq + 1,
       };

@@ -1,3 +1,8 @@
+import {
+  isDropDeviceDelegation,
+  type DropDeviceDelegation,
+} from "./deviceDelegation";
+
 /*
 This file is the canonical drop contract shared by the browser and Pages Functions.
 Stored envelopes live in IndexedDB and R2, so compatibility changes here ripple through
@@ -140,7 +145,7 @@ This is the exact shape signed by the device key. Provider signatures are derive
 this payload plus the device signature so the server never signs content the device
 did not already attest to.
 */
-export interface DropEnvelopeSignableV1 {
+export interface DropEnvelopeSignable {
   /** Envelope schema discriminator. */
   schema: typeof DROP_ENVELOPE_SCHEMA_V1;
   /** Envelope version discriminator. */
@@ -163,12 +168,14 @@ export interface DropEnvelopeSignableV1 {
   keyEnvelope: DropKeyEnvelope;
   /** Public verification key for the device signature. */
   deviceSignerPublicJwk?: JsonWebKey;
+  /** Account-signed authority for a delegated device signer. */
+  deviceDelegation?: DropDeviceDelegation;
   /** Optional provider escrow wrapped content key. */
   providerEscrow?: DropProviderEscrowEnvelope;
 }
 
 /** Complete persisted sealed drop envelope. */
-export interface DropEnvelopeV1 extends DropEnvelopeSignableV1 {
+export interface DropEnvelopeV1 extends DropEnvelopeSignable {
   /** Required device signature and optional provider countersignature. */
   signatures: {
     /** Device signature over the canonical signable envelope. */
@@ -369,6 +376,13 @@ export const isDropEnvelopeV1 = (value: unknown): value is DropEnvelopeV1 => {
   }
 
   if (
+    value.deviceDelegation !== undefined &&
+    !isDropDeviceDelegation(value.deviceDelegation)
+  ) {
+    return false;
+  }
+
+  if (
     value.providerEscrow !== undefined &&
     !isDropProviderEscrowEnvelope(value.providerEscrow)
   ) {
@@ -420,7 +434,7 @@ export const serializeCanonicalJson = (value: unknown): string =>
 /** Removes signatures from a complete envelope to recover the device-signable body. */
 export const toDropEnvelopeSignable = (
   envelope: DropEnvelopeV1,
-): DropEnvelopeSignableV1 => ({
+): DropEnvelopeSignable => ({
   schema: envelope.schema,
   version: envelope.version,
   createdAt: envelope.createdAt,
@@ -432,12 +446,13 @@ export const toDropEnvelopeSignable = (
   draftCipher: envelope.draftCipher,
   keyEnvelope: envelope.keyEnvelope,
   deviceSignerPublicJwk: envelope.deviceSignerPublicJwk,
+  deviceDelegation: envelope.deviceDelegation,
   providerEscrow: envelope.providerEscrow,
 });
 
 /** Serializes the exact canonical body that the device signs. */
 export const serializeDropEnvelopeForDeviceSignature = (
-  envelope: DropEnvelopeSignableV1,
+  envelope: DropEnvelopeSignable,
 ): string => serializeCanonicalJson(envelope);
 
 /** Serializes the canonical body that the provider signs after device attestation. */

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/diff/[id]";
+import { postDiffEvents } from "../functions/api/_lib/diffs/transport/service";
+import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutationLock";
 import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
 import { createCloudflareVoidProvider } from "../functions/api/_lib/core/platform/cloudflareProvider";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
@@ -10,6 +12,13 @@ import {
   readBranch,
   readSnapshot,
 } from "../functions/api/_lib/branches/storage/repository";
+import {
+  createBranchKey,
+  createBranchDiffEventIdKey,
+  createBranchDiffEventIdMarkerV2Key,
+  createBranchDiffEventKey,
+  createSnapshotKey,
+} from "../functions/api/_lib/branches/storage/keys";
 import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtimeFactLogRepository";
 import {
   createNulleditNullMemObserverSnapshotter,
@@ -410,6 +419,23 @@ const createPostRequestWithClientHeader = (
     body: JSON.stringify({ version: 1, events }),
   });
 
+const createPostRequestForBranch = (
+  events: unknown,
+  branchId: string,
+  requestAccountId: string,
+): Request =>
+  new Request(
+    `https://nulldown.test/api/diff/${rootDropId}?branchId=${encodeURIComponent(branchId)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-nulldown-account-id": requestAccountId,
+      },
+      body: JSON.stringify({ version: 1, events }),
+    },
+  );
+
 const createPostRequestWithPartialProviderHeaders = (
   events: unknown,
   clientId: string,
@@ -674,6 +700,7 @@ describe("functions api diff contracts", () => {
       sourceClientId: "writer-a",
       text: "hello",
       createdAt: 100,
+      metadata: { followsSeq: -1 },
     });
 
     const first = await onRequest({
@@ -684,6 +711,13 @@ describe("functions api diff contracts", () => {
 
     const firstBody = (await first.json()) as {
       accepted: number;
+      deduplicated: number;
+      acknowledgements: Array<{
+        eventId: string;
+        seq: number;
+        snapshotId: number;
+        status: string;
+      }>;
       totalStored: number;
     };
 
@@ -695,16 +729,403 @@ describe("functions api diff contracts", () => {
 
     const secondBody = (await second.json()) as {
       accepted: number;
+      deduplicated: number;
+      acknowledgements: Array<{
+        eventId: string;
+        seq: number;
+        snapshotId: number;
+        status: string;
+      }>;
       totalStored: number;
     };
 
     expect(first.status).toBe(200);
     expect(firstBody.accepted).toBe(1);
+    expect(firstBody.deduplicated).toBe(0);
+    expect(firstBody.acknowledgements).toEqual([
+      { eventId: "evt-1", seq: 0, snapshotId: 1, status: "accepted" },
+    ]);
     expect(firstBody.totalStored).toBe(1);
 
     expect(second.status).toBe(200);
     expect(secondBody.accepted).toBe(0);
+    expect(secondBody.deduplicated).toBe(1);
+    expect(secondBody.acknowledgements).toEqual([
+      { eventId: "evt-1", seq: 0, snapshotId: 1, status: "duplicate" },
+    ]);
     expect(secondBody.totalStored).toBe(1);
+
+    const reused = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-1",
+          sourceClientId: "writer-a",
+          text: "different payload",
+          createdAt: 100,
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(reused.status).toBe(409);
+  });
+
+  it("keeps distinct event ids isolated when legacy marker keys collide", async () => {
+    const bucket = createSeededBucket();
+    const firstEventId = "evt/a";
+    const secondEventId = "evt?a";
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+
+    expect(
+      createBranchDiffEventIdKey(rootDropId, branch.branchId, firstEventId),
+    ).toBe(createBranchDiffEventIdKey(rootDropId, branch.branchId, secondEventId));
+    expect(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        firstEventId,
+      ),
+    ).not.toBe(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        secondEventId,
+      ),
+    );
+
+    const first = makeEvent({
+      eventId: firstEventId,
+      sourceClientId: "writer-a",
+      text: "first",
+      createdAt: 100,
+    });
+    const second = makeEvent({
+      eventId: secondEventId,
+      sourceClientId: "writer-a",
+      text: "second",
+      createdAt: 101,
+    });
+    const accepted = await onRequest({
+      request: createPostRequest([first, second]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(accepted.status).toBe(200);
+    await expect(
+      onRequest({
+        request: createPostRequest([first]),
+        env: { R2_BUCKET: bucket as unknown as R2Bucket },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]),
+    ).resolves.toMatchObject({ status: 200 });
+    await expect(
+      onRequest({
+        request: createPostRequest([second]),
+        env: { R2_BUCKET: bucket as unknown as R2Bucket },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]),
+    ).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("repairs a missing v2 marker when a legacy event is durably reachable", async () => {
+    const bucket = createSeededBucket();
+    const event = makeEvent({
+      eventId: "evt-repair-marker",
+      sourceClientId: "writer-a",
+      text: "hello",
+      createdAt: 100,
+    });
+    const first = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const markerKey = createBranchDiffEventIdMarkerV2Key(
+      rootDropId,
+      branch.branchId,
+      event.eventId,
+    );
+    await bucket.delete(markerKey);
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(200);
+    await expect(bucket.head(markerKey)).resolves.not.toBeNull();
+  });
+
+  it("does not acknowledge a marker and event that have not reached the branch head", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const event = makeEvent({
+      eventId: "evt-orphaned",
+      sourceClientId: "writer-a",
+      text: "orphan",
+      createdAt: 100,
+    }) as DropDiffEvent;
+    const stored = { ...event, snapshotId: 1 };
+    bucket.seed(
+      createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      JSON.stringify(stored),
+    );
+    bucket.seed(
+      createBranchDiffEventIdMarkerV2Key(
+        rootDropId,
+        branch.branchId,
+        event.eventId,
+      ),
+      JSON.stringify({
+        version: 2,
+        rootDropId,
+        branchId: branch.branchId,
+        eventId: event.eventId,
+        seq: 0,
+        snapshotId: 1,
+      }),
+    );
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(503);
+    await expect(retry.json()).resolves.toMatchObject({
+      code: "diff_event_outcome_unknown",
+    });
+  });
+
+  it("does not acknowledge an event in a non-ancestor snapshot", async () => {
+    const bucket = createSeededBucket();
+    const event = makeEvent({
+      eventId: "evt-non-ancestor",
+      sourceClientId: "writer-a",
+      text: "reachable only from the orphan",
+      createdAt: 100,
+    });
+    const first = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    bucket.seed(
+      createSnapshotKey(rootDropId, branch.branchId, 2),
+      JSON.stringify({
+        version: 1,
+        snapshotId: 2,
+        rootDropId,
+        branchId: branch.branchId,
+        parentSnapshotId: 0,
+        seq: 2,
+        eventIds: [],
+        checkpointed: false,
+        patchStartSeq: null,
+        patchEndSeq: null,
+        checkpointKey: "__drop_checkpoint__/orphan.txt",
+        textLength: 5,
+        createdAt: 102,
+      }),
+    );
+    bucket.seed("__drop_checkpoint__/orphan.txt", "hello", "text/plain");
+    bucket.seed(
+      createBranchKey(rootDropId, branch.branchId),
+      JSON.stringify({ ...branch, headSnapshotId: 2, headEventSeq: 0 }),
+    );
+
+    const retry = await onRequest({
+      request: createPostRequest([event]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(retry.status).toBe(503);
+    await expect(retry.json()).resolves.toMatchObject({
+      code: "diff_event_outcome_unknown",
+    });
+  });
+
+  it.each([
+    ["branch_lock_lost_before_commit", "not_committed", 409],
+    ["branch_mutation_outcome_unknown", "unknown", 503],
+  ] as const)(
+    "maps %s lock outcomes to structured retry responses",
+    async (code, outcome, status) => {
+      const bucket = createSeededBucket();
+      const response = await postDiffEvents(
+        { R2_BUCKET: bucket as never },
+        { id: rootDropId },
+        createPostRequest([
+          makeEvent({
+            eventId: `evt-${code}`,
+            sourceClientId: "writer-a",
+            text: "hello",
+            createdAt: 100,
+          }),
+        ]),
+        {
+          voidProvider: {
+            nulledit: {
+              appendDiffEvents: async () => {
+                throw new BranchMutationLockError({ code, outcome });
+              },
+            },
+          } as never,
+        },
+      );
+
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toMatchObject({ code });
+    },
+  );
+
+  it("accepts contiguous predecessor sequences in one batch", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-chain-1",
+          sourceClientId: "writer-chain",
+          text: "first ",
+          createdAt: 101,
+          metadata: { followsSeq: -1 },
+        }),
+        makeEvent({
+          eventId: "evt-chain-2",
+          sourceClientId: "writer-chain",
+          text: "second ",
+          createdAt: 102,
+          metadata: { followsSeq: 0 },
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({
+        accepted: 2,
+        deduplicated: 0,
+        snapshotId: 1,
+        totalStored: 2,
+        acknowledgements: [
+          { eventId: "evt-chain-1", seq: 0, snapshotId: 1, status: "accepted" },
+          { eventId: "evt-chain-2", seq: 1, snapshotId: 1, status: "accepted" },
+        ],
+      }),
+    );
+  });
+
+  it("rejects stale predecessors before mutating branch state", async () => {
+    const bucket = createSeededBucket();
+    const winner = makeEvent({
+      eventId: "evt-winner",
+      sourceClientId: "writer-a",
+      text: "winner ",
+      createdAt: 101,
+      metadata: { followsSeq: -1 },
+    });
+    const first = await onRequest({
+      request: createPostRequest([winner]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(first.status).toBe(200);
+
+    const stale = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-loser",
+          sourceClientId: "writer-b",
+          text: "loser ",
+          createdAt: 102,
+          metadata: { followsSeq: -1 },
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toEqual({
+      error:
+        "Branch diff predecessor no longer matches the current head. Refresh and try again.",
+      code: "diff_predecessor_mismatch",
+    });
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    expect(branch).toEqual(
+      expect.objectContaining({ headSnapshotId: 1, headEventSeq: 0 }),
+    );
+    await expect(readSnapshot(bucket as never, rootDropId, branch.branchId, 2)).resolves.toBeNull();
+  });
+
+  it("rejects conflicting event IDs within one envelope", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-conflict",
+          sourceClientId: "writer-conflict",
+          text: "first ",
+          createdAt: 101,
+        }),
+        makeEvent({
+          eventId: "evt-conflict",
+          sourceClientId: "writer-conflict",
+          text: "second ",
+          createdAt: 101,
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(409);
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    expect(branch).toEqual(
+      expect.objectContaining({ headSnapshotId: 0, headEventSeq: -1 }),
+    );
   });
 
   it("returns filtered diff pages with cursor", async () => {
@@ -1249,6 +1670,62 @@ describe("functions api diff contracts", () => {
     } as unknown as Parameters<typeof onRequest>[0]);
 
     expect(response.status).toBe(200);
+  });
+
+  it("rejects an account session write to another account's existing branch", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as unknown as R2Bucket,
+      rootDropId,
+      accountId,
+      "owner-client",
+    );
+    const response = await onRequest({
+      request: createPostRequestForBranch(
+        [
+          makeEvent({
+            eventId: "evt-forbidden-branch-write",
+            sourceClientId: "other-client",
+            text: "forbidden",
+            createdAt: 105,
+          }),
+        ],
+        branch.branchId,
+        "acct_other",
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "You are not allowed to write to this branch.",
+      code: "branch_write_forbidden",
+    });
+  });
+
+  it("does not let an insecure account header bypass configured webhook auth", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "evt-webhook-auth-required",
+          sourceClientId: "writer-webhook-auth-required",
+          text: "blocked",
+          createdAt: 106,
+        }),
+      ]),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DIFF_WEBHOOK_SECRET: "webhook-secret",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(401);
   });
 
   it("ignores partial provider auth headers for normal diff writes", async () => {

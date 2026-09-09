@@ -12,6 +12,7 @@ import {
   DIFF_TIMESTAMP_HEADER,
   type DiffAuthRegisterResponse,
 } from "../../../shared/drop/diffAuth";
+import { DropDiffEventIdSchema } from "../../../shared/drop/diffSchemas";
 import { computeDiffOps } from "../../../shared/nulledit/textDiff";
 import { flagString, hasFlag, type ParsedArgs } from "../core/args";
 import type { CliCommand } from "../core/command";
@@ -72,16 +73,29 @@ const getDropContent = (drop: DropReadResult): string => {
 const branchContentFromResponse = (
   value: unknown,
   fallbackRootDropId: string,
-): { rootDropId: string; content: string } | null => {
+): { rootDropId: string; content: string; headEventSeq: number | null } | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as { rootDropId?: unknown; content?: unknown };
+  const record = value as {
+    rootDropId?: unknown;
+    content?: unknown;
+    headEventSeq?: unknown;
+  };
   if (typeof record.content !== "string") return null;
+  if (
+    record.headEventSeq !== undefined &&
+    record.headEventSeq !== null &&
+    (!Number.isInteger(record.headEventSeq) || record.headEventSeq < -1)
+  ) {
+    throw new Error("Branch content response contains an invalid head event cursor.");
+  }
   return {
     rootDropId:
       typeof record.rootDropId === "string" && record.rootDropId
         ? record.rootDropId
         : fallbackRootDropId,
     content: record.content,
+    headEventSeq:
+      typeof record.headEventSeq === "number" ? record.headEventSeq : null,
   };
 };
 
@@ -115,20 +129,46 @@ const createEvent = (input: {
   clientId: string;
   ops: DropDiffOp[];
   metadata?: DropDiffEventMetadata;
+  eventId?: string;
+  createdAt?: number;
 }): DropDiffEnvelope => ({
   version: 1,
   events: [
     {
-      eventId: `nd-${Date.now()}-${randomUUID()}`,
+      eventId: input.eventId ?? `nd-${Date.now()}-${randomUUID()}`,
       seq: 0,
       dropId: input.dropId,
       sourceClientId: input.clientId,
-      createdAt: Date.now(),
+      createdAt: input.createdAt ?? Date.now(),
       ops: input.ops,
       metadata: input.metadata,
     },
   ],
 });
+
+const eventIdentityFromArgs = (
+  args: ParsedArgs,
+): Pick<DropDiffEnvelope["events"][number], "eventId" | "createdAt"> | undefined => {
+  const hasEventId = Object.hasOwn(args.flags, "event-id");
+  const hasCreatedAt = Object.hasOwn(args.flags, "created-at");
+  const eventId = flagString(args, "event-id");
+  const createdAtRaw = flagString(args, "created-at");
+  if (hasEventId !== hasCreatedAt) {
+    throw new Error("Provide --event-id and --created-at together when retrying a diff.");
+  }
+  if (!hasEventId) return undefined;
+  if (eventId === null || createdAtRaw === null) {
+    throw new Error("--event-id and --created-at require values.");
+  }
+  if (!DropDiffEventIdSchema.safeParse(eventId).success) {
+    throw new Error("--event-id must be 1-120 characters without surrounding whitespace.");
+  }
+  const createdAt = Number(createdAtRaw);
+  if (!createdAtRaw.trim() || !Number.isInteger(createdAt) || createdAt < 0) {
+    throw new Error("--created-at must be a non-negative integer.");
+  }
+  return { eventId, createdAt };
+};
 
 const branchIdFromPosted = (posted: unknown, fallbackBranchId: string): string => {
   if (posted && typeof posted === "object" && !Array.isArray(posted)) {
@@ -400,6 +440,7 @@ export const createDiffCommand = <TConfig>(
     }
 
     if (subcommand === "apply") {
+      const eventIdentity = eventIdentityFromArgs(args);
       const canonical = await dependencies.runtime.drops.get(dropId);
       const metadata = await dependencies.parseDiffEventMetadata(args);
       const ops: DropDiffOp[] = [];
@@ -431,6 +472,7 @@ export const createDiffCommand = <TConfig>(
         clientId: dependencies.clientId() || "nd-cli",
         ops,
         metadata,
+        ...eventIdentity,
       });
       const response = await dependencies.runtime.diffs.postEnvelope({
         dropId,
@@ -443,6 +485,12 @@ export const createDiffCommand = <TConfig>(
 
     if (subcommand === "replace") {
       if (!branchId) throw new Error("nd diff replace requires --branch <branchId>.");
+      const eventIdentity = eventIdentityFromArgs(args);
+      if (eventIdentity) {
+        throw new Error(
+          "nd diff replace cannot safely replay a generated diff. Save and retry the exact envelope with nd diff event or nd diff batch.",
+        );
+      }
       const metadata = await dependencies.parseDiffEventMetadata(args);
       const branchContent = branchContentFromResponse(
         await dependencies.runtime.branches.contentOrNull(dropId, branchId),
@@ -452,6 +500,16 @@ export const createDiffCommand = <TConfig>(
       const from = flagString(args, "from-file")
         ? await dependencies.readInput(flagString(args, "from-file"))
         : (branchContent?.content ?? getDropContent(canonical!));
+      if (branchContent?.headEventSeq === null) {
+        throw new Error(
+          "Branch replacement requires a current event cursor. Upgrade the branch server and refresh before retrying.",
+        );
+      }
+      if (branchContent && from !== branchContent.content) {
+        throw new Error(
+          "Branch replacement --from-file content does not match the current branch. Refresh before retrying.",
+        );
+      }
       const toFile = flagString(args, "to-file");
       if (!toFile) throw new Error("nd diff replace requires --to-file <file|->.");
       const to = await dependencies.readInput(toFile);
@@ -464,7 +522,11 @@ export const createDiffCommand = <TConfig>(
         dropId: branchContent?.rootDropId ?? canonical!.id,
         clientId: dependencies.clientId() || "nd-cli",
         ops: diffs.map((diff) => diffToDropDiffOp(diff)),
-        metadata,
+        metadata: {
+          ...metadata,
+          followsSeq: branchContent?.headEventSeq ?? -1,
+        },
+        ...eventIdentity,
       });
       const posted = await dependencies.runtime.diffs.postEnvelope({
         dropId,
@@ -476,8 +538,13 @@ export const createDiffCommand = <TConfig>(
         await dependencies.runtime.branches.content(dropId, postedBranchId),
         dropId,
       );
+      if (verifiedContent?.content !== to) {
+        throw new Error(
+          "Branch replacement verification failed after the server response. Refresh before retrying.",
+        );
+      }
       dependencies.print(
-        { posted, verified: verifiedContent?.content === to },
+        { posted, verified: true },
         `updated branch ${postedBranchId}`,
       );
       return;

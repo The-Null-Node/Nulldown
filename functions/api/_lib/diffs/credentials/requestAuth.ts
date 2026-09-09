@@ -16,9 +16,13 @@ import {
   createDiffCredentialRepository,
   sanitizeDiffAuthToken,
 } from "./repository";
+import {
+  resolveAuthenticatedAccountId,
+  type AccountAuthEnv,
+} from "../../accounts/session/auth";
 
 /** Environment required to verify `/api/diff/:id` request authentication. */
-export interface DiffRequestAuthEnv {
+export interface DiffRequestAuthEnv extends AccountAuthEnv {
   R2_BUCKET?: VoidBlobStore;
   DB?: VoidSqlStore;
   DIFF_WEBHOOK_SECRET?: string;
@@ -28,7 +32,7 @@ export interface DiffRequestAuthEnv {
 /** Successful request authentication context for diff transport calls. */
 export interface DiffRequestAuthSuccess {
   ok: true;
-  mode: "provider" | "env" | "none";
+  mode: "provider" | "env" | "account" | "none";
   branchId: string | null;
   clientId: string | null;
 }
@@ -203,6 +207,21 @@ export const verifyDiffRequestAuth = async (
     };
   }
 
+  // Browser account sessions are authorized by the branch transport after it resolves
+  // the target branch. They must be accepted before webhook fallback so production
+  // browser editing does not require a server-only webhook secret.
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  const hasBearerSession = request.headers.has("Authorization");
+  const allowsInsecureAccountHeader = env.ALLOW_INSECURE_ACCOUNT_HEADER === "1";
+  if (accountId && (hasBearerSession || allowsInsecureAccountHeader)) {
+    return {
+      ok: true,
+      mode: "account",
+      branchId: null,
+      clientId,
+    };
+  }
+
   if (env.DIFF_WEBHOOK_SECRET) {
     if (!signature) {
       return {
@@ -242,6 +261,15 @@ export const verifyDiffRequestAuth = async (
       mode: "env",
       branchId: null,
       clientId: null,
+    };
+  }
+
+  if (env.ACCOUNT_AUTH_SECRET) {
+    return {
+      ok: false,
+      status: 401,
+      reason: "account_auth_required",
+      message: "An authenticated account session is required.",
     };
   }
 

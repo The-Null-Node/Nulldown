@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { VoidDataStore } from "../../server/ports";
 import { flagString, hasFlag } from "../core/args";
 import type { CliCommand } from "../core/command";
 
@@ -14,6 +16,8 @@ const parseServePort = (value: string | null): number => {
 export interface ServeCommandDependencies {
   /** Prints command output using the active CLI output policy. */
   print(value: unknown, human?: string): void;
+  /** Optional programmatic store used by embedded local-server hosts. */
+  data?: VoidDataStore;
 }
 
 /** Creates the modular local server command. */
@@ -32,52 +36,83 @@ export const createServeCommand = <TConfig>(
     );
     const logLevel =
       flagString(args, "log-level") || process.env.LOG_LEVEL || "warn";
-    const migrationsDir = resolve(
-      flagString(args, "migrations-dir") ||
-        process.env.ND_MIGRATIONS_DIR ||
-        "migrations",
-    );
+    const configuredMigrationsDir =
+      flagString(args, "migrations-dir") || process.env.ND_MIGRATIONS_DIR;
+    // Defaults must stay with the installed package, not the operator's CWD.
+    const migrationsDir = configuredMigrationsDir
+      ? resolve(configuredMigrationsDir)
+      : fileURLToPath(new URL("../../../migrations/", import.meta.url));
     const { createLocalNulldownServer, localNulldownServerBaseUrl } =
       await import("../../server/local");
     const sqliteEnabled = !hasFlag(args, "no-sqlite");
     const sqlite = sqliteEnabled
-      ? await import("../../server/bunSqliteStore").then(async (module) => {
+      ? await (async () => {
+          const module = await import("../../server/bunSqliteStore");
           const sql = await module.createBunSqliteStore({
             databasePath: resolve(dataDir, "metadata.sqlite"),
           });
-          const migrationsApplied = await module.applySqliteMigrations(
-            sql,
-            migrationsDir,
-          );
-          return { sql, migrationsApplied };
-        })
+          try {
+            const migrationsApplied = await module.applySqliteMigrations(
+              sql,
+              migrationsDir,
+            );
+            return { sql, migrationsApplied };
+          } catch (error) {
+            sql.close();
+            throw error;
+          }
+        })()
       : null;
     const publicBaseUrl =
       flagString(args, "public-base-url") ||
       localNulldownServerBaseUrl(host, port);
-    const server = createLocalNulldownServer({
-      dataDir,
-      publicBaseUrl,
-      logLevel,
-      sql: sqlite?.sql,
-    });
+    let listener: ReturnType<typeof Bun.serve> | null = null;
+    let shutdown: (() => void) | null = null;
+    try {
+      const server = createLocalNulldownServer({
+        dataDir,
+        publicBaseUrl,
+        logLevel,
+        sql: sqlite?.sql,
+        data: dependencies.data,
+      });
+      listener = Bun.serve({
+        hostname: host,
+        port,
+        fetch: (request) => server.fetch(request),
+      });
+      let resolveShutdown!: () => void;
+      const shutdownPromise = new Promise<void>((resolvePromise) => {
+        resolveShutdown = resolvePromise;
+      });
+      shutdown = () => resolveShutdown();
+      process.once("SIGINT", shutdown);
+      process.once("SIGTERM", shutdown);
+      const served = {
+        host,
+        port: listener.port,
+        dataDir,
+        baseUrl: publicBaseUrl,
+        sqlite: Boolean(sqlite),
+        databasePath: sqlite?.sql.databasePath ?? null,
+        migrationsApplied: sqlite?.migrationsApplied ?? [],
+      };
+      dependencies.print(
+        served,
+        `nulldown serving ${publicBaseUrl} using ${dataDir}`,
+      );
 
-    const listener = Bun.serve({
-      hostname: host,
-      port,
-      fetch: (request) => server.fetch(request),
-    });
-    const served = {
-      host,
-      port: listener.port,
-      dataDir,
-      baseUrl: publicBaseUrl,
-      sqlite: Boolean(sqlite),
-      databasePath: sqlite?.sql.databasePath ?? null,
-      migrationsApplied: sqlite?.migrationsApplied ?? [],
-    };
-    dependencies.print(served, `nulldown serving ${publicBaseUrl} using ${dataDir}`);
-
-    await new Promise<void>(() => undefined);
+      await shutdownPromise;
+    } finally {
+      if (shutdown) {
+        process.off("SIGINT", shutdown);
+        process.off("SIGTERM", shutdown);
+      }
+      try {
+        await listener?.stop();
+      } finally {
+        sqlite?.sql.close();
+      }
+    }
   },
 });

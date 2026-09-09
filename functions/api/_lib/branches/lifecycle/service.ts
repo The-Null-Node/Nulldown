@@ -10,7 +10,7 @@ import type {
   VoidBlobStore,
   VoidSqlStore,
 } from "../../../../../src/server/ports";
-import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
+import { decryptProviderEscrowEnvelope } from "../../crypto/void/envelopes/providerEscrow";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
   OWNER_BRANCH_ID,
@@ -418,12 +418,13 @@ export const backfillBranchToSnapshotHeapV2 = async (
     return null;
   }
 
-  return withBranchMutationLock(bucket, rootDropId, branchId, async () => {
+  return withBranchMutationLock(bucket, rootDropId, branchId, async (lock) => {
     const latest = await branchRepository.readBranch(rootDropId, branchId);
     if (!latest) {
       return null;
     }
 
+    await lock.beginCommit();
     return ensureBranchHeapV2(bucket, latest, db);
   });
 };

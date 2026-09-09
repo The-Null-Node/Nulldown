@@ -9,11 +9,34 @@ import type {
 import { parseJsonColumn } from "../../core/d1/metadata";
 import {
   createBranchDiffEventIdKey,
+  createBranchDiffEventIdMarkerV2Key,
   createBranchDiffEventKey,
   createBranchDiffEventPrefix,
   createBranchDiffLogKey,
 } from "./keys";
-import { readBranch, readR2Json, writeR2Json } from "./repository";
+import {
+  readBranch,
+  readR2Json,
+  writeR2Json,
+  writeR2JsonIfAbsent,
+} from "./repository";
+import { serializeCanonicalJson } from "../../../../../shared/drop/types";
+
+/** Persisted exact event-identity marker written only after branch-head publication. */
+export interface BranchDiffEventIdMarkerV2 {
+  version: 2;
+  rootDropId: string;
+  branchId: string;
+  eventId: string;
+  seq: number;
+  snapshotId: number;
+}
+
+/** Exact event lookup outcome before append logic confirms branch reachability. */
+export type BranchDiffEventIdentityLookup =
+  | { status: "absent" }
+  | { status: "found"; event: DropDiffEvent }
+  | { status: "invalid"; reason: string };
 
 /** Ports used by branch diff-event repositories. */
 export interface BranchDiffRepositoryPorts {
@@ -48,6 +71,18 @@ export interface BranchDiffRepository {
     branchId: string,
     seq: number,
   ): Promise<DropDiffEvent | null>;
+  /** Reads one branch diff event by its stable writer-supplied identity. */
+  readBranchDiffEventById(
+    rootDropId: string,
+    branchId: string,
+    eventId: string,
+  ): Promise<DropDiffEvent | null>;
+  /** Resolves one exact event identity while distinguishing corrupt marker state. */
+  lookupBranchDiffEventIdentity(
+    rootDropId: string,
+    branchId: string,
+    eventId: string,
+  ): Promise<BranchDiffEventIdentityLookup>;
   /** Checks whether a branch diff event id has already been stored. */
   hasBranchDiffEventId(
     rootDropId: string,
@@ -56,6 +91,12 @@ export interface BranchDiffRepository {
   ): Promise<boolean>;
   /** Writes one heap-v2 branch diff event to D1 and R2 fallback storage. */
   writeBranchDiffEvent(
+    rootDropId: string,
+    branchId: string,
+    event: DropDiffEvent,
+  ): Promise<void>;
+  /** Writes or validates a collision-free v2 event identity marker. */
+  writeBranchDiffEventIdMarker(
     rootDropId: string,
     branchId: string,
     event: DropDiffEvent,
@@ -76,6 +117,23 @@ export interface BranchDiffRepository {
 
 const isDropDiffEventList = (value: unknown): value is DropDiffEvent[] =>
   Array.isArray(value) && value.every((entry) => isDropDiffEvent(entry));
+
+const isBranchDiffEventIdMarkerV2 = (
+  value: unknown,
+): value is BranchDiffEventIdMarkerV2 => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.version === 2 &&
+    typeof record.rootDropId === "string" &&
+    typeof record.branchId === "string" &&
+    typeof record.eventId === "string" &&
+    Number.isInteger(record.seq) &&
+    (record.seq as number) >= 0 &&
+    Number.isInteger(record.snapshotId) &&
+    (record.snapshotId as number) >= 0
+  );
+};
 
 /** Reads the legacy single-object branch diff log. */
 export const readLegacyBranchDiffLog = async (
@@ -208,6 +266,157 @@ export const readBranchDiffEventBySeq = async (
   );
 };
 
+const hasSameStoredEvent = (
+  left: DropDiffEvent,
+  right: DropDiffEvent,
+): boolean => serializeCanonicalJson(left) === serializeCanonicalJson(right);
+
+const readR2BranchDiffEventBySeq = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  seq: number,
+): Promise<DropDiffEvent | null> =>
+  readR2Json(
+    bucket,
+    createBranchDiffEventKey(rootDropId, branchId, seq),
+    isDropDiffEvent,
+  );
+
+const readBranchDiffEventIdMarkerV2 = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  eventId: string,
+): Promise<
+  | { status: "absent" }
+  | { status: "found"; marker: BranchDiffEventIdMarkerV2 }
+  | { status: "invalid" }
+> => {
+  const key = createBranchDiffEventIdMarkerV2Key(rootDropId, branchId, eventId);
+  const object = await bucket.get(key);
+  if (!object) return { status: "absent" };
+  try {
+    const value = await object.json();
+    return isBranchDiffEventIdMarkerV2(value)
+      ? { status: "found", marker: value }
+      : { status: "invalid" };
+  } catch {
+    return { status: "invalid" };
+  }
+};
+
+/** Resolves an exact event identity without treating legacy marker collisions as presence. */
+export const lookupBranchDiffEventIdentity = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  eventId: string,
+  db?: VoidSqlStore,
+): Promise<BranchDiffEventIdentityLookup> => {
+  const marker = await readBranchDiffEventIdMarkerV2(
+    bucket,
+    rootDropId,
+    branchId,
+    eventId,
+  );
+  if (marker.status === "invalid") {
+    return { status: "invalid", reason: "v2_marker_invalid" };
+  }
+  if (
+    marker.status === "found" &&
+    (marker.marker.rootDropId !== rootDropId ||
+      marker.marker.branchId !== branchId ||
+      marker.marker.eventId !== eventId)
+  ) {
+    return { status: "invalid", reason: "v2_marker_identity_mismatch" };
+  }
+
+  let d1Event: DropDiffEvent | null = null;
+  if (db) {
+    const row = await db
+      .prepare(
+        `SELECT event_json
+         FROM branch_events
+         WHERE root_drop_id = ? AND branch_id = ? AND event_id = ?`,
+      )
+      .bind(rootDropId, branchId, eventId)
+      .first<{ event_json: string }>();
+    d1Event = parseJsonColumn(row?.event_json, isDropDiffEvent);
+  }
+
+  if (marker.status === "found") {
+    const r2Event = await readR2BranchDiffEventBySeq(
+      bucket,
+      rootDropId,
+      branchId,
+      marker.marker.seq,
+    );
+    if (
+      (!d1Event && !r2Event) ||
+      (d1Event &&
+        (d1Event.eventId !== eventId ||
+          d1Event.seq !== marker.marker.seq ||
+          d1Event.snapshotId !== marker.marker.snapshotId)) ||
+      (r2Event &&
+        (r2Event.eventId !== eventId ||
+          r2Event.seq !== marker.marker.seq ||
+          r2Event.snapshotId !== marker.marker.snapshotId)) ||
+      (d1Event && r2Event && !hasSameStoredEvent(d1Event, r2Event))
+    ) {
+      return { status: "invalid", reason: "v2_marker_event_mismatch" };
+    }
+    return { status: "found", event: d1Event ?? r2Event! };
+  }
+
+  const r2Events = await readHeapBranchDiffLog(bucket, rootDropId, branchId);
+  const legacyEvents = await readLegacyBranchDiffLog(
+    bucket,
+    rootDropId,
+    branchId,
+  );
+  const r2Matches = [...r2Events, ...legacyEvents].filter(
+    (event) => event.eventId === eventId,
+  );
+  const uniqueMatches = new Map<number, DropDiffEvent>();
+  for (const event of r2Matches) {
+    const prior = uniqueMatches.get(event.seq);
+    if (prior && !hasSameStoredEvent(prior, event)) {
+      return { status: "invalid", reason: "r2_event_sequence_mismatch" };
+    }
+    uniqueMatches.set(event.seq, event);
+  }
+  if (uniqueMatches.size > 1) {
+    return { status: "invalid", reason: "multiple_event_sequences" };
+  }
+  const r2Event = uniqueMatches.values().next().value as
+    | DropDiffEvent
+    | undefined;
+  if (d1Event && r2Event && !hasSameStoredEvent(d1Event, r2Event)) {
+    return { status: "invalid", reason: "d1_r2_event_mismatch" };
+  }
+  if (d1Event) return { status: "found", event: d1Event };
+  return r2Event ? { status: "found", event: r2Event } : { status: "absent" };
+};
+
+/** Reads a branch diff event through D1, the R2 identity index, or legacy storage. */
+export const readBranchDiffEventById = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  eventId: string,
+  db?: VoidSqlStore,
+): Promise<DropDiffEvent | null> => {
+  const result = await lookupBranchDiffEventIdentity(
+    bucket,
+    rootDropId,
+    branchId,
+    eventId,
+    db,
+  );
+  return result.status === "found" ? result.event : null;
+};
+
 /** Checks whether a branch diff event id has already been stored. */
 export const hasBranchDiffEventId = async (
   bucket: VoidBlobStore,
@@ -266,6 +475,43 @@ export const writeBranchDiffEvent = async (
     createBranchDiffEventKey(rootDropId, branchId, event.seq),
     event,
   );
+};
+
+/** Writes or validates the exact v2 marker for an accepted branch event. */
+export const writeBranchDiffEventIdMarker = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  event: DropDiffEvent,
+): Promise<void> => {
+  if (event.snapshotId === undefined) {
+    throw new Error("diff_event_marker_snapshot_missing");
+  }
+  const marker: BranchDiffEventIdMarkerV2 = {
+    version: 2,
+    rootDropId,
+    branchId,
+    eventId: event.eventId,
+    seq: event.seq,
+    snapshotId: event.snapshotId,
+  };
+  const key = createBranchDiffEventIdMarkerV2Key(
+    rootDropId,
+    branchId,
+    event.eventId,
+  );
+  if (await writeR2JsonIfAbsent(bucket, key, marker)) return;
+  const existing = await readR2Json(bucket, key, isBranchDiffEventIdMarkerV2);
+  if (
+    !existing ||
+    existing.rootDropId !== marker.rootDropId ||
+    existing.branchId !== marker.branchId ||
+    existing.eventId !== marker.eventId ||
+    existing.seq !== marker.seq ||
+    existing.snapshotId !== marker.snapshotId
+  ) {
+    throw new Error("diff_event_marker_conflict");
+  }
 };
 
 /** Polls branch diff events after a sequence cursor with heap-v2 and legacy fallback. */
@@ -437,10 +683,16 @@ export const createBranchDiffRepository = ({
     readBranchHeadEventSeq(blobs, rootDropId, branchId, sql),
   readBranchDiffEventBySeq: (rootDropId, branchId, seq) =>
     readBranchDiffEventBySeq(blobs, rootDropId, branchId, seq, sql),
+  readBranchDiffEventById: (rootDropId, branchId, eventId) =>
+    readBranchDiffEventById(blobs, rootDropId, branchId, eventId, sql),
+  lookupBranchDiffEventIdentity: (rootDropId, branchId, eventId) =>
+    lookupBranchDiffEventIdentity(blobs, rootDropId, branchId, eventId, sql),
   hasBranchDiffEventId: (rootDropId, branchId, eventId) =>
     hasBranchDiffEventId(blobs, rootDropId, branchId, eventId, sql),
   writeBranchDiffEvent: (rootDropId, branchId, event) =>
     writeBranchDiffEvent(blobs, rootDropId, branchId, event, sql),
+  writeBranchDiffEventIdMarker: (rootDropId, branchId, event) =>
+    writeBranchDiffEventIdMarker(blobs, rootDropId, branchId, event),
   pollBranchDiffEventsSince: (
     rootDropId,
     branchId,

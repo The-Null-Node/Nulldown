@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -26,10 +26,17 @@ import { createBranchCommand } from "./commands/branches";
 import { createDiffCommand } from "./commands/diffs";
 import { createDoctorCommand } from "./commands/doctor";
 import { createDropCommands } from "./commands/drops";
-import { createServeCommand } from "./commands/serve";
+import {
+  createServeCommand,
+  type ServeCommandDependencies,
+} from "./commands/serve";
 import { createSmokeCommand } from "./commands/smoke";
 import { flagString, hasFlag, parseArgs, type ParsedArgs } from "./core/args";
 import { findCliCommand, type CliCommand } from "./core/command";
+import {
+  createCliDiagnostics,
+  type CliDiagnostics,
+} from "./core/diagnostics";
 import { createHttpNulldownRuntime } from "./runtime/httpRuntime";
 import type {
   AdminBackfillTarget,
@@ -66,6 +73,44 @@ interface CliConfig {
   json: boolean;
   quiet: boolean;
   verbose: boolean;
+  requestTimeoutMs: number;
+}
+
+/** Result returned by one CLI invocation without terminating the host process. */
+export interface CliExitResult {
+  /** Process exit code the executable wrapper should expose. */
+  exitCode: number;
+}
+
+/** Injectable process and transport boundaries used by `runCli`. */
+export interface RunCliDependencies {
+  /** Writes one complete stdout value. */
+  stdout?(text: string): void;
+  /** Writes one complete stderr value. */
+  stderr?(text: string): void;
+  /** Performs outbound HTTP requests. */
+  fetch?: typeof globalThis.fetch;
+  /** Reads stdin when a command uses `-`. */
+  readStdin?(): Promise<string>;
+  /** Generates a correlation id for one outbound request. */
+  createRequestId?(): string;
+  /** Returns the current clock value in milliseconds. */
+  now?(): number;
+  /** Aborts outbound requests after this duration. */
+  requestTimeoutMs?: number;
+  /** Programmatic dependencies for the embedded local server command. */
+  serve?: Pick<ServeCommandDependencies, "data">;
+}
+
+interface ResolvedRunCliDependencies {
+  stdout(text: string): void;
+  stderr(text: string): void;
+  fetch: typeof globalThis.fetch;
+  readStdin(): Promise<string>;
+  createRequestId(): string;
+  now(): number;
+  requestTimeoutMs: number;
+  serve: Pick<ServeCommandDependencies, "data">;
 }
 
 interface DiffClientKeysRecord {
@@ -121,9 +166,30 @@ class CliError extends Error {
 const DEFAULT_BASE_URL = "https://nulldown.app";
 const DEFAULT_CONFIG_DIR_NAME = "nulldown";
 const DEFAULT_DIFF_AUTH_TOKEN_FILE = "diff-auth.token";
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_REQUEST_TIMEOUT_MS = 2_147_483_647;
 const DIFF_AUTH_TOKEN_KIND = "nulldown.diff-auth.v1";
 const DIFF_AUTH_TOKEN_PREFIX = "ndauth.v1.";
 const textDecoder = new TextDecoder();
+
+const resolveRunCliDependencies = (
+  dependencies: RunCliDependencies = {},
+): ResolvedRunCliDependencies => ({
+  stdout: dependencies.stdout ?? ((text) => console.log(text)),
+  stderr: dependencies.stderr ?? ((text) => console.error(text)),
+  fetch: dependencies.fetch ?? globalThis.fetch,
+  readStdin: dependencies.readStdin ?? (() => Bun.stdin.text()),
+  createRequestId: dependencies.createRequestId ?? randomUUID,
+  now: dependencies.now ?? Date.now,
+  requestTimeoutMs:
+    dependencies.requestTimeoutMs !== undefined &&
+    Number.isInteger(dependencies.requestTimeoutMs) &&
+    dependencies.requestTimeoutMs >= 1 &&
+    dependencies.requestTimeoutMs <= MAX_REQUEST_TIMEOUT_MS
+      ? dependencies.requestTimeoutMs
+      : DEFAULT_REQUEST_TIMEOUT_MS,
+  serve: dependencies.serve ?? {},
+});
 
 const helpText = `Nulldown CLI
 
@@ -154,12 +220,12 @@ Branch commands:
   branch priority <rootId> <branchId> --priority <n> [--node <id>|--heap|--diff <eventId>] [--reason <text>]
   branch priority list <rootId> <branchId> [--target-kind <kind>] [--target <id>]
   branch priority delete <rootId> <branchId> <factId>
-  branch promote <rootId> <branchId>
+  branch promote <rootId> <branchId> --expected-snapshot <n> --idempotency-key <key>
 
 Diff commands:
   diff poll <dropId> [--cursor <n>] [--limit <n>]
   diff latest <dropId>
-  diff apply <dropId> --branch <branchId> [--metadata-file <file>] [--insert pos:text] [--delete start:end]
+  diff apply <dropId> --branch <branchId> [--metadata-file <file>] [--event-id <id> --created-at <ms>] [--insert pos:text] [--delete start:end]
   diff replace <dropId> --branch <branchId> --to-file <file> [--from-file <file>] [--metadata-file <file>]
   diff batch <dropId> --branch <branchId> --body-file <file|->
   diff event <dropId> --body-file <file|->
@@ -189,6 +255,7 @@ Global flags:
   --config-dir <dir> Config directory (default: ~/.config/nulldown)
   --diff-auth-token <token>
                      Inline diff auth token
+  --timeout-ms <n>   Abort HTTP requests after n milliseconds (default: ${DEFAULT_REQUEST_TIMEOUT_MS})
   --quiet            Reduce human output
   --verbose          More diagnostics
 `;
@@ -216,8 +283,43 @@ const readConfig = async (args: ParsedArgs): Promise<Partial<CliConfig>> => {
   return (await readJsonFile<Partial<CliConfig>>(resolve(configPath))) ?? {};
 };
 
-const resolveConfig = async (args: ParsedArgs): Promise<CliConfig> => {
-  const fileConfig = await readConfig(args);
+const resolveRequestTimeoutMs = (
+  args: ParsedArgs,
+  fileConfig: Partial<CliConfig>,
+  defaultValue: number,
+): number => {
+  const value =
+    flagString(args, "timeout-ms") ||
+    process.env.ND_REQUEST_TIMEOUT_MS ||
+    fileConfig.requestTimeoutMs;
+  if (value === undefined || value === null) return defaultValue;
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new CliError(
+      `Request timeout must be an integer from 1 to ${MAX_REQUEST_TIMEOUT_MS}.`,
+      { code: "invalid_request_timeout" },
+    );
+  }
+  const parsed = Number(value);
+  if (
+    !Number.isInteger(parsed) ||
+    parsed < 1 ||
+    parsed > MAX_REQUEST_TIMEOUT_MS
+  ) {
+    throw new CliError(
+      `Request timeout must be an integer from 1 to ${MAX_REQUEST_TIMEOUT_MS}.`,
+      {
+        code: "invalid_request_timeout",
+      },
+    );
+  }
+  return parsed;
+};
+
+const resolveConfig = async (
+  args: ParsedArgs,
+  fileConfig: Partial<CliConfig>,
+  defaultRequestTimeoutMs: number,
+): Promise<CliConfig> => {
   const configDir = resolve(
     flagString(args, "config-dir") ||
       flagString(args, "diff-auth-dir") ||
@@ -267,11 +369,26 @@ const resolveConfig = async (args: ParsedArgs): Promise<CliConfig> => {
     json: hasFlag(args, "json") || Boolean(fileConfig.json),
     quiet: hasFlag(args, "quiet") || Boolean(fileConfig.quiet),
     verbose: hasFlag(args, "verbose") || Boolean(fileConfig.verbose),
+    requestTimeoutMs: resolveRequestTimeoutMs(
+      args,
+      fileConfig,
+      defaultRequestTimeoutMs,
+    ),
   };
 };
 
-const redact = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map((entry) => redact(entry));
+const redactText = (value: string, secrets: readonly string[]): string =>
+  secrets.reduce(
+    (output, secret) =>
+      secret ? output.split(secret).join("[redacted]") : output,
+    value,
+  );
+
+const redact = (value: unknown, secrets: readonly string[] = []): unknown => {
+  if (typeof value === "string") return redactText(value, secrets);
+  if (Array.isArray(value)) {
+    return value.map((entry) => redact(entry, secrets));
+  }
   if (!value || typeof value !== "object") return value;
 
   const output: Record<string, unknown> = {};
@@ -289,25 +406,57 @@ const redact = (value: unknown): unknown => {
       output[key] = "[redacted]";
       continue;
     }
-    output[key] = redact(entry);
+    output[key] = redact(entry, secrets);
   }
   return output;
 };
 
-const print = (config: CliConfig, value: unknown, human?: string): void => {
+const environmentSensitiveValues = (): Array<string | null | undefined> => [
+  process.env.ND_TOKEN,
+  process.env.ND_DIFF_AUTH_TOKEN,
+  process.env.DIFF_WEBHOOK_SECRET,
+  process.env.METADATA_BACKFILL_TOKEN,
+  process.env.DROP_INDEX_BACKFILL_TOKEN,
+  process.env.BRANCH_HEAP_BACKFILL_TOKEN,
+];
+
+const compactSensitiveValues = (
+  values: Array<string | null | undefined>,
+): string[] => [...new Set(values.filter((value): value is string => Boolean(value)))];
+
+const sensitiveValues = (config: CliConfig): string[] =>
+  compactSensitiveValues([
+    config.token,
+    config.diffAuthToken,
+    ...environmentSensitiveValues(),
+  ]);
+
+const unresolvedSensitiveValues = (args: ParsedArgs): string[] =>
+  compactSensitiveValues([
+    flagString(args, "token"),
+    flagString(args, "diff-auth-token"),
+    ...environmentSensitiveValues(),
+  ]);
+
+const print = (
+  config: CliConfig,
+  dependencies: ResolvedRunCliDependencies,
+  value: unknown,
+  human?: string,
+): void => {
   if (config.json) {
-    console.log(JSON.stringify(redact(value), null, 2));
+    dependencies.stdout(JSON.stringify(redact(value), null, 2));
     return;
   }
   if (human !== undefined) {
-    if (!config.quiet) console.log(human);
+    if (!config.quiet) dependencies.stdout(human);
     return;
   }
   if (typeof value === "string") {
-    console.log(value);
+    dependencies.stdout(value);
     return;
   }
-  console.log(JSON.stringify(redact(value), null, 2));
+  dependencies.stdout(JSON.stringify(redact(value), null, 2));
 };
 
 const parseJsonLoose = (text: string): unknown | null => {
@@ -322,8 +471,14 @@ const request = async <T = unknown>(
   config: CliConfig,
   path: string,
   options: RequestInit = {},
+  dependencies: ResolvedRunCliDependencies,
+  diagnostics: CliDiagnostics,
 ): Promise<ApiResponse<T>> => {
   const headers = new Headers(options.headers);
+  const requestId = dependencies.createRequestId();
+  const method = (options.method || "GET").toUpperCase();
+  const startedAt = dependencies.now();
+  headers.set("x-request-id", requestId);
   if (config.token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${config.token}`);
   }
@@ -334,38 +489,107 @@ const request = async <T = unknown>(
     headers.set(DIFF_CLIENT_ID_HEADER, config.clientId);
   }
 
-  const response = await fetch(`${config.baseUrl}${path}`, {
-    ...options,
-    headers,
-  });
-  const text = await response.text();
-  const data = parseJsonLoose(text) as T | null;
-
-  if (!response.ok) {
-    const message =
-      data && typeof data === "object" && "error" in data
-        ? String((data as { error: unknown }).error)
-        : text || `${response.status} ${response.statusText}`;
-    const code =
-      data && typeof data === "object" && "code" in data
-        ? String((data as { code: unknown }).code)
-        : undefined;
-    throw new CliError(message, { status: response.status, code });
-  }
-
-  return {
-    status: response.status,
-    headers: response.headers,
-    text,
-    data,
+  const controller = new AbortController();
+  const externalSignal = options.signal;
+  let abortSource: "caller" | "timeout" | null = null;
+  const abortFromCaller = () => {
+    if (abortSource) return;
+    abortSource = "caller";
+    controller.abort(externalSignal?.reason);
   };
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => {
+    if (abortSource) return;
+    abortSource = "timeout";
+    controller.abort();
+  }, config.requestTimeoutMs);
+
+  diagnostics.emit({ event: "http.start", requestId, method });
+  try {
+    const response = await dependencies.fetch(`${config.baseUrl}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const data = parseJsonLoose(text) as T | null;
+    const contentType = response.headers.get("Content-Type") || "";
+
+    if (
+      response.ok &&
+      contentType.includes("application/json") &&
+      text.trim() &&
+      text.trim() !== "null" &&
+      data === null
+    ) {
+      throw new CliError("Response body was not valid JSON.", {
+        status: response.status,
+        code: "invalid_json_response",
+      });
+    }
+
+    if (!response.ok) {
+      const message =
+        data && typeof data === "object" && "error" in data
+          ? String((data as { error: unknown }).error)
+          : text || `${response.status} ${response.statusText}`;
+      const code =
+        data && typeof data === "object" && "code" in data
+          ? String((data as { code: unknown }).code)
+          : "http_error";
+      throw new CliError(message, { status: response.status, code });
+    }
+
+    diagnostics.emit({
+      event: "http.end",
+      requestId,
+      method,
+      durationMs: dependencies.now() - startedAt,
+      status: response.status,
+    });
+    return {
+      status: response.status,
+      headers: response.headers,
+      text,
+      data,
+    };
+  } catch (error) {
+    const normalized = abortSource === "timeout"
+      ? new CliError("Request timed out.", { code: "request_timeout" })
+      : abortSource === "caller"
+        ? new CliError("Request was aborted.", { code: "request_aborted" })
+        : error instanceof CliError
+          ? error
+          : new CliError("Request failed.", { code: "request_failed" });
+    diagnostics.emit({
+      event: "http.error",
+      requestId,
+      method,
+      durationMs: dependencies.now() - startedAt,
+      code: normalized.code || "request_failed",
+      status: normalized.status,
+    });
+    throw normalized;
+  } finally {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
+  }
 };
 
 const readDrop = async (
   config: CliConfig,
   id: string,
+  dependencies: ResolvedRunCliDependencies,
+  diagnostics: CliDiagnostics,
 ): Promise<DropReadResult> => {
-  const response = await request(config, `/api/get/${encodeURIComponent(id)}`);
+  const response = await request(
+    config,
+    `/api/get/${encodeURIComponent(id)}`,
+    {},
+    dependencies,
+    diagnostics,
+  );
   const contentType = response.headers.get("Content-Type") || "";
   const body = contentType.includes("application/json")
     ? response.data
@@ -381,11 +605,15 @@ const readDrop = async (
   };
 };
 
-const createCliRuntime = (config: CliConfig): NulldownRuntime =>
+const createCliRuntime = (
+  config: CliConfig,
+  dependencies: ResolvedRunCliDependencies,
+  diagnostics: CliDiagnostics,
+): NulldownRuntime =>
   createHttpNulldownRuntime({
-    readDrop: (id) => readDrop(config, id),
+    readDrop: (id) => readDrop(config, id, dependencies, diagnostics),
     request: <T = unknown>(path: string, options?: RequestInit) =>
-      request<T>(config, path, options),
+      request<T>(config, path, options, dependencies, diagnostics),
     diffEnvelopeHeaders: (request: DiffEnvelopeHeadersRequest) =>
       createDiffEnvelopeHeaders(
         config,
@@ -396,20 +624,24 @@ const createCliRuntime = (config: CliConfig): NulldownRuntime =>
       ),
   });
 
-const readInput = async (path: string | null): Promise<string> => {
+const readInput = async (
+  path: string | null,
+  dependencies: ResolvedRunCliDependencies,
+): Promise<string> => {
   if (!path || path === "-") {
-    return await Bun.stdin.text();
+    return await dependencies.readStdin();
   }
   return await readFile(path, "utf8");
 };
 
 const parseMetadata = async (
   args: ParsedArgs,
+  dependencies: ResolvedRunCliDependencies,
 ): Promise<Record<string, unknown> | undefined> => {
   const inline = flagString(args, "metadata");
   const file = flagString(args, "metadata-file");
   if (!inline && !file) return undefined;
-  const raw = file ? await readInput(file) : inline!;
+  const raw = file ? await readInput(file, dependencies) : inline!;
   const parsed = JSON.parse(raw) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new CliError("Metadata must be a JSON object.");
@@ -419,11 +651,12 @@ const parseMetadata = async (
 
 const parseDiffEventMetadata = async (
   args: ParsedArgs,
+  dependencies: ResolvedRunCliDependencies,
 ): Promise<DropDiffEventMetadata | undefined> => {
   const inline = flagString(args, "metadata");
   const file = flagString(args, "metadata-file");
   if (!inline && !file) return undefined;
-  const raw = file ? await readInput(file) : inline!;
+  const raw = file ? await readInput(file, dependencies) : inline!;
   const parsed = JSON.parse(raw) as unknown;
   if (!isDropDiffEventMetadata(parsed)) {
     throw new CliError("Diff event metadata must match DropDiffEventMetadata.");
@@ -433,9 +666,11 @@ const parseDiffEventMetadata = async (
 
 const parseDiffEnvelopeInput = async (
   args: ParsedArgs,
+  dependencies: ResolvedRunCliDependencies,
 ): Promise<DropDiffEnvelope> => {
   const body = await readInput(
     flagString(args, "body-file") || flagString(args, "body") || "-",
+    dependencies,
   );
   const parsed = JSON.parse(body) as unknown;
   if (!isDropDiffEnvelope(parsed)) {
@@ -650,8 +885,12 @@ const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 };
 
-const createRegisteredCommands = (config: CliConfig): CliCommand<CliConfig>[] => {
-  const runtime = createCliRuntime(config);
+const createRegisteredCommands = (
+  config: CliConfig,
+  dependencies: ResolvedRunCliDependencies,
+  diagnostics: CliDiagnostics,
+): CliCommand<CliConfig>[] => {
+  const runtime = createCliRuntime(config, dependencies, diagnostics);
   const resolveAdminToken = (
     target: AdminBackfillTarget,
     args: ParsedArgs,
@@ -664,29 +903,35 @@ const createRegisteredCommands = (config: CliConfig): CliCommand<CliConfig>[] =>
         : process.env.BRANCH_HEAP_BACKFILL_TOKEN) ||
     null;
   return [
-    createDoctorCommand({ readDiffAuthBundle, print }),
+    createDoctorCommand({
+      readDiffAuthBundle,
+      print: (activeConfig, value, human) =>
+        print(activeConfig, dependencies, value, human),
+    }),
     ...createDropCommands<CliConfig>({
       runtime,
-      print: (value, human) => print(config, value, human),
+      print: (value, human) => print(config, dependencies, value, human),
       redact,
-      writeText: (text) => console.log(text),
-      readInput,
-      parseMetadata,
+      writeText: dependencies.stdout,
+      readInput: (path) => readInput(path, dependencies),
+      parseMetadata: (args) => parseMetadata(args, dependencies),
       shouldResolveSeedBranch: () => Boolean(config.token || config.accountId),
     }),
     createBranchCommand<CliConfig>({
       runtime,
-      print: (value, human) => print(config, value, human),
-      parseMetadata,
+      print: (value, human) => print(config, dependencies, value, human),
+      parseMetadata: (args) => parseMetadata(args, dependencies),
       parseJsonLoose,
       defaultDocumentResolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
     }),
     createDiffCommand<CliConfig>({
       runtime,
-      print: (value, human) => print(config, value, human),
-      parseDiffEnvelopeInput,
-      parseDiffEventMetadata,
-      readInput,
+      print: (value, human) => print(config, dependencies, value, human),
+      parseDiffEnvelopeInput: (args) =>
+        parseDiffEnvelopeInput(args, dependencies),
+      parseDiffEventMetadata: (args) =>
+        parseDiffEventMetadata(args, dependencies),
+      readInput: (path) => readInput(path, dependencies),
       clientId: () => config.clientId,
       readDiffAuthBundle: () => readDiffAuthBundle(config),
       writeDiffAuthBundle: (bundle) => writeDiffAuthBundle(config, bundle),
@@ -705,6 +950,8 @@ const createRegisteredCommands = (config: CliConfig): CliCommand<CliConfig>[] =>
               requesterPublicJwk: keys.encryptionPublicJwk,
             }),
           },
+          dependencies,
+          diagnostics,
         );
         if (!response.data) {
           throw new CliError("Diff auth registration returned no body.");
@@ -717,32 +964,65 @@ const createRegisteredCommands = (config: CliConfig): CliCommand<CliConfig>[] =>
       signDiffPayload,
       diffAuthTokenPath: () => config.diffAuthTokenPath,
       baseUrl: () => config.baseUrl,
-      writeText: (text) => console.log(text),
+      writeText: dependencies.stdout,
       isJson: () => config.json,
     }),
     createAuthCommand<CliConfig>({
       runtime,
-      print: (value, human) => print(config, value, human),
-      readInput,
+      print: (value, human) => print(config, dependencies, value, human),
+      readInput: (path) => readInput(path, dependencies),
     }),
     createAdminCommand<CliConfig>({
       runtime,
-      print: (value, human) => print(config, value, human),
+      print: (value, human) => print(config, dependencies, value, human),
       resolveAdminToken,
       sleep,
     }),
     createSmokeCommand<CliConfig>({
       runtime,
-      print: (value, human) => print(config, value, human),
+      print: (value, human) => print(config, dependencies, value, human),
       clientId: () => config.clientId,
     }),
     createServeCommand<CliConfig>({
-      print: (value, human) => print(config, value, human),
+      ...dependencies.serve,
+      print: (value, human) => print(config, dependencies, value, human),
     }),
   ];
 };
 
-const dispatch = async (config: CliConfig, args: ParsedArgs): Promise<void> => {
+const dispatch = async (
+  config: CliConfig,
+  args: ParsedArgs,
+  dependencies: ResolvedRunCliDependencies,
+  diagnostics: CliDiagnostics,
+): Promise<void> => {
+  const runCommand = async (
+    command: string,
+    execute: () => Promise<void>,
+  ): Promise<void> => {
+    const startedAt = dependencies.now();
+    diagnostics.emit({ event: "command.start", command });
+    try {
+      await execute();
+      diagnostics.emit({
+        event: "command.end",
+        command,
+        durationMs: dependencies.now() - startedAt,
+        exitCode: 0,
+      });
+    } catch (error) {
+      diagnostics.emit({
+        event: "command.error",
+        command,
+        durationMs: dependencies.now() - startedAt,
+        code:
+          error instanceof CliError && error.code
+            ? error.code
+            : "command_failed",
+      });
+      throw error;
+    }
+  };
   const command = args.positionals[0];
   if (
     !command ||
@@ -750,39 +1030,84 @@ const dispatch = async (config: CliConfig, args: ParsedArgs): Promise<void> => {
     hasFlag(args, "help") ||
     hasFlag(args, "h")
   ) {
-    console.log(helpText);
-    return;
+    return runCommand("help", async () => dependencies.stdout(helpText));
   }
   const registeredCommand = findCliCommand(
-    createRegisteredCommands(config),
+    createRegisteredCommands(config, dependencies, diagnostics),
     command,
     args,
   );
-  if (registeredCommand) return registeredCommand.run({ config, args });
+  if (registeredCommand) {
+    return runCommand(registeredCommand.name, () =>
+      registeredCommand.run({ config, args }),
+    );
+  }
 
-  throw new CliError(`Unknown command: ${command}`);
+  return runCommand("unknown", async () => {
+    throw new CliError(`Unknown command: ${command}`, {
+      code: "unknown_command",
+    });
+  });
 };
 
-export const runCli = async (argv: string[]): Promise<void> => {
+/** Runs one CLI invocation and returns the exit status to its host process. */
+export const runCli = async (
+  argv: string[],
+  injectedDependencies: RunCliDependencies = {},
+): Promise<CliExitResult> => {
+  const dependencies = resolveRunCliDependencies(injectedDependencies);
   const args = parseArgs(argv);
   if (hasFlag(args, "version")) {
-    console.log(packageJson.version);
-    return;
+    dependencies.stdout(packageJson.version);
+    return { exitCode: 0 };
   }
-  const config = await resolveConfig(args);
+  let config: CliConfig | null = null;
+  let fileConfig: Partial<CliConfig> = {};
   try {
-    await dispatch(config, args);
+    fileConfig = await readConfig(args);
+    config = await resolveConfig(
+      args,
+      fileConfig,
+      dependencies.requestTimeoutMs,
+    );
+    const diagnostics = createCliDiagnostics({
+      enabled: config.verbose,
+      format: config.json ? "ndjson" : "human",
+      write: dependencies.stderr,
+    });
+    await dispatch(config, args, dependencies, diagnostics);
+    return { exitCode: 0 };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (config.json) {
+    const json =
+      config?.json ?? (hasFlag(args, "json") || Boolean(fileConfig.json));
+    const verbose =
+      config?.verbose ??
+      (hasFlag(args, "verbose") || Boolean(fileConfig.verbose));
+    const secrets = config
+      ? sensitiveValues(config)
+      : unresolvedSensitiveValues(args);
+    const message = redactText(
+      error instanceof Error ? error.message : String(error),
+      secrets,
+    );
+    if (json) {
       const output =
         error instanceof CliError
-          ? { error: message, code: error.code, status: error.status }
-          : { error: message };
-      console.error(JSON.stringify(redact(output), null, 2));
+          ? {
+              error: message,
+              code: error.code || "command_failed",
+              status: error.status,
+            }
+          : {
+              error: message,
+              code: config ? "command_failed" : "config_error",
+            };
+      dependencies.stderr(
+        JSON.stringify(redact(output, secrets), null, verbose ? 0 : 2),
+      );
     } else {
-      console.error(`error: ${message}`);
+      dependencies.stderr(`error: ${message}`);
     }
-    process.exit(1);
+    return { exitCode: 1 };
   }
 };

@@ -20,7 +20,7 @@ export interface VoidSqlStatement {
   run(): Promise<unknown>;
   /** Reads the first row from a query, or null when no row matches. */
   first<T = Record<string, unknown>>(): Promise<T | null>;
-  /** Reads all rows returned by a query. */
+  /** Reads all rows returnehttps://youtu.be/bPx8F-YeaEcd by a query. */
   all<T = Record<string, unknown>>(): Promise<VoidSqlRows<T>>;
 }
 
@@ -251,5 +251,8 @@ export interface VoidDataStore {
   /** Runs work inside the adapter's transaction boundary when supported. */
   tx<T>(work: (data: VoidDataStore) => Promise<T>): Promise<T>;
   /** Runs work under an adapter-provided lock for the given portable key. */
-  lock<T>(key: VoidDataKey, work: (data: VoidDataStore) => Promise<T>): Promise<T>;
+  lock<T>(
+    key: VoidDataKey,
+    work: (data: VoidDataStore) => Promise<T>,
+  ): Promise<T>;
 }

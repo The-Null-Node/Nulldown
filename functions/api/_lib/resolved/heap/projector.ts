@@ -1,7 +1,10 @@
 import { listNullplugRuntimeFacts } from "../../nullplug/facts/repository";
+import { createBranchRuntimeFactLogRepository } from "../../branches/storage/runtimeFactLogRepository";
+import { withBranchMutationLock } from "../../branches/storage/mutationLock";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
+  RESOLVED_RUNTIME_REFS_RESOLVER_VERSION,
 } from "../../../../../shared/drop/resolved/constants";
 import { heapifyResolvedDocument } from "../../../../../shared/drop/resolved/heapify/document";
 import { heapifyResolvedRuntimeRefs } from "../../../../../shared/drop/resolved/heapify/runtimeRefs";
@@ -72,17 +75,33 @@ export const projectResolvedRuntimeRefsHeap = async (
   source: ResolvedHeapProjectionSource,
   update: ResolvedUpdateRequest = {},
 ): Promise<ResolvedHeapProjectionWrite> => {
+  const runtimeFactRepository = createBranchRuntimeFactLogRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const headBeforeRead = await runtimeFactRepository.readBranchHeadRuntimeFactSeq(
+    source.rootDropId,
+    source.branchId,
+  );
   const runtimeFacts = await listNullplugRuntimeFacts(
     env.R2_BUCKET,
     source.rootDropId,
     source.branchId,
     env.DB,
   );
+  const headAfterRead = await runtimeFactRepository.readBranchHeadRuntimeFactSeq(
+    source.rootDropId,
+    source.branchId,
+  );
+  // A concurrent append may be present in the fact list, but an older cursor is safe:
+  // the next query will observe the newer head and regenerate instead of missing data.
+  const runtimeFactHeadSeq =
+    headBeforeRead === headAfterRead ? headAfterRead : headBeforeRead;
   const state = await heapifyResolvedRuntimeRefs({
     rootDropId: source.rootDropId,
     branchId: source.branchId,
     snapshotId: source.snapshotId,
-    sourceSeqRange: sourceSeqRangeForHead(source.headEventSeq),
+    sourceSeqRange: sourceSeqRangeForHead(runtimeFactHeadSeq),
     content: source.content,
     uiPrimitives: update.uiPrimitives,
     uiResponseFacts: [
@@ -110,7 +129,15 @@ export const projectResolvedHeap = async (
   update?: ResolvedUpdateRequest,
 ): Promise<ResolvedHeapProjectionWrite> => {
   if (resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
-    return projectResolvedRuntimeRefsHeap(env, source, update);
+    return withBranchMutationLock(
+      env.R2_BUCKET,
+      source.rootDropId,
+      source.branchId,
+      async (lock) => {
+        await lock.beginCommit();
+        return await projectResolvedRuntimeRefsHeap(env, source, update);
+      },
+    );
   }
 
   return projectResolvedDocumentHeap(env, source);
@@ -132,6 +159,18 @@ export const ensureResolvedHeapProjection = async (
   );
   let heapGenerated = false;
   let stale = Boolean(state && state.sourceContentHash !== sourceContentHash);
+  if (resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
+    const runtimeFactHeadSeq = await createBranchRuntimeFactLogRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    }).readBranchHeadRuntimeFactSeq(source.rootDropId, source.branchId);
+    stale ||= Boolean(
+      state && (state.sourceSeqRange?.to ?? -1) !== runtimeFactHeadSeq,
+    );
+    stale ||= Boolean(
+      state && state.resolverVersion !== RESOLVED_RUNTIME_REFS_RESOLVER_VERSION,
+    );
+  }
 
   if (
     (!state || stale) &&

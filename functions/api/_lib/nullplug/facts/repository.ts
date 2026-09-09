@@ -8,6 +8,7 @@ import {
   nullplugUiStatePatchFactPrefix,
   nullplugUiStateSnapshotKey,
   nullplugUiStateSnapshotPrefix,
+  nullplugUiRuntimeFactId,
   type NullplugUiResponseFact,
   type NullplugUiStatePatchFact,
   type NullplugUiStateSnapshot,
@@ -21,6 +22,67 @@ import { parseJsonColumn } from "../../core/d1/metadata";
 type NullplugFactKind = "ui.response" | "ui.state.patch" | "ui.state.snapshot";
 
 const scopeValue = (value?: string): string => value ?? "";
+
+const mergeFacts = <
+  T extends
+    | NullplugUiResponseFact
+    | NullplugUiStatePatchFact
+    | NullplugUiStateSnapshot,
+>(
+  fromBlob: T[],
+  fromSql: T[],
+): T[] => {
+  const facts = new Map(
+    fromBlob.map((fact) => [nullplugUiRuntimeFactId(fact), fact]),
+  );
+  fromSql.forEach((fact) => facts.set(nullplugUiRuntimeFactId(fact), fact));
+  return [...facts.values()].sort(
+    (left, right) => left.createdAt - right.createdAt,
+  );
+};
+
+const readStoredFact = async <T>(
+  bucket: VoidBlobStore,
+  key: string,
+  guard: (value: unknown) => value is T,
+): Promise<T | null> => {
+  const object = await bucket.get(key);
+  if (!object) return null;
+  try {
+    const parsed = await object.json();
+    return guard(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Reads a persisted UI response fact by its immutable identity. */
+export const readNullplugUiResponseFact = async (
+  bucket: VoidBlobStore,
+  fact: Pick<NullplugUiResponseFact, "id" | "primitiveId" | "source">,
+): Promise<NullplugUiResponseFact | null> =>
+  readStoredFact(
+    bucket,
+    nullplugUiResponseFactKey(fact),
+    isNullplugUiResponseFact,
+  );
+
+/** Reads a persisted UI state fact by its immutable identity. */
+export const readNullplugUiStateFact = async (
+  bucket: VoidBlobStore,
+  fact:
+    | Pick<NullplugUiStatePatchFact, "kind" | "id" | "callId" | "source">
+    | Pick<NullplugUiStateSnapshot, "kind" | "id" | "callId" | "source">,
+): Promise<NullplugUiStatePatchFact | NullplugUiStateSnapshot | null> =>
+  readStoredFact(
+    bucket,
+    fact.kind === "ui.state.patch"
+      ? nullplugUiStatePatchFactKey(fact)
+      : nullplugUiStateSnapshotKey(fact),
+    fact.kind === "ui.state.patch"
+      ? isNullplugUiStatePatchFact
+      : isNullplugUiStateSnapshot,
+  );
 
 const writeFactToD1 = async (
   db: VoidSqlStore | undefined,
@@ -135,13 +197,12 @@ export const listNullplugUiResponseFacts = async (
     branchId,
     isNullplugUiResponseFact,
   );
-  if (facts.length > 0) return facts;
-
-  return listJsonByPrefix(
+  const fromBlob = await listJsonByPrefix(
     bucket,
     nullplugUiResponseFactPrefix(rootDropId, branchId),
     isNullplugUiResponseFact,
   );
+  return mergeFacts(fromBlob, facts);
 };
 
 /** Lists persisted UI state patch facts for a root drop or branch. */
@@ -158,13 +219,12 @@ export const listNullplugUiStatePatchFacts = async (
     branchId,
     isNullplugUiStatePatchFact,
   );
-  if (facts.length > 0) return facts;
-
-  return listJsonByPrefix(
+  const fromBlob = await listJsonByPrefix(
     bucket,
     nullplugUiStatePatchFactPrefix(rootDropId, branchId),
     isNullplugUiStatePatchFact,
   );
+  return mergeFacts(fromBlob, facts);
 };
 
 /** Lists persisted UI state snapshots for a root drop or branch. */
@@ -181,13 +241,12 @@ export const listNullplugUiStateSnapshots = async (
     branchId,
     isNullplugUiStateSnapshot,
   );
-  if (facts.length > 0) return facts;
-
-  return listJsonByPrefix(
+  const fromBlob = await listJsonByPrefix(
     bucket,
     nullplugUiStateSnapshotPrefix(rootDropId, branchId),
     isNullplugUiStateSnapshot,
   );
+  return mergeFacts(fromBlob, facts);
 };
 
 /** Writes a UI response fact to R2 and D1 metadata storage. */
@@ -195,16 +254,26 @@ export const putNullplugUiResponseFact = async (
   bucket: VoidBlobStore,
   fact: NullplugUiResponseFact,
   db?: VoidSqlStore,
-): Promise<{ key: string; written: boolean }> => {
+): Promise<{ key: string; written: boolean; fact: NullplugUiResponseFact }> => {
   const key = nullplugUiResponseFactKey(fact);
   const written = await bucket.put(key, JSON.stringify(fact), {
     httpMetadata: { contentType: "application/json" },
     onlyIf: { etagDoesNotMatch: "*" },
   });
-  if (!written) return { key, written: false };
+  if (!written) {
+    const existing = await readStoredFact(
+      bucket,
+      key,
+      isNullplugUiResponseFact,
+    );
+    if (!existing)
+      throw new Error("Existing nullplug response fact is invalid.");
+    await writeFactToD1(db, "ui.response", existing);
+    return { key, written: false, fact: existing };
+  }
 
   await writeFactToD1(db, "ui.response", fact);
-  return { key, written: true };
+  return { key, written: true, fact };
 };
 
 /** Writes a UI state fact to R2 and D1 metadata storage. */
@@ -212,7 +281,11 @@ export const putNullplugUiStateFact = async (
   bucket: VoidBlobStore,
   fact: NullplugUiStatePatchFact | NullplugUiStateSnapshot,
   db?: VoidSqlStore,
-): Promise<{ key: string; written: boolean }> => {
+): Promise<{
+  key: string;
+  written: boolean;
+  fact: NullplugUiStatePatchFact | NullplugUiStateSnapshot;
+}> => {
   const key =
     fact.kind === "ui.state.patch"
       ? nullplugUiStatePatchFactKey(fact)
@@ -221,10 +294,21 @@ export const putNullplugUiStateFact = async (
     httpMetadata: { contentType: "application/json" },
     onlyIf: { etagDoesNotMatch: "*" },
   });
-  if (!written) return { key, written: false };
+  if (!written) {
+    const existing = await readStoredFact(
+      bucket,
+      key,
+      fact.kind === "ui.state.patch"
+        ? isNullplugUiStatePatchFact
+        : isNullplugUiStateSnapshot,
+    );
+    if (!existing) throw new Error("Existing nullplug state fact is invalid.");
+    await writeFactToD1(db, existing.kind, existing);
+    return { key, written: false, fact: existing };
+  }
 
   await writeFactToD1(db, fact.kind, fact);
-  return { key, written: true };
+  return { key, written: true, fact };
 };
 
 /** Reads all nullplug runtime facts used by resolved runtime heap materialization. */

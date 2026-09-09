@@ -230,6 +230,13 @@ describe("functions api nullplug state contracts", () => {
       },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
+    const storedBranch = await bucket
+      .get(createBranchKey(rootDropId, branchId))
+      .then((object) => object?.json<Record<string, unknown>>());
+    bucket.seed(
+      createBranchKey(rootDropId, branchId),
+      JSON.stringify({ ...storedBranch, status: "archived" }),
+    );
     const duplicate = await onRequest({
       request: createStateRequest(fact),
       env: {
@@ -247,6 +254,22 @@ describe("functions api nullplug state contracts", () => {
       duplicate: true,
       runtimeFact: expect.objectContaining({ appended: false }),
     });
+    const reused = await onRequest({
+      request: createStateRequest({
+        ...fact,
+        patch: [{ op: "set", path: ["approved"], value: false }],
+      }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(reused.status).toBe(409);
+    bucket.seed(
+      createBranchKey(rootDropId, branchId),
+      JSON.stringify({ ...storedBranch, status: "active" }),
+    );
 
     const otherCall = {
       ...fact,

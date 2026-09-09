@@ -242,11 +242,27 @@ describe("functions api nullplug submit contracts", () => {
       bucket.get(body.key).then((object) => object?.json()),
     ).resolves.toEqual(body.fact);
 
-    const queryResponse = await onResolvedQueryRequest({
+    const unauthorizedQuery = await onResolvedQueryRequest({
       request: new Request(
         `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query?resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&kind=ui.response&primitiveId=approval-form&q=approved%20true`,
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: { rootId: rootDropId, branchId },
+    } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+    expect(unauthorizedQuery.status).toBe(401);
+
+    const queryResponse = await onResolvedQueryRequest({
+      request: new Request(
+        `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query?resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&kind=ui.response&primitiveId=approval-form&q=approved%20true`,
+        { headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: accountId } },
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { rootId: rootDropId, branchId },
     } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
     const queryBody = (await queryResponse.json()) as {
@@ -278,6 +294,13 @@ describe("functions api nullplug submit contracts", () => {
       },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
+    const storedBranch = await bucket
+      .get(createBranchKey(rootDropId, branchId))
+      .then((object) => object?.json<Record<string, unknown>>());
+    bucket.seed(
+      createBranchKey(rootDropId, branchId),
+      JSON.stringify({ ...storedBranch, status: "archived" }),
+    );
     const duplicate = await onRequest({
       request: createSubmitRequest(fact),
       env: {
@@ -296,6 +319,18 @@ describe("functions api nullplug submit contracts", () => {
       duplicate: true,
       runtimeFact: expect.objectContaining({ appended: false }),
     });
+    const reused = await onRequest({
+      request: createSubmitRequest({
+        ...fact,
+        data: { approved: false },
+      }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(reused.status).toBe(409);
   });
 
   it("rejects invalid facts and missing roots", async () => {

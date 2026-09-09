@@ -234,6 +234,8 @@ export const getBranchContent = async (
       rootDropId,
       branchId,
       snapshotId: branch.headSnapshotId,
+      headEventSeq:
+        typeof branch.headEventSeq === "number" ? branch.headEventSeq : null,
       content,
     }),
     {

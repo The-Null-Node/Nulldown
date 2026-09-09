@@ -7,9 +7,12 @@ that must remain readable across page reloads and browser restarts.
 import type { DropEnvelopeV1 } from "../../shared/drop/types";
 
 const DB_NAME = "nulldown";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const KV_STORE = "kv";
 const DROPS_STORE = "drops";
+export const NULLDOWN_DIFF_OUTBOX_EVENTS_STORE = "diffOutboxEvents";
+export const NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE = "diffOutboxBranchState";
+export const NULLDOWN_DIFF_OUTBOX_BRANCH_QUEUE_INDEX = "byBranchQueueOrder";
 
 export interface IndexedDbDropRecord {
   id: string;
@@ -72,12 +75,32 @@ export const openNulldownDatabase = async (): Promise<IDBDatabase> => {
           });
           dropsStore.createIndex("createdAt", "createdAt", { unique: false });
         }
+        if (!db.objectStoreNames.contains(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE)) {
+          const eventsStore = db.createObjectStore(
+            NULLDOWN_DIFF_OUTBOX_EVENTS_STORE,
+            { keyPath: ["rootId", "branchId", "eventId"] },
+          );
+          eventsStore.createIndex(
+            NULLDOWN_DIFF_OUTBOX_BRANCH_QUEUE_INDEX,
+            ["rootId", "branchId", "queueOrder"],
+            { unique: true },
+          );
+        }
+        if (!db.objectStoreNames.contains(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE)) {
+          db.createObjectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE, {
+            keyPath: ["rootId", "branchId"],
+          });
+        }
       };
 
       request.onsuccess = () => {
         const db = request.result;
+        const openingPromise = databasePromise;
         db.onversionchange = () => {
           db.close();
+          if (databasePromise === openingPromise) {
+            databasePromise = null;
+          }
         };
         resolve(db);
       };
@@ -229,4 +252,23 @@ export const removeOfflineDrop = async (id: string): Promise<void> => {
   const store = transaction.objectStore(DROPS_STORE);
   store.delete(id);
   await waitForTransaction(transaction);
+};
+
+export const resetNulldownDatabaseForTests = async (
+  options: { deleteDatabase?: boolean } = {},
+): Promise<void> => {
+  const database = await databasePromise?.catch(() => null);
+  databasePromise = null;
+  database?.close();
+
+  if (options.deleteDatabase === false || !isIndexedDbSupported()) return;
+
+  const request = window.indexedDB.deleteDatabase(DB_NAME);
+  await new Promise<void>((resolve, reject) => {
+    request.onsuccess = () => resolve();
+    request.onerror = () =>
+      reject(getRequestError("Failed to delete IndexedDB database", request.error));
+    request.onblocked = () =>
+      reject(new Error("IndexedDB deletion is blocked by another open connection."));
+  });
 };
