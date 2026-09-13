@@ -10,6 +10,8 @@ import {
   normalizeNetworkAllowlist,
 } from "../networkAllowlist";
 import type { RootRuntimePolicy } from "../../../shared/nullplug/policy";
+import type { DropRuntimeNullplugCallProvenance } from "../../../shared/drop/runtime";
+import type { VoidNullplugRuntime } from "../../../shared/nullplug/runtime";
 import type {
   JsonValue,
   NullplugDiagnostic,
@@ -17,16 +19,13 @@ import type {
   NullplugYield,
 } from "../../../shared/nullplug/types";
 import type { NullplugUiPrimitive } from "../../../shared/nullplug/ui";
-import { parseNullplugBlocks } from "./parser";
-import { resolveNullplug } from "./registry";
-import { normalizeNullplugRuntimeReturn } from "./runtime";
+import { discoverRenderInvocations } from "./renderDiscovery";
+import { invokeRenderBlock } from "./renderInvocation";
+import { mergeRenderInvocationUiState } from "./renderResult";
 import type {
   NullplugCaller,
   NullplugContext,
-  NullplugHandler,
-  PluginBlock,
   RenderableDiff,
-  RenderablePatch,
 } from "./types";
 import "./plugins";
 
@@ -43,6 +42,10 @@ export interface RenderPipelineOptions {
   caller?: NullplugCaller;
   maxDepth?: number;
   runtimePolicy?: RootRuntimePolicy | null;
+  nullplugRuntime?: VoidNullplugRuntime;
+  providerId?: string;
+  providerBaseUrl?: string;
+  capabilities?: readonly string[];
   resolveDrop?: NullplugContext["resolveDrop"];
   visitedDropIds?: Iterable<string>;
   onFlush?: (renderedMarkdown: string, status: RenderChunkStatus) => void;
@@ -51,6 +54,7 @@ export interface RenderPipelineOptions {
 
 export interface RenderPipelineResult {
   markdown: string;
+  nullplugCalls: DropRuntimeNullplugCallProvenance[];
   uiPrimitives: NullplugUiPrimitive[];
   uiState: Record<string, JsonValue>;
   mutations: NullplugMutation[];
@@ -68,11 +72,6 @@ export class RenderCancelledError extends Error {
 
 const DEFAULT_CHUNK_SIZE = 6;
 const DEFAULT_FLUSH_INTERVAL_MS = 24;
-
-interface ResolvedPluginBlock {
-  block: PluginBlock;
-  handler: NullplugHandler;
-}
 
 const normalizeEmbedCandidate = (rawUrl: string): string => {
   const trimmed = rawUrl.trim();
@@ -147,33 +146,6 @@ const escapeRawIframeSyntax = (value: string): string => {
     .replace(/<\s*\/\s*iframe\s*>/gi, "&lt;/iframe&gt;");
 };
 
-const toRenderableDiff = (
-  block: PluginBlock,
-  patch: RenderablePatch | null,
-): RenderableDiff | null => {
-  if (!patch) {
-    return null;
-  }
-
-  if (
-    typeof (patch as RenderableDiff).start === "number" &&
-    typeof (patch as RenderableDiff).end === "number"
-  ) {
-    const diff = patch as RenderableDiff;
-    return {
-      start: diff.start,
-      end: diff.end,
-      text: diff.text,
-    };
-  }
-
-  return {
-    start: block.start,
-    end: block.end,
-    text: patch.text,
-  };
-};
-
 export const applyRenderableDiffs = (
   source: string,
   diffs: readonly RenderableDiff[],
@@ -241,25 +213,14 @@ export const renderMarkdownWithNullplugState = async (
   );
 
   const escapedSource = escapeRawIframeSyntax(source);
-  const blocks = parseNullplugBlocks(escapedSource)
-    .map((block) => {
-      const handler = resolveNullplug(block.id);
-      if (!handler) {
-        return null;
-      }
-
-      return {
-        block,
-        handler,
-      };
-    })
-    .filter((entry): entry is ResolvedPluginBlock => entry !== null);
+  const blocks = await discoverRenderInvocations(source, escapedSource, options);
 
   if (!blocks.length) {
     const status = buildChunkStatus(0, 0);
     options.onFlush?.(escapedSource, status);
     return {
       markdown: escapedSource,
+      nullplugCalls: [],
       uiPrimitives: [],
       uiState: {},
       mutations: [],
@@ -277,6 +238,7 @@ export const renderMarkdownWithNullplugState = async (
     visitedDropIds: options.visitedDropIds,
   });
   const diffs: RenderableDiff[] = [];
+  const nullplugCalls: DropRuntimeNullplugCallProvenance[] = [];
   const uiPrimitives: NullplugUiPrimitive[] = [];
   const uiState: Record<string, JsonValue> = {};
   const mutations: NullplugMutation[] = [];
@@ -288,24 +250,19 @@ export const renderMarkdownWithNullplugState = async (
   for (let index = 0; index < blocks.length; index += 1) {
     guardCancellation(options.shouldCancel);
 
-    const { block, handler } = blocks[index];
-
-    const runtimeResult = normalizeNullplugRuntimeReturn(
-      await handler(context, block.content, block),
-      block,
-      { policy: options.runtimePolicy, pluginId: block.id },
+    const invocation = await invokeRenderBlock(
+      blocks[index],
+      index,
+      context,
+      options,
     );
-    if (runtimeResult) {
-      uiPrimitives.push(...(runtimeResult.result.uiPrimitives ?? []));
-      Object.assign(uiState, runtimeResult.result.uiState ?? {});
-      mutations.push(...(runtimeResult.result.mutations ?? []));
-      yields.push(...(runtimeResult.result.yields ?? []));
-      diagnostics.push(...runtimeResult.diagnostics);
-    }
-    const diff = toRenderableDiff(block, runtimeResult?.patch ?? null);
-    if (diff) {
-      diffs.push(diff);
-    }
+    nullplugCalls.push(invocation.call);
+    if (invocation.diff) diffs.push(invocation.diff);
+    uiPrimitives.push(...invocation.uiPrimitives);
+    mergeRenderInvocationUiState(uiState, invocation.uiState, invocation.call.callIds);
+    mutations.push(...invocation.mutations);
+    yields.push(...invocation.yields);
+    diagnostics.push(...invocation.diagnostics);
 
     const processedBlocks = index + 1;
     const shouldFlushChunk = processedBlocks % chunkSize === 0;
@@ -327,6 +284,7 @@ export const renderMarkdownWithNullplugState = async (
   options.onFlush?.(rendered, status);
   return {
     markdown: rendered,
+    nullplugCalls,
     uiPrimitives,
     uiState,
     mutations,

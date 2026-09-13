@@ -71,6 +71,10 @@ nd --base=http://127.0.0.1:8788 get <id> --json
 
 ## Agents And MCP
 
+This checkout prepares the unpublished `0.0.8` core and MCP pair. MCP requires
+core `>=0.0.8 <0.1.0` for the strategy-read contract below. Registry install
+commands do not install this local candidate; verification uses both local tarballs.
+
 Use the separate MCP package to let agents retrieve structure, manage branch diffs, and work with NullMem without shelling out:
 
 ```bash
@@ -79,6 +83,30 @@ nulldown-mcp
 ```
 
 Configure `ND_BASE_URL`, `ND_TOKEN`, `ND_ACCOUNT_ID`, and `ND_CLIENT_ID` in the MCP client environment as needed. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
+
+`strategy_get` (SDK: `client.readStrategy`) uses an explicit `branchId` without
+reading the root. Otherwise it reads the root once and follows plaintext payload
+metadata `strategyRef: { kind: "branch", rootDropId: "<canonical same root>", branchId: "<explicit branch>" }`.
+Both ids must be nonempty trimmed strings. Short input ids are checked against the
+canonical id returned by the root read. Without a reference it stays a labeled root
+read; `query`, `snapshotId` and `top` require an explicit or metadata-selected branch.
+Reads never resolve/create branches, follow references recursively, or fall back
+after invalid/cross-root references or branch errors. Routing is not authorization.
+Envelope metadata is not followed and no secrets are decrypted. Existing drops are
+not migrated: publishing a branch and revision-safely updating its original root's
+metadata are separate explicit actions; preserve the root content and other metadata.
+Output defaults to 800 approximate tokens (`maxTokens`, 100-8000), bounded to
+`maxTokens * 4` serialized characters even with `format: "full"` or `preview: false`.
+Root/branch/snapshot identity, partial/truncated flags and requery guidance survive
+payload truncation. `getDrop` / `drop_get` remain the raw root read interfaces.
+
+New committed branch snapshots carry an authoritative `sourceContentHash` in
+snapshot JSON. Document queries can reuse a matching current-version projection
+without replaying content. Missing or stale projections reconstruct and validate
+the source before repair; inconsistent authoritative hashes fail explicitly.
+Legacy snapshots and mutable snapshot zero still reconstruct on every query,
+without writing hashes back. Runtime fact freshness and per-query priority reads
+remain independent of document projection reuse. No database migration is required.
 
 ## Interactive Approval
 
@@ -116,6 +144,10 @@ Install dependencies:
 ```bash
 bun install
 ```
+
+The root-only `@thenullnode/nulldown: file:.` override links MCP to this checkout
+while `0.0.8` is unpublished. It does not replace the MCP package's consumer
+dependency range; installed-pair verification supplies both exact tarballs.
 
 Run the Vite development server:
 

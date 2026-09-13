@@ -235,31 +235,26 @@ export const readSnapshot = async (
   branchId: string,
   snapshotId: number,
   db?: VoidSqlStore,
-): Promise<DropSnapshotRecord | null> =>
-  db
-    ? (parseJsonColumn(
-        (
-          await db
-            .prepare(
-              `SELECT record_json
-               FROM branch_snapshots
-               WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ?`,
-            )
-            .bind(rootDropId, branchId, snapshotId)
-            .first<{ record_json: string }>()
-        )?.record_json,
-        isDropSnapshotRecord,
-      ) ??
-      (await readR2Json(
-        bucket,
-        createSnapshotKey(rootDropId, branchId, snapshotId),
-        isDropSnapshotRecord,
-      )))
-    : readR2Json(
-        bucket,
-        createSnapshotKey(rootDropId, branchId, snapshotId),
-        isDropSnapshotRecord,
-      );
+): Promise<DropSnapshotRecord | null> => {
+  const validate = (value: unknown): value is DropSnapshotRecord => {
+    const valid = isDropSnapshotRecord(value);
+    // A known authority must not silently degrade to a legacy row or checkpoint.
+    if (!valid && value && typeof value === "object" && "sourceContentHash" in value) {
+      throw new Error("snapshot_source_identity_invalid");
+    }
+    return valid;
+  };
+  if (db) {
+    const row = await db.prepare(
+      `SELECT record_json
+       FROM branch_snapshots
+       WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ?`,
+    ).bind(rootDropId, branchId, snapshotId).first<{ record_json: string }>();
+    const parsed = parseJsonColumn(row?.record_json, (value): value is unknown => true);
+    if (validate(parsed)) return parsed;
+  }
+  return readR2Json(bucket, createSnapshotKey(rootDropId, branchId, snapshotId), validate);
+};
 
 /** Writes a snapshot record to D1 and its canonical R2 fallback key. */
 export const writeSnapshot = async (

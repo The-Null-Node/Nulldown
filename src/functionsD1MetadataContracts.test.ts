@@ -5,6 +5,7 @@ import type { NullplugUiResponseFact } from "../shared/nullplug/ui";
 import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
+import { hashNulldownSourceContent } from "../shared/drop/resolved/hash";
 import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
 import { createNullMemFact, createNullMemProcedure, createNullMemService, deleteNullMemRecord, queryNullMem } from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
@@ -400,6 +401,12 @@ class MemoryD1Database {
   }
 
   all(sql: string, params: unknown[]): Record<string, unknown>[] {
+    if (sql.includes("FROM resolved_node_payloads")) {
+      return [...this.nodePayloads.entries()]
+        .filter(([hash]) => params.includes(hash))
+        .map(([hash, row]) => ({ ...row, node_hash: hash }));
+    }
+
     if (sql.includes("FROM branch_snapshots")) {
       return [...this.snapshots.entries()]
         .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/`))
@@ -565,6 +572,25 @@ const createEvent = (): DropDiffEvent => ({
 });
 
 describe("D1 metadata contracts", () => {
+  it("preserves additive snapshot hashes in JSON and rejects corrupt SQL authority instead of using valid R2", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const snapshot = createSnapshot({ snapshotId: 1, sourceContentHash: await hashNulldownSourceContent("accepted") });
+    const blobs = bucket as unknown as R2Bucket;
+    const sql = db as unknown as D1Database;
+    await writeSnapshot(blobs, snapshot, sql);
+    const read = () => readSnapshot(blobs, snapshot.rootDropId, snapshot.branchId, 1, sql);
+    expect(await read()).toEqual(snapshot);
+    const row = db.snapshots.get(`${snapshot.rootDropId}/${snapshot.branchId}/1`)!;
+    for (const corrupt of [{ sourceContentHash: "sha256:bad" }, { sourceContentHash: null }, { textLength: "bad" }]) {
+      row.record_json = JSON.stringify({ ...snapshot, ...corrupt });
+      await expect(read()).rejects.toThrow("snapshot_source_identity_invalid");
+    }
+    const legacy = { ...snapshot };
+    delete legacy.sourceContentHash;
+    row.record_json = JSON.stringify(legacy);
+    expect(await read()).toEqual(legacy);
+  });
   it("reads branch, snapshot, and event metadata from D1 without R2 records", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
@@ -745,9 +771,9 @@ describe("D1 metadata contracts", () => {
   it("persists generated resolved heaps and nodes to D1", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
-    const branch = createBranch();
-    const snapshot = createSnapshot();
+    const branch = createBranch({ headSnapshotId: 1 });
     const content = "# D1 Test\n\nA searchable paragraph.";
+    const snapshot = createSnapshot({ snapshotId: 1, sourceContentHash: await hashNulldownSourceContent(content) });
 
     await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
     await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
@@ -779,6 +805,13 @@ describe("D1 metadata contracts", () => {
     };
     expect(delta).toEqual(expect.objectContaining({ version: 1, checkpointed: true }));
     expect(delta.nodeRefs.length).toBe(db.nodeRefs.size);
+    const get = bucket.get.bind(bucket);
+    bucket.get = async (key) => {
+      if (key.startsWith("__drop_checkpoint__/") || key.startsWith("__drop_branch_diff")) {
+        throw new Error("Valid SQL projection must not replay content, even after priority changes");
+      }
+      return get(key);
+    };
 
     await bucket.delete(
       dropResolvedHeapKey(

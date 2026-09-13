@@ -4,6 +4,7 @@ import {
   isDropDraftPackV1,
   isDropEnvelopeV1,
   isDropPayload,
+  isDropStrategyRef,
   serializeCanonicalJson,
   serializeDropEnvelopeForDeviceSignature,
   serializeDropEnvelopeForProviderSignature,
@@ -12,6 +13,15 @@ import {
 } from "./types";
 
 describe("drop types", () => {
+  it("validates strategy references independently of payload classification", () => {
+    const ref = { kind: "branch", rootDropId: "root", branchId: "branch" };
+    expect(isDropStrategyRef(ref, "root")).toBe(true);
+    expect(isDropStrategyRef(ref, "alias")).toBe(false);
+    for (const strategyRef of [null, {}, { ...ref, branchId: " " }, { ...ref, rootDropId: " root" }]) {
+      expect(isDropStrategyRef(strategyRef, "root")).toBe(false);
+      expect(isDropPayload({ content: "title", metadata: { strategyRef } })).toBe(true);
+    }
+  });
   it("validates drop payloads", () => {
     expect(isDropPayload({ content: "hello" })).toBe(true);
     expect(isDropPayload({ content: "hello", metadata: { themeId: "system" } })).toBe(
@@ -115,6 +125,9 @@ describe("drop types", () => {
     };
 
     expect(isDropEnvelopeV1(envelope)).toBe(true);
+    for (const strategyRef of [null, {}, { kind: "unknown" }]) {
+      expect(isDropEnvelopeV1({ ...envelope, metadata: { strategyRef } })).toBe(true);
+    }
     expect(
       isDropEnvelopeV1({
         ...envelope,

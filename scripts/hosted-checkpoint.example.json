@@ -1,0 +1,11 @@
+{
+  "schema": "nulldown.hosted-checkpoint-input.v1",
+  "version": 1,
+  "checkpointId": "replace-with-operator-approved-checkpoint-id",
+  "targetAccountId": "replace-with-new-durable-account-id",
+  "source": {
+    "rootId": "1wrhjx8Wzk67",
+    "branchId": "clone_account:91c993ac-2c8c-46d6-aaec-5d31e610a2b7",
+    "expectedSnapshotId": 102
+  }
+}

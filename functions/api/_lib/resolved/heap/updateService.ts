@@ -11,7 +11,7 @@ import {
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
 } from "../../../../../shared/drop/resolved/constants";
 import { hashBranchSnapshotSource } from "../../../../../shared/drop/resolved/hash";
-import { resolveResolvedBranchTarget } from "./context";
+import { authorizeResolvedRuntimeAccess, resolveResolvedBranchTarget } from "./context";
 import { projectResolvedHeap } from "./projector";
 import { parseResolvedUpdateBody } from "./request";
 import type { ResolvedHeapEnv, ResolvedHeapParams } from "./types";
@@ -42,6 +42,12 @@ export const updateResolvedHeap = async (
       );
     }
 
+    const resolverId = parsed.resolverId ?? "all";
+    if (resolverId === "all" || resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
+      const denied = await authorizeResolvedRuntimeAccess(request, env, branch);
+      if (denied) return denied;
+    }
+
     const snapshotId =
       parsed.snapshotId === undefined || parsed.snapshotId === "latest"
         ? branch.headSnapshotId
@@ -67,7 +73,6 @@ export const updateResolvedHeap = async (
       snapshotId,
       content,
     });
-    const resolverId = parsed.resolverId ?? "all";
     const updated: Array<{
       resolverId: string;
       key: string;

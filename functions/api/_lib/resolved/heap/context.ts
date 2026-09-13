@@ -57,6 +57,22 @@ export const resolveResolvedBranchTarget = async (
   return { rootDropId, branchId, branch };
 };
 
+/** Restricts runtime projections to the branch owner or writer. */
+export const authorizeResolvedRuntimeAccess = async (
+  request: Request,
+  env: ResolvedHeapEnv,
+  branch: { ownerAccountId?: string | null; writerAccountId?: string | null },
+): Promise<Response | null> => {
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  if (!accountId) {
+    return jsonErrorResponse(401, "account_required", "Authenticated account session is required.");
+  }
+  if (accountId !== branch.ownerAccountId && accountId !== branch.writerAccountId) {
+    return jsonErrorResponse(403, "forbidden", "You are not allowed to access runtime projections for this branch.");
+  }
+  return null;
+};
+
 /** Checks that the authenticated account can mutate priority facts for a branch. */
 export const authorizeResolvedPriorityFactWrite = async (
   request: Request,

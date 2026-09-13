@@ -3,6 +3,8 @@ import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/nullplug/submit";
 import { onRequest as onResolvedQueryRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
+import { onRequest as onResolvedUpdateRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/update";
+import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../shared/drop/branch";
 import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved/constants";
 import { nullplugUiResponseFactKey } from "../shared/nullplug/ui";
@@ -213,6 +215,63 @@ describe("functions api nullplug submit contracts", () => {
     );
     return bucket;
   };
+
+  it.each([
+    ["anonymous", null, 401],
+    ["forged header", "header", 401],
+    ["invalid bearer", "invalid", 401],
+    ["unrelated account", "acct-other", 403],
+    ["owner", "acct-owner", 200],
+    ["writer", accountId, 200],
+  ] as const)("protects runtime queries and updates for %s", async (_label, actor, status) => {
+    const bucket = createSeededBucket();
+    const env = {
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      ACCOUNT_AUTH_SECRET: "isolated-runtime-auth-test-secret",
+    };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (actor === "header") headers[NULLDOWN_ACCOUNT_ID_HEADER] = accountId;
+    else if (actor === "invalid") headers.Authorization = "Bearer invalid";
+    else if (actor) {
+      const session = await issueAccountSessionToken(actor, env);
+      headers.Authorization = `Bearer ${session.token}`;
+    }
+    const put = jest.spyOn(bucket, "put");
+    const base = `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved`;
+    for (const query of [
+      `resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}`,
+      `resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&snapshotterId=nulledit.frame`,
+      `resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&snapshotterId=nulledit.resolved-document`,
+      "snapshotterId=nulledit.resolved-runtime-refs",
+    ]) {
+      const response = await onResolvedQueryRequest({
+        request: new Request(`${base}/query?${query}`, { headers }),
+        env,
+        params: { rootId: rootDropId, branchId },
+      } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+      expect(response.status).toBe(status);
+      if (status === 200) {
+        expect(await response.json()).toMatchObject(
+          query.startsWith("snapshotterId=")
+            ? { items: [] }
+            : { resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID },
+        );
+      }
+    }
+    for (const resolverId of [RESOLVED_RUNTIME_REFS_RESOLVER_ID, "all", undefined]) {
+      const response = await onResolvedUpdateRequest({
+        request: new Request(`${base}/update`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ resolverId, uiResponseFacts: [createFact()] }),
+        }),
+        env,
+        params: { rootId: rootDropId, branchId },
+      } as unknown as Parameters<typeof onResolvedUpdateRequest>[0]);
+      expect(response.status).toBe(status);
+    }
+    if (status !== 200) expect(put).not.toHaveBeenCalled();
+  });
 
   it("stores immutable UI response facts", async () => {
     const bucket = createSeededBucket();

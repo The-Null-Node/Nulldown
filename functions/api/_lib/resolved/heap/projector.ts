@@ -10,6 +10,7 @@ import { heapifyResolvedDocument } from "../../../../../shared/drop/resolved/hea
 import { heapifyResolvedRuntimeRefs } from "../../../../../shared/drop/resolved/heapify/runtimeRefs";
 import type { ResolvedNulldownState } from "../../../../../shared/drop/resolved/types";
 import {
+  isCurrentResolvedDocumentProjection,
   readResolvedHeapState,
   sourceSeqRangeForHead,
   writeResolvedHeapState,
@@ -156,9 +157,17 @@ export const ensureResolvedHeapProjection = async (
     source.branchId,
     resolverId,
     source.snapshotId,
+    sourceContentHash,
   );
   let heapGenerated = false;
   let stale = Boolean(state && state.sourceContentHash !== sourceContentHash);
+  if (resolverId === RESOLVED_DOCUMENT_RESOLVER_ID) {
+    stale ||= Boolean(
+      state && !isCurrentResolvedDocumentProjection(
+        state, source.rootDropId, source.branchId, source.snapshotId, sourceContentHash,
+      ),
+    );
+  }
   if (resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
     const runtimeFactHeadSeq = await createBranchRuntimeFactLogRepository({
       blobs: env.R2_BUCKET,

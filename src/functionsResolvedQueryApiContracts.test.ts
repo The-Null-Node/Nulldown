@@ -6,6 +6,15 @@ import { onRequest as onResolvedUpdateRequest } from "../functions/api/branches/
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
 import type { DropDiffEvent } from "../shared/drop/diff";
+import { NULLDOWN_ACCOUNT_ID_HEADER, isDropSnapshotRecord } from "../shared/drop/branch";
+import { createBranchRepository } from "../functions/api/_lib/branches/storage/repository";
+import { createCheckpointKey, createSnapshotKey } from "../functions/api/_lib/branches/storage/keys";
+import { hashNulldownSourceContent } from "../shared/drop/resolved/hash";
+import { heapifyResolvedDocument } from "../shared/drop/resolved/heapify/document";
+import { writeResolvedNulldownState } from "../shared/drop/resolved/storage";
+import { readResolvedHeapState } from "../functions/api/_lib/resolved/heap/state";
+import { dropResolvedHeapKey } from "../shared/drop/sidecar";
+import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../shared/drop/resolved/constants";
 import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved/constants";
 import {
   nullplugUiResponseFactKey,
@@ -227,6 +236,21 @@ const makeEvent = (text: string): DropDiffEvent => ({
   ops: [{ type: "insert", start: 0, end: 0, text }],
 });
 
+const documentFixture = async () => {
+  const bucket = createSeededBucket();
+  const blobs = bucket as unknown as R2Bucket;
+  const { branch } = await resolveBranchForActor(blobs, rootDropId, accountId, null);
+  const result = await appendEventsToBranch(blobs, branch, [makeEvent("# Authoritative content")]);
+  const state = await heapifyResolvedDocument({ rootDropId, branchId: branch.branchId, snapshotId: 1, content: result.content });
+  const projectionKey = await writeResolvedNulldownState(blobs, state);
+  const query = (snapshotId = 1) => onResolvedQueryRequest({
+    request: new Request(`https://nulldown.test/api/branches/${rootDropId}/${branch.branchId}/resolved/query?snapshotId=${snapshotId}`),
+    env: { R2_BUCKET: blobs }, params: { rootId: rootDropId, branchId: branch.branchId },
+  } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+  return { bucket, blobs, branch, result, state, projectionKey, query,
+    snapshotKey: createSnapshotKey(rootDropId, branch.branchId, 1) };
+};
+
 describe("functions api branch resolved query contracts", () => {
   let infoSpy: jest.SpiedFunction<typeof console.info>;
   let warnSpy: jest.SpiedFunction<typeof console.warn>;
@@ -245,6 +269,105 @@ describe("functions api branch resolved query contracts", () => {
     warnSpy.mockRestore();
     errorSpy.mockRestore();
     debugSpy.mockRestore();
+  });
+
+  it("stamps authoritative content at append and reuses even the first legacy projection query without replay", async () => {
+    const { bucket, blobs, result, query, branch } = await documentFixture();
+    expect(result.snapshot?.sourceContentHash).toBe(await hashNulldownSourceContent(result.content));
+    const initial = await createBranchRepository({ blobs }).readSnapshot(rootDropId, branch.branchId, 0);
+    expect(initial?.sourceContentHash).toBeUndefined();
+    const get = jest.spyOn(bucket, "get");
+    for (let i = 0; i < 2; i++) {
+      const response = await query();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ heapGenerated: false, stale: false });
+    }
+    expect(get.mock.calls.some(([key]) => key.startsWith("__drop_checkpoint__/") || key.startsWith("__drop_branch_diff"))).toBe(false);
+  });
+
+  it("keeps legacy snapshots readable but replays each query without backfilling authority", async () => {
+    const { bucket, result, query, snapshotKey } = await documentFixture();
+    const legacy = { ...result.snapshot! };
+    delete legacy.sourceContentHash;
+    expect(isDropSnapshotRecord(legacy)).toBe(true);
+    bucket.seed(snapshotKey, JSON.stringify(legacy));
+    const get = jest.spyOn(bucket, "get");
+    for (let i = 0; i < 2; i++) {
+      get.mockClear();
+      expect((await query()).status).toBe(200);
+      expect(get.mock.calls.some(([key]) => key.startsWith("__drop_checkpoint__/"))).toBe(true);
+      expect(get.mock.calls.some(([key]) => key.startsWith("__drop_branch_diff_events__/"))).toBe(true);
+    }
+    expect(await (await bucket.get(snapshotKey)).json()).toEqual(legacy);
+  });
+
+  it.each(["hash", "version", "root", "branch", "snapshot", "resolver", "missing"])(
+    "repairs a %s projection only after replay and then reuses it", async (mismatch) => {
+      const { bucket, state, projectionKey, query } = await documentFixture();
+      const invalid = { ...state };
+      if (mismatch === "hash") invalid.sourceContentHash = await hashNulldownSourceContent("old");
+      if (mismatch === "version") invalid.resolverVersion = "old";
+      if (mismatch === "root") invalid.rootDropId = "other";
+      if (mismatch === "branch") invalid.branchId = "other";
+      if (mismatch === "snapshot") invalid.snapshotId = 2;
+      if (mismatch === "resolver") invalid.resolverId = "other";
+      bucket.seed(projectionKey, JSON.stringify(invalid));
+      if (mismatch === "missing") await bucket.delete(projectionKey);
+      const get = jest.spyOn(bucket, "get");
+      const response = await query();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ heapGenerated: true, sourceContentHash: state.sourceContentHash });
+      expect(get.mock.calls.some(([key]) => key.startsWith("__drop_checkpoint__/"))).toBe(true);
+      get.mockClear();
+      expect(await (await query()).json()).toMatchObject({ heapGenerated: false });
+      expect(get.mock.calls.some(([key]) => key.startsWith("__drop_checkpoint__/"))).toBe(false);
+    },
+  );
+
+  it.each(["hash", "malformed-hash", "null-hash", "metadata", "root", "branch", "snapshot"])(
+    "fails explicitly for inconsistent %s snapshot authority without overwriting it", async (mismatch) => {
+      const { bucket, result, query, snapshotKey } = await documentFixture();
+      const invalid = { ...result.snapshot! } as Record<string, unknown>;
+      if (mismatch === "hash") invalid.sourceContentHash = await hashNulldownSourceContent("not accepted");
+      if (mismatch === "malformed-hash") invalid.sourceContentHash = "sha256:broken";
+      if (mismatch === "null-hash") invalid.sourceContentHash = null;
+      if (mismatch === "metadata") invalid.textLength = "broken";
+      if (mismatch === "root") invalid.rootDropId = "other";
+      if (mismatch === "branch") invalid.branchId = "other";
+      if (mismatch === "snapshot") invalid.snapshotId = 2;
+      bucket.seed(snapshotKey, JSON.stringify(invalid));
+      const put = jest.spyOn(bucket, "put");
+      const response = await query();
+      expect(response.status).toBe(500);
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining(
+        mismatch === "hash" ? "snapshot_source_hash_mismatch" : "snapshot_source_identity_invalid",
+      ) });
+      expect(put).not.toHaveBeenCalled();
+      expect(await (await bucket.get(snapshotKey)).json()).toEqual(invalid);
+    },
+  );
+
+  it("always reconstructs mutable snapshot zero even if a hash and matching old projection are present", async () => {
+    const { bucket, blobs, branch, query } = await documentFixture();
+    const repository = createBranchRepository({ blobs });
+    const initial = (await repository.readSnapshot(rootDropId, branch.branchId, 0))!;
+    const old = await heapifyResolvedDocument({ rootDropId, branchId: branch.branchId, snapshotId: 0, content: "" });
+    await repository.writeSnapshot({ ...initial, sourceContentHash: old.sourceContentHash });
+    await writeResolvedNulldownState(blobs, old);
+    bucket.seed(createCheckpointKey(rootDropId, branch.branchId, 0), "# Mutable replacement", "text/plain");
+    const response = await query(0);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ heapGenerated: true, sourceContentHash: await hashNulldownSourceContent("# Mutable replacement") });
+  });
+
+  it("repairs historical projections with the selected snapshot event cursor, not the current head", async () => {
+    const { bucket, blobs, branch, result, query, projectionKey } = await documentFixture();
+    await appendEventsToBranch(blobs, result.branch, [{ ...makeEvent("later"), eventId: "later" }]);
+    await bucket.delete(projectionKey);
+    expect((await query()).status).toBe(200);
+    const state = await readResolvedHeapState({ R2_BUCKET: blobs }, rootDropId, branch.branchId, RESOLVED_DOCUMENT_RESOLVER_ID, 1);
+    expect(state?.sourceSeqRange).toEqual({ from: 0, to: 0 });
+    expect(await bucket.get(dropResolvedHeapKey(rootDropId, branch.branchId, RESOLVED_DOCUMENT_RESOLVER_ID, 2))).toBeNull();
   });
 
   it("returns top resolved document nodes with diff metadata refs", async () => {
@@ -400,7 +523,7 @@ describe("functions api branch resolved query contracts", () => {
         `https://nulldown.test/api/branches/${rootDropId}/${branch.branchId}/resolved/update`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", [NULLDOWN_ACCOUNT_ID_HEADER]: accountId },
           body: JSON.stringify({
             resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID,
             uiPrimitives: [
@@ -414,7 +537,7 @@ describe("functions api branch resolved query contracts", () => {
           }),
         },
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: { R2_BUCKET: bucket as unknown as R2Bucket, ALLOW_INSECURE_ACCOUNT_HEADER: "1" },
       params: { rootId: rootDropId, branchId: branch.branchId },
     } as unknown as Parameters<typeof onResolvedUpdateRequest>[0]);
 
@@ -434,8 +557,9 @@ describe("functions api branch resolved query contracts", () => {
         `https://nulldown.test/api/branches/${rootDropId}/${branch.branchId}/resolved/query?resolverId=${encodeURIComponent(
           RESOLVED_RUNTIME_REFS_RESOLVER_ID,
         )}&q=approve&kind=ui.primitive,ui.response,ui.state`,
+        { headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: accountId } },
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: { R2_BUCKET: bucket as unknown as R2Bucket, ALLOW_INSECURE_ACCOUNT_HEADER: "1" },
       params: { rootId: rootDropId, branchId: branch.branchId },
     } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
 

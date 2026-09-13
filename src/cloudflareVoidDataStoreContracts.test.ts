@@ -1,6 +1,16 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { createHash } from "node:crypto";
 import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
+import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
+import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
+import { onRequestGet } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
+import { ensureResolvedHeapProjection } from "../functions/api/_lib/resolved/heap/projector";
+import { readResolvedHeapState } from "../functions/api/_lib/resolved/heap/state";
+import { createNulleditResolvedDocumentSnapshotter } from "./server/nulledit/snapshotters/resolvedDocument";
+import { createResolvedHeapDataKey } from "./server/nulledit/dataKeys/resolved";
+import { heapifyResolvedDocument } from "../shared/drop/resolved/heapify/document";
+import { RESOLVED_DOCUMENT_RESOLVER_ID, RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved/constants";
+import type { ResolvedNulldownState } from "../shared/drop/resolved/types";
 
 interface StoredObject {
   value: string;
@@ -237,6 +247,88 @@ class MemoryD1Database {
 }
 
 describe("Cloudflare VoidDataStore contracts", () => {
+  it("connects a completed append snapshotter to the first and repeated Cloudflare query", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const env = { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database };
+    const data = createCloudflareVoidDataStore(env);
+    const rootDropId = "ProjectionRoot123";
+    await bucket.put(rootDropId, JSON.stringify({ content: "", metadata: { ownerAccountId: "owner" } }));
+    const { branch } = await resolveBranchForActor(env.R2_BUCKET, rootDropId, "owner", null);
+    const pending: Promise<unknown>[] = [];
+    const result = await appendEventsToBranch(env.R2_BUCKET, branch, [{
+      eventId: "projection-event", seq: 0, dropId: rootDropId,
+      sourceClientId: "test", createdAt: 123,
+      ops: [{ type: "insert", start: 0, end: 0, text: "# Connected Projection\n\nAccepted content." }],
+    }], { data, snapshotters: [createNulleditResolvedDocumentSnapshotter()], waitUntil: (task) => { pending.push(task); } });
+    await Promise.all(pending);
+    expect(result.acceptedEvents).toHaveLength(1);
+    const state = await data.get<ResolvedNulldownState>(createResolvedHeapDataKey({
+      rootDropId, branchId: branch.branchId, snapshotId: 1, resolverId: RESOLVED_DOCUMENT_RESOLVER_ID,
+    }));
+    expect(state?.sourceSeqRange).toEqual({ from: 0, to: 0 });
+    expect(result.snapshot?.sourceContentHash).toBe(state?.sourceContentHash);
+    // The producer has not populated the legacy reader's SQL/R2 projection.
+    expect(await readResolvedHeapState(env, rootDropId, branch.branchId, RESOLVED_DOCUMENT_RESOLVER_ID, 1)).toBeNull();
+    for (const override of [{ rootDropId: "other" }, { branchId: "other" }, { snapshotId: 2 }]) {
+      expect(await data.get(createResolvedHeapDataKey({ ...state!, ...override }))).toBeNull();
+    }
+    const get = bucket.get.bind(bucket);
+    let sourceReads = 0;
+    bucket.get = async (key) => {
+      if (key.startsWith("__drop_checkpoint__/") || key.startsWith("__drop_branch_diff")) {
+        sourceReads++;
+        throw new Error("Document projection must not replay content");
+      }
+      return get(key);
+    };
+    for (let i = 0; i < 2; i++) {
+      const response = await onRequestGet({ env, params: { rootId: rootDropId, branchId: branch.branchId },
+        request: new Request(`https://nulldown.test/api/branches/${rootDropId}/${branch.branchId}/resolved/query?q=Connected`),
+      } as unknown as Parameters<typeof onRequestGet>[0]);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ heapGenerated: false, stale: false, snapshotId: 1 });
+    }
+    expect(sourceReads).toBe(0);
+    expect([...db.records.values()].filter((row) => row.namespace === "resolved" && row.collection === "heaps")).toHaveLength(1);
+  });
+
+  it.each(["hash", "version", "root", "branch", "snapshot", "resolver", "shape", "unavailable"])(
+    "rejects %s portable state and reuses the repaired legacy fallback",
+    async (mismatch) => {
+      const bucket = new MemoryR2Bucket();
+      const data = createCloudflareVoidDataStore({ R2_BUCKET: bucket as unknown as R2Bucket, DB: new MemoryD1Database() as unknown as D1Database });
+      const source = { rootDropId: "ProjectionRoot123", branchId: "owner", snapshotId: 1, content: "# Current content" };
+      const state = await heapifyResolvedDocument(source);
+      const key = createResolvedHeapDataKey(state);
+      const invalid = { ...state };
+      if (mismatch === "hash") invalid.sourceContentHash = (await heapifyResolvedDocument({ ...source, content: "old" })).sourceContentHash;
+      if (mismatch === "version") invalid.resolverVersion = "old";
+      if (mismatch === "root") invalid.rootDropId = "other";
+      if (mismatch === "branch") invalid.branchId = "other";
+      if (mismatch === "snapshot") invalid.snapshotId = 2;
+      if (mismatch === "resolver") invalid.resolverId = RESOLVED_RUNTIME_REFS_RESOLVER_ID;
+      await data.put(key, mismatch === "shape" ? { ...invalid, documentNodes: [{}] } : invalid);
+      if (mismatch === "unavailable") data.get = async () => { throw new Error("offline"); };
+      const env = { R2_BUCKET: bucket as unknown as R2Bucket, resolvedDocumentData: data };
+      const read = () => ensureResolvedHeapProjection(env, state.resolverId, source, state.sourceContentHash);
+      const repaired = await read();
+      expect(repaired).toMatchObject({ heapGenerated: true, stale: false });
+      expect(repaired.state?.documentNodes).toEqual(state.documentNodes);
+      expect(await read()).toMatchObject({ heapGenerated: false, stale: false });
+    },
+  );
+
+  it("never reads portable document storage for runtime projections", async () => {
+    const bucket = new MemoryR2Bucket();
+    let reads = 0;
+    const source = { rootDropId: "ProjectionRoot123", branchId: "owner", snapshotId: 1, content: "# Runtime" };
+    const state = await heapifyResolvedDocument(source);
+    const env = { R2_BUCKET: bucket as unknown as R2Bucket,
+      resolvedDocumentData: { get: async <T>() => { reads++; return state as T; } } };
+    expect((await ensureResolvedHeapProjection(env, RESOLVED_RUNTIME_REFS_RESOLVER_ID, source, state.sourceContentHash)).heapGenerated).toBe(true);
+    expect(reads).toBe(0);
+  });
   it("reads and queries D1-backed records when R2 has no mirror", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();

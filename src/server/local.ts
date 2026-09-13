@@ -452,9 +452,12 @@ export const createLocalNulldownServer = ({
       method: "GET",
       path: "/api/branches/:rootId/:branchId/resolved/query",
       handler: ({ request, params }) =>
-        queryResolvedHeap(env, routeParams(params), request, {
-          repairBufferedCommits: repairBufferedCommitsForQuery,
-        }),
+        queryResolvedHeap(
+          { ...env, resolvedDocumentData: data },
+          routeParams(params),
+          request,
+          { repairBufferedCommits: repairBufferedCommitsForQuery },
+        ),
     },
     {
       method: "POST",

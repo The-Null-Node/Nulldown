@@ -1,4 +1,5 @@
 import { jest } from "@jest/globals";
+import { hashNulldownSourceContent } from "../../shared/drop/resolved/hash";
 import {
   createCliDurabilityHarness,
   type CliDurabilityHarness,
@@ -78,7 +79,7 @@ describeDurability("CLI restart durability", () => {
     );
     expect(replaced.verified).toBe(true);
 
-    const snapshotsBefore = jsonResult<{ snapshots: Array<{ snapshotId: number }> }>(
+    const snapshotsBefore = jsonResult<{ snapshots: Array<{ snapshotId: number; sourceContentHash?: string }> }>(
       await harness.nd([
         "branch",
         "snapshots",
@@ -89,7 +90,9 @@ describeDurability("CLI restart durability", () => {
     expect(snapshotsBefore.snapshots.map((snapshot) => snapshot.snapshotId)).toEqual([
       0, 1, 2,
     ]);
-    const queryBefore = jsonResult<{ nodes: Array<{ node: { text: string } }> }>(
+    expect(snapshotsBefore.snapshots[0].sourceContentHash).toBeUndefined();
+    expect(snapshotsBefore.snapshots[2].sourceContentHash).toBe(await hashNulldownSourceContent(finalBranch));
+    const queryBefore = jsonResult<{ heapGenerated: boolean; nodes: Array<{ node: { text: string } }> }>(
       await harness.nd([
         "branch",
         "query",
@@ -102,6 +105,11 @@ describeDurability("CLI restart durability", () => {
     expect(queryBefore.nodes.some(({ node }) => node.text.includes("Restart Query Token"))).toBe(
       true,
     );
+    expect(queryBefore.heapGenerated).toBe(false);
+    const repeatedQuery = jsonResult<{ heapGenerated: boolean }>(
+      await harness.nd(["branch", "query", created.id, branch.branchId, "--query=Restart Query Token"]),
+    );
+    expect(repeatedQuery.heapGenerated).toBe(false);
 
     const fact = jsonResult<{ record: { recordId: string } }>(
       await harness.nd([
@@ -167,7 +175,7 @@ describeDurability("CLI restart durability", () => {
     expect(snapshotsAfter.snapshots.map((snapshot) => snapshot.snapshotId)).toEqual([
       0, 1, 2,
     ]);
-    const queryAfter = jsonResult<{ nodes: Array<{ node: { text: string } }> }>(
+    const queryAfter = jsonResult<{ heapGenerated: boolean; nodes: Array<{ node: { text: string } }> }>(
       await harness.nd(
         [
           "branch",
@@ -184,6 +192,12 @@ describeDurability("CLI restart durability", () => {
     expect(queryAfter.nodes.some(({ node }) => node.text.includes("Restart Query Token"))).toBe(
       true,
     );
+    // The local adapter's portable store is in memory; restart repairs its missing heap.
+    expect(queryAfter.heapGenerated).toBe(true);
+    expect(jsonResult<{ heapGenerated: boolean }>(await harness.nd([
+      "branch", "query", created.id, branch.branchId, "--query=Restart Query Token",
+    ])).heapGenerated).toBe(false);
+    expect(snapshotsAfter).toEqual(snapshotsBefore);
     const memoryAfter = jsonResult<{
       records: Array<{ recordId: string }>;
     }>(
