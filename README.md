@@ -47,6 +47,7 @@ Choose the surface that fits your work:
 | Retrieval and memory | Structural document/runtime queries, source references, priority overlays, and optional NullMem facts, procedures, capabilities, and freshness signals. |
 | Interfaces           | Native Nulldown composition, nullplug runtime contracts, runtime facts, and policy-controlled proposed mutations.                                       |
 | Trust                | Public plaintext, client-sealed, provider-assisted, and self-hosted workflows with different explicit trust properties.                                 |
+| Account continuity   | OpenAuth can bind a current V1 account and store a browser-encrypted key package for recovery of known private links on another signed-in browser.       |
 | Deployment           | Cloudflare Pages/R2/D1 plus a self-hostable Bun API backend using filesystem blobs and SQLite metadata.                                                 |
 
 ## Authenticated Branch Workflow
@@ -59,6 +60,44 @@ nd branch resolve <rootId> --json
 nd branch content <rootId> <branchId> --json
 nd branch query <rootId> <branchId> --query "important section" --top 3 --json
 ```
+
+Authorize the CLI through the signed-in browser by opening the printed
+verification URL and entering the printed authorization code. The refreshable
+credential is kept in the default private config directory:
+
+```bash
+nd auth login
+nd auth status
+nd auth logout
+```
+
+An authoring-capable login seals authenticated `create` and `update` content in
+the CLI before it is sent to the API. Use `--visibility private|unlisted|public`
+to select sharing behavior; it defaults to `unlisted`. Private drops are
+vault-only, while unlisted and public drops use provider escrow for recovery.
+The CLI reads the public `VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK` setting for that
+escrow path and never needs a provider private key. Older credentials must run
+`nd auth login` again before account-owned authoring. Use `--legacy-plaintext`
+only for intentional compatibility: it stores plaintext and does not enter
+Remote Library.
+
+MCP integrations can seal account-owned drops through the stable root export:
+
+```ts
+import {
+  sealDropForAuthoring,
+  type DropAccountEncryptionMaterial,
+  type DropDelegateSigningMaterial,
+  type DropProviderEncryptionMaterial,
+  type SealDropForAuthoringInput,
+} from "@thenullnode/nulldown/drop/authoring";
+```
+
+Use `--no-browser` to print the verification URL and authorization code
+without opening it. Set
+`ND_AUTH_FILE` or pass `--auth-file` to select another credential file. Direct
+`--token` and `ND_TOKEN` values still take precedence over the stored CLI
+credential.
 
 When retrying `nd diff apply` after an ambiguous network failure, reuse both the
 original event identity and creation time. A successful response includes the
@@ -162,6 +201,13 @@ Run the API locally with filesystem blob storage and SQLite metadata:
 ```bash
 nd serve --host 127.0.0.1 --port 8788 --data-dir .nulldown-data
 ```
+
+The local SQLite runner records successful migration files transactionally, so
+restarts do not repeat account-schema alterations. Its startup `migrationsApplied`
+list contains only files applied during that invocation.
+For databases created before the migration ledger, existing DDL is adopted only
+after matching its stored schema definition. Missing statements still execute;
+incompatible definitions fail and roll back that migration rather than being marked applied.
 
 Run the same API in Docker with `/data` as the persistent volume:
 

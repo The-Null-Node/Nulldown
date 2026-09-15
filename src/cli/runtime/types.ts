@@ -1,4 +1,11 @@
 import type { DropDiffEnvelope } from "../../../shared/drop/diff";
+import type { DropEnvelopeV1 } from "../../../shared/drop/types";
+import type {
+  CliCredentialBundleV1,
+  CliDevicePollResponse,
+  CliDeviceStartResponse,
+  CliEncryptionPublicJwk,
+} from "../../../shared/auth/cliDevice";
 
 /** Result returned by a drop read operation. */
 export interface DropReadResult {
@@ -22,6 +29,8 @@ export interface DropCreateRequest {
   content: string;
   /** Optional drop metadata. */
   metadata?: Record<string, unknown> | null;
+  /** Optional account-owned envelope to send instead of plaintext fields. */
+  envelope?: DropEnvelopeV1;
 }
 
 /** Result returned after creating a drop. */
@@ -42,6 +51,8 @@ export interface DropUpdateRequest {
   metadata: Record<string, unknown>;
   /** Optional expected root revision for optimistic concurrency. */
   expectedRevision?: string | null;
+  /** Optional account-owned envelope to send instead of plaintext fields. */
+  envelope?: DropEnvelopeV1;
 }
 
 /** Result returned after updating a drop. */
@@ -171,10 +182,44 @@ export interface AuthSessionRequest {
   proof: Record<string, unknown>;
 }
 
+/** Request for starting browser-mediated CLI authorization. */
+export interface AuthDeviceRequest {
+  /** Ephemeral public key that receives the one-time credential envelope. */
+  publicKey: CliEncryptionPublicJwk;
+  /** Optional human-readable CLI/device name. */
+  clientName?: string | null;
+}
+
+/** Request for polling a pending CLI authorization. */
+export interface AuthDevicePollRequest {
+  /** Private device code returned by the start endpoint. */
+  deviceCode: string;
+}
+
+/** Request for rotating a persisted CLI refresh credential. */
+export interface AuthRefreshRequest {
+  /** Current refresh credential. */
+  refreshToken: string;
+}
+
+/** Request for revoking a persisted CLI refresh credential. */
+export interface AuthRevokeRequest {
+  /** Refresh credential to revoke. */
+  refreshToken: string;
+}
+
 /** Runtime facade for auth commands. */
 export interface AuthRuntime {
   /** Creates an authenticated account session. */
   session(request: AuthSessionRequest): Promise<unknown | null>;
+  /** Starts browser-mediated CLI authorization. */
+  device(request: AuthDeviceRequest): Promise<CliDeviceStartResponse | null>;
+  /** Polls browser-mediated CLI authorization. */
+  poll(request: AuthDevicePollRequest): Promise<CliDevicePollResponse | null>;
+  /** Rotates a CLI refresh credential. */
+  refresh(request: AuthRefreshRequest): Promise<CliCredentialBundleV1 | null>;
+  /** Revokes a CLI refresh credential. */
+  revoke(request: AuthRevokeRequest): Promise<unknown | null>;
 }
 
 /** Supported admin backfill jobs. */
@@ -195,6 +240,8 @@ export interface AdminBackfillRequest {
   limit: string;
   /** Optional pagination cursor. */
   cursor?: string | null;
+  /** Restricts metadata backfill to verified account-library projection rows. */
+  accountLibraryOnly?: boolean;
 }
 
 /** Runtime facade for admin commands. */

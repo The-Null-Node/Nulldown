@@ -7,10 +7,14 @@ how to interpret plaintext payloads versus sealed envelopes.
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
+import { readAccountLibraryEntry } from "../_lib/accounts/library/repository";
+import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/auth";
 
 interface Env {
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
+  ACCOUNT_AUTH_SECRET?: string;
+  ALLOW_INSECURE_ACCOUNT_HEADER?: string;
 }
 
 const READ_SUCCESS_SAMPLE_RATE = 0.1;
@@ -71,6 +75,17 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
     }
 
     const canonicalDropRef = toLogRef(id);
+
+    const entry = env.DB ? await readAccountLibraryEntry(env.DB, id) : null;
+    // Legacy private drops are intentionally left on their pre-library behavior until backfill
+    // creates a verified projection; only a projection can safely establish ownership.
+    if (entry?.visibility === "private") {
+      const accountId = await resolveAuthenticatedAccountId(request, env);
+      if (!accountId || entry.account_id !== accountId || entry.deleted_at !== null) {
+        logger.logEnd(404, { reason: "private_drop_not_found", canonicalDropRef });
+        return new Response("Drop not found.", { status: 404 });
+      }
+    }
 
     const object = await env.R2_BUCKET.get(id);
 

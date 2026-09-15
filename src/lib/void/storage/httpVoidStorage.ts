@@ -4,6 +4,7 @@ import {
   type DropEnvelopeV1,
 } from "../../../../shared/drop/types";
 import { createHttpErrorFromResponse } from "../provider/errors";
+import { getAccountAuthHeaders } from "../../auth/accountSession";
 import type {
   DropCrudRecord,
   StoredDropRecord,
@@ -34,6 +35,7 @@ export class HttpVoidStorage implements VoidStorage {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(await getAccountAuthHeaders()),
       },
       body: JSON.stringify({
         id: options.id,
@@ -64,7 +66,9 @@ export class HttpVoidStorage implements VoidStorage {
   }
 
   async get(id: string): Promise<StoredDropRecord | null> {
-    const response = await fetch(`/api/get/${encodeURIComponent(id)}`);
+    const response = await fetch(`/api/get/${encodeURIComponent(id)}`, {
+      headers: await getAccountAuthHeaders(),
+    });
     if (response.status === 404) {
       return null;
     }
@@ -151,6 +155,7 @@ export class HttpVoidStorage implements VoidStorage {
   async delete(id: string): Promise<void> {
     const response = await fetch(`/api/delete/${encodeURIComponent(id)}`, {
       method: "DELETE",
+      headers: await getAccountAuthHeaders(),
     });
 
     if (!response.ok && response.status !== 404) {
