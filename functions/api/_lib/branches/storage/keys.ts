@@ -21,8 +21,11 @@ export const BRANCH_RUNTIME_FACT_EVENT_KEY_PREFIX =
   "__drop_branch_runtime_fact_events__/";
 const BRANCH_RUNTIME_FACT_EVENT_ID_KEY_PREFIX =
   "__drop_branch_runtime_fact_event_ids__/";
+const BRANCH_RUNTIME_FACT_HEAD_KEY_PREFIX =
+  "__drop_branch_runtime_fact_heads__/";
 const BRANCH_LOCK_KEY_PREFIX = "__drop_branch_lock__/";
-const BRANCH_PROMOTION_RECEIPT_KEY_PREFIX = "__drop_branch_promotion_receipts__/";
+const BRANCH_PROMOTION_RECEIPT_KEY_PREFIX =
+  "__drop_branch_promotion_receipts__/";
 const EVENT_SEQ_PAD = 16;
 
 /** Sanitizes a dynamic branch key segment before embedding it in an R2 key. */
@@ -108,7 +111,8 @@ export const createBranchDiffEventIdMarkerV2Key = (
 export const createBranchRuntimeFactEventPrefix = (
   rootDropId: string,
   branchId: string,
-): string => `${BRANCH_RUNTIME_FACT_EVENT_KEY_PREFIX}${rootDropId}/${branchId}/`;
+): string =>
+  `${BRANCH_RUNTIME_FACT_EVENT_KEY_PREFIX}${rootDropId}/${branchId}/`;
 
 /** Builds the R2 key for one cursor-addressable branch runtime fact. */
 export const createBranchRuntimeFactEventKey = (
@@ -125,6 +129,13 @@ export const createBranchRuntimeFactEventIdKey = (
   factId: string,
 ): string =>
   `${BRANCH_RUNTIME_FACT_EVENT_ID_KEY_PREFIX}${rootDropId}/${branchId}/${sanitizeBranchKeyPart(factId)}.json`;
+
+/** Builds the R2 key for one branch runtime-fact head and pending reservation. */
+export const createBranchRuntimeFactHeadKey = (
+  rootDropId: string,
+  branchId: string,
+): string =>
+  `${BRANCH_RUNTIME_FACT_HEAD_KEY_PREFIX}${rootDropId}/${branchId}.json`;
 
 /** Builds the R2 key for the coarse branch mutation lock. */
 export const createBranchLockKey = (

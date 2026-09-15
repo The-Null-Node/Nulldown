@@ -38,14 +38,18 @@ export const registerStrategyTools = (server: McpServer): void => {
     {
       title: "Get Nulldown Strategy",
       description:
-        "Fetch a Nulldown strategy or documentation drop by canonical or short id.",
+        "Read a bounded strategy using an explicit branch, otherwise a validated same-root plaintext metadata strategyRef, otherwise the root. Never resolves or creates a branch; invalid references and branch errors fail without fallback.",
       inputSchema: {
         ...clientArgsSchema,
         ...mcpResponseArgsSchema,
         id: z.string().describe("Canonical or short drop id."),
+        branchId: z.string().min(1).optional().describe("Explicit branch override; otherwise use plaintext strategyRef or read the root."),
+        query: z.string().optional(),
+        snapshotId: z.union([z.string(), z.number().int().nonnegative()]).optional(),
+        top: z.number().int().min(1).optional(),
       },
     },
     async (args) =>
-      asCompact(await createClient(args).getDrop(args.id), extractMcpResponseArgs(args)),
+      asCompact(await createClient(args).readStrategy(args), extractMcpResponseArgs(args)),
   );
 };

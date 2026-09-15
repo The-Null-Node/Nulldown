@@ -4,6 +4,9 @@ just API shapes: the same records are stored in R2 and replayed to rebuild branc
 content, so validation here protects both transport and storage integrity.
 */
 
+import { isNulldownSourceHash } from "./resolved/hash";
+import type { NulldownSourceHash } from "./resolved/types";
+
 /** Account-id request header used by branch and memory APIs in account-scoped flows. */
 export const NULLDOWN_ACCOUNT_ID_HEADER = "x-nulldown-account-id";
 
@@ -83,6 +86,8 @@ export interface DropSnapshotRecord {
   checkpointKey?: string;
   /** Materialized text length. */
   textLength: number;
+  /** Authoritative content hash computed during snapshot construction; absent on legacy/mutable snapshots. */
+  sourceContentHash?: NulldownSourceHash;
   /** Creation time in epoch milliseconds. */
   createdAt: number;
 }
@@ -231,6 +236,9 @@ export const isDropSnapshotRecord = (
     return false;
   }
   if (value.checkpointKey !== undefined && !isString(value.checkpointKey)) {
+    return false;
+  }
+  if (value.sourceContentHash !== undefined && !isNulldownSourceHash(value.sourceContentHash)) {
     return false;
   }
   return isNumber(value.textLength) && isNumber(value.createdAt);

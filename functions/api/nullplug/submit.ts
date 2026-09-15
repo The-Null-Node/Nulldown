@@ -8,16 +8,24 @@ import {
   isNullplugUiResponseFact,
   type NullplugUiResponseFact,
 } from "../../../shared/nullplug/ui";
-import { putNullplugUiResponseFact } from "../_lib/nullplug/facts/repository";
+import {
+  putNullplugUiResponseFact,
+  readNullplugUiResponseFact,
+} from "../_lib/nullplug/facts/repository";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/auth";
 import { createBranchRepository } from "../_lib/branches/storage/repository";
 import { readBranchContent } from "../_lib/branches/content/replay";
 import { createBranchRuntimeFactLogRepository } from "../_lib/branches/storage/runtimeFactLogRepository";
+import {
+  BranchMutationLockError,
+  withBranchMutationLock,
+} from "../_lib/branches/storage/mutationLock";
 import { sanitizeDiffAuthToken } from "../_lib/diffs/credentials/repository";
 import { updateResolvedHeap } from "../_lib/resolved/heap/service";
 import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../../../shared/drop/resolved/constants";
 import { hashMarkdownSource } from "../../../shared/drop/resolved/hash";
+import { serializeCanonicalJson } from "../../../shared/drop/types";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
@@ -166,72 +174,158 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
         "You are not allowed to submit responses for this branch.",
       );
     }
-    if (branch.status !== "active") {
-      logger.logEnd(409, { reason: "branch_not_active" });
-      return jsonErrorResponse(
-        409,
-        "branch_not_active",
-        "Nullplug responses require an active branch.",
-      );
-    }
-    if (!parsed.source.sourceContentHash) {
-      logger.logEnd(400, { reason: "source_hash_required" });
-      return jsonErrorResponse(
-        400,
-        "source_hash_required",
-        "Nullplug responses must include the rendered source hash.",
-      );
-    }
-    const branchContent = await readBranchContent(
+    const committed = await withBranchMutationLock(
       serviceEnv.R2_BUCKET,
       canonicalRootDropId,
       branchId,
-      branch.headSnapshotId,
-      serviceEnv.DB,
+      async (lock) => {
+        const lockedBranch = await branchRepository.readBranch(
+          canonicalRootDropId,
+          branchId,
+        );
+        if (!lockedBranch) {
+          return {
+            error: jsonErrorResponse(404, "branch_not_found", "Branch not found."),
+          } as const;
+        }
+        if (
+          accountId !== lockedBranch.ownerAccountId &&
+          accountId !== lockedBranch.writerAccountId
+        ) {
+          return {
+            error: jsonErrorResponse(
+              403,
+              "forbidden",
+              "You are not allowed to submit responses for this branch.",
+            ),
+          } as const;
+        }
+        const requestedFact: NullplugUiResponseFact = {
+          ...parsed,
+          source: {
+            ...parsed.source,
+            rootDropId: canonicalRootDropId,
+            branchId,
+          },
+          metadata: { ...parsed.metadata, actorAccountId: accountId },
+        };
+        const existingFact = await readNullplugUiResponseFact(
+          serviceEnv.R2_BUCKET,
+          requestedFact,
+        );
+        const runtimeFactRepository = createBranchRuntimeFactLogRepository({
+          blobs: serviceEnv.R2_BUCKET,
+          sql: serviceEnv.DB,
+        });
+        if (existingFact) {
+          const normalizedRetry: NullplugUiResponseFact = {
+            ...requestedFact,
+            createdAt: existingFact.createdAt,
+            source: {
+              ...requestedFact.source,
+              snapshotId: existingFact.source.snapshotId,
+            },
+          };
+          if (
+            serializeCanonicalJson(normalizedRetry) !==
+            serializeCanonicalJson(existingFact)
+          ) {
+            return {
+              error: jsonErrorResponse(
+                409,
+                "idempotency_key_reused",
+                "The response identity was already used for different data.",
+              ),
+            } as const;
+          }
+          await lock.beginCommit();
+          const { key, fact } = await putNullplugUiResponseFact(
+            serviceEnv.R2_BUCKET,
+            existingFact,
+            serviceEnv.DB,
+          );
+          const runtimeFact =
+            await runtimeFactRepository.appendBranchRuntimeFactUnderLock(
+              canonicalRootDropId,
+              branchId,
+              fact,
+            );
+          return { fact, key, written: false, runtimeFact } as const;
+        }
+        if (lockedBranch.status !== "active") {
+          return {
+            error: jsonErrorResponse(
+              409,
+              "branch_not_active",
+              "Nullplug responses require an active branch.",
+            ),
+          } as const;
+        }
+        if (!parsed.source.sourceContentHash) {
+          return {
+            error: jsonErrorResponse(
+              400,
+              "source_hash_required",
+              "Nullplug responses must include the rendered source hash.",
+            ),
+          } as const;
+        }
+        const branchContent = await readBranchContent(
+          serviceEnv.R2_BUCKET,
+          canonicalRootDropId,
+          branchId,
+          lockedBranch.headSnapshotId,
+          serviceEnv.DB,
+        );
+        if (
+          branchContent === null ||
+          (await hashMarkdownSource(branchContent)) !==
+            parsed.source.sourceContentHash
+        ) {
+          return {
+            error: jsonErrorResponse(
+              409,
+              "stale_source",
+              "The approval was rendered for an older branch revision.",
+            ),
+          } as const;
+        }
+
+        const candidateFact: NullplugUiResponseFact = {
+          ...requestedFact,
+          createdAt: Date.now(),
+          source: {
+            ...requestedFact.source,
+            snapshotId: lockedBranch.headSnapshotId,
+          },
+        };
+        await lock.beginCommit();
+        const { key, written, fact } = await putNullplugUiResponseFact(
+          serviceEnv.R2_BUCKET,
+          candidateFact,
+          serviceEnv.DB,
+        );
+        const runtimeFact = await runtimeFactRepository.appendBranchRuntimeFactUnderLock(
+          canonicalRootDropId,
+          branchId,
+          fact,
+        );
+        return { fact, key, written, runtimeFact } as const;
+      },
     );
-    if (
-      branchContent === null ||
-      (await hashMarkdownSource(branchContent)) !== parsed.source.sourceContentHash
-    ) {
-      logger.logEnd(409, { reason: "stale_source" });
-      return jsonErrorResponse(
-        409,
-        "stale_source",
-        "The approval was rendered for an older branch revision.",
-      );
+    if ("error" in committed) {
+      return committed.error;
     }
+    const { fact, key, written, runtimeFact } = committed;
 
-    const fact: NullplugUiResponseFact = {
-      ...parsed,
-      createdAt: Date.now(),
-      source: {
-        ...parsed.source,
-        rootDropId: canonicalRootDropId,
-        branchId,
-        snapshotId: branch.headSnapshotId,
-      },
-      metadata: {
-        ...parsed.metadata,
-        actorAccountId: accountId,
-      },
-    };
-    const { key, written } = await putNullplugUiResponseFact(
-      serviceEnv.R2_BUCKET,
-      fact,
-      serviceEnv.DB,
-    );
-
-    const runtimeFact = await createBranchRuntimeFactLogRepository({
-      blobs: serviceEnv.R2_BUCKET,
-      sql: serviceEnv.DB,
-    }).appendBranchRuntimeFact(canonicalRootDropId, branchId, fact);
-
+    const projectionHeaders = new Headers(request.headers);
+    projectionHeaders.set("Content-Type", "application/json");
     const projectionResponse = await updateResolvedHeap(
       serviceEnv,
       { rootId: canonicalRootDropId, branchId },
       new Request(request.url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: projectionHeaders,
         body: JSON.stringify({
           resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID,
           snapshotId: "latest",
@@ -262,6 +356,17 @@ const handlePost = async (env: Env, request: Request): Promise<Response> => {
       runtimeFact,
     });
   } catch (error) {
+    if (error instanceof BranchMutationLockError) {
+      const status = error.outcome === "not_committed" ? 409 : 503;
+      logger.logEnd(status, { reason: error.code });
+      return jsonErrorResponse(
+        status,
+        error.code,
+        error.outcome === "not_committed"
+          ? "Branch lock was not held before commit. Refresh and retry."
+          : "Mutation outcome could not be confirmed. Retry the exact same response.",
+      );
+    }
     logger.logError("nullplug.submit.unhandled_error", error);
     logger.logEnd(500, { reason: "unhandled_error" });
     const message = error instanceof Error ? error.message : String(error);

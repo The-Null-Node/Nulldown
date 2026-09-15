@@ -96,7 +96,9 @@ describe("createLocalNulldownServer", () => {
     );
 
     expect(content.status).toBe(200);
-    await expect(content.json()).resolves.toEqual(expect.objectContaining({ content: "local base" }));
+    await expect(content.json()).resolves.toEqual(
+      expect.objectContaining({ content: "local base", headEventSeq: 0 }),
+    );
   });
 
   it("persists nullplug state facts through local routes", async () => {

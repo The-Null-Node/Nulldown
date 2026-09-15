@@ -377,6 +377,7 @@ export const lookupBranchDiffEventIdentity = async (
       Boolean(
         event &&
           event.eventId === eventId &&
+          event.seq === marker.marker.seq &&
           (event.snapshotId === markerSnapshotId ||
             (event.snapshotId === undefined && event.seq === marker.marker.seq)),
       );

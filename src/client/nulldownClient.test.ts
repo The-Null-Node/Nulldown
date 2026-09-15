@@ -8,7 +8,11 @@ import {
   DIFF_TIMESTAMP_HEADER,
   buildDiffSigningPayload,
 } from "../../shared/drop/diffAuth";
-import { createNulldownClient, NulldownClientError } from "./nulldownClient";
+import {
+  createNulldownClient,
+  createNulldownClientConfig,
+  NulldownClientError,
+} from "./nulldownClient";
 import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../shared/nullplug/registry";
 
 const base64UrlEncode = (value: string): string =>
@@ -19,6 +23,26 @@ const base64UrlEncode = (value: string): string =>
     .replace(/=+$/g, "");
 
 describe("NulldownClient", () => {
+  it("allows explicit null diff credentials to override inherited environment values", () => {
+    const previousDiffToken = process.env.ND_DIFF_AUTH_TOKEN;
+    const previousWebhookSecret = process.env.DIFF_WEBHOOK_SECRET;
+    process.env.ND_DIFF_AUTH_TOKEN = "inherited-diff-token";
+    process.env.DIFF_WEBHOOK_SECRET = "inherited-webhook-secret";
+    try {
+      expect(
+        createNulldownClientConfig({
+          diffAuthToken: null,
+          diffWebhookSecret: null,
+        }),
+      ).toEqual(expect.objectContaining({ diffAuthToken: null, diffWebhookSecret: null }));
+    } finally {
+      if (previousDiffToken === undefined) delete process.env.ND_DIFF_AUTH_TOKEN;
+      else process.env.ND_DIFF_AUTH_TOKEN = previousDiffToken;
+      if (previousWebhookSecret === undefined) delete process.env.DIFF_WEBHOOK_SECRET;
+      else process.env.DIFF_WEBHOOK_SECRET = previousWebhookSecret;
+    }
+  });
+
   it("signs diff_apply requests with exported diff auth tokens", async () => {
     const token = `ndauth.v1.${base64UrlEncode(
       JSON.stringify({

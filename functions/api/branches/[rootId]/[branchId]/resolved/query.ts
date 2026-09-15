@@ -5,7 +5,8 @@ import {
 } from "../../../../_lib/resolved/heap/service";
 import { methodNotAllowedResponse, jsonResponse } from "../../../../_lib/core/http/responses";
 import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/cloudflareBackendRuntime";
-import type { NulleditNextRequest } from "../../../../../src/server/nulledit/types";
+import type { NulleditNextRequest } from "../../../../../../src/server/nulledit/types";
+import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../../../../../../shared/drop/resolved/constants";
 
 interface Env extends ResolvedHeapEnv {
   R2_BUCKET: R2Bucket;
@@ -22,7 +23,12 @@ export const onRequestGet: PagesFunction<Env, "rootId" | "branchId"> = ({
   const url = new URL(request.url);
   const snapshotterId = url.searchParams.get("snapshotterId");
 
-  if (snapshotterId && snapshotterId !== RESOLVED_DOCUMENT_SNAPSHOTTER_ID) {
+  if (
+    snapshotterId &&
+    snapshotterId !== RESOLVED_DOCUMENT_SNAPSHOTTER_ID &&
+    snapshotterId !== "nulledit.resolved-runtime-refs" &&
+    url.searchParams.get("resolverId") !== RESOLVED_RUNTIME_REFS_RESOLVER_ID
+  ) {
     const top = url.searchParams.get("k") ? Number(url.searchParams.get("k")) : undefined;
     const maxTokens = url.searchParams.get("maxTokens") ? Number(url.searchParams.get("maxTokens")) : undefined;
     const preview = url.searchParams.get("preview") ? url.searchParams.get("preview") === "true" : undefined;
@@ -40,10 +46,15 @@ export const onRequestGet: PagesFunction<Env, "rootId" | "branchId"> = ({
     return promise.then((r) => jsonResponse(r ?? { items: [] }));
   }
 
-  return queryResolvedHeap(env, params, request, {
-    repairBufferedCommits: ({ rootDropId, branchId }) =>
-      runtime.repairBufferedCommitsForQuery({ rootDropId, branchId }),
-  });
+  return queryResolvedHeap(
+    { ...env, resolvedDocumentData: runtime.data },
+    params,
+    request,
+    {
+      repairBufferedCommits: ({ rootDropId, branchId }) =>
+        runtime.repairBufferedCommitsForQuery({ rootDropId, branchId }),
+    },
+  );
 };
 
 export const onRequest: PagesFunction<Env, "rootId" | "branchId"> = async (context) => {

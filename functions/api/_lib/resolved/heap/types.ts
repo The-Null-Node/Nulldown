@@ -12,6 +12,7 @@ import type {
 } from "../../../../../shared/nullplug/ui";
 import type {
   VoidBlobStore,
+  VoidDataStore,
   VoidSqlStore,
 } from "../../../../../src/server/ports";
 
@@ -19,6 +20,8 @@ import type {
 export interface ResolvedHeapEnv extends AccountAuthEnv {
   R2_BUCKET: VoidBlobStore;
   DB?: VoidSqlStore;
+  /** Trusted runtime snapshotter storage; never populated from request payloads. */
+  resolvedDocumentData?: Pick<VoidDataStore, "get">;
 }
 
 /** Route parameters for branch resolved heap operations. */

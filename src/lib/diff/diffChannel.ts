@@ -13,7 +13,10 @@ import type {
   DropDiffOp,
   DropDiffPollResponse,
 } from "../../../shared/drop/diff";
-import { isDropDiffAppendResponse, isDropDiffEvent } from "../../../shared/drop/diff";
+import {
+  hasConfirmedDropDiffAppendReceipt,
+  isDropDiffEvent,
+} from "../../../shared/drop/diff";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../shared/drop/branch";
 import { serializeCanonicalJson } from "../../../shared/drop/types";
 import { emitEvent } from "../events/eventBus";
@@ -253,18 +256,14 @@ export const createRemoteDiffChannel = (
     }
 
     const data = await response.json();
-    if (!isDropDiffAppendResponse(data)) {
-      throw new Error(
-        "Diff publish receipt is unconfirmed. Upgrade the server before retrying.",
-      );
-    }
-    const acknowledgements = data.acknowledgements;
     if (
-      data.branchId !== branchId ||
-      acknowledgements.filter((ack) => ack.eventId === event.eventId).length !== 1
+      !hasConfirmedDropDiffAppendReceipt(data, {
+        branchId,
+        eventIds: [event.eventId],
+      })
     ) {
       throw new DiffChannelError({
-        message: `Diff publish acknowledgement missing event ${event.eventId}.`,
+        message: `Diff publish receipt is unconfirmed for event ${event.eventId}.`,
         code: "diff_receipt_unconfirmed",
       });
     }

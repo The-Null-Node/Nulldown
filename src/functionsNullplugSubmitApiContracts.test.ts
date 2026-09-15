@@ -3,6 +3,8 @@ import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/nullplug/submit";
 import { onRequest as onResolvedQueryRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
+import { onRequest as onResolvedUpdateRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/update";
+import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../shared/drop/branch";
 import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved/constants";
 import { nullplugUiResponseFactKey } from "../shared/nullplug/ui";
@@ -214,6 +216,153 @@ describe("functions api nullplug submit contracts", () => {
     return bucket;
   };
 
+  it.each([
+    ["anonymous", null, 401],
+    ["forged header", "header", 401],
+    ["invalid bearer", "invalid", 401],
+    ["unrelated account", "acct-other", 403],
+    ["owner", "acct-owner", 200],
+    ["writer", accountId, 200],
+  ] as const)("protects runtime queries and updates for %s", async (_label, actor, status) => {
+    const bucket = createSeededBucket();
+    const env = {
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      ACCOUNT_AUTH_SECRET: "isolated-runtime-auth-test-secret",
+    };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (actor === "header") headers[NULLDOWN_ACCOUNT_ID_HEADER] = accountId;
+    else if (actor === "invalid") headers.Authorization = "Bearer invalid";
+    else if (actor) {
+      const session = await issueAccountSessionToken(actor, env);
+      headers.Authorization = `Bearer ${session.token}`;
+    }
+    const put = jest.spyOn(bucket, "put");
+    const base = `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved`;
+    for (const query of [
+      `resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}`,
+      `resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&snapshotterId=nulledit.frame`,
+      `resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&snapshotterId=nulledit.resolved-document`,
+      "snapshotterId=nulledit.resolved-runtime-refs",
+    ]) {
+      const response = await onResolvedQueryRequest({
+        request: new Request(`${base}/query?${query}`, { headers }),
+        env,
+        params: { rootId: rootDropId, branchId },
+      } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+      expect(response.status).toBe(status);
+      if (status === 200) {
+        expect(await response.json()).toMatchObject(
+          query.startsWith("snapshotterId=")
+            ? { items: [] }
+            : { resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID },
+        );
+      }
+    }
+    for (const resolverId of [RESOLVED_RUNTIME_REFS_RESOLVER_ID, "all", undefined]) {
+      const response = await onResolvedUpdateRequest({
+        request: new Request(`${base}/update`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ resolverId }),
+        }),
+        env,
+        params: { rootId: rootDropId, branchId },
+      } as unknown as Parameters<typeof onResolvedUpdateRequest>[0]);
+      expect(response.status).toBe(status);
+    }
+    if (status !== 200) expect(put).not.toHaveBeenCalled();
+  });
+
+  it("denies private document projections before and after cache generation", async () => {
+    const bucket = createSeededBucket();
+    bucket.seed(rootDropId, JSON.stringify({
+      schema: "nmdn.drop.v1", version: 1, createdAt: 1,
+      accountId, visibility: "private", unlockPolicy: "provider-escrow",
+      cipher: { alg: "A256GCM", iv: "iv", ciphertext: "cipher" },
+      keyEnvelope: { mode: "account-vault-rsa-oaep", kid: "key", wrappedKey: "wrapped" },
+      providerEscrow: { mode: "provider-rsa-oaep", kid: "provider", wrappedKey: "wrapped" },
+      signatures: { device: { kid: "sig", alg: "ECDSA_P256_SHA256", sig: "signature" } },
+    }));
+    const env = { R2_BUCKET: bucket as unknown as R2Bucket, ACCOUNT_AUTH_SECRET: "private-projection-test" };
+    const owner = await issueAccountSessionToken(accountId, env);
+    const other = await issueAccountSessionToken("other-account", env);
+    const query = (token?: string) => onResolvedQueryRequest({
+      request: new Request(`https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }), env, params: { rootId: rootDropId, branchId },
+    } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+    expect((await query()).status).toBe(401);
+    expect((await query(other.token)).status).toBe(403);
+    const authorized = await query(owner.token);
+    expect(authorized.status).toBe(200);
+    const put = jest.spyOn(bucket, "put");
+    expect((await query()).status).toBe(401);
+    expect((await query(other.token)).status).toBe(403);
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["public", false], ["unlisted", false],
+    ["public", true], ["unlisted", true],
+  ] as const)("checks %s provider-escrow record presence (%s) before regeneration and cache reuse", async (visibility, hasEscrow) => {
+    const bucket = createSeededBucket();
+    bucket.seed(rootDropId, JSON.stringify({
+      schema: "nmdn.drop.v1", version: 1, createdAt: 1,
+      accountId, visibility, unlockPolicy: "provider-escrow",
+      cipher: { alg: "A256GCM", iv: "iv", ciphertext: "cipher" },
+      keyEnvelope: { mode: "account-vault-rsa-oaep", kid: "key", wrappedKey: "wrapped" },
+      ...(hasEscrow ? { providerEscrow: { mode: "provider-rsa-oaep", kid: "provider", wrappedKey: "wrapped" } } : {}),
+      signatures: { device: { kid: "sig", alg: "ECDSA_P256_SHA256", sig: "signature" } },
+    }));
+    const env = { R2_BUCKET: bucket as unknown as R2Bucket, ACCOUNT_AUTH_SECRET: "escrow-presence-test" };
+    const owner = await issueAccountSessionToken(accountId, env);
+    const other = await issueAccountSessionToken("other-account", env);
+    const query = (token?: string) => onResolvedQueryRequest({
+      request: new Request(`https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }), env, params: { rootId: rootDropId, branchId },
+    } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+    const put = jest.spyOn(bucket, "put");
+    if (!hasEscrow) {
+      expect((await query()).status).toBe(401);
+      expect((await query(other.token)).status).toBe(403);
+      expect(put).not.toHaveBeenCalled();
+    }
+    const generated = await query(hasEscrow ? undefined : owner.token);
+    expect(generated.status).toBe(200);
+    expect(await generated.json()).toMatchObject({ heapGenerated: true });
+    put.mockClear();
+    if (!hasEscrow) {
+      expect((await query()).status).toBe(401);
+      expect((await query(other.token)).status).toBe(403);
+      expect(put).not.toHaveBeenCalled();
+    }
+    const cached = await query(hasEscrow ? undefined : owner.token);
+    expect(cached.status).toBe(200);
+    expect(await cached.json()).toMatchObject({ heapGenerated: false });
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("rejects unpersisted response facts and projects only stored facts", async () => {
+    const bucket = createSeededBucket();
+    const env = { R2_BUCKET: bucket as unknown as R2Bucket, ALLOW_INSECURE_ACCOUNT_HEADER: "1" };
+    const base = `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved`;
+    const headers = { "Content-Type": "application/json", [NULLDOWN_ACCOUNT_ID_HEADER]: accountId };
+    const response = await onResolvedUpdateRequest({
+      request: new Request(`${base}/update`, { method: "POST", headers,
+        body: JSON.stringify({ resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID, uiResponseFacts: [createFact()] }),
+      }), env, params: { rootId: rootDropId, branchId },
+    } as unknown as Parameters<typeof onResolvedUpdateRequest>[0]);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "runtime_facts_must_be_stored" });
+    const query = await onResolvedQueryRequest({
+      request: new Request(`${base}/query?resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&kind=ui.response`, { headers }),
+      env, params: { rootId: rootDropId, branchId },
+    } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+    expect(query.status).toBe(200);
+    expect(await query.json()).toMatchObject({ nodes: [] });
+  });
+
   it("stores immutable UI response facts", async () => {
     const bucket = createSeededBucket();
     const fact = createFact();
@@ -242,11 +391,27 @@ describe("functions api nullplug submit contracts", () => {
       bucket.get(body.key).then((object) => object?.json()),
     ).resolves.toEqual(body.fact);
 
-    const queryResponse = await onResolvedQueryRequest({
+    const unauthorizedQuery = await onResolvedQueryRequest({
       request: new Request(
         `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query?resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&kind=ui.response&primitiveId=approval-form&q=approved%20true`,
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: { rootId: rootDropId, branchId },
+    } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
+    expect(unauthorizedQuery.status).toBe(401);
+
+    const queryResponse = await onResolvedQueryRequest({
+      request: new Request(
+        `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query?resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&kind=ui.response&primitiveId=approval-form&q=approved%20true`,
+        { headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: accountId } },
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { rootId: rootDropId, branchId },
     } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
     const queryBody = (await queryResponse.json()) as {
@@ -278,6 +443,13 @@ describe("functions api nullplug submit contracts", () => {
       },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
+    const storedBranch = await bucket
+      .get(createBranchKey(rootDropId, branchId))
+      .then((object) => object?.json<Record<string, unknown>>());
+    bucket.seed(
+      createBranchKey(rootDropId, branchId),
+      JSON.stringify({ ...storedBranch, status: "archived" }),
+    );
     const duplicate = await onRequest({
       request: createSubmitRequest(fact),
       env: {
@@ -296,6 +468,18 @@ describe("functions api nullplug submit contracts", () => {
       duplicate: true,
       runtimeFact: expect.objectContaining({ appended: false }),
     });
+    const reused = await onRequest({
+      request: createSubmitRequest({
+        ...fact,
+        data: { approved: false },
+      }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(reused.status).toBe(409);
   });
 
   it("rejects invalid facts and missing roots", async () => {

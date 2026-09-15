@@ -4,7 +4,7 @@ import {
   isDropPayload,
   type DropPayload,
 } from "../../../../../shared/drop/types";
-import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
+import { decryptProviderEscrowEnvelope } from "../../crypto/void/envelopes/providerEscrow";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,

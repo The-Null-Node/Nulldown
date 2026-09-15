@@ -3,6 +3,7 @@ import { createBranchRepository } from "../../branches/storage/repository";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { jsonErrorResponse, resolveParam } from "../../core/http/responses";
+import { isDropEnvelopeV1 } from "../../../../../shared/drop/types";
 import type {
   ResolvedBranchTarget,
   ResolvedHeapEnv,
@@ -55,6 +56,48 @@ export const resolveResolvedBranchTarget = async (
   }
 
   return { rootDropId, branchId, branch };
+};
+
+/** Checks root plaintext-read rights before either cached or regenerated projections are exposed. */
+export const authorizeResolvedRootRead = async (
+  request: Request,
+  env: ResolvedHeapEnv,
+  rootDropId: string,
+): Promise<Response | null> => {
+  const object = await env.R2_BUCKET.get(rootDropId);
+  if (!object) return jsonErrorResponse(404, "root_drop_not_found", "Root drop not found.");
+  const text = await object.text();
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null; // Legacy plaintext roots remain publicly readable.
+  }
+  if (!value || typeof value !== "object" || !("schema" in value || "cipher" in value)) return null;
+  if (!isDropEnvelopeV1(value)) {
+    return jsonErrorResponse(403, "forbidden", "Root envelope cannot authorize plaintext access.");
+  }
+  if (value.visibility !== "private" && value.unlockPolicy === "provider-escrow" && value.providerEscrow) return null;
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  if (!accountId) return jsonErrorResponse(401, "account_required", "Authenticated account session is required.");
+  if (accountId !== value.accountId) return jsonErrorResponse(403, "forbidden", "You are not allowed to read this root's plaintext.");
+  return null;
+};
+
+/** Restricts runtime projections to the branch owner or writer. */
+export const authorizeResolvedRuntimeAccess = async (
+  request: Request,
+  env: ResolvedHeapEnv,
+  branch: { ownerAccountId?: string | null; writerAccountId?: string | null },
+): Promise<Response | null> => {
+  const accountId = await resolveAuthenticatedAccountId(request, env);
+  if (!accountId) {
+    return jsonErrorResponse(401, "account_required", "Authenticated account session is required.");
+  }
+  if (accountId !== branch.ownerAccountId && accountId !== branch.writerAccountId) {
+    return jsonErrorResponse(403, "forbidden", "You are not allowed to access runtime projections for this branch.");
+  }
+  return null;
 };
 
 /** Checks that the authenticated account can mutate priority facts for a branch. */

@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerNulldownTools } from "./tools";
+import packageJson from "../package.json";
 
 /** Creates the Nulldown MCP server and registers direct API tools. */
 export const createNulldownMcpServer = (): McpServer => {
-  const server = new McpServer({ name: "nulldown", version: "1.0.0" });
+  const server = new McpServer({ name: "nulldown", version: packageJson.version });
   registerNulldownTools(server);
   return server;
 };

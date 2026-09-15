@@ -234,6 +234,43 @@ export const isDropDiffAppendResponse = (
   );
 };
 
+/** Confirms a response accounts for submitted event identities on the expected branch. */
+export const hasConfirmedDropDiffAppendReceipt = (
+  value: unknown,
+  expected: { branchId?: string; eventIds: readonly string[] },
+): value is DropDiffAppendResponse => {
+  if (!isDropDiffAppendResponse(value)) return false;
+  if (expected.branchId !== undefined && value.branchId !== expected.branchId) {
+    return false;
+  }
+  if (value.accepted + value.deduplicated !== expected.eventIds.length) {
+    return false;
+  }
+
+  const expectedEventIds = new Set(expected.eventIds);
+  const acknowledgedEventIds = new Set<string>();
+  let acceptedAcknowledgements = 0;
+  let duplicateAcknowledgements = 0;
+
+  for (const acknowledgement of value.acknowledgements) {
+    if (
+      !expectedEventIds.has(acknowledgement.eventId) ||
+      acknowledgedEventIds.has(acknowledgement.eventId)
+    ) {
+      return false;
+    }
+    acknowledgedEventIds.add(acknowledgement.eventId);
+    if (acknowledgement.status === "accepted") acceptedAcknowledgements += 1;
+    else duplicateAcknowledgements += 1;
+  }
+
+  return (
+    [...expectedEventIds].every((eventId) => acknowledgedEventIds.has(eventId)) &&
+    acceptedAcknowledgements <= value.accepted &&
+    duplicateAcknowledgements <= value.deduplicated
+  );
+};
+
 /** Checks whether a value is a branch-local, cursor-addressable runtime fact. */
 export const isDropBranchRuntimeFact = (
   value: unknown,
@@ -327,9 +364,8 @@ export const isDropDiffEvent = (value: unknown): value is DropDiffEvent =>
   DropDiffEventSchema.safeParse(value).success;
 
 /** Returns true when `value` is a valid diff transport envelope. */
-export const isDropDiffEnvelope = (
-  value: unknown,
-): value is DropDiffEnvelope => DropDiffEnvelopeSchema.safeParse(value).success;
+export const isDropDiffEnvelope = (value: unknown): value is DropDiffEnvelope =>
+  DropDiffEnvelopeSchema.safeParse(value).success;
 
 /** Converts an in-memory Nulledit diff to the branch transport operation shape. */
 export const diffToDropDiffOp = (diff: Diff): DropDiffOp => {

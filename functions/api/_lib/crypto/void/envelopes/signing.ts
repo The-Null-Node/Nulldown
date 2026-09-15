@@ -1,9 +1,9 @@
 import {
   serializeDropEnvelopeForProviderSignature,
   type DropEnvelopeV1,
-} from "../../../../../shared/drop/types";
-import { serializeError, type RequestLogger } from "../../core/logging/logger";
-import { serverVoidCrypto } from "../void/serverVoidCrypto";
+} from "../../../../../../shared/drop/types";
+import { serializeError, type RequestLogger } from "../../../core/logging/logger";
+import { serverVoidCrypto } from "../serverVoidCrypto";
 
 /** Environment values needed to attach provider signatures to stored envelopes. */
 export interface ProviderSigningEnv {

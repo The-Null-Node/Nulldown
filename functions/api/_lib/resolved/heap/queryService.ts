@@ -19,7 +19,7 @@ import {
   queryResolvedDocumentNodes,
 } from "../../../../../shared/drop/resolved/query/document";
 import { queryResolvedRuntimeNodes } from "../../../../../shared/drop/resolved/query/runtime";
-import { resolveResolvedBranchTarget } from "./context";
+import { authorizeResolvedRootRead, authorizeResolvedRuntimeAccess, resolveResolvedBranchTarget } from "./context";
 import { ensureResolvedHeapProjection } from "./projector";
 import { createResolvedHeapRepository } from "./repository";
 import {
@@ -35,6 +35,9 @@ import type {
   ResolvedHeapQueryOptions,
   ResolvedHeapQueryRepairTarget,
 } from "./types";
+import { createBranchRepository } from "../../branches/storage/repository";
+import { isCurrentResolvedDocumentProjection, readResolvedHeapState } from "./state";
+import type { ResolvedHeapProjectionRead } from "./projector";
 
 const RESOLVED_DOCUMENT_SNAPSHOTTER_ID = "nulledit.resolved-document";
 const defaultCompactTextLimit = 240;
@@ -94,10 +97,26 @@ const queryResolvedHeapUnsafe = async (
   const target = await resolveResolvedBranchTarget(env, params);
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
+  const rootDenied = await authorizeResolvedRootRead(request, env, rootDropId);
+  if (rootDenied) return rootDenied;
 
   const url = new URL(request.url);
   const resolverId =
-    url.searchParams.get("resolverId") || RESOLVED_DOCUMENT_RESOLVER_ID;
+    url.searchParams.get("resolverId") ||
+    (url.searchParams.get("snapshotterId") === "nulledit.resolved-runtime-refs"
+      ? RESOLVED_RUNTIME_REFS_RESOLVER_ID
+      : RESOLVED_DOCUMENT_RESOLVER_ID);
+  if (resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
+    const denied = await authorizeResolvedRuntimeAccess(request, env, branch);
+    if (denied) return denied;
+    if (
+      !url.searchParams.get("resolverId") &&
+      url.searchParams.get("snapshotterId") === "nulledit.resolved-runtime-refs"
+    ) {
+      // Runtime snapshotter yieldNext is not implemented; retain its empty contract.
+      return jsonResponse({ items: [] });
+    }
+  }
   const snapshotParam = url.searchParams.get("snapshotId") || "latest";
   const snapshotId =
     snapshotParam === "latest"
@@ -125,39 +144,64 @@ const queryResolvedHeapUnsafe = async (
     }
   }
 
-  const content = await readBranchContent(
-    env.R2_BUCKET,
-    rootDropId,
-    branchId,
-    snapshotId,
-    env.DB,
-  );
-  if (content === null) {
-    return jsonErrorResponse(
-      404,
-      "snapshot_content_not_found",
-      "Snapshot content not found.",
-    );
+  const snapshot = resolverId === RESOLVED_DOCUMENT_RESOLVER_ID
+    ? await createBranchRepository({ blobs: env.R2_BUCKET, sql: env.DB })
+      .readSnapshot(rootDropId, branchId, snapshotId)
+    : null;
+  if (snapshot && (snapshot.rootDropId !== rootDropId || snapshot.branchId !== branchId || snapshot.snapshotId !== snapshotId)) {
+    throw new Error("snapshot_source_identity_invalid");
+  }
+  // Snapshot zero is mutable; only committed nonzero snapshots can skip replay.
+  const authoritativeHash = snapshotId > 0 ? snapshot?.sourceContentHash : undefined;
+  let projection: ResolvedHeapProjectionRead | undefined;
+  if (authoritativeHash && snapshotId <= branch.headSnapshotId) {
+    const state = await readResolvedHeapState(env, rootDropId, branchId, resolverId, snapshotId, authoritativeHash);
+    if (isCurrentResolvedDocumentProjection(state, rootDropId, branchId, snapshotId, authoritativeHash)) {
+      projection = { state, heapGenerated: false, stale: false };
+    }
   }
 
-  const sourceContentHash = await hashBranchSnapshotSource({
-    rootDropId,
-    branchId,
-    snapshotId,
-    content,
-  });
-  const { state, heapGenerated, stale } = await ensureResolvedHeapProjection(
-    env,
-    resolverId,
-    {
+  if (!projection) {
+    const content = await readBranchContent(
+      env.R2_BUCKET,
       rootDropId,
       branchId,
       snapshotId,
-      headEventSeq: branch.headEventSeq,
+      env.DB,
+    );
+    if (content === null) {
+      return jsonErrorResponse(
+        404,
+        "snapshot_content_not_found",
+        "Snapshot content not found.",
+      );
+    }
+
+    const sourceContentHash = await hashBranchSnapshotSource({
+      rootDropId,
+      branchId,
+      snapshotId,
       content,
-    },
-    sourceContentHash,
-  );
+    });
+    if (authoritativeHash && sourceContentHash !== authoritativeHash) {
+      throw new Error("snapshot_source_hash_mismatch");
+    }
+    projection = await ensureResolvedHeapProjection(
+      env,
+      resolverId,
+      {
+        rootDropId,
+        branchId,
+        snapshotId,
+        headEventSeq: resolverId === RESOLVED_DOCUMENT_RESOLVER_ID
+          ? snapshot?.patchEndSeq
+          : branch.headEventSeq,
+        content,
+      },
+      sourceContentHash,
+    );
+  }
+  const { state, heapGenerated, stale } = projection;
 
   if (!state) {
     return jsonErrorResponse(

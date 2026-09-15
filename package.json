@@ -1,10 +1,13 @@
 {
   "name": "@thenullnode/nulldown",
-  "version": "0.0.5",
+  "version": "0.0.8",
   "private": false,
   "workspaces": [
     "packages/*"
   ],
+  "overrides": {
+    "@thenullnode/nulldown": "file:."
+  },
   "description": "Deterministic structure for Markdown, agents, memory, and interfaces",
   "type": "module",
   "bin": {
@@ -44,10 +47,18 @@
     "src/cli/",
     "src/client/",
     "src/server/",
+    "scripts/fork-hosted-checkpoint.ts",
+    "scripts/hosted-checkpoint.example.json",
     "functions/api/_lib/",
+    "functions/api/nullplug/resolve.ts",
+    "functions/api/nullplug/state.ts",
+    "functions/api/nullplug/submit.ts",
     "migrations/",
+    "src/lib/db/searchDatabase.ts",
     "shared/drop/",
+    "shared/nullmem/",
     "shared/nullmem.ts",
+    "shared/themeCatalog.ts",
     "shared/nullplug/",
     "shared/nulledit/",
     "AGENTS.md",
@@ -55,7 +66,8 @@
     "README.md"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "tag": "next"
   },
   "scripts": {
     "nd": "bun run bin/nulldown.ts",
@@ -67,14 +79,20 @@
     "bin:build:current": "bun run cli:build:current && bun run mcp:build:current",
     "bin:smoke": "bun run scripts/smoke-compiled-binaries.ts",
     "package:smoke-mcp": "bun run scripts/smoke-mcp-package.ts",
+    "package:smoke-cli": "bun run scripts/smoke-cli-package.ts",
     "bench:resolved-heap": "bun run scripts/bench-resolved-heap.ts",
+    "hosted:checkpoint": "bun run scripts/fork-hosted-checkpoint.ts",
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview",
     "lint": "bunx --bun eslint .",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
+    "test:cli-contracts": "bun run test -- src/cli/runCli.test.ts src/cli/diagnostics.test.ts src/cli/entrypoint.test.ts src/cli/version.test.ts src/cli/diffApply.test.ts src/cli/diffReplace.test.ts --runInBand",
+    "test:cli-integration": "bun run test -- src/cli/cliDurability.integration.test.ts --runInBand --detectOpenHandles",
     "package:check-cli": "bun run scripts/check-cli-package-boundary.ts",
     "package:check-mcp": "bun run scripts/check-mcp-package-boundary.ts",
+    "package:verify-cli": "bun run test:cli-contracts && bun run test:cli-integration && bun run package:check-cli && bun run package:smoke-cli",
+    "package:verify-mcp": "bun run test -- src/mcp/server.test.ts --runInBand && bun run mcp:build:current && bun run package:check-mcp && bun run package:smoke-mcp",
     "test:diff-webhook": "bun run bin/nulldown.ts smoke diff",
     "diff:keygen": "bun run bin/nulldown.ts diff keygen",
     "diff:register": "bun run bin/nulldown.ts diff register",
@@ -138,6 +156,8 @@
     "katex": "^0.16.22",
     "lucide-react": "^0.577.0",
     "mermaid": "^11.6.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "react-katex": "^3.1.0",
     "react-markdown": "^8.0.7",
     "react-router-dom": "^7.6.0",
@@ -147,8 +167,6 @@
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^3.0.1",
     "remark-math": "^6.0.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
     "shadcn": "^4.0.0",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4",

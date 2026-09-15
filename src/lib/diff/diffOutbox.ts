@@ -4,7 +4,7 @@ import type {
   DropDiffEventMetadata,
   DropDiffOp,
 } from "../../../shared/drop/diff";
-import { isDropDiffAppendResponse } from "../../../shared/drop/diff";
+import { hasConfirmedDropDiffAppendReceipt } from "../../../shared/drop/diff";
 import { DropDiffEventSchema } from "../../../shared/drop/diffSchemas";
 import {
   acknowledgeDiffOutboxEvent,
@@ -142,10 +142,10 @@ const hasMatchingAcknowledgement = (
   scope: DiffOutboxScope,
   eventId: string,
 ): response is DropDiffAppendResponse =>
-  isDropDiffAppendResponse(response) &&
-  response.branchId === scope.branchId &&
-  response.acknowledgements.filter((acknowledgement) => acknowledgement.eventId === eventId)
-    .length === 1;
+  hasConfirmedDropDiffAppendReceipt(response, {
+    branchId: scope.branchId,
+    eventIds: [eventId],
+  });
 
 /**
  * Classifies unknown error values by their structural `status` and `code` fields.

@@ -134,10 +134,12 @@ export function useDiffChannel({
   const enqueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const nextFollowsSeqRef = useRef(-1);
   const localEventIdsRef = useRef(new Set<string>());
+  const localEventScopeRef = useRef<string | null>(null);
   const enqueueFailedRef = useRef(false);
   const writerRef = useRef(false);
   const editorRef = useRef(editor);
   const onRuntimeFactsRef = useRef(onRuntimeFacts);
+  const onRestoreBranchDraftRef = useRef(onRestoreBranchDraft);
   const [networkOnline, setNetworkOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine,
   );
@@ -151,6 +153,7 @@ export function useDiffChannel({
   });
   editorRef.current = editor;
   onRuntimeFactsRef.current = onRuntimeFacts;
+  onRestoreBranchDraftRef.current = onRestoreBranchDraft;
   transportPausedRef.current = transportPaused;
 
   useEffect(() => {
@@ -198,7 +201,24 @@ export function useDiffChannel({
       const matchesScope = (): boolean =>
         remoteOutboxRef.current === remoteState;
       writerRef.current = false;
-      localEventIdsRef.current.clear();
+      // Identities describe edits already represented by this editor's content,
+      // not the current transport client. Keep them through same-snapshot restarts.
+      const contentScope = JSON.stringify([outboxScopeKey(scope), initialHeadSeq ?? -1]);
+      if (localEventScopeRef.current !== contentScope) {
+        localEventScopeRef.current = contentScope;
+        localEventIdsRef.current.clear();
+        nextFollowsSeqRef.current = initialHeadSeq ?? -1;
+      }
+      const restoreDraft = async () => {
+        const events = await listDiffOutboxEvents(scope);
+        const draft = await readDiffOutboxBranchDraft(scope);
+        if (disposed || !matchesScope()) return;
+        if (draft && onRestoreBranchDraftRef.current) {
+          onRestoreBranchDraftRef.current(draft.content);
+          events.forEach((record) => localEventIdsRef.current.add(record.eventId));
+        }
+        nextFollowsSeqRef.current = nextFollowsSeq(nextFollowsSeqRef.current, events);
+      };
       const outbox = createDiffOutbox({
         transport: ({ event }) => {
           if (transportPausedRef.current) {
@@ -318,12 +338,9 @@ export function useDiffChannel({
         }
         const events = await listDiffOutboxEvents(scope);
         if (disposed || !matchesScope()) return;
-        nextFollowsSeqRef.current = nextFollowsSeq(initialHeadSeq, events);
+        nextFollowsSeqRef.current = nextFollowsSeq(nextFollowsSeqRef.current, events);
         if (writerRef.current && events.length > 0) {
-          const draft = await readDiffOutboxBranchDraft(scope);
-          if (!disposed && matchesScope() && draft) {
-            onRestoreBranchDraft?.(draft.content);
-          }
+          await restoreDraft();
         }
         enqueueFailedRef.current = false;
         await refresh();
@@ -355,6 +372,7 @@ export function useDiffChannel({
           throw new Error("This branch is being edited in another tab.");
         }
         nextFollowsSeqRef.current = typeof initialHeadSeq === "number" ? initialHeadSeq : -1;
+        localEventIdsRef.current.clear();
         await refresh();
       };
       const takeOver = async () => {
@@ -369,10 +387,7 @@ export function useDiffChannel({
         }
         writerRef.current = true;
         startLeaseRenewal();
-        const draft = await readDiffOutboxBranchDraft(scope);
-        if (draft) {
-          onRestoreBranchDraft?.(draft.content);
-        }
+        await restoreDraft();
         await refresh();
         if (!transportPausedRef.current) {
           await drain();
@@ -408,7 +423,7 @@ export function useDiffChannel({
         void listDiffOutboxEvents(remoteOutbox.scope).then(async (pending) => {
           if (channelRef.current !== channel) return;
           const foreignEvents = batch.events.filter(
-            (event) => event.sourceClientId !== clientId,
+            (event) => event.sourceClientId !== clientId && !localEventIdsRef.current.has(event.eventId),
           );
           if (foreignEvents.length === 0) {
             return;
@@ -497,7 +512,6 @@ export function useDiffChannel({
     dropId,
     enabled,
     initialHeadSeq,
-    onRestoreBranchDraft,
   ]);
 
   useEffect(() => {
@@ -552,7 +566,7 @@ export function useDiffChannel({
             const record = await remoteOutbox.outbox.enqueue({
               ...remoteOutbox.scope,
               clientId: channel.clientId,
-              ownerId: clientId ?? undefined,
+              ownerId: channel.clientId,
               branchHeadSeq,
               ops,
               metadata: options.metadata,

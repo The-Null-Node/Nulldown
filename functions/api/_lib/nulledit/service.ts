@@ -7,6 +7,7 @@ import type {
   DropDiffEventAcknowledgement,
 } from "../../../../shared/drop/diff";
 import { serializeCanonicalJson } from "../../../../shared/drop/types";
+import { hashNulldownSourceContent } from "../../../../shared/drop/resolved/hash";
 import type {
   VoidBlobStore,
   VoidDataKey,
@@ -482,6 +483,7 @@ export const appendEventsToBranch = async (
         patchEndSeq,
         checkpointKey: checkpointObjectKey,
         textLength: nextContent.length,
+        sourceContentHash: await hashNulldownSourceContent(nextContent),
         createdAt,
       };
 

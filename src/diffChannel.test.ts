@@ -117,6 +117,45 @@ describe("remote diff channel", () => {
     }
   });
 
+  it("rejects a matching acknowledgement from another branch", async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Response.json({
+        accepted: 1,
+        deduplicated: 0,
+        branchId: "other-branch",
+        snapshotId: 4,
+        totalStored: 4,
+        acknowledgements: [
+          {
+            eventId: "stable-event-1",
+            seq: 3,
+            snapshotId: 4,
+            status: "accepted",
+          },
+        ],
+      });
+
+    try {
+      const channel = createRemoteDiffChannel({
+        dropId: "root-1",
+        branchId: "branch-1",
+        clientId: "client-1",
+      });
+      await expect(
+        channel.publish(
+          [{ type: "insert", start: 0, end: 0, text: "hello" }],
+          { eventId: "stable-event-1", createdAt: 1_725_000_000_000 },
+        ),
+      ).rejects.toMatchObject<Partial<DiffChannelError>>({
+        code: "diff_receipt_unconfirmed",
+      });
+      channel.stop();
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   it("refreshes account auth once without changing the event envelope", async () => {
     const requestBodies: string[] = [];
     const authorizationHeaders: string[] = [];

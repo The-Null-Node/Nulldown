@@ -8,6 +8,7 @@ flash outdated preview output.
 import { DEFAULT_NETWORK_ALLOWLIST } from "../networkAllowlist";
 import type { DropRuntimeNullplugCallProvenance } from "../../../shared/drop/runtime";
 import type { RootRuntimePolicy } from "../../../shared/nullplug/policy";
+import type { VoidNullplugRuntime } from "../../../shared/nullplug/runtime";
 import type {
   JsonValue,
   NullplugDiagnostic,

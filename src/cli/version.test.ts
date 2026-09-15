@@ -6,8 +6,10 @@ describe("CLI version", () => {
   it("prints the package version without resolving configuration", async () => {
     const log = jest.spyOn(console, "log").mockImplementation();
 
-    await runCli(["--version"]);
+    const result = await runCli(["--version"]);
 
+    expect(result).toEqual({ exitCode: 0 });
     expect(log).toHaveBeenCalledWith(packageJson.version);
+    log.mockRestore();
   });
 });

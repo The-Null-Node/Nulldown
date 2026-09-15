@@ -251,5 +251,8 @@ export interface VoidDataStore {
   /** Runs work inside the adapter's transaction boundary when supported. */
   tx<T>(work: (data: VoidDataStore) => Promise<T>): Promise<T>;
   /** Runs work under an adapter-provided lock for the given portable key. */
-  lock<T>(key: VoidDataKey, work: (data: VoidDataStore) => Promise<T>): Promise<T>;
+  lock<T>(
+    key: VoidDataKey,
+    work: (data: VoidDataStore) => Promise<T>,
+  ): Promise<T>;
 }

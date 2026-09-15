@@ -8,13 +8,16 @@ import {
   buildDiffSigningPayload,
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
+import type { BranchResolvedQueryResponse } from "../../shared/drop/branchApi";
+import { isDropPayload, isDropStrategyRef } from "../../shared/drop/types";
+import { isShortDropId, toShortDropId } from "../../shared/drop/id";
 import type {
   DropDiffAppendResponse,
   DropDiffEnvelope,
   DropDiffEventMetadata,
   DropDiffOp,
 } from "../../shared/drop/diff";
-import { isDropDiffAppendResponse } from "../../shared/drop/diff";
+import { hasConfirmedDropDiffAppendReceipt } from "../../shared/drop/diff";
 import { DropDiffEventIdSchema } from "../../shared/drop/diffSchemas";
 import type {
   NullplugInvokeRequest,
@@ -121,6 +124,10 @@ export interface NulldownSearchDropsRequest {
 
 /** Query options for a branch resolved heap search. */
 export interface NulldownBranchQueryRequest {
+  /** Approximate response token budget forwarded to the projection. */
+  maxTokens?: number;
+  /** Whether the projection should use preview text. */
+  preview?: boolean;
   /** Root drop id. */
   rootId: string;
   /** Branch id. */
@@ -153,6 +160,32 @@ export interface NulldownBranchQueryRequest {
   includeAncestors?: boolean;
   /** Whether to include event metadata. */
   includeEventMetadata?: boolean;
+}
+
+/** Explicit or drop-metadata strategy target; never resolves or creates a branch. */
+export interface NulldownStrategyReadRequest {
+  id: string;
+  branchId?: string;
+  query?: string;
+  snapshotId?: string | number;
+  top?: number;
+  maxTokens?: number;
+  preview?: boolean;
+  format?: "compact" | "full";
+}
+
+/** Bounded strategy read with identity retained even when payload is omitted. */
+export interface NulldownStrategyReadResult
+  extends
+    Pick<BranchResolvedQueryResponse, "rootDropId">,
+    Partial<Pick<BranchResolvedQueryResponse, "branchId" | "snapshotId">> {
+  read: "root" | "branch";
+  revision?: string | null;
+  partial: boolean;
+  truncated: boolean;
+  data?: unknown;
+  excerpt?: string;
+  requery?: string;
 }
 
 /** Query options for branch-scoped NullMem memory. */
@@ -415,9 +448,13 @@ export const createNulldownClientConfig = (
   accountId: options.accountId ?? process.env.ND_ACCOUNT_ID ?? null,
   clientId: options.clientId ?? process.env.ND_CLIENT_ID ?? null,
   diffAuthToken:
-    options.diffAuthToken ?? process.env.ND_DIFF_AUTH_TOKEN ?? null,
+    options.diffAuthToken !== undefined
+      ? options.diffAuthToken
+      : process.env.ND_DIFF_AUTH_TOKEN ?? null,
   diffWebhookSecret:
-    options.diffWebhookSecret ?? process.env.DIFF_WEBHOOK_SECRET ?? null,
+    options.diffWebhookSecret !== undefined
+      ? options.diffWebhookSecret
+      : process.env.DIFF_WEBHOOK_SECRET ?? null,
   fetch: options.fetch,
 });
 
@@ -493,6 +530,152 @@ export class NulldownClient {
     };
   }
 
+  /** Reads a root or explicit/metadata-selected branch within a serialized character budget. */
+  async readStrategy(
+    request: NulldownStrategyReadRequest,
+  ): Promise<NulldownStrategyReadResult> {
+    const maxTokens = request.maxTokens ?? 800;
+    if (
+      !request.id?.trim() ||
+      (request.branchId !== undefined && !request.branchId.trim()) ||
+      !Number.isInteger(maxTokens) ||
+      maxTokens < 100 ||
+      maxTokens > 8000 ||
+      (request.top !== undefined &&
+        (!Number.isInteger(request.top) || request.top < 1)) ||
+      (request.snapshotId !== undefined &&
+        !/^(latest|\d+)$/.test(String(request.snapshotId)))
+    ) {
+      throw new NulldownClientError("Invalid strategy target or budget.");
+    }
+    let branchId = request.branchId;
+    const root = branchId === undefined ? await this.getDrop(request.id) : undefined;
+    // Never interpret envelope-like bodies as plaintext, even if they expose content.
+    if (
+      root &&
+      isDropPayload(root.body) &&
+      !("schema" in root.body || "cipher" in root.body) &&
+      root.body.metadata &&
+      Object.prototype.hasOwnProperty.call(root.body.metadata, "strategyRef")
+    ) {
+      const ref = root.body.metadata.strategyRef;
+      if (!isDropStrategyRef(ref, root.id)) {
+        throw new NulldownClientError("Invalid or cross-root strategyRef.");
+      }
+      branchId = ref.branchId;
+    }
+    if (
+      branchId === undefined &&
+      (request.query !== undefined ||
+        request.snapshotId !== undefined ||
+        request.top !== undefined)
+    ) {
+      throw new NulldownClientError(
+        "Strategy query, snapshotId and top require an explicit branchId or valid strategyRef.",
+      );
+    }
+    let result: NulldownStrategyReadResult;
+    if (branchId !== undefined) {
+      const data = (await this.queryBranch({
+        rootId: root?.id ?? request.id,
+        branchId,
+        query: request.query,
+        snapshotId: request.snapshotId,
+        top: request.top,
+        snapshotterId: "nulledit.resolved-document",
+        maxTokens,
+        preview: request.preview ?? true,
+      })) as
+        | (Partial<BranchResolvedQueryResponse> & {
+            items?: unknown[];
+            truncated?: boolean;
+          })
+        | null;
+      if (
+        !data ||
+        typeof data.rootDropId !== "string" ||
+        !data.rootDropId ||
+        (root !== undefined && data.rootDropId !== root.id) ||
+        (root === undefined &&
+          data.rootDropId !== request.id &&
+          !(isShortDropId(request.id) && toShortDropId(data.rootDropId) === request.id)) ||
+        data.branchId !== branchId ||
+        !Number.isInteger(data.snapshotId) ||
+        (data.snapshotId ?? -1) < 0 ||
+        (request.snapshotId !== undefined &&
+          request.snapshotId !== "latest" &&
+          Number(request.snapshotId) !== data.snapshotId) ||
+        !Array.isArray(data.items)
+      ) {
+        throw new NulldownClientError("Invalid resolved strategy response.");
+      }
+      result = {
+        read: "branch",
+        rootDropId: data.rootDropId,
+        branchId: data.branchId,
+        snapshotId: data.snapshotId,
+        partial: true,
+        truncated: data.truncated === true,
+        data,
+      };
+    } else {
+      const { id, revision, body } = root!;
+      result = {
+        read: "root",
+        rootDropId: id,
+        revision,
+        partial: false,
+        truncated: false,
+        data: body,
+      };
+    }
+    const indent =
+      (request.format ?? (request.preview === false ? "full" : "compact")) ===
+      "full"
+        ? 2
+        : 0;
+    const size = () => JSON.stringify(result, null, indent).length;
+    if (result.partial || result.truncated) {
+      result.requery =
+        "Narrow query or increase top/maxTokens on this branch and snapshot.";
+    }
+    if (size() > maxTokens * 4) {
+      const text =
+        typeof result.data === "string"
+          ? result.data
+          : JSON.stringify(
+              result.read === "branch"
+                ? (result.data as { items: unknown[] }).items
+                : result.data,
+            );
+      delete result.data;
+      result.partial = true;
+      result.truncated = true;
+      result.requery =
+        result.read === "branch"
+          ? "Narrow query or increase maxTokens; reuse branch/snapshot."
+          : "Increase maxTokens or use drop_get for raw root.";
+      result.excerpt = "";
+      if (size() > maxTokens * 4) {
+        throw new NulldownClientError(
+          "Strategy identity exceeds budget; increase maxTokens.",
+        );
+      }
+      // Fit escaped JSON and indentation too, without splitting surrogate pairs.
+      const points = Array.from(text ?? "");
+      let low = 0;
+      let high = Math.min(points.length, maxTokens * 4);
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        result.excerpt = points.slice(0, middle).join("");
+        if (size() <= maxTokens * 4) low = middle;
+        else high = middle - 1;
+      }
+      result.excerpt = points.slice(0, low).join("");
+    }
+    return result;
+  }
+
   /** Creates a new drop or revision-safe root upsert. */
   async createDrop(request: NulldownCreateDropRequest): Promise<unknown> {
     const response = await this.request("/api/store", {
@@ -540,6 +723,8 @@ export class NulldownClient {
   /** Queries a branch resolved heap. */
   async queryBranch(request: NulldownBranchQueryRequest): Promise<unknown> {
     const params = new URLSearchParams();
+    appendParam(params, "maxTokens", request.maxTokens);
+    appendParam(params, "preview", request.preview);
     appendParam(params, "q", request.query);
     appendParam(params, "k", request.top);
     appendParam(params, "snapshotId", request.snapshotId);
@@ -710,10 +895,12 @@ export class NulldownClient {
           code: "diff_retry_identity_invalid",
         });
       }
+      const createdAt = request.createdAt;
       if (
-        !Number.isFinite(request.createdAt) ||
-        !Number.isInteger(request.createdAt) ||
-        request.createdAt < 0
+        typeof createdAt !== "number" ||
+        !Number.isFinite(createdAt) ||
+        !Number.isInteger(createdAt) ||
+        createdAt < 0
       ) {
         throw new NulldownClientError("Diff retry createdAt is invalid.", {
           code: "diff_retry_identity_invalid",
@@ -775,20 +962,14 @@ export class NulldownClient {
       headers,
       body,
     });
-    if (!isDropDiffAppendResponse(response.data)) {
-      throw new NulldownClientError(
-        "Diff response did not include a durable acknowledgement. Upgrade the server before retrying.",
-        { code: "diff_receipt_unconfirmed", status: response.status },
-      );
-    }
     if (
-      (request.branchId && response.data.branchId !== request.branchId) ||
-      response.data.acknowledgements.filter(
-        (ack) => ack.eventId === envelope.events[0]?.eventId,
-      ).length !== 1
+      !hasConfirmedDropDiffAppendReceipt(response.data, {
+        branchId: request.branchId,
+        eventIds: [envelope.events[0]!.eventId],
+      })
     ) {
       throw new NulldownClientError(
-        "Diff response did not acknowledge the submitted event. Retry the exact same event.",
+        "Diff response did not confirm the submitted event. Retry the exact same event.",
         { code: "diff_receipt_unconfirmed", status: response.status },
       );
     }

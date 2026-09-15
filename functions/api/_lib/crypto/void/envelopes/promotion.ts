@@ -4,8 +4,8 @@ import {
   serializeDropEnvelopeForDeviceSignature,
   type DropEnvelopeV1,
   type DropMetadata,
-} from "../../../../../shared/drop/types";
-import { serverVoidCrypto } from "../void/serverVoidCrypto";
+} from "../../../../../../shared/drop/types";
+import { serverVoidCrypto } from "../serverVoidCrypto";
 
 /** Inputs for creating a provider-sealed drop envelope from promoted branch content. */
 export interface CreatePromotedEnvelopeInput {
@@ -30,16 +30,20 @@ export const createPromotedEnvelope = async (
 
   const { jwk: encryptionPublicJwk, kid: keyId } =
     serverVoidCrypto.deriveProviderEncryptionPublicJwk(encryptionPrivateJwk);
+
   const { jwk: signingPublicJwk, kid: signingKeyId } =
     serverVoidCrypto.deriveProviderSigningPublicJwk(signingPrivateJwk);
+
   const encryptedContent = await serverVoidCrypto.encryptTextWithNewContentKey(
     input.content,
   );
+
   const wrappedKey =
     await serverVoidCrypto.wrapRawContentKeyWithProviderPublicJwk(
       encryptionPublicJwk,
       encryptedContent.rawContentKey,
     );
+
   const escrowWrappedKey =
     await serverVoidCrypto.wrapRawContentKeyWithProviderPublicJwk(
       encryptionPublicJwk,
