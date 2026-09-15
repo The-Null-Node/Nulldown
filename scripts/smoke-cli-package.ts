@@ -138,6 +138,7 @@ const isolatedEnvironment = (tempRoot: string): NodeJS.ProcessEnv => {
   const environment = { ...process.env };
   for (const key of [
     "ND_ACCOUNT_ID",
+    "ND_AUTH_FILE",
     "ND_BASE_URL",
     "ND_CLIENT_ID",
     "ND_CONFIG",
@@ -422,7 +423,7 @@ const main = async (): Promise<void> => {
       .sort();
     const port = await reservePort();
     const dataDir = join(tempRoot, "data");
-    const startServer = async (): Promise<{ process: RunningProcess; baseUrl: string }> => {
+    const startServer = async (pendingMigrations: string[]): Promise<{ process: RunningProcess; baseUrl: string }> => {
       const baseUrl = `http://127.0.0.1:${port}`;
       const process = startProcess(
         nd,
@@ -455,7 +456,7 @@ const main = async (): Promise<void> => {
       assert(startup.baseUrl === baseUrl, "Installed nd serve reported an unexpected base URL.");
       assert(startup.sqlite, "Installed nd serve did not enable SQLite by default.");
       assert(
-        JSON.stringify(startup.migrationsApplied) === JSON.stringify(expectedMigrations),
+        JSON.stringify(startup.migrationsApplied) === JSON.stringify(pendingMigrations),
         "Installed nd serve did not apply the packaged migration set.",
       );
       const readiness = await fetch(`${baseUrl}/api/list?limit=1`);
@@ -463,7 +464,7 @@ const main = async (): Promise<void> => {
       return { process, baseUrl };
     };
 
-    const first = await startServer();
+    const first = await startServer(expectedMigrations);
     const commandArgs = [
       `--base=${first.baseUrl}`,
       "--account=package-smoke-account",
@@ -494,7 +495,7 @@ const main = async (): Promise<void> => {
     runningProcesses.delete(first.process);
     assert(firstStop.status === 0 && firstStop.signal === null, "Installed nd serve did not exit cleanly after SIGTERM.");
 
-    const second = await startServer();
+    const second = await startServer([]);
     const restartedRead = await runChecked(
       nulldown,
       ["get", createdBody.id, "--raw", ...commandArgs],

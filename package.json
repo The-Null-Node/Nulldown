@@ -27,7 +27,10 @@
     "./drop/branch": "./shared/drop/branch.ts",
     "./drop/diff": "./shared/drop/diff.ts",
     "./drop/runtime": "./shared/drop/runtime.ts",
+    "./drop/authoring": "./shared/drop/authoringCrypto.ts",
     "./drop/resolved": "./shared/drop/resolved.ts",
+    "./auth/cliDevice": "./shared/auth/cliDevice.ts",
+    "./auth/cliCredential": "./src/cli/cliCredential.ts",
     "./nullmem": "./shared/nullmem.ts",
     "./nullplug/types": "./shared/nullplug/types.ts",
     "./nullplug/ui": "./shared/nullplug/ui.ts",
@@ -57,6 +60,7 @@
     "src/lib/db/searchDatabase.ts",
     "shared/drop/",
     "shared/nullmem/",
+    "shared/auth/",
     "shared/nullmem.ts",
     "shared/themeCatalog.ts",
     "shared/nullplug/",
@@ -124,6 +128,7 @@
   "license": "MIT",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.797.0",
+    "@openauthjs/openauth": "0.4.3",
     "nanoid": "^5.0.0",
     "zod": "^4.4.3"
   },
@@ -134,6 +139,7 @@
     "@fontsource-variable/geist": "^5.2.8",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tailwindcss/vite": "^4.2.0",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.0",
     "@types/d3": "^7.4.3",
     "@types/jest": "^29.5.14",
@@ -177,7 +183,10 @@
     "vfile": "^6.0.3",
     "vfile-message": "^4.0.2",
     "vite": "^5.0.0",
-    "wrangler": "^3.0.0",
+    "wrangler": "4.127.0",
     "zustand": "^4.0.0"
+  },
+  "patchedDependencies": {
+    "@openauthjs/openauth@0.4.3": "packages/nulldown-openauth/patches/@openauthjs%2Fopenauth@0.4.3.patch"
   }
 }

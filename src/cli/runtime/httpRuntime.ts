@@ -9,6 +9,10 @@ import type {
   BranchPriorityListRequest,
   BranchResolvedQueryRequest,
   BranchResolvedUpdateRequest,
+  AuthDevicePollRequest,
+  AuthDeviceRequest,
+  AuthRefreshRequest,
+  AuthRevokeRequest,
   AuthSessionRequest,
   DiffEnvelopeHeadersRequest,
   DiffEnvelopePostRequest,
@@ -28,6 +32,11 @@ import {
   hasConfirmedDropDiffAppendReceipt,
   isDropDiffAppendResponse,
 } from "../../../shared/drop/diff";
+import type {
+  CliCredentialBundleV1,
+  CliDevicePollResponse,
+  CliDeviceStartResponse,
+} from "../../../shared/auth/cliDevice";
 
 const encodeBranchPathSegment = (value: string): string =>
   encodeURIComponent(value).replace(/%3A/gi, ":");
@@ -133,8 +142,9 @@ export const createHttpNulldownRuntime = (
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: request.content,
-          metadata: request.metadata,
+          ...(request.envelope
+            ? { envelope: request.envelope }
+            : { content: request.content, metadata: request.metadata }),
         }),
       });
       if (!response.data) throw new Error("Create response did not include a drop.");
@@ -144,8 +154,9 @@ export const createHttpNulldownRuntime = (
       const body: Record<string, unknown> = {
         id: request.id,
         upsert: true,
-        content: request.content,
-        metadata: request.metadata,
+        ...(request.envelope
+          ? { envelope: request.envelope }
+          : { content: request.content, metadata: request.metadata }),
       };
       if (request.expectedRevision) body.expectedRevision = request.expectedRevision;
       const response = await dependencies.request<DropUpdateResult>("/api/store", {
@@ -298,11 +309,44 @@ export const createHttpNulldownRuntime = (
       });
       return response.data;
     },
+    async device(request: AuthDeviceRequest) {
+      const response = await dependencies.request<CliDeviceStartResponse>("/api/auth/cli/device", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.data;
+    },
+    async poll(request: AuthDevicePollRequest) {
+      const response = await dependencies.request<CliDevicePollResponse>("/api/auth/cli/poll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.data;
+    },
+    async refresh(request: AuthRefreshRequest) {
+      const response = await dependencies.request<CliCredentialBundleV1>("/api/auth/cli/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.data;
+    },
+    async revoke(request: AuthRevokeRequest) {
+      const response = await dependencies.request("/api/auth/cli/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.data;
+    },
   },
   admin: {
     async backfill(request: AdminBackfillRequest) {
       const params = new URLSearchParams({ limit: request.limit });
       if (request.cursor) params.set("cursor", request.cursor);
+      if (request.accountLibraryOnly) params.set("mode", "account-library");
       const path =
         request.target === "branch-backfill"
           ? `/api/branches/backfill/${encodeURIComponent(request.rootId || "")}?${params}`

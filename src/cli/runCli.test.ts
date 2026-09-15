@@ -2,6 +2,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli, type RunCliDependencies } from "./index";
+import { generateCliDeviceKeyPair } from "./auth";
+import { readCliCredential, writeCliCredential } from "./cliCredential";
+import { CLI_CREDENTIAL_KIND_V1, type CliCredentialBundleV1 } from "../../shared/auth/cliDevice";
 
 const captureOutput = (): {
   stdout: string[];
@@ -21,6 +24,83 @@ const captureOutput = (): {
 };
 
 describe("runCli", () => {
+  it.each(["near-expiry", "rejected"])("refreshes a %s bearer through injected transport without losing local authoring", async (mode) => {
+    const directory = await mkdtemp(join(tmpdir(), "nulldown-cli-refresh-"));
+    const authFile = join(directory, "auth.json");
+    const output = captureOutput();
+    const keys = await generateCliDeviceKeyPair(true);
+    const now = Date.now();
+    const current: CliCredentialBundleV1 = {
+      kind: CLI_CREDENTIAL_KIND_V1,
+      version: 1,
+      baseUrl: "https://nulldown.test",
+      userId: "user-1",
+      accountId: "account-1",
+      credentialId: "credential-1",
+      refreshToken: "local-refresh-canary",
+      accessToken: "local-access-canary",
+      accessExpiresAt: now + (mode === "near-expiry" ? 1 : 60_000),
+      credentialExpiresAt: now + 86_400_000,
+      createdAt: now,
+      authoring: {
+        ...keys.authoring!,
+        deviceDelegation: {
+          schema: "nulldown.drop-device-delegation.v1",
+          version: 1,
+          accountId: "account-1",
+          credentialId: "credential-1",
+          delegateSigningPublicJwk: keys.authoring!.signingPublicJwk,
+          encryptionKid: "enc-1",
+          encryptionPublicJwk: keys.publicKey,
+          issuedAt: now,
+          expiresAt: now + 86_400_000,
+          signature: { kid: "account-key", alg: "ECDSA_P256_SHA256", sig: "fixture-signature" },
+        },
+      },
+    };
+    const { authoring, ...bearer } = current;
+    const replacement = { ...bearer, refreshToken: "rotated-refresh-canary", accessToken: "rotated-access-canary", accessExpiresAt: now + 120_000 };
+    const paths: string[] = [];
+    try {
+      await writeCliCredential(authFile, current);
+      const result = await runCli([
+        "list", "--json", "--verbose", "--base=https://nulldown.test",
+        `--config-dir=${directory}`, `--auth-file=${authFile}`,
+      ], {
+        ...output.dependencies,
+        now: () => now,
+        fetch: async (url, init) => {
+          const path = new URL(String(url)).pathname;
+          paths.push(path);
+          const headers = new Headers(init?.headers);
+          expect(headers.get("x-request-id")).toBeTruthy();
+          expect(init?.signal).toBeDefined();
+          if (path === "/api/auth/cli/refresh") {
+            expect(headers.get("Authorization")).toBeNull();
+            expect(JSON.parse(String(init?.body))).toEqual({ refreshToken: current.refreshToken });
+            return Response.json(replacement);
+          }
+          if (mode === "rejected" && paths.length === 1) {
+            expect(headers.get("Authorization")).toBe(`Bearer ${current.accessToken}`);
+            return Response.json({ error: "Expired", code: "expired" }, { status: 401 });
+          }
+          expect(headers.get("Authorization")).toBe(`Bearer ${replacement.accessToken}`);
+          return Response.json({ drops: [] });
+        },
+      });
+      expect(result).toEqual({ exitCode: 0 });
+      expect(paths).toEqual(mode === "near-expiry"
+        ? ["/api/auth/cli/refresh", "/api/list"]
+        : ["/api/list", "/api/auth/cli/refresh", "/api/list"]);
+      expect(await readCliCredential(authFile)).toEqual({ ...replacement, authoring });
+      expect(output.stdout).toEqual([JSON.stringify({ drops: [] }, null, 2)]);
+      expect(output.stderr.join("\n")).not.toContain("canary");
+      expect(output.stderr.join("\n")).not.toContain(keys.authoring!.signingPrivateJwk.d);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("returns exit 1 and preserves JSON stderr", async () => {
     const output = captureOutput();
 

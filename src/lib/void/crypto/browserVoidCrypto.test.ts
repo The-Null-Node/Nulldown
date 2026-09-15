@@ -3,7 +3,11 @@ import {
   BrowserVoidCrypto,
   createBrowserVoidCrypto,
 } from "./browserVoidCrypto";
-import type { DropEnvelopeV1 } from "../../../../shared/drop/types";
+import {
+  serializeDropEnvelopeForDeviceSignature,
+  toDropEnvelopeSignable,
+  type DropEnvelopeV1,
+} from "../../../../shared/drop/types";
 
 interface MockSubtle {
   generateKey: jest.MockedFunction<(...args: any[]) => Promise<unknown>>;
@@ -115,6 +119,11 @@ describe("browser void crypto", () => {
     expect(envelope.schema).toBe("nmdn.drop.v1");
     expect(envelope.signatures.device.kid).toBe("sig-kid-1");
     expect(typeof envelope.cipher.ciphertext).toBe("string");
+    expect(
+      new TextDecoder().decode(subtle.sign.mock.calls[0]?.[2] as Uint8Array),
+    ).toBe(
+      serializeDropEnvelopeForDeviceSignature(toDropEnvelopeSignable(envelope)),
+    );
   });
 
   it("opens envelopes after signature verification", async () => {

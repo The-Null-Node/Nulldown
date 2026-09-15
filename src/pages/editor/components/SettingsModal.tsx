@@ -33,6 +33,8 @@ import {
   normalizeNetworkAllowlist,
   parseNetworkAllowlistInput,
 } from "../../../lib/networkAllowlist";
+import { isAccountPreferenceValue } from "../../../../shared/auth/accountPreferences";
+import { useAccountPreferencesStore } from "../../../stores/accountPreferencesStore";
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
@@ -434,7 +436,7 @@ const StorageSection: React.FC<StorageSectionProps> = ({ offlineMode }) => (
 );
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
-  const { themeId, setThemeId, typefaceId, setTypefaceId } = useTheme();
+  const { themeId, typefaceId } = useTheme();
   const catalog = useThemeCatalog();
   const typefaces = useTypefaceCatalog();
   const offlineMode = useDropStore((state) => state.offlineMode);
@@ -445,17 +447,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
   );
   const syntaxMode = useDropStore((state) => state.syntaxMode);
   const allowedUrls = useDropStore((state) => state.allowedUrls);
-  const setShareVisibility = useDropStore((state) => state.setShareVisibility);
   const setDraftDiffPolicy = useDropStore((state) => state.setDraftDiffPolicy);
   const setPasskeyProtectionEnabled = useDropStore(
     (state) => state.setPasskeyProtectionEnabled,
   );
-  const setSyntaxMode = useDropStore((state) => state.setSyntaxMode);
   const setAllowedUrls = useDropStore((state) => state.setAllowedUrls);
   const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
   const hydrateSharePreferences = useDropStore(
     (state) => state.hydrateSharePreferences,
   );
+  const setAccountPreference = useAccountPreferencesStore(
+    (state) => state.setPreference,
+  );
+  const preferenceMessage = useAccountPreferencesStore((state) => state.message);
 
   const themeOptions = useMemo(
     () => [
@@ -499,7 +503,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
               themeId={themeId}
               themeOptions={themeOptions}
               onThemeChange={(id) => {
-                void setThemeId(id);
+                if (isAccountPreferenceValue("theme", id)) {
+                  void setAccountPreference("theme", id);
+                }
               }}
             />
 
@@ -508,7 +514,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
               typefaces={typefaces}
               activeTypeface={activeTypeface}
               onTypefaceChange={(id) => {
-                setTypefaceId(id);
+                void setAccountPreference("typeface", id);
               }}
             />
 
@@ -517,7 +523,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
             <EditorSection
               syntaxMode={syntaxMode}
               onSyntaxModeChange={(mode) => {
-                void setSyntaxMode(mode);
+                void setAccountPreference("syntaxMode", mode);
               }}
             />
 
@@ -529,7 +535,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
               draftDiffPolicy={draftDiffPolicy}
               passkeyProtectionEnabled={passkeyProtectionEnabled}
               onShareVisibilityChange={(visibility) => {
-                void setShareVisibility(visibility);
+                void setAccountPreference("shareVisibilityDefault", visibility);
               }}
               onDraftDiffPolicyChange={(policy) => {
                 void setDraftDiffPolicy(policy);
@@ -537,7 +543,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
               onPasskeyProtectionChange={(enabled) => {
                 void setPasskeyProtectionEnabled(enabled);
               }}
-            />
+              />
+
+            {preferenceMessage ? (
+              <p className="text-xs text-muted">{preferenceMessage}</p>
+            ) : null}
 
             <Separator className="bg-border" />
 

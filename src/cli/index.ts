@@ -20,6 +20,8 @@ import {
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved/constants";
+import type { CliCredentialBundleV1 } from "../../shared/auth/cliDevice";
+import { isCliCredentialBundle } from "../../shared/auth/cliDevice";
 import { createAdminCommand } from "./commands/admin";
 import { createAuthCommand } from "./commands/auth";
 import { createBranchCommand } from "./commands/branches";
@@ -31,6 +33,13 @@ import {
   type ServeCommandDependencies,
 } from "./commands/serve";
 import { createSmokeCommand } from "./commands/smoke";
+import { mergeCliCredentialAuthoring } from "./cliCredential";
+import {
+  clearCliCredential,
+  isCliCredentialForBaseUrl,
+  readCliCredential,
+  writeCliCredential,
+} from "./auth";
 import { flagString, hasFlag, parseArgs, type ParsedArgs } from "./core/args";
 import { findCliCommand, type CliCommand } from "./core/command";
 import {
@@ -70,6 +79,9 @@ interface CliConfig {
   diffAuthDir: string;
   diffAuthToken: string | null;
   diffAuthTokenPath: string;
+  authFilePath: string;
+  authCredential: CliCredentialBundleV1 | null;
+  authRefreshPromise: Promise<boolean> | null;
   json: boolean;
   quiet: boolean;
   verbose: boolean;
@@ -237,9 +249,11 @@ Diff commands:
 
 Auth and admin:
   auth session --account <id> --proof <file|->
+  auth login [--no-browser] [--name <name>]
+  auth status | refresh | logout
   admin branch-backfill <rootId>
   admin index-backfill
-  admin metadata-backfill
+  admin metadata-backfill [--account-library-only]
   serve [--host <host>] [--port <port>] [--data-dir <dir>] [--migrations-dir <dir>] [--no-sqlite]
   doctor
   smoke diff
@@ -253,6 +267,7 @@ Global flags:
   --client <id>      Stable client ID
   --config <file>    JSON config file
   --config-dir <dir> Config directory (default: ~/.config/nulldown)
+  --auth-file <file> Credential file (default: ~/.config/nulldown/auth.json)
   --diff-auth-token <token>
                      Inline diff auth token
   --timeout-ms <n>   Abort HTTP requests after n milliseconds (default: ${DEFAULT_REQUEST_TIMEOUT_MS})
@@ -335,14 +350,22 @@ const resolveConfig = async (
     fileConfig.baseUrl ||
     DEFAULT_BASE_URL
   ).replace(/\/$/, "");
+  const authFilePath = resolve(
+    flagString(args, "auth-file") ||
+      process.env.ND_AUTH_FILE ||
+      fileConfig.authFilePath ||
+      join(configDir, "auth.json"),
+  );
+  const directToken =
+    flagString(args, "token") || process.env.ND_TOKEN || fileConfig.token || null;
+  const storedCredential = await readCliCredential(authFilePath);
+  const authCredential = isCliCredentialForBaseUrl(storedCredential, baseUrl)
+    ? storedCredential
+    : null;
 
   return {
     baseUrl,
-    token:
-      flagString(args, "token") ||
-      process.env.ND_TOKEN ||
-      fileConfig.token ||
-      null,
+    token: directToken || authCredential?.accessToken || null,
     accountId:
       flagString(args, "account") ||
       process.env.ND_ACCOUNT_ID ||
@@ -366,6 +389,9 @@ const resolveConfig = async (
         fileConfig.diffAuthTokenPath ||
         join(configDir, DEFAULT_DIFF_AUTH_TOKEN_FILE),
     ),
+    authFilePath,
+    authCredential: directToken ? null : authCredential,
+    authRefreshPromise: null,
     json: hasFlag(args, "json") || Boolean(fileConfig.json),
     quiet: hasFlag(args, "quiet") || Boolean(fileConfig.quiet),
     verbose: hasFlag(args, "verbose") || Boolean(fileConfig.verbose),
@@ -467,10 +493,80 @@ const parseJsonLoose = (text: string): unknown | null => {
   }
 };
 
+const refreshStoredCliCredential = async (
+  config: CliConfig,
+  dependencies: ResolvedRunCliDependencies,
+  diagnostics: CliDiagnostics,
+): Promise<boolean> => {
+  if (!config.authCredential) return false;
+  if (config.authRefreshPromise) return config.authRefreshPromise;
+
+  const current = config.authCredential;
+  const promise = (async (): Promise<boolean> => {
+    try {
+      const response = await requestOnce({ ...config, token: null, accountId: null, clientId: null }, "/api/auth/cli/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: current.refreshToken }),
+      }, dependencies, diagnostics);
+      const parsed = response.data;
+      if (
+        !isCliCredentialBundle(parsed) ||
+        !isCliCredentialForBaseUrl(parsed, config.baseUrl)
+      ) {
+        return false;
+      }
+      const refreshed = mergeCliCredentialAuthoring(current, parsed);
+      await writeCliCredential(config.authFilePath, refreshed);
+      if (config.authCredential === current) {
+        config.authCredential = refreshed;
+        config.token = refreshed.accessToken;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  config.authRefreshPromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (config.authRefreshPromise === promise) config.authRefreshPromise = null;
+  }
+};
+
 const request = async <T = unknown>(
   config: CliConfig,
   path: string,
   options: RequestInit = {},
+  dependencies: ResolvedRunCliDependencies,
+  diagnostics: CliDiagnostics,
+): Promise<ApiResponse<T>> => {
+  const canRefresh =
+    path !== "/api/auth/cli/refresh" &&
+    path !== "/api/auth/cli/revoke" &&
+    !new Headers(options.headers).has("Authorization") &&
+    config.authCredential !== null;
+  if (canRefresh && (config.authCredential?.accessExpiresAt ?? 0) - dependencies.now() <= 30_000) {
+    await refreshStoredCliCredential(config, dependencies, diagnostics);
+  }
+  try {
+    return await requestOnce<T>(config, path, options, dependencies, diagnostics);
+  } catch (error) {
+    if (
+      error instanceof CliError && error.status === 401 && canRefresh &&
+      await refreshStoredCliCredential(config, dependencies, diagnostics)
+    ) {
+      return await requestOnce<T>(config, path, options, dependencies, diagnostics);
+    }
+    throw error;
+  }
+};
+
+const requestOnce = async <T = unknown>(
+  config: CliConfig,
+  path: string,
+  options: RequestInit,
   dependencies: ResolvedRunCliDependencies,
   diagnostics: CliDiagnostics,
 ): Promise<ApiResponse<T>> => {
@@ -885,6 +981,21 @@ const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 };
 
+const openBrowser = async (url: string): Promise<void> => {
+  const command =
+    process.platform === "darwin"
+      ? ["open", url]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", "", url]
+        : ["xdg-open", url];
+  try {
+    const child = Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
+    void child.exited;
+  } catch {
+    // The verification URI is printed regardless of local browser availability.
+  }
+};
+
 const createRegisteredCommands = (
   config: CliConfig,
   dependencies: ResolvedRunCliDependencies,
@@ -971,6 +1082,24 @@ const createRegisteredCommands = (
       runtime,
       print: (value, human) => print(config, dependencies, value, human),
       readInput: (path) => readInput(path, dependencies),
+      baseUrl: () => config.baseUrl,
+      authFilePath: () => config.authFilePath,
+      readCredential: async () => {
+        const credential = config.authCredential ?? await readCliCredential(config.authFilePath);
+        return isCliCredentialForBaseUrl(credential, config.baseUrl) ? credential : null;
+      },
+      writeCredential: async (credential) => {
+        await writeCliCredential(config.authFilePath, credential);
+        config.authCredential = credential;
+        config.token = credential.accessToken;
+      },
+      clearCredential: async () => {
+        await clearCliCredential(config.authFilePath);
+        config.authCredential = null;
+        config.token = null;
+      },
+      openBrowser,
+      sleep,
     }),
     createAdminCommand<CliConfig>({
       runtime,

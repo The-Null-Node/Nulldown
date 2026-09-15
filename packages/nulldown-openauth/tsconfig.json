@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/**/*.ts", "../../shared/auth/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "../../shared/auth/**/*.test.ts"]
+}

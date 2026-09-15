@@ -55,6 +55,8 @@ import { toUserFacingDropError } from "../lib/drop/userErrors";
 import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
 import { createBranchApiClient } from "../../shared/drop/branchApi";
 import { getAccountSessionToken } from "../lib/auth/accountSession";
+import { fetchAccountLibrary } from "../lib/auth/accountLibraryClient";
+import type { AccountLibraryEntry } from "../../shared/auth/accountLibrary";
 import {
   clearBranchPromotionIntent,
   readBranchPromotionIntent,
@@ -67,9 +69,10 @@ import type {
 } from "../../shared/nullplug/ui";
 import { getDefaultRemoteNullplugRuntime } from "../lib/nullplug/providerRuntime";
 import { resolveRootRuntimePolicy } from "../../shared/nullplug/policy";
+import { useAccountPreferencesStore } from "../stores/accountPreferencesStore";
 
 type PaletteAction =
-  | { kind: "open-drop"; id: string; source: "owned" | "external" }
+  | { kind: "open-drop"; id: string; source: "owned" | "external" | "remote" }
   | { kind: "open-draft"; entry: DraftLibraryEntry }
   | {
       kind: "insert-block";
@@ -251,7 +254,9 @@ const EditorPage: React.FC = () => {
   );
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
   const setMode = useDropStore((state) => state.setMode);
-  const setShareVisibility = useDropStore((state) => state.setShareVisibility);
+  const setAccountPreference = useAccountPreferencesStore(
+    (state) => state.setPreference,
+  );
   const getDrop = useDropStore((state) => state.getDrop);
   const resolveDropOwnership = useDropStore(
     (state) => state.resolveDropOwnership,
@@ -326,8 +331,11 @@ const EditorPage: React.FC = () => {
   }, [hydrateOfflineMode, hydrateSharePreferences, initializeStorage]);
 
   const handleToggleShareVisibility = useCallback(() => {
-    void setShareVisibility(nextVisibility(shareVisibility));
-  }, [setShareVisibility, shareVisibility]);
+    void setAccountPreference(
+      "shareVisibilityDefault",
+      nextVisibility(shareVisibility),
+    );
+  }, [setAccountPreference, shareVisibility]);
 
   const handleRequestAddNetworkHost = useCallback(
     (host: string) => {
@@ -513,6 +521,8 @@ const EditorPage: React.FC = () => {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryDrops, setLibraryDrops] = useState<OwnedDropRecord[]>([]);
+  const [libraryRemoteEntries, setLibraryRemoteEntries] = useState<AccountLibraryEntry[]>([]);
+  const [libraryRefreshError, setLibraryRefreshError] = useState<string | null>(null);
   const [libraryExternalDrops, setLibraryExternalDrops] = useState<
     RecentExternalDropRecord[]
   >([]);
@@ -532,9 +542,24 @@ const EditorPage: React.FC = () => {
       setLibraryExternalDrops(externalDrops);
     } catch (error) {
       console.error("Failed to load library:", error);
-      setLibraryDrops([]);
-      setLibraryDrafts([]);
-      setLibraryExternalDrops([]);
+      setLibraryRefreshError("Unable to refresh local library entries. Existing results are still available.");
+    }
+
+    try {
+      const remoteLibrary = await fetchAccountLibrary();
+      const activeEntries = new Map<string, AccountLibraryEntry>();
+      for (const entry of remoteLibrary.items) {
+        if (entry.state === "deleted") {
+          activeEntries.delete(entry.id);
+        } else {
+          activeEntries.set(entry.id, entry);
+        }
+      }
+      setLibraryRemoteEntries([...activeEntries.values()]);
+      setLibraryRefreshError(null);
+    } catch (error) {
+      console.error("Failed to load remote library:", error);
+      setLibraryRefreshError("Unable to refresh Remote Library. Existing results are still available.");
     } finally {
       setLibraryLoading(false);
     }
@@ -1029,6 +1054,20 @@ const EditorPage: React.FC = () => {
         } satisfies PaletteEntity;
       });
 
+    const remoteDropEntities: PaletteEntity[] = libraryRemoteEntries
+      .filter((entry) => entry.state === "active")
+      .map((entry) => {
+        const shortId = toShortDropId(entry.id);
+        return {
+          id: `drop-remote-${entry.id}`,
+          type: "drop",
+          title: `Nulldown ${shortId}`,
+          description: `Remote library • ${entry.visibility} • Updated ${formatTimestamp(entry.updatedAt)}`,
+          keywords: [entry.id, shortId, "remote", "library", entry.visibility],
+          value: { kind: "open-drop", id: entry.id, source: "remote" },
+        } satisfies PaletteEntity;
+      });
+
     const dropEntities: PaletteEntity[] = [
       ...ownedDropEntities,
       ...externalDropEntities,
@@ -1055,15 +1094,20 @@ const EditorPage: React.FC = () => {
         label: "Drops",
         entities: dropEntities,
       },
+      {
+        id: "remote-library",
+        label: "Remote Library",
+        entities: remoteDropEntities,
+      },
     ].filter((group) => group.entities.length > 0);
-  }, [libraryDrafts, libraryDrops, libraryExternalDrops]);
+  }, [libraryDrafts, libraryDrops, libraryExternalDrops, libraryRemoteEntries]);
 
   const handleSelectSearchEntity = useCallback(
     (entity: Searchable<PaletteAction>) => {
       void (async () => {
         switch (entity.value.kind) {
           case "open-drop": {
-            if (entity.value.source === "owned") {
+            if (entity.value.source === "owned" || entity.value.source === "remote") {
               navigate(`/?edit=${encodeURIComponent(entity.value.id)}`);
               return;
             }
@@ -1263,6 +1307,7 @@ const EditorPage: React.FC = () => {
         onOpenLibrary={openLibrary}
         onOpenBranches={() => setBranchActivityOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onSyncReady={() => window.location.reload()}
         onTakeOverBranch={() => {
           void takeOverEditing().catch((takeOverError) => {
             setError(
@@ -1303,6 +1348,8 @@ const EditorPage: React.FC = () => {
           void refreshLibrary();
         }}
       />
+
+      {libraryRefreshError ? <ErrorBanner message={libraryRefreshError} /> : null}
 
       <div className="flex-1 relative" style={{ height: "calc(100vh - 65px)" }}>
         {error && <ErrorBanner message={error} />}

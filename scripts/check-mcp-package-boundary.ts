@@ -54,6 +54,8 @@ const requiredDependencies = [
 const missingDependencies = requiredDependencies.filter(
   (dependency) => !(dependency in (packageJson.dependencies ?? {})),
 );
+const requiresAuthoringExport =
+  packageJson.dependencies?.["@thenullnode/nulldown"] === expectedCoreRange;
 
 const pack = spawnSync("npm", ["pack", "--dry-run", "--json"], {
   cwd: packageDir,
@@ -74,7 +76,9 @@ const requiredFiles = [
   "README.md",
   "bin/nulldown-mcp",
   "bin/nulldown-mcp.ts",
-  "src/diffSchemas.ts",
+    "src/diffSchemas.ts",
+    "src/cliCredential.ts",
+    "src/logging.ts",
   "src/server.ts",
   "src/tooling.ts",
   "src/tools/branchTools.ts",
@@ -84,6 +88,24 @@ const requiredFiles = [
   "src/tools/strategyTools.ts",
 ];
 const missingFiles = requiredFiles.filter((file) => !files.has(file));
+const credentialAdapter = readFileSync(
+  new URL("../packages/nulldown-mcp/src/cliCredential.ts", import.meta.url),
+  "utf8",
+);
+const packageTooling = readFileSync(
+  new URL("../packages/nulldown-mcp/src/tooling.ts", import.meta.url),
+  "utf8",
+);
+const preservesAuthoringOnRefresh = credentialAdapter.includes("mergeCliCredentialAuthoring");
+const usesAuthoringExport = packageTooling.includes(
+  'from "@thenullnode/nulldown/drop/authoring"',
+);
+const hasLocalAuthoringImplementation = [
+  "const serializeCanonicalJson",
+  "const toBase64",
+  "const sealDropForAuthoring",
+  "const isDropEncryptionPublicJwk",
+].some((marker) => packageTooling.includes(marker));
 
 if (
   packageJson.name !== "@thenullnode/nulldown-mcp" ||
@@ -91,7 +113,11 @@ if (
   unexpectedBins.length ||
   invalidBinTargets.length ||
   missingDependencies.length ||
-  missingFiles.length
+  !requiresAuthoringExport ||
+  missingFiles.length ||
+  !preservesAuthoringOnRefresh ||
+  !usesAuthoringExport ||
+  hasLocalAuthoringImplementation
 ) {
   fail("MCP package boundary check failed.", {
     packageName: packageJson.name,
@@ -99,7 +125,11 @@ if (
     unexpectedBins,
     invalidBinTargets,
     missingDependencies,
+    requiresAuthoringExport,
     missingFiles,
+    preservesAuthoringOnRefresh,
+    usesAuthoringExport,
+    hasLocalAuthoringImplementation,
   });
 }
 

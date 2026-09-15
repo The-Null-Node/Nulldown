@@ -10,6 +10,7 @@ import {
   Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import OpenAuthAccountControl from "./OpenAuthAccountControl";
 
 interface EditorToolbarProps {
   canOpenBranches?: boolean;
@@ -31,6 +32,7 @@ interface EditorToolbarProps {
   onOpenSettings: () => void;
   onTakeOverBranch?: () => void;
   onShare: () => void;
+  onSyncReady?: () => void;
 }
 
 const EditorToolbar: React.FC<EditorToolbarProps> = ({
@@ -53,6 +55,7 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
   onOpenSettings,
   onTakeOverBranch,
   onShare,
+  onSyncReady,
 }) => {
   const visibilityLabel =
     shareVisibility === "private"
@@ -149,6 +152,10 @@ const EditorToolbar: React.FC<EditorToolbarProps> = ({
           <Search className="h-4 w-4" aria-hidden="true" />
           Search
         </Button>
+        <OpenAuthAccountControl
+          onSignedOut={() => window.location.reload()}
+          onSyncReady={onSyncReady}
+        />
         {canOpenBranches && onOpenBranches ? (
           <Button
             type="button"
