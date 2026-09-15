@@ -16,7 +16,7 @@ import {
   isDropPayload,
   type DropEnvelopeV1,
 } from "../../../../../shared/drop/types";
-import { signProviderEnvelope, type ProviderSigningEnv } from "../../crypto/envelopes/signing";
+import { signProviderEnvelope, type ProviderSigningEnv } from "../../crypto/void/envelopes/signing";
 import { syncPublicDropIndexForEnvelope } from "../index/repository";
 import { createDropIdentityRepository } from "../identity/id";
 import {

@@ -5,6 +5,7 @@ import type { NullplugUiResponseFact } from "../shared/nullplug/ui";
 import { DROP_ENVELOPE_SCHEMA_V1 } from "../shared/drop/types";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
+import { hashNulldownSourceContent } from "../shared/drop/resolved/hash";
 import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
 import { createNullMemFact, createNullMemProcedure, createNullMemService, deleteNullMemRecord, queryNullMem } from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
@@ -27,10 +28,16 @@ import {
   writeSnapshotCheckpoint,
 } from "../functions/api/_lib/branches/storage/repository";
 import {
+  lookupBranchDiffEventIdentity,
   pollBranchDiffEventsSince,
   readBranchDiffEventBySeq,
   writeBranchDiffEvent,
 } from "../functions/api/_lib/branches/storage/diffLogRepository";
+import {
+  createBranchDiffEventIdMarkerV2Key,
+  createBranchDiffEventKey,
+  createSnapshotKey,
+} from "../functions/api/_lib/branches/storage/keys";
 import { createMemoryVoidDataStore } from "./server/memoryDataStore";
 import { createNullMemFreshnessWatermarkKey } from "./server/nulledit";
 
@@ -353,6 +360,15 @@ class MemoryD1Database {
       return this.events.get(`${params[0]}/${params[1]}/${params[2]}`) ?? null;
     }
 
+    if (sql.includes("FROM branch_events") && sql.includes("event_id = ?")) {
+      return (
+        [...this.events.entries()]
+          .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/`))
+          .map(([, event]) => event)
+          .find((event) => event.event_id === params[2]) ?? null
+      );
+    }
+
     if (sql.includes("SELECT 1 AS found") && sql.includes("FROM branch_events")) {
       const found = [...this.events.values()].some(
         (event) =>
@@ -386,6 +402,12 @@ class MemoryD1Database {
   }
 
   all(sql: string, params: unknown[]): Record<string, unknown>[] {
+    if (sql.includes("FROM resolved_node_payloads")) {
+      return [...this.nodePayloads.entries()]
+        .filter(([hash]) => params.includes(hash))
+        .map(([hash, row]) => ({ ...row, node_hash: hash }));
+    }
+
     if (sql.includes("FROM branch_snapshots")) {
       return [...this.snapshots.entries()]
         .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/`))
@@ -551,6 +573,30 @@ const createEvent = (): DropDiffEvent => ({
 });
 
 describe("D1 metadata contracts", () => {
+  it("keeps R2 snapshot authority over corrupt SQL and validates SQL-only fallback hashes", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const snapshot = createSnapshot({ snapshotId: 1, sourceContentHash: await hashNulldownSourceContent("accepted") });
+    const blobs = bucket as unknown as R2Bucket;
+    const sql = db as unknown as D1Database;
+    await writeSnapshot(blobs, snapshot, sql);
+    const read = () => readSnapshot(blobs, snapshot.rootDropId, snapshot.branchId, 1, sql);
+    expect(await read()).toEqual(snapshot);
+    const row = db.snapshots.get(`${snapshot.rootDropId}/${snapshot.branchId}/1`)!;
+    for (const corrupt of [{ sourceContentHash: "sha256:bad" }, { sourceContentHash: null }, { textLength: "bad" }]) {
+      row.record_json = JSON.stringify({ ...snapshot, ...corrupt });
+      expect(await read()).toEqual(snapshot);
+    }
+    await bucket.delete(createSnapshotKey(snapshot.rootDropId, snapshot.branchId, 1));
+    for (const corrupt of [{ sourceContentHash: "sha256:bad" }, { sourceContentHash: null }, { textLength: "bad" }]) {
+      row.record_json = JSON.stringify({ ...snapshot, ...corrupt });
+      await expect(read()).rejects.toThrow("snapshot_source_identity_invalid");
+    }
+    const legacy = { ...snapshot };
+    delete legacy.sourceContentHash;
+    row.record_json = JSON.stringify(legacy);
+    expect(await read()).toEqual(legacy);
+  });
   it("reads branch, snapshot, and event metadata from D1 without R2 records", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
@@ -698,6 +744,73 @@ describe("D1 metadata contracts", () => {
     ).resolves.toEqual(expect.objectContaining({ events: [event], nextCursor: 0 }));
   });
 
+  it("rejects a duplicate identity when D1 and R2 event records disagree", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const event = createEvent();
+
+    await writeBranchDiffEvent(
+      bucket as unknown as R2Bucket,
+      event.dropId,
+      "owner",
+      event,
+      db as unknown as D1Database,
+    );
+    await bucket.put(
+      createBranchDiffEventKey(event.dropId, "owner", event.seq),
+      JSON.stringify({
+        ...event,
+        ops: [{ type: "insert", start: 0, end: 0, text: "different" }],
+      }),
+    );
+
+    await expect(
+      lookupBranchDiffEventIdentity(
+        bucket as unknown as R2Bucket,
+        event.dropId,
+        "owner",
+        event.eventId,
+        db as unknown as D1Database,
+      ),
+    ).resolves.toEqual({
+      status: "invalid",
+      reason: "d1_r2_event_mismatch",
+    });
+  });
+
+  it("rejects a v2 marker whose R2 event sequence disagrees", async () => {
+    const bucket = new MemoryR2Bucket();
+    const event = createEvent();
+
+    await bucket.put(
+      createBranchDiffEventKey(event.dropId, "owner", 0),
+      JSON.stringify({ ...event, seq: 1 }),
+    );
+    await bucket.put(
+      createBranchDiffEventIdMarkerV2Key(event.dropId, "owner", event.eventId),
+      JSON.stringify({
+        version: 2,
+        rootDropId: event.dropId,
+        branchId: "owner",
+        eventId: event.eventId,
+        seq: 0,
+        snapshotId: event.snapshotId,
+      }),
+    );
+
+    await expect(
+      lookupBranchDiffEventIdentity(
+        bucket as unknown as R2Bucket,
+        event.dropId,
+        "owner",
+        event.eventId,
+      ),
+    ).resolves.toEqual({
+      status: "invalid",
+      reason: "v2_marker_event_mismatch",
+    });
+  });
+
   it("lists nullplug runtime facts from D1 without R2 records", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
@@ -729,12 +842,51 @@ describe("D1 metadata contracts", () => {
     expect(facts.uiStateSnapshots).toEqual([]);
   });
 
-  it("persists generated resolved heaps and nodes to D1", async () => {
+  it("merges nullplug runtime facts across D1 and R2", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
-    const branch = createBranch();
-    const snapshot = createSnapshot();
+    const fromSql: NullplugUiResponseFact = {
+      version: 1,
+      kind: "ui.response",
+      id: "response_sql",
+      primitiveId: "primitive_sql",
+      createdAt: 1002,
+      source: { rootDropId: "drop_123456789", branchId: "owner" },
+      data: { accepted: true },
+    };
+    const fromBlob: NullplugUiResponseFact = {
+      ...fromSql,
+      id: "response_blob",
+      primitiveId: "primitive_blob",
+      createdAt: 1001,
+    };
+    await putNullplugUiResponseFact(
+      bucket as unknown as R2Bucket,
+      fromSql,
+      db as unknown as D1Database,
+    );
+    await putNullplugUiResponseFact(
+      bucket as unknown as R2Bucket,
+      fromBlob,
+    );
+
+    const facts = await listNullplugRuntimeFacts(
+      bucket as unknown as R2Bucket,
+      "drop_123456789",
+      "owner",
+      db as unknown as D1Database,
+    );
+
+    expect(facts.uiResponseFacts).toEqual([fromBlob, fromSql]);
+  });
+
+  it("persists generated resolved heaps and nodes to D1", async () => {
+    const bucket = new MemoryR2Bucket();
+    await bucket.put("drop_123456789", JSON.stringify({ content: "Public root" }));
+    const db = new MemoryD1Database();
+    const branch = createBranch({ headSnapshotId: 1 });
     const content = "# D1 Test\n\nA searchable paragraph.";
+    const snapshot = createSnapshot({ snapshotId: 1, sourceContentHash: await hashNulldownSourceContent(content) });
 
     await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
     await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
@@ -766,6 +918,13 @@ describe("D1 metadata contracts", () => {
     };
     expect(delta).toEqual(expect.objectContaining({ version: 1, checkpointed: true }));
     expect(delta.nodeRefs.length).toBe(db.nodeRefs.size);
+    const get = bucket.get.bind(bucket);
+    bucket.get = async (key) => {
+      if (key.startsWith("__drop_checkpoint__/") || key.startsWith("__drop_branch_diff")) {
+        throw new Error("Valid SQL projection must not replay content, even after priority changes");
+      }
+      return get(key);
+    };
 
     await bucket.delete(
       dropResolvedHeapKey(
@@ -871,6 +1030,7 @@ describe("D1 metadata contracts", () => {
 
   it("runs explicit resolved query repair before reading branch content", async () => {
     const bucket = new MemoryR2Bucket();
+    await bucket.put("drop_123456789", JSON.stringify({ content: "Public root" }));
     const db = new MemoryD1Database();
     const branch = createBranch();
     const snapshot = createSnapshot({ textLength: 45 });
@@ -1267,6 +1427,7 @@ describe("D1 metadata contracts", () => {
   for (const headEventSeq of [null, -1] as const) {
     it(`generates snapshot 0 resolved heaps when head event seq is ${headEventSeq}`, async () => {
       const bucket = new MemoryR2Bucket();
+      await bucket.put("drop_123456789", JSON.stringify({ content: "Public root" }));
       const db = new MemoryD1Database();
       const branch = createBranch({ headEventSeq });
       const snapshot = createSnapshot();
@@ -1303,6 +1464,7 @@ describe("D1 metadata contracts", () => {
 
   it("materializes compact v2 resolved heaps by walking parent deltas", async () => {
     const bucket = new MemoryR2Bucket();
+    await bucket.put("drop_123456789", JSON.stringify({ content: "Public root" }));
     const db = new MemoryD1Database();
     const branch = createBranch({ headSnapshotId: 2, headEventSeq: 2 });
     const snapshots = [

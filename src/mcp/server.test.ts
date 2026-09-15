@@ -46,6 +46,68 @@ const serverFactories = [
 ] as const;
 
 describe.each(serverFactories)("%s createNulldownMcpServer", (_name, createServer) => {
+  it.each([false, true])("keeps strategy provenance within the minimum full-format budget (metadata: %s)", async (implicit) => {
+    const requests: string[] = [];
+    const api = await listen((request, response) => {
+      requests.push(`${request.method} ${request.url}`);
+      response.setHeader("Content-Type", "application/json");
+      if (request.url === "/api/get/short") {
+        response.setHeader("X-Drop-Canonical-Id", "root");
+        response.end(JSON.stringify({ content: "# Title", metadata: {
+          strategyRef: { kind: "branch", rootDropId: "root", branchId: "branch" },
+        } }));
+        return;
+      }
+      response.end(JSON.stringify({
+        rootDropId: "root",
+        branchId: "branch",
+        snapshotId: 7,
+        items: [{ text: "oversized".repeat(1000) }],
+      }));
+    });
+    const server = createServer();
+    const client = new Client({ name: "strategy-test", version: "1.0.0" });
+    const { clientTransport, serverTransport } = createTransportPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const result = await client.callTool({
+        name: "strategy_get",
+        arguments: {
+          baseUrl: api.baseUrl,
+          id: implicit ? "short" : "root",
+          ...(implicit ? {} : { branchId: "branch" }),
+          snapshotId: 7,
+          query: "next",
+          top: 2,
+          maxTokens: 100,
+          preview: false,
+          format: "full",
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      const text = result.content[0]?.text as string;
+      expect(text.length).toBeLessThanOrEqual(400);
+      expect(JSON.parse(text)).toMatchObject({
+        read: "branch",
+        rootDropId: "root",
+        branchId: "branch",
+        snapshotId: 7,
+        partial: true,
+        truncated: true,
+      });
+      expect(requests).toHaveLength(implicit ? 2 : 1);
+      if (implicit) expect(requests[0]).toBe("GET /api/get/short");
+      expect(requests.at(-1)).toContain("GET /api/branches/root/branch/resolved/query?");
+      expect(requests.at(-1)).toContain("maxTokens=100&preview=false");
+      expect(requests.at(-1)).toContain("snapshotId=7");
+    } finally {
+      await client.close();
+      await server.close();
+      api.server.closeAllConnections();
+      await new Promise<void>((resolve) => api.server.close(() => resolve()));
+    }
+  });
   it("rejects invalid diff_apply input at the MCP boundary", async () => {
     const server = createServer();
     const client = new Client({ name: "nulldown-test", version: "1.0.0" });

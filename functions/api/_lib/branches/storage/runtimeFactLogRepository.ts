@@ -2,10 +2,7 @@ import {
   isDropBranchRuntimeFact,
   type DropBranchRuntimeFact,
 } from "../../../../../shared/drop/diff";
-import {
-  nullplugUiRuntimeFactId,
-  type NullplugUiRuntimeFact,
-} from "../../../../../shared/nullplug/ui";
+import { nullplugUiRuntimeFactId } from "../../../../../shared/nullplug/ui";
 import type {
   VoidBlobStore,
   VoidSqlStore,
@@ -15,6 +12,7 @@ import {
   createBranchRuntimeFactEventIdKey,
   createBranchRuntimeFactEventKey,
   createBranchRuntimeFactEventPrefix,
+  createBranchRuntimeFactHeadKey,
 } from "./keys";
 import { readR2Json, writeR2Json } from "./repository";
 import { withBranchMutationLock } from "./mutationLock";
@@ -34,11 +32,23 @@ export interface BranchRuntimeFactLogRepository {
     rootDropId: string,
     branchId: string,
   ): Promise<number>;
+  /** Reads one fact by stable idempotency identity. */
+  readBranchRuntimeFactById(
+    rootDropId: string,
+    branchId: string,
+    factId: string,
+  ): Promise<DropBranchRuntimeFact | null>;
   /** Appends a fact once, returning its existing event for an idempotent retry. */
   appendBranchRuntimeFact(
     rootDropId: string,
     branchId: string,
-    fact: NullplugUiRuntimeFact,
+    fact: DropBranchRuntimeFact["fact"],
+  ): Promise<{ event: DropBranchRuntimeFact; appended: boolean }>;
+  /** Appends while the caller already holds the branch mutation lock. */
+  appendBranchRuntimeFactUnderLock(
+    rootDropId: string,
+    branchId: string,
+    fact: DropBranchRuntimeFact["fact"],
   ): Promise<{ event: DropBranchRuntimeFact; appended: boolean }>;
   /** Reads runtime facts after a branch-local cursor. */
   pollBranchRuntimeFactsSince(
@@ -77,19 +87,184 @@ const readD1FactById = async (
   return parseJsonColumn(row?.fact_json, isDropBranchRuntimeFact) ?? null;
 };
 
-const readExistingFact = async (
+const readD1HeadRuntimeFactSeq = async (
+  db: VoidSqlStore | undefined,
+  rootDropId: string,
+  branchId: string,
+): Promise<number> => {
+  if (!db) return -1;
+  const row = await db
+    .prepare(
+      `SELECT MAX(seq) AS max_seq
+       FROM branch_runtime_facts
+       WHERE root_drop_id = ? AND branch_id = ?`,
+    )
+    .bind(rootDropId, branchId)
+    .first<{ max_seq: number | null }>();
+  return typeof row?.max_seq === "number" ? row.max_seq : -1;
+};
+
+const writeD1RuntimeFact = async (
+  db: VoidSqlStore | undefined,
+  event: DropBranchRuntimeFact,
+): Promise<void> => {
+  if (!db) return;
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO branch_runtime_facts (
+         root_drop_id, branch_id, seq, fact_id, created_at, fact_json
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      event.rootDropId,
+      event.branchId,
+      event.seq,
+      event.factId,
+      event.createdAt,
+      JSON.stringify(event),
+    )
+    .run();
+};
+
+interface BranchRuntimeFactHead {
+  version: 1;
+  rootDropId: string;
+  branchId: string;
+  headSeq: number;
+  pending?: DropBranchRuntimeFact;
+}
+
+const isBranchRuntimeFactHead = (
+  value: unknown,
+): value is BranchRuntimeFactHead => {
+  if (!value || typeof value !== "object") return false;
+  const head = value as Partial<BranchRuntimeFactHead>;
+  return (
+    head.version === 1 &&
+    typeof head.rootDropId === "string" &&
+    typeof head.branchId === "string" &&
+    Number.isInteger(head.headSeq) &&
+    head.headSeq! >= -1 &&
+    (head.pending === undefined || isDropBranchRuntimeFact(head.pending))
+  );
+};
+
+const readR2RuntimeFactHead = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+): Promise<BranchRuntimeFactHead | null> =>
+  readR2Json(
+    bucket,
+    createBranchRuntimeFactHeadKey(rootDropId, branchId),
+    isBranchRuntimeFactHead,
+  );
+
+const writeR2RuntimeFactHead = async (
+  bucket: VoidBlobStore,
+  head: BranchRuntimeFactHead,
+): Promise<void> => {
+  await writeR2Json(
+    bucket,
+    createBranchRuntimeFactHeadKey(head.rootDropId, head.branchId),
+    head,
+  );
+};
+
+const readR2HeadRuntimeFactSeq = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  afterSeq = -1,
+): Promise<number> => {
+  const prefix = createBranchRuntimeFactEventPrefix(rootDropId, branchId);
+  const storedHead = await readR2RuntimeFactHead(bucket, rootDropId, branchId);
+  let cursor: string | undefined;
+  let headSeq = Math.max(afterSeq, storedHead?.headSeq ?? -1);
+  let startAfter =
+    headSeq >= 0
+      ? createBranchRuntimeFactEventKey(rootDropId, branchId, headSeq)
+      : undefined;
+  while (true) {
+    const listed = await bucket.list({
+      prefix,
+      cursor,
+      startAfter,
+      limit: 1000,
+    });
+    listed.objects.forEach((entry) => {
+      const suffix = entry.key.slice(prefix.length).replace(/\.json$/, "");
+      const seq = Number.parseInt(suffix, 10);
+      if (Number.isInteger(seq)) headSeq = Math.max(headSeq, seq);
+    });
+    if (!listed.truncated || !listed.cursor) break;
+    cursor = listed.cursor;
+    startAfter = undefined;
+  }
+  return headSeq;
+};
+
+const writeR2RuntimeFactSequence = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  event: DropBranchRuntimeFact,
+): Promise<void> => {
+  const key = createBranchRuntimeFactEventKey(rootDropId, branchId, event.seq);
+  const written = await bucket.put(key, JSON.stringify(event), {
+    httpMetadata: { contentType: "application/json" },
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  if (written) return;
+  const existing = await readR2Json(bucket, key, isDropBranchRuntimeFact);
+  if (existing?.factId === event.factId) return;
+  throw new Error("runtime_fact_sequence_conflict");
+};
+
+const repairPendingR2RuntimeFact = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+): Promise<void> => {
+  const head = await readR2RuntimeFactHead(bucket, rootDropId, branchId);
+  if (!head?.pending) return;
+  await writeR2RuntimeFactSequence(
+    bucket,
+    rootDropId,
+    branchId,
+    head.pending,
+  );
+  await writeR2Json(
+    bucket,
+    createBranchRuntimeFactEventIdKey(
+      rootDropId,
+      branchId,
+      head.pending.factId,
+    ),
+    head.pending,
+  );
+  await writeR2RuntimeFactHead(bucket, { ...head, pending: undefined });
+};
+
+/** Reads one runtime fact through the D1-primary/R2-fallback identity index. */
+export const readBranchRuntimeFactById = async (
   bucket: VoidBlobStore,
   rootDropId: string,
   branchId: string,
   factId: string,
   db?: VoidSqlStore,
-): Promise<DropBranchRuntimeFact | null> =>
-  (await readD1FactById(db, rootDropId, branchId, factId)) ??
-  readR2Json(
+): Promise<DropBranchRuntimeFact | null> => {
+  const fromSql = await readD1FactById(db, rootDropId, branchId, factId);
+  if (fromSql?.factId === factId) return fromSql;
+  const fromBlob = await readR2Json(
     bucket,
     createBranchRuntimeFactEventIdKey(rootDropId, branchId, factId),
     isDropBranchRuntimeFact,
   );
+  if (fromBlob?.factId === factId) return fromBlob;
+  const head = await readR2RuntimeFactHead(bucket, rootDropId, branchId);
+  return head?.pending?.factId === factId ? head.pending : null;
+};
 
 /** Resolves the highest stored runtime-fact sequence for one branch. */
 export const readBranchHeadRuntimeFactSeq = async (
@@ -98,35 +273,13 @@ export const readBranchHeadRuntimeFactSeq = async (
   branchId: string,
   db?: VoidSqlStore,
 ): Promise<number> => {
-  if (db) {
-    const row = await db
-      .prepare(
-        `SELECT MAX(seq) AS max_seq
-         FROM branch_runtime_facts
-         WHERE root_drop_id = ? AND branch_id = ?`,
-      )
-      .bind(rootDropId, branchId)
-      .first<{ max_seq: number | null }>();
-    if (typeof row?.max_seq === "number") return row.max_seq;
-  }
-
-  const prefix = createBranchRuntimeFactEventPrefix(rootDropId, branchId);
-  let cursor: string | undefined;
-  let headSeq = -1;
-  while (true) {
-    const listed = await bucket.list({ prefix, cursor, limit: 1000 });
-    const facts = await Promise.all(
-      listed.objects.map((entry) =>
-        readR2Json(bucket, entry.key, isDropBranchRuntimeFact),
-      ),
-    );
-    facts.forEach((fact) => {
-      if (fact) headSeq = Math.max(headSeq, fact.seq);
-    });
-    if (!listed.truncated || !listed.cursor) break;
-    cursor = listed.cursor;
-  }
-  return headSeq;
+  const sqlHeadSeq = await readD1HeadRuntimeFactSeq(db, rootDropId, branchId);
+  return readR2HeadRuntimeFactSeq(
+    bucket,
+    rootDropId,
+    branchId,
+    sqlHeadSeq,
+  );
 };
 
 /** Appends a runtime fact under the existing branch mutation lock. */
@@ -134,78 +287,96 @@ export const appendBranchRuntimeFact = async (
   bucket: VoidBlobStore,
   rootDropId: string,
   branchId: string,
-  fact: NullplugUiRuntimeFact,
+  fact: DropBranchRuntimeFact["fact"],
   db?: VoidSqlStore,
 ): Promise<{ event: DropBranchRuntimeFact; appended: boolean }> => {
-  const factId = nullplugUiRuntimeFactId(fact);
   return withBranchMutationLock(bucket, rootDropId, branchId, async (lock) => {
-    const existing = await readExistingFact(
+    await lock.beginCommit();
+    return await appendBranchRuntimeFactUnderLock(
       bucket,
       rootDropId,
       branchId,
-      factId,
+      fact,
       db,
     );
-    if (existing) {
-      await lock.beginCommit();
-      await Promise.all([
-        writeR2Json(
-          bucket,
-          createBranchRuntimeFactEventKey(rootDropId, branchId, existing.seq),
-          existing,
-        ),
-        writeR2Json(
-          bucket,
-          createBranchRuntimeFactEventIdKey(rootDropId, branchId, factId),
-          existing,
-        ),
-      ]);
-      return { event: existing, appended: false };
-    }
+  });
+};
 
-    const event: DropBranchRuntimeFact = {
+/** Appends a runtime fact without reacquiring the branch lock. */
+export const appendBranchRuntimeFactUnderLock = async (
+  bucket: VoidBlobStore,
+  rootDropId: string,
+  branchId: string,
+  fact: DropBranchRuntimeFact["fact"],
+  db?: VoidSqlStore,
+): Promise<{ event: DropBranchRuntimeFact; appended: boolean }> => {
+  await repairPendingR2RuntimeFact(bucket, rootDropId, branchId);
+  const factId = nullplugUiRuntimeFactId(fact);
+  const existing = await readBranchRuntimeFactById(
+    bucket,
+    rootDropId,
+    branchId,
+    factId,
+    db,
+  );
+  if (existing) {
+    await writeD1RuntimeFact(db, existing);
+    await writeR2RuntimeFactSequence(
+      bucket,
+      rootDropId,
+      branchId,
+      existing,
+    );
+    await writeR2Json(
+      bucket,
+      createBranchRuntimeFactEventIdKey(rootDropId, branchId, factId),
+      existing,
+    );
+    await writeR2RuntimeFactHead(bucket, {
       version: 1,
       rootDropId,
       branchId,
-      seq: (await readBranchHeadRuntimeFactSeq(bucket, rootDropId, branchId, db)) + 1,
-      factId,
-      createdAt: Date.now(),
-      fact,
-    };
-
-    await lock.beginCommit();
-    if (db) {
-      await db
-        .prepare(
-          `INSERT OR IGNORE INTO branch_runtime_facts (
-             root_drop_id, branch_id, seq, fact_id, created_at, fact_json
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          rootDropId,
-          branchId,
-          event.seq,
-          event.factId,
-          event.createdAt,
-          JSON.stringify(event),
-        )
-        .run();
-    }
-
-    await Promise.all([
-      writeR2Json(
-        bucket,
-        createBranchRuntimeFactEventKey(rootDropId, branchId, event.seq),
-        event,
+      headSeq: Math.max(
+        existing.seq,
+        await readR2HeadRuntimeFactSeq(bucket, rootDropId, branchId),
       ),
-      writeR2Json(
-        bucket,
-        createBranchRuntimeFactEventIdKey(rootDropId, branchId, event.factId),
-        event,
-      ),
-    ]);
-    return { event, appended: true };
+    });
+    return { event: existing, appended: false };
+  }
+
+  const event: DropBranchRuntimeFact = {
+    version: 1,
+    rootDropId,
+    branchId,
+    seq:
+      (await readBranchHeadRuntimeFactSeq(bucket, rootDropId, branchId, db)) + 1,
+    factId,
+    createdAt: Date.now(),
+    fact,
+  };
+
+  await writeD1RuntimeFact(db, event);
+
+  await writeR2RuntimeFactHead(bucket, {
+    version: 1,
+    rootDropId,
+    branchId,
+    headSeq: event.seq,
+    pending: event,
   });
+  await writeR2RuntimeFactSequence(bucket, rootDropId, branchId, event);
+  await writeR2Json(
+    bucket,
+    createBranchRuntimeFactEventIdKey(rootDropId, branchId, event.factId),
+    event,
+  );
+  await writeR2RuntimeFactHead(bucket, {
+    version: 1,
+    rootDropId,
+    branchId,
+    headSeq: event.seq,
+  });
+  return { event, appended: true };
 };
 
 /** Polls runtime facts after a branch-local cursor with D1-primary/R2 fallback. */
@@ -234,23 +405,40 @@ export const pollBranchRuntimeFactsSince = async (
       )
       .bind(rootDropId, branchId, normalizedAfter, normalizedLimit)
       .all<{ fact_json: string }>();
-    const facts = (rows.results ?? [])
+    const sqlFacts = (rows.results ?? [])
       .map((row) => parseJsonColumn(row.fact_json, isDropBranchRuntimeFact))
       .filter((entry): entry is DropBranchRuntimeFact => Boolean(entry));
-    const headSeq = await readBranchHeadRuntimeFactSeq(
+    const r2Result = await pollBranchRuntimeFactsSince(
       bucket,
       rootDropId,
       branchId,
-      db,
+      normalizedAfter,
+      normalizedLimit,
     );
+    const sqlFactIds = new Set(sqlFacts.map((fact) => fact.factId));
+    const mergedBySeq = new Map<number, DropBranchRuntimeFact>();
+    r2Result.facts.forEach((fact) => {
+      if (!sqlFactIds.has(fact.factId)) mergedBySeq.set(fact.seq, fact);
+    });
+    sqlFacts.forEach((fact) => mergedBySeq.set(fact.seq, fact));
+    const r2SafeHorizon =
+      r2Result.nextCursor !== null && r2Result.nextCursor < r2Result.headSeq
+        ? r2Result.nextCursor
+        : Number.POSITIVE_INFINITY;
+    const facts = [...mergedBySeq.values()]
+      .filter((fact) => fact.seq <= r2SafeHorizon)
+      .sort((left, right) => left.seq - right.seq)
+      .slice(0, normalizedLimit);
+    const sqlHeadSeq = await readD1HeadRuntimeFactSeq(db, rootDropId, branchId);
     return {
       facts,
       nextCursor: facts.length ? facts[facts.length - 1]!.seq : null,
-      headSeq,
+      headSeq: Math.max(sqlHeadSeq, r2Result.headSeq),
     };
   }
 
   const prefix = createBranchRuntimeFactEventPrefix(rootDropId, branchId);
+  const r2PageLimit = Math.min(normalizedLimit, 40);
   const startAfter =
     normalizedAfter >= 0
       ? createBranchRuntimeFactEventKey(rootDropId, branchId, normalizedAfter)
@@ -259,12 +447,12 @@ export const pollBranchRuntimeFactsSince = async (
   let cursor: string | undefined;
   let nextStartAfter = startAfter;
   let headSeq = normalizedAfter;
-  while (facts.length < normalizedLimit) {
+  while (facts.length < r2PageLimit) {
     const listed = await bucket.list({
       prefix,
       cursor,
       startAfter: nextStartAfter,
-      limit: Math.min(1000, Math.max(64, normalizedLimit * 4)),
+      limit: r2PageLimit,
     });
     if (!listed.objects.length) break;
     const chunk = await Promise.all(
@@ -277,19 +465,34 @@ export const pollBranchRuntimeFactsSince = async (
       headSeq = Math.max(headSeq, fact.seq);
       if (fact.seq <= normalizedAfter) continue;
       facts.push(fact);
-      if (facts.length >= normalizedLimit) break;
+      if (facts.length >= r2PageLimit) break;
     }
-    if (facts.length >= normalizedLimit || !listed.truncated || !listed.cursor) {
+    if (facts.length >= r2PageLimit || !listed.truncated || !listed.cursor) {
       break;
     }
     cursor = listed.cursor;
     nextStartAfter = undefined;
   }
 
+  const storedHead = await readR2RuntimeFactHead(bucket, rootDropId, branchId);
+  if (
+    storedHead?.pending &&
+    storedHead.pending.seq > normalizedAfter &&
+    !facts.some((fact) => fact.seq === storedHead.pending!.seq)
+  ) {
+    facts.push(storedHead.pending);
+    facts.sort((left, right) => left.seq - right.seq);
+    facts.splice(r2PageLimit);
+  }
+  const storedHeadSeq = await readBranchHeadRuntimeFactSeq(
+    bucket,
+    rootDropId,
+    branchId,
+  );
   return {
     facts,
     nextCursor: facts.length ? facts[facts.length - 1]!.seq : null,
-    headSeq,
+    headSeq: Math.max(headSeq, storedHeadSeq),
   };
 };
 
@@ -300,8 +503,12 @@ export const createBranchRuntimeFactLogRepository = ({
 }: BranchRuntimeFactLogRepositoryPorts): BranchRuntimeFactLogRepository => ({
   readBranchHeadRuntimeFactSeq: (rootDropId, branchId) =>
     readBranchHeadRuntimeFactSeq(blobs, rootDropId, branchId, sql),
+  readBranchRuntimeFactById: (rootDropId, branchId, factId) =>
+    readBranchRuntimeFactById(blobs, rootDropId, branchId, factId, sql),
   appendBranchRuntimeFact: (rootDropId, branchId, fact) =>
     appendBranchRuntimeFact(blobs, rootDropId, branchId, fact, sql),
+  appendBranchRuntimeFactUnderLock: (rootDropId, branchId, fact) =>
+    appendBranchRuntimeFactUnderLock(blobs, rootDropId, branchId, fact, sql),
   pollBranchRuntimeFactsSince: (rootDropId, branchId, afterSeq, limit) =>
     pollBranchRuntimeFactsSince(blobs, rootDropId, branchId, afterSeq, limit, sql),
 });

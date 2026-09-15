@@ -31,6 +31,13 @@ const packageJson = JSON.parse(
 ) as PackageJson;
 
 const binEntries = packageJson.bin ?? {};
+const expectedCoreRange = ">=0.0.8 <0.1.0";
+if (packageJson.dependencies?.["@thenullnode/nulldown"] !== expectedCoreRange) {
+  fail("MCP requires the core release that provides bounded strategy reads.", {
+    expectedCoreRange,
+    actualCoreRange: packageJson.dependencies?.["@thenullnode/nulldown"],
+  });
+}
 const binKeys = Object.keys(binEntries);
 const expectedBins = ["nd-mcp", "nulldown-mcp"];
 const expectedBinTarget = "bin/nulldown-mcp";
@@ -102,6 +109,7 @@ console.log(
       packageName: packageJson.name,
       bins: binKeys,
       dependencies: requiredDependencies,
+      coreRange: expectedCoreRange,
       fileCount: files.size,
       checked: {
         requiredFiles,

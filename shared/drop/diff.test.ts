@@ -1,6 +1,7 @@
 import {
   createDropDiffRef,
   createDropDiffRenderableRef,
+  hasConfirmedDropDiffAppendReceipt,
   isDropBranchRuntimeFact,
   isDropDiffAppendResponse,
   isDropDiffEvent,
@@ -101,6 +102,36 @@ describe("DropDiffAppendResponse", () => {
         totalStored: 1,
         acknowledgements: [{ ...acknowledgement, snapshotId: undefined }],
       }),
+    ).toBe(false);
+  });
+
+  it("requires matching branch, totals, and acknowledgement status", () => {
+    const response = {
+      accepted: 1,
+      deduplicated: 0,
+      branchId: "branch-1",
+      snapshotId: 1,
+      totalStored: 1,
+      acknowledgements: [acknowledgement],
+    };
+
+    expect(
+      hasConfirmedDropDiffAppendReceipt(response, {
+        branchId: "branch-1",
+        eventIds: ["event-1"],
+      }),
+    ).toBe(true);
+    expect(
+      hasConfirmedDropDiffAppendReceipt(
+        { ...response, branchId: "other-branch" },
+        { branchId: "branch-1", eventIds: ["event-1"] },
+      ),
+    ).toBe(false);
+    expect(
+      hasConfirmedDropDiffAppendReceipt(
+        { ...response, accepted: 0, deduplicated: 1 },
+        { branchId: "branch-1", eventIds: ["event-1"] },
+      ),
     ).toBe(false);
   });
 

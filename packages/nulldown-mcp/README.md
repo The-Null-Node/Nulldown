@@ -6,6 +6,10 @@ Nulldown turns Markdown into deterministic structure. This server lets an MCP cl
 
 ## Install
 
+This checkout prepares unpublished MCP `0.0.8`, requiring core
+`>=0.0.8 <0.1.0`. Verify the candidate with both local tarballs; the registry
+command below does not install this unpublished pair.
+
 ```bash
 bun install -g @thenullnode/nulldown-mcp
 nulldown-mcp
@@ -56,6 +60,22 @@ network I/O and treats a missing or mismatched acknowledgement as unconfirmed.
 Use `branch_query` before `branch_content` whenever possible. Queries return structural nodes with source ranges and ranking context; fetch exact content only when an edit, claim, or decision requires it.
 
 ## Response Discipline
+
+`strategy_get` (SDK: `client.readStrategy`) uses an explicit `branchId` without
+reading the root. Otherwise it reads the root once and follows plaintext payload
+metadata `strategyRef: { kind: "branch", rootDropId: "<canonical same root>", branchId: "<explicit branch>" }`.
+Both ids must be nonempty trimmed strings. Short input ids are checked against the
+canonical id returned by the root read. Without a reference it stays a labeled root
+read; `query`, `snapshotId` and `top` require an explicit or metadata-selected branch.
+Reads never resolve/create branches, follow references recursively, or fall back
+after invalid/cross-root references or branch errors. Routing is not authorization.
+Envelope metadata is not followed and no secrets are decrypted. Existing drops are
+not migrated: publishing a branch and revision-safely updating its original root's
+metadata are separate explicit actions; preserve the root content and other metadata.
+Output defaults to 800 approximate tokens (`maxTokens`, 100-8000), bounded to
+`maxTokens * 4` serialized characters even with `format: "full"` or `preview: false`.
+Root/branch/snapshot identity, partial/truncated flags and requery guidance survive
+payload truncation. `getDrop` / `drop_get` remain the raw root read interfaces.
 
 Read/query tools use compact responses by default and accept response controls where supported:
 

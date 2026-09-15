@@ -30,7 +30,7 @@ import {
   readJsonBodyWithSchema,
   resolveParam,
 } from "../../core/http/responses";
-import { createPromotedEnvelope } from "../../crypto/envelopes/promotion";
+import { createPromotedEnvelope } from "../../crypto/void/envelopes/promotion";
 import {
   createReservedRemoteJsonDrop,
   releaseReservedRemoteJsonDropId,

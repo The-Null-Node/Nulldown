@@ -24,6 +24,8 @@ import type { VoidSqlStore } from "../../../../../src/server/ports";
 
 const RESOLVED_HEAP_CHECKPOINT_INTERVAL = 24;
 const RESOLVED_HEAP_MAX_DELTA_DEPTH = 64;
+// Keep each IN query within D1's 100 bound-parameter limit.
+const RESOLVED_NODE_PAYLOAD_BATCH_SIZE = 100;
 
 const DOCUMENT_NODE_KINDS = new Set<ResolvedDocumentNodeKind>([
   "document.title",
@@ -201,41 +203,42 @@ const resolveResolvedNodeRefsFromD1 = async (
   return refs;
 };
 
-const readResolvedNodePayloadFromD1 = async (
-  db: VoidSqlStore,
-  nodeHash: string,
-  resolverId: string,
-): Promise<ResolvedDocumentNode | ResolvedRuntimeNode | null> => {
-  const row = await db
-    .prepare(
-      `SELECT node_json
-       FROM resolved_node_payloads
-       WHERE node_hash = ?`,
-    )
-    .bind(nodeHash)
-    .first<{ node_json: string }>();
-  if (resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
-    return parseJsonColumn(row?.node_json, isResolvedRuntimeNodeProjection);
-  }
-  return parseJsonColumn(row?.node_json, isResolvedDocumentNodeProjection);
-};
-
 const hydrateResolvedNodesFromPayloads = async (
   db: VoidSqlStore,
   refs: readonly ResolvedNodeRefRecord[],
   resolverId: string,
 ): Promise<Array<ResolvedDocumentNode | ResolvedRuntimeNode> | null> => {
-  const nodes: Array<ResolvedDocumentNode | ResolvedRuntimeNode> = [];
-  for (const ref of refs) {
-    const node = await readResolvedNodePayloadFromD1(
-      db,
-      ref.nodeHash,
-      resolverId,
-    );
-    if (!node) return null;
-    nodes.push(node);
+  const hashes = [...new Set(refs.map((ref) => ref.nodeHash))];
+  const nodesByHash = new Map<
+    string,
+    ResolvedDocumentNode | ResolvedRuntimeNode
+  >();
+  for (
+    let offset = 0;
+    offset < hashes.length;
+    offset += RESOLVED_NODE_PAYLOAD_BATCH_SIZE
+  ) {
+    const batch = hashes.slice(offset, offset + RESOLVED_NODE_PAYLOAD_BATCH_SIZE);
+    const { results = [] } = await db
+      .prepare(
+        `SELECT node_hash, node_json
+         FROM resolved_node_payloads
+         WHERE node_hash IN (${batch.map(() => "?").join(", ")})`,
+      )
+      .bind(...batch)
+      .all<{ node_hash: string; node_json: string }>();
+    for (const row of results) {
+      const node =
+        resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID
+          ? parseJsonColumn(row.node_json, isResolvedRuntimeNodeProjection)
+          : parseJsonColumn(row.node_json, isResolvedDocumentNodeProjection);
+      if (!node) return null;
+      nodesByHash.set(row.node_hash, node);
+    }
+    if (batch.some((hash) => !nodesByHash.has(hash))) return null;
   }
-  return nodes;
+  // SQL row order is unspecified; the ref sequence owns order and multiplicity.
+  return refs.map((ref) => nodesByHash.get(ref.nodeHash)!);
 };
 
 const hydrateResolvedNodesFromProjection = async (
@@ -258,8 +261,7 @@ const hydrateResolvedNodesFromProjection = async (
     )
     .all<{ node_id: string; node_json: string }>();
 
-  const nodes: Array<ResolvedDocumentNode | ResolvedRuntimeNode> = [];
-  const seen = new Set<string>();
+  const nodesById = new Map<string, ResolvedDocumentNode | ResolvedRuntimeNode>();
   for (const row of results) {
     if (!refIds.has(row.node_id)) continue;
     const node =
@@ -267,11 +269,12 @@ const hydrateResolvedNodesFromProjection = async (
         ? parseJsonColumn(row.node_json, isResolvedRuntimeNodeProjection)
         : parseJsonColumn(row.node_json, isResolvedDocumentNodeProjection);
     if (!node) return null;
-    seen.add(row.node_id);
-    nodes.push(node);
+    nodesById.set(row.node_id, node);
   }
 
-  return seen.size === refIds.size ? nodes : null;
+  return nodesById.size === refIds.size
+    ? refs.map((ref) => nodesById.get(ref.nodeId)!)
+    : null;
 };
 
 const materializeResolvedStateFromD1Delta = async (

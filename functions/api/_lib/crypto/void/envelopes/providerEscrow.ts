@@ -9,8 +9,8 @@ import {
   isDropEnvelopeV1,
   type DropEnvelopeV1,
   type DropPayload,
-} from "../../../../../shared/drop/types";
-import { serverVoidCrypto } from "../void/serverVoidCrypto";
+} from "../../../../../../shared/drop/types";
+import { serverVoidCrypto } from "../serverVoidCrypto";
 
 /** Opens a provider-escrowed drop envelope into plaintext payload material. */
 export const decryptProviderEscrowEnvelope = async (

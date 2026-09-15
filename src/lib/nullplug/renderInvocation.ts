@@ -214,7 +214,7 @@ export const invokeRenderBlock = async (
       diagnostics: callDiagnostics,
       ...(failure ? { failure } : {}),
     },
-    diff: toRenderableDiff(entry.block, localPatch),
+    diff: runtimeResult ? toRenderableDiff(entry.block, localPatch) : null,
     uiPrimitives: result?.uiPrimitives ?? [],
     uiState: result?.uiState ?? {},
     mutations: result?.mutations ?? [],

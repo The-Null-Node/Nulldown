@@ -3,7 +3,8 @@
 import { runCli } from "../src/cli";
 
 const main = async () => {
-  await runCli(process.argv.slice(2));
+  const result = await runCli(process.argv.slice(2));
+  process.exitCode = result.exitCode;
 };
 
 main();

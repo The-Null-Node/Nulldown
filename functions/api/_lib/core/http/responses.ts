@@ -76,9 +76,16 @@ export const apiHttpErrorResponse = (error: ApiHttpError): Response =>
 export const methodNotAllowedResponse = (): Response =>
   jsonErrorResponse(405, "method_not_allowed", "Method Not Allowed");
 
-/** Resolves a Pages dynamic route parameter into one string. */
-export const resolveParam = (value: string | string[] | undefined): string =>
-  typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
+/** Resolves and safely decodes a Pages dynamic route parameter into one string. */
+export const resolveParam = (value: string | string[] | undefined): string => {
+  const parameter =
+    typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
+  try {
+    return decodeURIComponent(parameter);
+  } catch {
+    return parameter;
+  }
+};
 
 /** Converts Zod issues to the public validation issue shape. */
 export const zodIssuesToApiIssues = (error: z.ZodError): ApiValidationIssue[] =>

@@ -268,14 +268,22 @@ export const readSnapshot = async (
   snapshotId: number,
   db?: VoidSqlStore,
 ): Promise<DropSnapshotRecord | null> => {
+  const validate = (value: unknown): value is DropSnapshotRecord => {
+    const valid = isDropSnapshotRecord(value);
+    if (!valid && value && typeof value === "object" && "sourceContentHash" in value) {
+      throw new Error("snapshot_source_identity_invalid");
+    }
+    return valid;
+  };
   const canonical = await readR2Json(
     bucket,
     createSnapshotKey(rootDropId, branchId, snapshotId),
-    isDropSnapshotRecord,
+    validate,
   );
   if (canonical || !db) return canonical;
+  let fallback: unknown;
   try {
-    return parseJsonColumn(
+    fallback = parseJsonColumn(
       (
         await db
           .prepare(
@@ -286,11 +294,12 @@ export const readSnapshot = async (
           .bind(rootDropId, branchId, snapshotId)
           .first<{ record_json: string }>()
       )?.record_json,
-      isDropSnapshotRecord,
+      (value): value is unknown => true,
     );
   } catch {
     return null;
   }
+  return validate(fallback) ? fallback : null;
 };
 
 /** Writes a snapshot record to D1 and its canonical R2 fallback key. */

@@ -789,6 +789,11 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/snapshots.ts`.
 
 ### GET /api/branches/:rootId/:branchId/resolved/query
 
+Root plaintext-read permissions are checked before cache access, projection repair,
+or content replay. Private and account-vault-only envelopes require the root owner's
+authenticated session. Public plaintext roots remain accountless; runtime-reference
+queries additionally require the branch owner or writer.
+
 Query top resolved heap nodes for a branch snapshot. The default document resolver indexes titles, headings, sections, paragraphs, list/checklist items, code blocks, nullplug refs, and links. `resolverId=nulldown.resolved.runtime-refs` queries runtime nodes for `nullplug.ref`, `ui.primitive`, `ui.response`, and `ui.state`. If a supported heap is missing or stale, the endpoint rebuilds it from authoritative branch content and stored nullplug UI facts.
 
 Query params:
@@ -1082,6 +1087,12 @@ Request:
 ```
 
 `resolverId` can be `all`, `nulldown.resolved.document`, or `nulldown.resolved.runtime-refs`. Runtime updates automatically include durable `ui.response`, `ui.state.patch`, and `ui.state.snapshot` facts already stored for the branch.
+
+Updates enforce the same root-read permissions as queries. Runtime and `all` updates
+also require branch-owner/writer authentication. Nonempty `uiResponseFacts`,
+`uiStatePatchFacts`, or `uiStateSnapshots` arrays are rejected with
+`400 runtime_facts_must_be_stored`; persist facts through the state/submit endpoints
+before requesting a rebuild.
 
 CLI example:
 
