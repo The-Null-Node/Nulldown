@@ -28,11 +28,11 @@ import {
   getLocalAccountSummary,
   getUnlockedVault,
   installLocalAccountRecoveryPayload,
-} from "../void/vault/passkeyVault";
+} from "./vault/passkey-vault";
 import {
   decryptAccountRecoveryPackage,
   encryptAccountRecoveryPayload,
-} from "../void/vault/recovery/crypto";
+} from "./vault/recovery/crypto";
 import { getKvValue, isIndexedDbSupported } from "../indexedDb";
 
 const CHALLENGE_PATH = "/api/account/challenge";

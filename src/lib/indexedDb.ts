@@ -4,7 +4,7 @@ state. `kv` stores generic settings and caches, while `drops` stores offline env
 that must remain readable across page reloads and browser restarts.
 */
 
-import type { encodeDropEnvelope } from "../../shared/drop/codecs/envelopeV1";
+import type { encodeDropEnvelope } from "../../shared/drop/codecs/envelope-v1";
 
 const DB_NAME = "nulldown";
 const DB_VERSION = 2;

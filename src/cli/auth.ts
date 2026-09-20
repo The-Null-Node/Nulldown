@@ -9,7 +9,7 @@ import {
   decodeCliDeviceAuthoring,
   encodeCliCredentialEnvelope,
 } from "../../shared/auth/codecs/cli-device-v1";
-import { normalizeCliCredentialBaseUrl } from "./cliCredential";
+import { normalizeCliCredentialBaseUrl } from "./cli-credential";
 import { serializeCanonicalJson } from "../../shared/drop/types";
 
 export {
@@ -17,7 +17,7 @@ export {
   isCliCredentialForBaseUrl,
   readCliCredential,
   writeCliCredential,
-} from "./cliCredential";
+} from "./cli-credential";
 
 const textDecoder = new TextDecoder();
 

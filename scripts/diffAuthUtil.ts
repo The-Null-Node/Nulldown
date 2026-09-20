@@ -3,8 +3,8 @@ import { dirname, resolve } from "node:path";
 import { createHmac } from "node:crypto";
 import {
   buildDiffSigningPayload,
+  decodeDiffAuthRegisterResponse,
   DIFF_SIGNATURE_PREFIX,
-  type DiffAuthRegisterResponse,
 } from "../shared/drop/diffAuth";
 
 export interface DiffClientKeysRecord {
@@ -176,7 +176,10 @@ export const registerCredentialAndUnwrap = async (
     throw new Error(body || `Registration failed with status ${response.status}`);
   }
 
-  const payload = (await response.json()) as DiffAuthRegisterResponse;
+  const payload = decodeDiffAuthRegisterResponse(await response.json());
+  if (!payload) {
+    throw new Error("Registration returned an invalid response.");
+  }
   const secret = await unwrapSecret(payload.wrappedSecret, keys.encryptionPrivateJwk);
 
   return {

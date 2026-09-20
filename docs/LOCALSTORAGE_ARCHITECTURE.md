@@ -2,13 +2,15 @@
 
 ## Overview
 
-Nulldown now uses a **void provider** model where each provider combines:
+Nulldown uses browser drop provider ports that compose:
 
 - storage
 - crypto
 - graph resolution/cache
 
-The UI calls one provider interface for create/read/clone, while provider selection happens by mode (offline/online) or drop id.
+The UI calls the drop store, which coordinates local and remote provider ports.
+Creates are staged locally first; online mode then publishes through the remote
+port. Reads try local storage before falling back to the remote port.
 
 ## Storage Layers
 
@@ -57,32 +59,32 @@ Draft hooks are now async-safe and debounced:
 - `useLocalStorageLoad(...)` loads asynchronously on mount
 - `useDraftStorage(...)` keeps draft behavior intact with async storage APIs
 
-## Void Providers
+## Drop Providers
 
-### Provider Interface (`src/lib/void/provider.ts`)
+### Provider Interface (`src/lib/drop/provider.ts`)
 
 The provider composes three ports:
 
-- `VoidStorage`
-- `VoidCrypto`
-- `VoidGraph`
+- `DropStorage`
+- `DropCrypto`
+- `DropGraphResolver`
 
-Runtime providers:
+Provider ports:
 
 - Local provider: IndexedDB-backed storage + browser crypto + local graph cache
-- Remote provider: API-backed storage + browser crypto + provider-managed graph semantics
+- Remote provider: API-backed storage + browser crypto + remote graph cache
 
 ### Shared Contract (`shared/drop/types.ts`)
 
 Both frontend and functions use one canonical schema:
 
 - `DropPayload` for legacy/plain payloads
-- `DropEnvelopeV1` (`nmdn.drop.v1`) for encrypted/signed drops
+- `DropEnvelope` for encrypted/signed drops; the private v1 codec preserves the `nmdn.drop.v1` wire schema
 - canonical JSON serialization helpers for signature payloads
 
 ## Crypto + Vault Model
 
-### Browser Vault (`src/lib/void/vault/passkeyVault.ts`)
+### Browser Vault (`src/lib/auth/vault/passkey-vault.ts`)
 
 - Creates a local account vault with:
   - RSA-OAEP keypair for per-drop key wrapping
@@ -90,7 +92,7 @@ Both frontend and functions use one canonical schema:
 - Gated by WebAuthn passkey checks before crypto operations
 - Keys are stored locally (IndexedDB-first, localStorage fallback)
 
-### Sealed Envelope (`src/lib/void/crypto/browserVoidCrypto.ts`)
+### Sealed Envelope (`src/lib/crypto/browser-drop-crypto.ts`)
 
 Each created drop is sealed as:
 
@@ -114,14 +116,12 @@ The drop store now routes through providers:
 - `getDrop(id)`
 - `resolveDropGraph(id)`
 
-Offline ids are prefixed with `offline_`.
-
 ### Settings UI (`src/pages/editor/components/SettingsModal.tsx`)
 
 Settings now includes an **Offline mode** toggle:
 
-- Online mode: encrypt + upload sealed drop via `/api/store`
-- Offline mode: encrypt + save sealed drop in IndexedDB and return `/d/offline_<id>` URL
+- Online mode: encrypt + save locally, then publish through `/api/store`
+- Offline mode: encrypt + save in IndexedDB and return a local-only drop URL
 
 ### Share Flow (`src/pages/editor/hooks/useShareDrop.ts`)
 
@@ -140,7 +140,7 @@ Share now calls `createDrop(...)` and receives provider-scoped output:
 ### Drop view (`src/pages/DropViewPage.tsx`)
 
 - Uses `getDrop(id)` from the drop store
-- Provider selection happens internally by id
+- Resolution tries the local provider before the remote provider
 
 ### Editor clone (`src/pages/EditorPage.tsx`)
 
@@ -150,7 +150,8 @@ Share now calls `createDrop(...)` and receives provider-scoped output:
 ## Notes
 
 - Offline links are local-only and work in the same browser profile/device.
-- Online drops are provider-blind (encrypted before upload).
+- Remote storage receives sealed envelopes; provider-assisted unlock remains an
+  explicit envelope policy.
 - Provider signatures are added when `PROVIDER_SIGNING_PRIVATE_JWK` is configured in Functions.
 - Theme preference storage remains in localStorage (`src/theme/themeContext.tsx`).
 - Draft persistence is now async and no longer blocks typing with synchronous writes.

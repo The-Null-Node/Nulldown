@@ -28,9 +28,9 @@ import {
   pollDiffEvents,
   postDiffEvents,
 } from "../../functions/api/_lib/diffs/transport/service";
-import { onRequest as resolveNullplugProvider } from "../../functions/api/nullplug/resolve";
-import { onRequest as submitNullplugState } from "../../functions/api/nullplug/state";
-import { onRequest as submitNullplugResponse } from "../../functions/api/nullplug/submit";
+import { handleNullplugResolveRequest } from "../../functions/api/_lib/nullplug/resolve-controller";
+import { handleNullplugStateRequest } from "../../functions/api/_lib/nullplug/state-controller";
+import { handleNullplugResponseRequest } from "../../functions/api/_lib/nullplug/response-controller";
 import { createDropIdentityRepository } from "../../functions/api/_lib/drops/identity/id";
 import {
   REMOTE_PUBLIC_DROP_INDEX_PREFIX,
@@ -41,6 +41,7 @@ import {
   storeDrop,
   type StoreServiceEnv,
 } from "../../functions/api/_lib/drops/services/storeDrop";
+import { getRootDrop } from "../../functions/api/_lib/drops/services/getRootDrop";
 import { appendEventsToBranch } from "../../functions/api/_lib/nulledit/service";
 import {
   createBuiltInNulleditSnapshotters,
@@ -51,10 +52,10 @@ import {
   createNulleditSnapshotterRegistry,
   flushBranchCommitBufferSnapshotters,
 } from "./nulledit";
-import { createVoidProvider } from "./provider";
+import { createNulldownServerRuntime } from "./runtime";
 import {
   createNullplugRuntime,
-  type VoidRuntimePolicy,
+  type NullplugRuntimePolicy,
 } from "../../shared/nullplug/runtime";
 import { createMemoryVoidDataStore } from "./memoryDataStore";
 import { createFilesystemBlobStore } from "./filesystemBlobStore";
@@ -108,7 +109,8 @@ const json = (value: unknown, init?: ResponseInit): Response =>
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
 
-const routeParams = (params: Record<string, string>) => params;
+const routeParams = <T>(params: Record<string, string>): T =>
+  params as unknown as T;
 
 const createStoreEnv = (env: LocalNulldownServerEnv): StoreServiceEnv => ({
   ...env,
@@ -159,29 +161,15 @@ const getDrop = async (
     successSampleRate: 0.1,
   });
   logger.logStart({ requestedDropRef: toLogRef(requestedId) });
-  const dropIdentityRepository = createDropIdentityRepository({
-    blobs: env.R2_BUCKET,
-    sql: env.DB,
-  });
-  const id = await dropIdentityRepository.resolveRemoteDropId(
+  return getRootDrop({
+    request,
     requestedId,
+    env: {
+      ...env,
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    },
     logger,
-  );
-  if (!id) return new Response("Drop ID is required.", { status: 400 });
-  const object = await env.R2_BUCKET.get(id);
-  if (!object) return new Response("Drop not found.", { status: 404 });
-  const headers = new Headers({
-    "Content-Type": object.httpMetadata?.contentType || "text/plain",
-    "X-Drop-Canonical-Id": id,
-  });
-  if (object.httpEtag) {
-    headers.set("ETag", object.httpEtag);
-    headers.set("X-Drop-Revision", object.httpEtag);
-  }
-  logger.logEnd(200, { canonicalDropRef: toLogRef(id) });
-  return new Response(object.body ?? (await object.text()), {
-    status: 200,
-    headers,
   });
 };
 
@@ -259,7 +247,7 @@ export const createLocalNulldownServer = ({
     LOG_LEVEL: logLevel,
   };
   const memory = createNullMemService({ blobs, sql, data });
-  const policy: VoidRuntimePolicy = {
+  const policy: NullplugRuntimePolicy = {
     prepare: (request) => request,
     validate: (response) => response,
   };
@@ -312,7 +300,7 @@ export const createLocalNulldownServer = ({
         ),
     }),
   );
-  const voidProvider = createVoidProvider({
+  const serverRuntime = createNulldownServerRuntime({
     data,
     nullplug: createNullplugRuntime({ resolvers: [], policy }),
     nulledit: {
@@ -395,42 +383,41 @@ export const createLocalNulldownServer = ({
       method: "POST",
       path: "/api/diff/:id",
       handler: ({ request, params }) =>
-        postDiffEvents(env, routeParams(params), request, { voidProvider }),
+        postDiffEvents(env, routeParams(params), request, { serverRuntime }),
     },
     {
       method: "POST",
       path: "/api/nullplug/resolve",
       handler: ({ request }) =>
-        resolveNullplugProvider({
+        handleNullplugResolveRequest({
           request,
           env,
-          params: {},
-        } as Parameters<typeof resolveNullplugProvider>[0]),
+          createRuntime: () => serverRuntime.nullplug,
+        }),
     },
     {
       method: "POST",
       path: "/api/nullplug/submit",
       handler: ({ request }) =>
-        submitNullplugResponse({
+        handleNullplugResponseRequest({
           request,
           env,
-          params: {},
-        } as Parameters<typeof submitNullplugResponse>[0]),
+        }),
     },
     {
       method: "POST",
       path: "/api/nullplug/state",
       handler: ({ request }) =>
-        submitNullplugState({
+        handleNullplugStateRequest({
           request,
           env,
-          params: {},
-        } as Parameters<typeof submitNullplugState>[0]),
+        }),
     },
     {
       method: "GET",
       path: "/api/branches/:id",
-      handler: ({ params }) => listBranchesForDrop(env, routeParams(params)),
+      handler: ({ request, params }) =>
+        listBranchesForDrop(env, routeParams(params), request),
     },
     {
       method: "POST",
@@ -441,12 +428,14 @@ export const createLocalNulldownServer = ({
     {
       method: "GET",
       path: "/api/branches/:rootId/:branchId/content",
-      handler: ({ params }) => getBranchContent(env, routeParams(params)),
+      handler: ({ request, params }) =>
+        getBranchContent(env, routeParams(params), request),
     },
     {
       method: "GET",
       path: "/api/branches/:rootId/:branchId/snapshots",
-      handler: ({ params }) => listBranchSnapshots(env, routeParams(params)),
+      handler: ({ request, params }) =>
+        listBranchSnapshots(env, routeParams(params), request),
     },
     {
       method: "GET",
@@ -454,6 +443,8 @@ export const createLocalNulldownServer = ({
       handler: ({ request, params }) =>
         queryResolvedHeap(env, routeParams(params), request, {
           repairBufferedCommits: repairBufferedCommitsForQuery,
+          querySnapshotter: (snapshotterId, snapshotterRequest) =>
+            serverRuntime.nulledit.yieldNext(snapshotterId, snapshotterRequest),
         }),
     },
     {
@@ -484,16 +475,14 @@ export const createLocalNulldownServer = ({
       method: "GET",
       path: "/api/branches/:rootId/:branchId/memory/query",
       handler: ({ request, params }) =>
-        queryNullMem(env, routeParams(params), request, {
-          memory: voidProvider.memory,
-        }),
+        queryNullMem(env, routeParams(params), request, { data }),
     },
     {
       method: "POST",
       path: "/api/branches/:rootId/:branchId/memory/facts",
       handler: ({ request, params }) =>
         createNullMemFact(env, routeParams(params), request, {
-          memory: voidProvider.memory,
+          memory: serverRuntime.memory,
         }),
     },
     {
@@ -501,7 +490,7 @@ export const createLocalNulldownServer = ({
       path: "/api/branches/:rootId/:branchId/memory/procedures",
       handler: ({ request, params }) =>
         createNullMemProcedure(env, routeParams(params), request, {
-          memory: voidProvider.memory,
+          memory: serverRuntime.memory,
         }),
     },
     {
@@ -509,7 +498,7 @@ export const createLocalNulldownServer = ({
       path: "/api/branches/:rootId/:branchId/memory/:recordId",
       handler: ({ request, params }) =>
         deleteNullMemRecord(env, routeParams(params), request, {
-          memory: voidProvider.memory,
+          memory: serverRuntime.memory,
         }),
     },
   ];

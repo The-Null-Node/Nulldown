@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
-import type { R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/nullplug/resolve";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../shared/drop/branch";
 import {
@@ -8,6 +8,7 @@ import {
   remoteNullplugLatestKey,
 } from "../shared/nullplug/registry";
 import { createBranchKey } from "../functions/api/_lib/branches/storage/keys";
+import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 
 interface StoredObject {
   value: string;
@@ -19,6 +20,7 @@ interface StoredObject {
 class MemoryR2Bucket {
   private readonly objects = new Map<string, StoredObject>();
   getCalls = 0;
+  readonly getKeys: string[] = [];
 
   seed(key: string, value: string, contentType = "application/json"): void {
     const uploaded = new Date();
@@ -32,6 +34,7 @@ class MemoryR2Bucket {
 
   async get(key: string): Promise<any> {
     this.getCalls += 1;
+    this.getKeys.push(key);
     const existing = this.objects.get(key);
     if (!existing) return null;
     return {
@@ -60,6 +63,70 @@ class MemoryR2Bucket {
     };
   }
 }
+
+interface ProjectionRow {
+  entry_seq: number;
+  drop_id: string;
+  account_id: string;
+  visibility: unknown;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+}
+
+class MemoryD1Database {
+  runs = 0;
+  readonly projectionReads: string[] = [];
+
+  constructor(
+    private readonly projections = new Map<string, ProjectionRow>(),
+    private readonly aliases = new Map<string, string>(),
+  ) {}
+
+  prepare(sql: string): any {
+    let values: unknown[] = [];
+    const statement = {
+      bind: (...bound: unknown[]) => {
+        values = bound;
+        return statement;
+      },
+      first: async () => {
+        if (sql.includes("FROM drop_aliases")) {
+          const fullId = this.aliases.get(String(values[0]));
+          return fullId ? { full_id: fullId } : null;
+        }
+        if (sql.includes("FROM account_library_entries")) {
+          const id = String(values[0]);
+          this.projectionReads.push(id);
+          return this.projections.get(id) ?? null;
+        }
+        return null;
+      },
+      run: async () => {
+        this.runs += 1;
+        return { success: true };
+      },
+      all: async () => ({ results: [] }),
+      raw: async () => [],
+    };
+    return statement;
+  }
+}
+
+const projection = (
+  dropId: string,
+  visibility: unknown,
+  ownerAccountId: string,
+  deletedAt: number | null = null,
+): ProjectionRow => ({
+  entry_seq: 1,
+  drop_id: dropId,
+  account_id: ownerAccountId,
+  visibility,
+  created_at: 1,
+  updated_at: 1,
+  deleted_at: deletedAt,
+});
 
 const rootDropId = "RootDrop1122";
 const childDropId = "ChildDrop3344";
@@ -197,7 +264,10 @@ describe("functions api nullplug resolve contracts", () => {
 
     const response = await onRequest({
       request: createResolveRequest(createInvokeBody()),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
 
@@ -233,13 +303,241 @@ describe("functions api nullplug resolve contracts", () => {
 
     const forbidden = await onRequest({
       request: createResolveRequest(createInvokeBody(), "acct-other"),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
     await expect(forbidden.json()).resolves.toMatchObject({
       code: "caller_branch_forbidden",
     });
     expect(forbidden.status).toBe(403);
+  });
+
+  it("uses canonical caller ownership or the exact writer, never branch owner metadata", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database(
+      new Map([
+        [rootDropId, projection(rootDropId, "private", "canonical-owner")],
+      ]),
+    );
+
+    const writerResponse = await onRequest({
+      request: createResolveRequest(createInvokeBody(), accountId),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(writerResponse.status).toBe(200);
+
+    bucket.seed(
+      createBranchKey(rootDropId, branchId),
+      JSON.stringify({
+        version: 1,
+        branchId,
+        rootDropId,
+        baseDropId: rootDropId,
+        mode: "clone",
+        status: "active",
+        ownerAccountId: accountId,
+        writerAccountId: "acct-other",
+        writerClientId: "client-1",
+        headSnapshotId: 0,
+        headEventSeq: null,
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    );
+    const canonicalOwnerResponse = await onRequest({
+      request: createResolveRequest(createInvokeBody(), "canonical-owner"),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(canonicalOwnerResponse.status).toBe(200);
+
+    const forgedOwnerResponse = await onRequest({
+      request: createResolveRequest(createInvokeBody(), accountId),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(forgedOwnerResponse.status).toBe(404);
+    await expect(forgedOwnerResponse.json()).resolves.toEqual({
+      error: "Caller root not found.",
+      code: "caller_root_not_found",
+    });
+  });
+
+  it("keeps public and unlisted targets readable while tombstone and malformed projections fail closed", async () => {
+    for (const [visibility, expectedStatus] of [
+      ["public", 200],
+      ["unlisted", 200],
+      ["private", 404],
+      ["friends", 404],
+    ] as const) {
+      const targetId = `Target${visibility.slice(0, 3)}001`;
+      const bucket = createSeededBucket();
+      bucket.seed(targetId, JSON.stringify({ content: `# ${visibility}` }));
+      const db = new MemoryD1Database(
+        new Map([
+          [rootDropId, projection(rootDropId, "public", "caller-owner")],
+          [targetId, projection(targetId, visibility, "target-owner")],
+        ]),
+      );
+      const response = await onRequest({
+        request: createResolveRequest(createInvokeBody("nd", targetId)),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        },
+        params: {},
+      } as unknown as Parameters<typeof onRequest>[0]);
+      expect(response.status).toBe(expectedStatus);
+      expect(bucket.getKeys.includes(targetId)).toBe(expectedStatus === 200);
+    }
+
+    const tombstonedId = "TargetTom001";
+    const bucket = createSeededBucket();
+    bucket.seed(tombstonedId, JSON.stringify({ content: "must not read" }));
+    const response = await onRequest({
+      request: createResolveRequest(createInvokeBody("nd", tombstonedId)),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: new MemoryD1Database(
+          new Map([
+            [rootDropId, projection(rootDropId, "public", "caller-owner")],
+            [
+              tombstonedId,
+              projection(tombstonedId, "public", "target-owner", 2),
+            ],
+          ]),
+        ) as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(response.status).toBe(404);
+    expect(bucket.getKeys).not.toContain(tombstonedId);
+  });
+
+  it("rejects an invalid bearer without falling back to the development account header", async () => {
+    const bucket = createSeededBucket();
+    const request = createResolveRequest(createInvokeBody(), accountId);
+    request.headers.set("Authorization", "Bearer invalid-token");
+    const response = await onRequest({
+      request,
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: new MemoryD1Database(
+          new Map([
+            [rootDropId, projection(rootDropId, "public", "caller-owner")],
+          ]),
+        ) as unknown as D1Database,
+        ACCOUNT_AUTH_SECRET: "test-secret",
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "account_required",
+    });
+    expect(bucket.getKeys).not.toContain(createBranchKey(rootDropId, branchId));
+  });
+
+  it("denies a tombstoned caller alias before branch, payload, or runtime reads and never backfills D1", async () => {
+    const bucket = createSeededBucket();
+    const alias = "RootTs";
+    bucket.seed(createRemoteAliasKey(alias), rootDropId, "text/plain");
+    const db = new MemoryD1Database(
+      new Map([[rootDropId, projection(rootDropId, "private", accountId, 2)]]),
+    );
+
+    const response = await onRequest({
+      request: createResolveRequest(createInvokeBody("nd", childDropId, alias)),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "Caller root not found.",
+      code: "caller_root_not_found",
+    });
+    expect(db.runs).toBe(0);
+    expect(bucket.getKeys).toEqual([createRemoteAliasKey(alias)]);
+  });
+
+  it("authorizes the built-in target independently from caller branch authority", async () => {
+    const targetOwner = "target-owner";
+    const projections = new Map([
+      [rootDropId, projection(rootDropId, "public", "caller-owner")],
+      [childDropId, projection(childDropId, "private", targetOwner)],
+    ]);
+    const deniedBucket = createSeededBucket();
+    const denied = await onRequest({
+      request: createResolveRequest(createInvokeBody(), accountId),
+      env: {
+        R2_BUCKET: deniedBucket as unknown as R2Bucket,
+        DB: new MemoryD1Database(projections) as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(denied.status).toBe(404);
+    await expect(denied.json()).resolves.toEqual({
+      error: "Drop not found.",
+      code: "drop_not_found",
+    });
+    expect(deniedBucket.getKeys).not.toContain(childDropId);
+
+    const ownerBucket = createSeededBucket();
+    ownerBucket.seed(
+      createBranchKey(rootDropId, branchId),
+      JSON.stringify({
+        version: 1,
+        branchId,
+        rootDropId,
+        baseDropId: rootDropId,
+        mode: "clone",
+        status: "active",
+        ownerAccountId: "forged-owner",
+        writerAccountId: targetOwner,
+        writerClientId: "client-1",
+        headSnapshotId: 0,
+        headEventSeq: null,
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+    );
+    const allowed = await onRequest({
+      request: createResolveRequest(createInvokeBody(), targetOwner),
+      env: {
+        R2_BUCKET: ownerBucket as unknown as R2Bucket,
+        DB: new MemoryD1Database(projections) as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: {},
+    } as unknown as Parameters<typeof onRequest>[0]);
+    expect(allowed.status).toBe(200);
   });
 
   it("rejects unsupported plugins instead of resolving remote code", async () => {
@@ -251,7 +549,10 @@ describe("functions api nullplug resolve contracts", () => {
 
     const response = await onRequest({
       request: createResolveRequest(createInvokeBody("remote-plugin")),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
 
@@ -273,9 +574,7 @@ describe("functions api nullplug resolve contracts", () => {
     });
     seedActiveRemoteManifest(bucket, "remote.summary");
     const fetchImpl: typeof fetch = async (input, init) => {
-      expect(String(input)).toBe(
-        "https://plugins.nulldown.test/summary",
-      );
+      expect(String(input)).toBe("https://plugins.nulldown.test/summary");
       expect(new Headers(init?.headers).get("Content-Type")).toBe(
         NULLPLUG_INVOKE_CONTENT_TYPE,
       );
@@ -298,16 +597,15 @@ describe("functions api nullplug resolve contracts", () => {
 
     const response = await onRequest({
       request: createResolveRequest(
-        createInvokeBody(
-          "remote.summary",
-          childDropId,
-          rootDropId,
-          undefined,
-          ["render", "drop.read", "null.call"],
-        ),
+        createInvokeBody("remote.summary", childDropId, rootDropId, undefined, [
+          "render",
+          "drop.read",
+          "null.call",
+        ]),
       ),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
         NULLPLUG_REGISTRY_ALLOWED_HOSTS: "plugins.nulldown.test",
         fetchImpl,
       },
@@ -338,6 +636,7 @@ describe("functions api nullplug resolve contracts", () => {
       ),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
         NULLPLUG_REGISTRY_ALLOWED_HOSTS: "plugins.nulldown.test",
         fetchImpl,
       },
@@ -356,13 +655,16 @@ describe("functions api nullplug resolve contracts", () => {
     seedActiveRemoteManifest(bucket, "remote.summary");
     const fetchImpl = jest.fn<typeof fetch>();
     const body = createInvokeBody("remote.summary", childDropId);
-    body.call.caller = {};
-    body.context.rootPolicyRef = rootDropId;
+    body.call.caller = {} as never;
+    (
+      body.context as typeof body.context & { rootPolicyRef: string }
+    ).rootPolicyRef = rootDropId;
 
     const response = await onRequest({
       request: createResolveRequest(body),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
         NULLPLUG_REGISTRY_ALLOWED_HOSTS: "plugins.nulldown.test",
         fetchImpl,
       },
@@ -391,6 +693,7 @@ describe("functions api nullplug resolve contracts", () => {
       ),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
         NULLPLUG_REGISTRY_ALLOWED_HOSTS: "plugins.nulldown.test",
         fetchImpl,
       },
@@ -413,7 +716,10 @@ describe("functions api nullplug resolve contracts", () => {
 
     const response = await onRequest({
       request: createResolveRequest(createInvokeBody()),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
 
@@ -435,6 +741,7 @@ describe("functions api nullplug resolve contracts", () => {
       ),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
         NULLPLUG_REGISTRY_ALLOWED_HOSTS: "plugins.nulldown.test",
         fetchImpl,
       },
@@ -454,7 +761,10 @@ describe("functions api nullplug resolve contracts", () => {
 
     const malformed = await onRequest({
       request: createResolveRequest(createInvokeBody()),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
     await expect(malformed.json()).resolves.toMatchObject({
@@ -466,7 +776,10 @@ describe("functions api nullplug resolve contracts", () => {
       request: createResolveRequest(
         createInvokeBody("nd", childDropId, rootDropId, "OtherRoot5566"),
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
     await expect(mismatch.json()).resolves.toMatchObject({

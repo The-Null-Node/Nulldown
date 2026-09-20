@@ -14,7 +14,7 @@ import type {
   NullplugMutation,
   NullplugYield,
 } from "../../../shared/nullplug/types";
-import type { VoidNullplugRuntime } from "../../../shared/nullplug/runtime";
+import type { NullplugRuntime } from "../../../shared/nullplug/runtime";
 import type { NullplugUiPrimitive } from "../../../shared/nullplug/ui";
 import { discoverRenderInvocations } from "./renderDiscovery";
 import { invokeRenderBlock } from "./renderInvocation";
@@ -39,7 +39,7 @@ export interface RenderPipelineOptions {
   caller?: NullplugCaller;
   maxDepth?: number;
   runtimePolicy?: RootRuntimePolicy | null;
-  nullplugRuntime?: VoidNullplugRuntime;
+  nullplugRuntime?: NullplugRuntime;
   providerId?: string;
   providerBaseUrl?: string;
   capabilities?: readonly string[];

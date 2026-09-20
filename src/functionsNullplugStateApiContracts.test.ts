@@ -310,7 +310,10 @@ describe("functions api nullplug state contracts", () => {
           sourceContentHash: rootContentHash,
         },
       }),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
     expect(missingRoot.status).toBe(404);

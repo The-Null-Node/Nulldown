@@ -4,7 +4,7 @@ import {
   isNullplugRuntimeError,
   NullplugRuntimeError,
   type NullplugRuntimeResolver,
-  type VoidNullplugRuntime,
+  type NullplugRuntime,
 } from "../../../shared/nullplug/runtime";
 import type {
   JsonValue,
@@ -100,7 +100,7 @@ const invocationPolicy = (
     }
     return request;
   },
-  validate: (response: Awaited<ReturnType<VoidNullplugRuntime["invoke"]>>) => {
+  validate: (response: Awaited<ReturnType<NullplugRuntime["invoke"]>>) => {
     const validated = validateNullplugRuntimeResult(
       {
         result: response.result,

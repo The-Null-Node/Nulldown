@@ -6,7 +6,7 @@ import {
 import { filterNullplugInvokeResponse } from "../../../../shared/nullplug/resultPolicy";
 import {
   NullplugRuntimeError,
-  type VoidRuntimePolicy,
+  type NullplugRuntimePolicy,
 } from "../../../../shared/nullplug/runtime";
 import type { NullplugInvokeRequest } from "../../../../shared/nullplug/types";
 import {
@@ -20,6 +20,8 @@ export interface CreateCloudflareRuntimePolicyOptions {
   bindings: CloudflareProviderPayloadBindings;
   /** Built-ins that remain invokable when no caller root was supplied. */
   trustedPluginIds: readonly string[];
+  /** Canonical caller root already authorized by the route boundary. */
+  preauthorizedCallerRootDropId?: string;
 }
 
 const callerRootId = (request: NullplugInvokeRequest): string | null => {
@@ -37,8 +39,18 @@ const callerRootId = (request: NullplugInvokeRequest): string | null => {
 const loadRootPolicy = async (
   bindings: CloudflareProviderPayloadBindings,
   rootDropId: string,
+  preauthorizedCallerRootDropId?: string,
 ): Promise<RootRuntimePolicy> => {
-  const root = await readProviderDropPayload(bindings, rootDropId);
+  const root = await readProviderDropPayload(
+    bindings,
+    rootDropId,
+    preauthorizedCallerRootDropId
+      ? {
+          kind: "preauthorized",
+          canonicalDropId: preauthorizedCallerRootDropId,
+        }
+      : undefined,
+  );
   if (!root) {
     throw new NullplugRuntimeError(
       "policy_source_unreadable",
@@ -60,7 +72,8 @@ const loadRootPolicy = async (
 export const createCloudflareRuntimePolicy = ({
   bindings,
   trustedPluginIds,
-}: CreateCloudflareRuntimePolicyOptions): VoidRuntimePolicy => {
+  preauthorizedCallerRootDropId,
+}: CreateCloudflareRuntimePolicyOptions): NullplugRuntimePolicy => {
   const trustedPlugins = new Set(trustedPluginIds);
   const policyByPreparedRequest = new WeakMap<
     NullplugInvokeRequest,
@@ -82,7 +95,12 @@ export const createCloudflareRuntimePolicy = ({
         return request;
       }
 
-      const policy = await loadRootPolicy(bindings, rootDropId);
+      const policyRootDropId = preauthorizedCallerRootDropId ?? rootDropId;
+      const policy = await loadRootPolicy(
+        bindings,
+        policyRootDropId,
+        preauthorizedCallerRootDropId,
+      );
       const nullplugPolicies = policy.nullplugs;
       const pluginPolicy =
         nullplugPolicies &&

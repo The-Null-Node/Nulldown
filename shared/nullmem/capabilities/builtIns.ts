@@ -190,13 +190,15 @@ const builtInMcpCapabilityDefinitions: BuiltInMcpCapabilityDefinition[] = [
     toolName: "drop_create",
     title: "Create Drop",
     description:
-      "Creates a plaintext Nulldown drop through MCP using the configured Nulldown client.",
+      "Creates an account-owned sealed Nulldown drop by default with an authoring-capable credential; legacyPlaintext explicitly opts into authenticated plaintext creation.",
     labels: ["drop", "drop-write", "mutation"],
     whenToUse: [
-      "Create a new hosted strategy, evidence, or graph seed from an MCP client.",
+      "Create a new account-owned sealed strategy, evidence, or graph seed from an MCP client.",
+      "Set legacyPlaintext only for a deliberate legacy plaintext write that will not enter Remote Library.",
     ],
     whenNotToUse: [
       "Do not use to update existing branch plans when an atomic branch diff is the smaller operation.",
+      "Do not treat authentication-only credentials as account-owned sealing authority.",
     ],
   },
   {
@@ -241,6 +243,20 @@ const builtInMcpCapabilityDefinitions: BuiltInMcpCapabilityDefinition[] = [
     ],
     whenNotToUse: [
       "Do not use for whole-document rewrites when a smaller insert or delete is available.",
+    ],
+  },
+  {
+    toolName: "memory_stale_check",
+    title: "Check Stale NullMem",
+    description:
+      "Queries branch-scoped NullMem with freshness enabled to evaluate matching facts, procedures, or capabilities for staleness and supersession.",
+    labels: ["nullmem", "memory-query", "stale-memory", "freshness", "query"],
+    whenToUse: [
+      "Check freshness before trusting current-work, procedure, or capability memory for decisions.",
+      "Use query, kind, labels, or limit to scope the freshness check to relevant memory records.",
+    ],
+    whenNotToUse: [
+      "Do not use as proof of primary branch content; inspect returned source refs or exact branch text.",
     ],
   },
   {

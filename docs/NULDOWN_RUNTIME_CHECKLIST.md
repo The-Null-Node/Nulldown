@@ -106,7 +106,7 @@ Expanded tracker branch: `rootDropId=Nr3hhveS67B5`, `branchId=clone_anonymous`
 ## Phase 9: Provider Runtime
 
 - [ ] Create `NullProvider` wrapper shape.
-- [ ] Keep `DropProviderPort` as a child storage/sync capability under `VoidProvider`.
+- [x] Keep `DropProviderPort` as a domain-scoped browser storage/sync capability; do not introduce a universal facade.
 - [x] Add provider-level nullplug resolver boundary.
 - [ ] Add provider policy service boundary.
 - [x] Decide `/api/nullplug/resolve` vs `/api/render/:id`.

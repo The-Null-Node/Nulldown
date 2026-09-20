@@ -55,6 +55,12 @@ interface EnhancedMarkdownProps {
   allowedUrls?: readonly string[];
 }
 
+type MarkdownDivProps = React.ComponentPropsWithoutRef<"div"> & {
+  node: unknown;
+  dataHost?: unknown;
+  dataGraph?: unknown;
+};
+
 const asList = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
@@ -267,12 +273,14 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
           dataGraph,
           children,
           ...props
-        }) => {
-          const classes = typeof divClass === "string" ? divClass.split(/\s+/) : [];
+        }: MarkdownDivProps) => {
+          const classes =
+            typeof divClass === "string" ? divClass.split(/\s+/) : [];
           const graphData =
             typeof dataGraph === "string"
               ? dataGraph
-              : typeof (props as Record<string, unknown>)["data-graph"] === "string"
+              : typeof (props as Record<string, unknown>)["data-graph"] ===
+                  "string"
                 ? ((props as Record<string, unknown>)["data-graph"] as string)
                 : null;
           if (classes.includes("nulldown-graph") && graphData) {

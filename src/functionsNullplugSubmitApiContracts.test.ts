@@ -245,8 +245,12 @@ describe("functions api nullplug submit contracts", () => {
     const queryResponse = await onResolvedQueryRequest({
       request: new Request(
         `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query?resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&kind=ui.response&primitiveId=approval-form&q=approved%20true`,
+        { headers: { "x-nulldown-account-id": accountId } },
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { rootId: rootDropId, branchId },
     } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
     const queryBody = (await queryResponse.json()) as {

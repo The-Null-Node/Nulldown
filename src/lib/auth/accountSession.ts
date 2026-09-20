@@ -2,7 +2,7 @@ import {
   getActiveVaultUser,
   getLocalAccountSummary,
   getUnlockedVault,
-} from "../void/vault/passkeyVault";
+} from "./vault/passkey-vault";
 import { serializeCanonicalJson } from "../../../shared/drop/types";
 
 export interface AccountSessionCredentials {

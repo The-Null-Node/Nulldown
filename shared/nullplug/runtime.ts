@@ -9,11 +9,7 @@ import {
 
 /** Value returned by a compiled, remote, or policy-backed nullplug invoker. */
 export type NullplugRuntimeReturn =
-  | NullplugInvokeResponse
-  | NullplugResult
-  | string
-  | null
-  | undefined;
+  NullplugInvokeResponse | NullplugResult | string | null | undefined;
 
 /** Executes one already-resolved nullplug invocation. */
 export type NullplugRuntimeInvoker = (
@@ -40,8 +36,8 @@ export interface NullplugRuntimeResolver {
     | Promise<NullplugRuntimeInvoker | NullplugResolvedInvoker | null>;
 }
 
-/** Provider policy that prepares an invocation and filters its normalized result. */
-export interface VoidRuntimePolicy {
+/** Policy that prepares a Nullplug invocation and filters its normalized result. */
+export interface NullplugRuntimePolicy {
   /** Authorizes and optionally narrows a call before any resolver or invoker executes. */
   prepare(
     request: NullplugInvokeRequest,
@@ -53,20 +49,20 @@ export interface VoidRuntimePolicy {
   ): NullplugInvokeResponse | Promise<NullplugInvokeResponse>;
 }
 
-/** Provider-owned nullplug invocation, normalization, and policy boundary. */
-export interface VoidNullplugRuntime {
+/** Nullplug invocation, normalization, and policy boundary. */
+export interface NullplugRuntime {
   /** Checks whether this runtime currently owns a call without invoking it. */
   supports?(request: NullplugInvokeRequest): Promise<boolean>;
   /** Resolves, invokes, normalizes, and validates one nullplug call. */
   invoke(request: NullplugInvokeRequest): Promise<NullplugInvokeResponse>;
 }
 
-/** Dependencies used to compose a provider-owned nullplug runtime. */
+/** Dependencies used to compose a Nullplug runtime instance. */
 export interface CreateNullplugRuntimeOptions {
   /** Ordered resolvers. The first resolver that recognizes the plugin wins. */
   resolvers: readonly NullplugRuntimeResolver[];
-  /** Optional provider policy applied before resolution and after normalization. */
-  policy?: VoidRuntimePolicy;
+  /** Optional policy applied before resolution and after normalization. */
+  policy?: NullplugRuntimePolicy;
 }
 
 /** Stable runtime failure carrying a machine-readable boundary error code. */
@@ -114,11 +110,11 @@ const isResolvedInvoker = (
   value: NullplugRuntimeInvoker | NullplugResolvedInvoker,
 ): value is NullplugResolvedInvoker => typeof value !== "function";
 
-/** Creates the concrete runtime wrapper shared by server and browser providers. */
+/** Creates a runtime instance shared by server and browser adapters. */
 export const createNullplugRuntime = ({
   resolvers,
   policy,
-}: CreateNullplugRuntimeOptions): VoidNullplugRuntime => ({
+}: CreateNullplugRuntimeOptions): NullplugRuntime => ({
   async supports(request) {
     try {
       for (const resolver of resolvers) {
@@ -162,7 +158,7 @@ export const createNullplugRuntime = ({
         } else {
           invoker = resolved;
         }
-        if (invoker) break;
+        break;
       }
     } catch (error) {
       if (isNullplugRuntimeError(error)) throw error;

@@ -1,5 +1,5 @@
 import MiniSearch from "minisearch";
-import type { Searchable, SearchableGroup } from "./searchable";
+import type { Searchable } from "./searchable";
 
 export interface OfflineSearchDocument {
   id: string;

@@ -1,9 +1,15 @@
-import { exportJWK, generateKeyPair, SignJWT, type KeyLike } from "jose";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { D1Database } from "@cloudflare/workers-types";
 
-import { onRequest as callbackRoute, onRequestGet as callback } from "../functions/api/auth/open/callback";
+import {
+  onRequest as callbackRoute,
+  onRequestGet as callback,
+} from "../functions/api/auth/open/callback";
 import { onRequestGet as login } from "../functions/api/auth/open/login";
-import { onRequest as logoutRoute, onRequestPost as logout } from "../functions/api/auth/open/logout";
+import {
+  onRequest as logoutRoute,
+  onRequestPost as logout,
+} from "../functions/api/auth/open/logout";
 import { onRequestGet as principal } from "../functions/api/auth/open/principal";
 import type { OpenAuthBffEnvironment } from "../functions/api/_lib/accounts/openAuth/service";
 
@@ -55,7 +61,10 @@ class MemoryD1Database {
 
   run(sql: string, params: unknown[]): void {
     this.sqlLog.push(sql);
-    if (/\b(?:accounts|branches|drops)\b/i.test(sql) && !sql.includes("auth_")) {
+    if (
+      /\b(?:accounts|branches|drops)\b/i.test(sql) &&
+      !sql.includes("auth_")
+    ) {
       this.legacyWriteCount += 1;
     }
     if (sql.includes("INSERT INTO auth_callback_transactions")) {
@@ -79,7 +88,8 @@ class MemoryD1Database {
     if (sql.includes("DELETE FROM auth_callback_transactions")) {
       const stateHash = String(params[0]);
       const transaction = this.transactions.get(stateHash);
-      if (!transaction || transaction.expires_at <= Number(params[1])) return null;
+      if (!transaction || transaction.expires_at <= Number(params[1]))
+        return null;
       this.transactions.delete(stateHash);
       return { return_to: transaction.return_to };
     }
@@ -102,21 +112,33 @@ class MemoryR2Bucket {
 
 class FakeOpenAuthFetcher {
   readonly requests: Array<{ url: string; authorization: string | null }> = [];
-  readonly exchanges: Array<{ code: string; redirectUri: string; verifier: string }> = [];
+  readonly exchanges: Array<{
+    code: string;
+    redirectUri: string;
+    verifier: string;
+  }> = [];
   readonly refreshes: string[] = [];
-  private readonly codes = new Map<string, { access: string; refresh: string; expiresIn: number }>();
-  private readonly refreshTokens = new Map<string, { access: string; refresh: string; expiresIn: number }>();
+  private readonly codes = new Map<
+    string,
+    { access: string; refresh: string; expiresIn: number }
+  >();
+  private readonly refreshTokens = new Map<
+    string,
+    { access: string; refresh: string; expiresIn: number }
+  >();
 
   private constructor(
-    private readonly privateKey: KeyLike | CryptoKey,
+    private readonly privateKey: CryptoKey,
     private readonly jwk: JsonWebKey,
   ) {}
 
   static async create(): Promise<FakeOpenAuthFetcher> {
     const pair = await generateKeyPair("ES256");
-    const jwk = await exportJWK(pair.publicKey);
-    jwk.kid = "test-key";
-    jwk.alg = "ES256";
+    const jwk = {
+      ...(await exportJWK(pair.publicKey)),
+      kid: "test-key",
+      alg: "ES256",
+    } as unknown as JsonWebKey;
     return new FakeOpenAuthFetcher(pair.privateKey, jwk);
   }
 
@@ -144,7 +166,12 @@ class FakeOpenAuthFetcher {
       .sign(this.privateKey);
   }
 
-  queueCode(code: string, access: string, refresh = `refresh-${code}`, expiresIn = 300): void {
+  queueCode(
+    code: string,
+    access: string,
+    refresh = `refresh-${code}`,
+    expiresIn = 300,
+  ): void {
     this.codes.set(code, { access, refresh, expiresIn });
   }
 
@@ -154,11 +181,17 @@ class FakeOpenAuthFetcher {
     nextRefresh = `next-${refresh}`,
     expiresIn = 300,
   ): void {
-    this.refreshTokens.set(refresh, { access, refresh: nextRefresh, expiresIn });
+    this.refreshTokens.set(refresh, {
+      access,
+      refresh: nextRefresh,
+      expiresIn,
+    });
   }
 
   async fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = new URL(input instanceof Request ? input.url : input.toString());
+    const url = new URL(
+      input instanceof Request ? input.url : input.toString(),
+    );
     this.requests.push({
       url: url.toString(),
       authorization: new Headers(init?.headers).get("Authorization"),
@@ -205,7 +238,9 @@ class FakeOpenAuthFetcher {
 }
 
 const setCookies = (response: Response): string[] => {
-  const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+  const headers = response.headers as Headers & {
+    getSetCookie?: () => string[];
+  };
   if (headers.getSetCookie) return headers.getSetCookie();
   const raw = headers.get("Set-Cookie");
   return raw ? raw.split(/, (?=__Host-)/) : [];
@@ -245,7 +280,9 @@ const loginFlow = async (
 }> => {
   const response = await login(
     routeContext(
-      new Request(`${appOrigin}/api/auth/open/login?returnTo=${encodeURIComponent(returnTo)}`),
+      new Request(
+        `${appOrigin}/api/auth/open/login?returnTo=${encodeURIComponent(returnTo)}`,
+      ),
       env,
     ),
   );
@@ -253,8 +290,12 @@ const loginFlow = async (
   const transactionSetCookie = setCookies(response).find((value) =>
     value.startsWith(`${transactionCookieName}=`),
   );
-  if (!transactionSetCookie) throw new Error("Expected authorization transaction cookie.");
-  const transactionCookie = cookie([transactionSetCookie], transactionCookieName);
+  if (!transactionSetCookie)
+    throw new Error("Expected authorization transaction cookie.");
+  const transactionCookie = cookie(
+    [transactionSetCookie],
+    transactionCookieName,
+  );
   return {
     state: location.searchParams.get("state") ?? "",
     nonce: location.searchParams.get("nonce") ?? "",
@@ -263,18 +304,24 @@ const loginFlow = async (
   };
 };
 
-const callbackRequest = (code: string, state: string, transactionCookie: string): Request =>
-  new Request(`${appOrigin}/api/auth/open/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`, {
-    headers: { Cookie: transactionCookie },
-  });
+const callbackRequest = (
+  code: string,
+  state: string,
+  transactionCookie: string,
+): Request =>
+  new Request(
+    `${appOrigin}/api/auth/open/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+    {
+      headers: { Cookie: transactionCookie },
+    },
+  );
 
 describe("functions OpenAuth Pages BFF contracts", () => {
   it("fails closed with a structured 503 when authority configuration is absent", async () => {
     const response = await login(
-      routeContext(
-        new Request(`${appOrigin}/api/auth/open/login`),
-        { DB: new MemoryD1Database() as unknown as D1Database },
-      ),
+      routeContext(new Request(`${appOrigin}/api/auth/open/login`), {
+        DB: new MemoryD1Database() as unknown as D1Database,
+      }),
     );
 
     expect(response.status).toBe(503);
@@ -289,13 +336,17 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const authority = await FakeOpenAuthFetcher.create();
     const response = await login(
       routeContext(
-        new Request(`${appOrigin}/api/auth/open/login?returnTo=https%3A%2F%2Fevil.test`),
+        new Request(
+          `${appOrigin}/api/auth/open/login?returnTo=https%3A%2F%2Fevil.test`,
+        ),
         createEnv(database, authority),
       ),
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "invalid_return_to" });
+    await expect(response.json()).resolves.toEqual({
+      error: "invalid_return_to",
+    });
     expect(database.transactions.size).toBe(0);
   });
 
@@ -318,7 +369,14 @@ describe("functions OpenAuth Pages BFF contracts", () => {
 
     const mismatchedNonce = `${flow.state.startsWith("x") ? "y" : "x"}${flow.state.slice(1)}`;
     const response = await callback(
-      routeContext(callbackRequest("code-state-mismatch", mismatchedNonce, flow.transactionCookie), env),
+      routeContext(
+        callbackRequest(
+          "code-state-mismatch",
+          mismatchedNonce,
+          flow.transactionCookie,
+        ),
+        env,
+      ),
     );
 
     expect(response.status).toBe(400);
@@ -332,12 +390,21 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const env = createEnv(database, authority);
     const flow = await loginFlow(env);
     const [, encoded] = flow.transactionCookie.split("=");
-    const altered = JSON.parse(Buffer.from(encoded, "base64url").toString()) as Record<string, unknown>;
+    const altered = JSON.parse(
+      Buffer.from(encoded, "base64url").toString(),
+    ) as Record<string, unknown>;
     delete altered.verifier;
     const missingVerifierCookie = `${transactionCookieName}=${Buffer.from(JSON.stringify(altered)).toString("base64url")}`;
 
     const response = await callback(
-      routeContext(callbackRequest("code-missing-verifier", flow.state, missingVerifierCookie), env),
+      routeContext(
+        callbackRequest(
+          "code-missing-verifier",
+          flow.state,
+          missingVerifierCookie,
+        ),
+        env,
+      ),
     );
 
     expect(response.status).toBe(400);
@@ -352,15 +419,23 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const authority = await FakeOpenAuthFetcher.create();
     const env = createEnv(database, authority, bucket);
     const flow = await loginFlow(env, "/restore?step=confirm");
-    authority.queueCode("code-success", await authority.issueAccessToken("user_recoverable"));
+    authority.queueCode(
+      "code-success",
+      await authority.issueAccessToken("user_recoverable"),
+    );
 
     const callbackResponse = await callback(
-      routeContext(callbackRequest("code-success", flow.state, flow.transactionCookie), env),
+      routeContext(
+        callbackRequest("code-success", flow.state, flow.transactionCookie),
+        env,
+      ),
     );
     const callbackCookies = setCookies(callbackResponse);
 
     expect(callbackResponse.status).toBe(302);
-    expect(callbackResponse.headers.get("Location")).toBe("/restore?step=confirm");
+    expect(callbackResponse.headers.get("Location")).toBe(
+      "/restore?step=confirm",
+    );
     expect(authority.exchanges).toEqual([
       expect.objectContaining({
         code: "code-success",
@@ -386,7 +461,9 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     expect(database.principalWriteCount).toBe(0);
     expect(database.legacyWriteCount).toBe(0);
     expect(bucket.writeCount).toBe(0);
-    expect(authority.requests.every((request) => request.authorization === null)).toBe(true);
+    expect(
+      authority.requests.every((request) => request.authorization === null),
+    ).toBe(true);
 
     const principalResponse = await principal(
       routeContext(
@@ -416,12 +493,26 @@ describe("functions OpenAuth Pages BFF contracts", () => {
 
     expect(
       (
-        await callback(routeContext(callbackRequest("code-first", first.state, first.transactionCookie), env))
+        await callback(
+          routeContext(
+            callbackRequest("code-first", first.state, first.transactionCookie),
+            env,
+          ),
+        )
       ).status,
     ).toBe(302);
     expect(
       (
-        await callback(routeContext(callbackRequest("code-second", second.state, second.transactionCookie), env))
+        await callback(
+          routeContext(
+            callbackRequest(
+              "code-second",
+              second.state,
+              second.transactionCookie,
+            ),
+            env,
+          ),
+        )
       ).status,
     ).toBe(302);
     expect(database.users).toEqual(new Set(["user_same_identity"]));
@@ -433,14 +524,26 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const authority = await FakeOpenAuthFetcher.create();
     const env = createEnv(database, authority);
     const flow = await loginFlow(env);
-    authority.queueCode("code-unknown-user", await authority.issueAccessToken("user_unknown"));
+    authority.queueCode(
+      "code-unknown-user",
+      await authority.issueAccessToken("user_unknown"),
+    );
 
     const response = await callback(
-      routeContext(callbackRequest("code-unknown-user", flow.state, flow.transactionCookie), env),
+      routeContext(
+        callbackRequest(
+          "code-unknown-user",
+          flow.state,
+          flow.transactionCookie,
+        ),
+        env,
+      ),
     );
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "invalid_principal" });
+    await expect(response.json()).resolves.toEqual({
+      error: "invalid_principal",
+    });
     expect(database.users).toEqual(new Set());
     expect(database.principalWriteCount).toBe(0);
     expect(database.legacyWriteCount).toBe(0);
@@ -453,7 +556,11 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const env = createEnv(database, authority);
     const flow = await loginFlow(env);
     authority.queueCode("code-replay", await authority.issueAccessToken());
-    const request = callbackRequest("code-replay", flow.state, flow.transactionCookie);
+    const request = callbackRequest(
+      "code-replay",
+      flow.state,
+      flow.transactionCookie,
+    );
 
     expect((await callback(routeContext(request, env))).status).toBe(302);
     expect((await callback(routeContext(request, env))).status).toBe(400);
@@ -462,28 +569,60 @@ describe("functions OpenAuth Pages BFF contracts", () => {
   });
 
   it.each([
-    ["expired", async (authority: FakeOpenAuthFetcher) => authority.issueAccessToken("user_01", { expiresAt: Math.floor(Date.now() / 1000) - 1 })],
-    ["forged", async (authority: FakeOpenAuthFetcher) => `${await authority.issueAccessToken()}x`],
-    ["wrong issuer", async (authority: FakeOpenAuthFetcher) => authority.issueAccessToken("user_01", { issuer: "https://other-issuer.test" })],
-    ["wrong audience", async (authority: FakeOpenAuthFetcher) => authority.issueAccessToken("user_01", { audience: "other-client" })],
-  ])("rejects %s access tokens without creating a user principal", async (_name, createToken) => {
-    const database = new MemoryD1Database();
-    const authority = await FakeOpenAuthFetcher.create();
-    const env = createEnv(database, authority);
-    const flow = await loginFlow(env);
-    authority.queueCode("code-invalid-token", await createToken(authority));
+    [
+      "expired",
+      async (authority: FakeOpenAuthFetcher) =>
+        authority.issueAccessToken("user_01", {
+          expiresAt: Math.floor(Date.now() / 1000) - 1,
+        }),
+    ],
+    [
+      "forged",
+      async (authority: FakeOpenAuthFetcher) =>
+        `${await authority.issueAccessToken()}x`,
+    ],
+    [
+      "wrong issuer",
+      async (authority: FakeOpenAuthFetcher) =>
+        authority.issueAccessToken("user_01", {
+          issuer: "https://other-issuer.test",
+        }),
+    ],
+    [
+      "wrong audience",
+      async (authority: FakeOpenAuthFetcher) =>
+        authority.issueAccessToken("user_01", { audience: "other-client" }),
+    ],
+  ])(
+    "rejects %s access tokens without creating a user principal",
+    async (_name, createToken) => {
+      const database = new MemoryD1Database();
+      const authority = await FakeOpenAuthFetcher.create();
+      const env = createEnv(database, authority);
+      const flow = await loginFlow(env);
+      authority.queueCode("code-invalid-token", await createToken(authority));
 
-    const response = await callback(
-      routeContext(callbackRequest("code-invalid-token", flow.state, flow.transactionCookie), env),
-    );
+      const response = await callback(
+        routeContext(
+          callbackRequest(
+            "code-invalid-token",
+            flow.state,
+            flow.transactionCookie,
+          ),
+          env,
+        ),
+      );
 
-    expect(response.status).toBe(401);
-    expect(database.users.size).toBe(0);
-    expect(database.principalWriteCount).toBe(0);
-    expect(setCookies(response)).toEqual(
-      expect.arrayContaining([expect.stringContaining(`${transactionCookieName}=; Max-Age=0`)]),
-    );
-  });
+      expect(response.status).toBe(401);
+      expect(database.users.size).toBe(0);
+      expect(database.principalWriteCount).toBe(0);
+      expect(setCookies(response)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(`${transactionCookieName}=; Max-Age=0`),
+        ]),
+      );
+    },
+  );
 
   it("returns anonymous for invalid access cookies without returning refresh material", async () => {
     const database = new MemoryD1Database();
@@ -492,7 +631,9 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const response = await principal(
       routeContext(
         new Request(`${appOrigin}/api/auth/open/principal`, {
-          headers: { Cookie: `${accessCookieName}=forged; ${refreshCookieName}=secret-refresh` },
+          headers: {
+            Cookie: `${accessCookieName}=forged; ${refreshCookieName}=secret-refresh`,
+          },
         }),
         env,
       ),
@@ -511,7 +652,8 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const expiredAccess = await authority.issueAccessToken("user_recoverable", {
       expiresAt: Math.floor(Date.now() / 1000) - 1,
     });
-    const refreshedAccess = await authority.issueAccessToken("user_recoverable");
+    const refreshedAccess =
+      await authority.issueAccessToken("user_recoverable");
     authority.queueRefresh("refresh-before", refreshedAccess, "refresh-after");
 
     const response = await principal(
@@ -570,18 +712,27 @@ describe("functions OpenAuth Pages BFF contracts", () => {
     const env = createEnv(database, authority);
     const invalidOrigin = await logout(
       routeContext(
-        new Request(`${appOrigin}/api/auth/open/logout`, { method: "POST", headers: { Origin: "https://evil.test" } }),
+        new Request(`${appOrigin}/api/auth/open/logout`, {
+          method: "POST",
+          headers: { Origin: "https://evil.test" },
+        }),
         env,
       ),
     );
     const response = await logout(
       routeContext(
-        new Request(`${appOrigin}/api/auth/open/logout`, { method: "POST", headers: { Origin: appOrigin } }),
+        new Request(`${appOrigin}/api/auth/open/logout`, {
+          method: "POST",
+          headers: { Origin: appOrigin },
+        }),
         env,
       ),
     );
     const method = await logoutRoute(
-      routeContext(new Request(`${appOrigin}/api/auth/open/logout`, { method: "GET" }), env),
+      routeContext(
+        new Request(`${appOrigin}/api/auth/open/logout`, { method: "GET" }),
+        env,
+      ),
     );
 
     expect(invalidOrigin.status).toBe(403);
@@ -595,6 +746,17 @@ describe("functions OpenAuth Pages BFF contracts", () => {
       ]),
     );
     expect(method.status).toBe(405);
-    expect((await callbackRoute(routeContext(new Request(`${appOrigin}/api/auth/open/callback`, { method: "POST" }), env))).status).toBe(405);
+    expect(
+      (
+        await callbackRoute(
+          routeContext(
+            new Request(`${appOrigin}/api/auth/open/callback`, {
+              method: "POST",
+            }),
+            env,
+          ),
+        )
+      ).status,
+    ).toBe(405);
   });
 });

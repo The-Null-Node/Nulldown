@@ -135,7 +135,7 @@ describe("nulledit editor", () => {
             kind: "action",
             id: `action-${invocation}`,
             label: "Act",
-            source: { callId: "stale-call" },
+            source: { callId: "stale-call", rootDropId: "root" },
           },
         ],
       };

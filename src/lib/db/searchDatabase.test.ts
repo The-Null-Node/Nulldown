@@ -18,7 +18,10 @@ class MemorySearchDb {
         return this;
       },
       async run() {
-        if (sql.includes("INSERT INTO search_index") || sql.includes("ON CONFLICT")) {
+        if (
+          sql.includes("INSERT INTO search_index") ||
+          sql.includes("ON CONFLICT")
+        ) {
           const id = String(params[0]);
           self.rows.set(id, {
             id: params[0],
@@ -57,17 +60,30 @@ class MemorySearchDb {
     };
   }
 
-  private matchRows(_sql: string, params: unknown[]): Record<string, unknown>[] {
+  private matchRows(
+    _sql: string,
+    params: unknown[],
+  ): Record<string, unknown>[] {
     const results: Record<string, unknown>[] = [];
-    const visibilityFilter = params.filter((p) => typeof p === "string" && (p === "public" || p === "unlisted"));
-    const ownerFilter = params.filter((p) => typeof p === "string" && p.length > 0 && p !== "public" && p !== "unlisted" && !String(p).startsWith("%"));
+    const visibilityFilter = params.filter(
+      (p) => typeof p === "string" && (p === "public" || p === "unlisted"),
+    );
+    const ownerFilter = params.filter(
+      (p) =>
+        typeof p === "string" &&
+        p.length > 0 &&
+        p !== "public" &&
+        p !== "unlisted" &&
+        !String(p).startsWith("%"),
+    );
     const limitIdx = params.findIndex((p) => typeof p === "number");
     let offset = 0;
     let limit = 50;
 
     if (limitIdx >= 0) {
       limit = Number(params[limitIdx]);
-      if (limitIdx + 1 < params.length) offset = Number(params[limitIdx + 1]) || 0;
+      if (limitIdx + 1 < params.length)
+        offset = Number(params[limitIdx + 1]) || 0;
     }
 
     for (const [, row] of this.rows) {
@@ -85,15 +101,23 @@ class MemorySearchDb {
         }
       }
       if (match && visibilityFilter.length > 0) {
-        if (!visibilityFilter.includes(String(row.visibility))) match = false;
+        if (
+          !visibilityFilter.includes(
+            String(row.visibility) as (typeof visibilityFilter)[number],
+          )
+        )
+          match = false;
       }
       if (match && ownerFilter.length > 0) {
-        if (!ownerFilter.includes(String(row.owner_account_id ?? ""))) match = false;
+        if (!ownerFilter.includes(String(row.owner_account_id ?? "")))
+          match = false;
       }
       if (match) results.push(row);
     }
 
-    results.sort((a, b) => (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0));
+    results.sort(
+      (a, b) => (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0),
+    );
     return results.slice(offset, offset + limit);
   }
 }

@@ -2,7 +2,6 @@ import { jest } from "@jest/globals";
 
 import { createAuthCommand } from "./auth";
 import { parseArgs } from "../core/args";
-import { generateCliDeviceKeyPair } from "../auth";
 import type {
   CliCredentialBundle,
   CliCredentialEnvelope,
@@ -19,7 +18,10 @@ const toBase64Url = (bytes: Uint8Array): string => {
   bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 };
 
 const encryptFor = async (
@@ -59,10 +61,9 @@ const encryptFor = async (
 
 describe("auth login command", () => {
   it("opens the verification URI, polls, decrypts, and persists the credential", async () => {
-    const device = jest.fn();
+    const device = jest.fn<(request: unknown) => Promise<unknown>>();
     const poll = jest.fn();
     const openBrowser = jest.fn(async () => undefined);
-    const keyPair = await generateCliDeviceKeyPair();
     const bundle: CliCredentialBundle = {
       baseUrl: "https://nulldown.app",
       userId: "user-1",
@@ -76,10 +77,11 @@ describe("auth login command", () => {
     };
     let publicKey: JsonWebKey | undefined;
     let delegateSigningPublicJwk: JsonWebKey | undefined;
-    device.mockImplementation(async (request: {
-      publicKey: JsonWebKey;
-      delegateSigningPublicJwk?: JsonWebKey;
-    }) => {
+    device.mockImplementation(async (rawRequest) => {
+      const request = rawRequest as {
+        publicKey: JsonWebKey;
+        delegateSigningPublicJwk?: JsonWebKey;
+      };
       publicKey = request.publicKey;
       delegateSigningPublicJwk = request.delegateSigningPublicJwk;
       return {
@@ -92,26 +94,27 @@ describe("auth login command", () => {
     });
     poll.mockImplementation(async () => ({
       status: "approved",
-      envelope: await encryptFor(
-        publicKey!,
-        {
-          ...encodeCliCredentialBundle(bundle),
-          authoring: {
-            signingKid: "account-kid",
-            signingPublicJwk: delegateSigningPublicJwk!,
-            deviceDelegation: encodeDropDeviceDelegation({
-              accountId: bundle.accountId,
-              credentialId: bundle.credentialId,
-              delegateSigningPublicJwk: delegateSigningPublicJwk!,
-              encryptionKid: "enc-kid",
-              encryptionPublicJwk: { kty: "RSA", n: "n", e: "AQAB" },
-              issuedAt: bundle.createdAt,
-              expiresAt: bundle.credentialExpiresAt,
-              signature: { kid: "account-kid", alg: "ECDSA_P256_SHA256", sig: "signature" },
-            }),
-          },
+      envelope: await encryptFor(publicKey!, {
+        ...encodeCliCredentialBundle(bundle),
+        authoring: {
+          signingKid: "account-kid",
+          signingPublicJwk: delegateSigningPublicJwk!,
+          deviceDelegation: encodeDropDeviceDelegation({
+            accountId: bundle.accountId,
+            credentialId: bundle.credentialId,
+            delegateSigningPublicJwk: delegateSigningPublicJwk!,
+            encryptionKid: "enc-kid",
+            encryptionPublicJwk: { kty: "RSA", n: "n", e: "AQAB" },
+            issuedAt: bundle.createdAt,
+            expiresAt: bundle.credentialExpiresAt,
+            signature: {
+              kid: "account-kid",
+              alg: "ECDSA_P256_SHA256",
+              sig: "signature",
+            },
+          }),
         },
-      ),
+      }),
     }));
     const writeCredential = jest.fn(async () => undefined);
     const print = jest.fn();
@@ -152,7 +155,7 @@ describe("auth login command", () => {
       }),
       expect.stringContaining("https://nulldown.app/auth/cli"),
     );
-    expect((print.mock.calls[0]?.[1] as string)).toContain("ABCD-EFGH-JKLM");
+    expect(print.mock.calls[0]?.[1] as string).toContain("ABCD-EFGH-JKLM");
     expect(print).toHaveBeenLastCalledWith(
       expect.objectContaining({ authenticated: true, accountId: "account-1" }),
     );
@@ -187,7 +190,9 @@ describe("auth login command", () => {
         config: {},
         args: parseArgs(["auth", "login", "--no-browser"]),
       }),
-    ).rejects.toThrow("CLI authorization expired before the browser approved it.");
+    ).rejects.toThrow(
+      "CLI authorization expired before the browser approved it.",
+    );
 
     expect(openBrowser).not.toHaveBeenCalled();
     expect(print).toHaveBeenCalledWith(
@@ -197,7 +202,7 @@ describe("auth login command", () => {
       }),
       expect.stringContaining("https://nulldown.app/auth/cli"),
     );
-    expect((print.mock.calls[0]?.[1] as string)).toContain("ABCD-EFGH-JKLM");
+    expect(print.mock.calls[0]?.[1] as string).toContain("ABCD-EFGH-JKLM");
   });
 
   it("requests an intentional bearer-only credential with --read-only", async () => {
@@ -222,8 +227,13 @@ describe("auth login command", () => {
     });
 
     await expect(
-      command.run({ config: {}, args: parseArgs(["auth", "login", "--read-only"]) }),
-    ).rejects.toThrow("CLI authorization expired before the browser approved it.");
+      command.run({
+        config: {},
+        args: parseArgs(["auth", "login", "--read-only"]),
+      }),
+    ).rejects.toThrow(
+      "CLI authorization expired before the browser approved it.",
+    );
     expect(device).toHaveBeenCalledWith({
       publicKey: expect.any(Object),
       clientName: null,
@@ -271,8 +281,13 @@ describe("auth login command", () => {
       args: parseArgs(["auth", "refresh"]),
     });
 
-    expect(refresh).toHaveBeenCalledWith({ refreshToken: current.refreshToken });
-    expect(writeCredential).toHaveBeenCalledWith({ ...refreshed, authoring: localAuthoring });
+    expect(refresh).toHaveBeenCalledWith({
+      refreshToken: current.refreshToken,
+    });
+    expect(writeCredential).toHaveBeenCalledWith({
+      ...refreshed,
+      authoring: localAuthoring,
+    });
     expect(print).toHaveBeenCalledWith(
       expect.objectContaining({ authenticated: true, accountId: "account-1" }),
     );

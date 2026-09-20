@@ -36,10 +36,10 @@ import {
   readCliCredential,
   writeCliCredential,
 } from "./auth";
-import { mergeCliCredentialAuthoring } from "./cliCredential";
+import { mergeCliCredentialAuthoring } from "./cli-credential";
 import { flagString, hasFlag, parseArgs, type ParsedArgs } from "./core/args";
 import { findCliCommand, type CliCommand } from "./core/command";
-import { createHttpNulldownRuntime } from "./runtime/httpRuntime";
+import { createHttpNulldownRuntime } from "./runtime/http-runtime";
 import type {
   AdminBackfillTarget,
   DiffEnvelopeHeadersRequest,
@@ -54,14 +54,6 @@ export {
   isSeedCreateArgs,
   resolveSeedTitle,
 } from "./seed";
-
-type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
 
 interface CliConfig {
   baseUrl: string;

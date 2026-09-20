@@ -1,4 +1,4 @@
-import { exportJWK, generateKeyPair, SignJWT, type KeyLike } from "jose";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { D1Database } from "@cloudflare/workers-types";
 
 import {
@@ -11,20 +11,21 @@ import {
   type CliAuthEnvironment,
 } from "../functions/api/_lib/accounts/cliAuth/service";
 import { verifyAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
-import { generateCliDeviceKeyPair, decryptCliCredentialEnvelope } from "./cli/auth";
+import {
+  generateCliDeviceKeyPair,
+  decryptCliCredentialEnvelope,
+} from "./cli/auth";
 import {
   CLI_CREDENTIAL_KIND_V1,
-  isCliCredentialBundle,
-  type CliCredentialBundleV1,
-  type CliDeviceStartResponse,
-} from "../shared/auth/cliDevice";
+  decodeCliCredentialBundle,
+  decodeCliDeviceStartResponse,
+} from "../shared/auth/codecs/cli-device-v1";
 import {
-  DROP_DEVICE_DELEGATION_SCHEMA,
-  DROP_DEVICE_DELEGATION_VERSION,
+  encodeDropDeviceDelegation,
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-  type DropDeviceDelegation,
-} from "../shared/drop/deviceDelegation";
+} from "../shared/drop/codecs/device-delegation-v1";
+import type { DropDeviceDelegation } from "../shared/drop/deviceDelegation";
 
 const appOrigin = "https://nulldown.app";
 const issuer = "https://issuer.test";
@@ -99,7 +100,9 @@ class MemoryDatabase {
     return new MemoryStatement(this, sql);
   }
 
-  async batch(statements: MemoryStatement[]): Promise<Array<{ meta: { changes: number } }>> {
+  async batch(
+    statements: MemoryStatement[],
+  ): Promise<Array<{ meta: { changes: number } }>> {
     const results: Array<{ meta: { changes: number } }> = [];
     for (const statement of statements) results.push(await statement.run());
     return results;
@@ -114,7 +117,8 @@ class MemoryDatabase {
         client_public_jwk_json: String(params[3]),
         client_name: params[4] === null ? null : String(params[4]),
         authoring_requested: Number(params[5]),
-        delegate_signing_public_jwk_json: params[6] === null ? null : String(params[6]),
+        delegate_signing_public_jwk_json:
+          params[6] === null ? null : String(params[6]),
         credential_id: params[7] === null ? null : String(params[7]),
         credential_expires_at: params[8] === null ? null : Number(params[8]),
         device_delegation_json: null,
@@ -191,7 +195,8 @@ class MemoryDatabase {
       ticket.approved_user_id = String(params[0]);
       ticket.approved_account_id = String(params[1]);
       ticket.approved_at = approvedAt;
-      ticket.device_delegation_json = params[3] === null ? null : String(params[3]);
+      ticket.device_delegation_json =
+        params[3] === null ? null : String(params[3]);
       return { ticket_id: ticket.ticket_id };
     }
     if (sql.includes("FROM auth_users")) {
@@ -214,7 +219,8 @@ class MemoryDatabase {
     if (sql.includes("FROM accounts")) {
       const accountId = String(params[0]);
       const signingPublicJwk = this.accountSigningKeys.get(accountId);
-      const encryptionRecipient = this.accountEncryptionRecipients.get(accountId);
+      const encryptionRecipient =
+        this.accountEncryptionRecipients.get(accountId);
       return signingPublicJwk
         ? {
             account_id: accountId,
@@ -230,17 +236,22 @@ class MemoryDatabase {
     }
     if (sql.includes("FROM auth_cli_device_tickets")) {
       const value = String(params[0]);
-      return [...this.tickets.values()].find(
-        (ticket) =>
-          (sql.includes("device_code_hash") && ticket.device_code_hash === value) ||
-          (sql.includes("user_code_hash") && ticket.user_code_hash === value),
-      ) ?? null;
+      return (
+        [...this.tickets.values()].find(
+          (ticket) =>
+            (sql.includes("device_code_hash") &&
+              ticket.device_code_hash === value) ||
+            (sql.includes("user_code_hash") && ticket.user_code_hash === value),
+        ) ?? null
+      );
     }
     if (sql.includes("FROM auth_cli_credentials")) {
       const value = String(params[0]);
-      return [...this.credentials.values()].find(
-        (credential) => credential.refresh_token_hash === value,
-      ) ?? null;
+      return (
+        [...this.credentials.values()].find(
+          (credential) => credential.refresh_token_hash === value,
+        ) ?? null
+      );
     }
     if (sql.includes("UPDATE auth_cli_credentials")) {
       if (sql.includes("COALESCE(revoked_at")) {
@@ -270,15 +281,17 @@ class MemoryDatabase {
 
 class FakeOpenAuthAuthority {
   private constructor(
-    private readonly privateKey: KeyLike | CryptoKey,
+    private readonly privateKey: CryptoKey,
     private readonly jwk: JsonWebKey,
   ) {}
 
   static async create(): Promise<FakeOpenAuthAuthority> {
     const pair = await generateKeyPair("ES256");
-    const jwk = await exportJWK(pair.publicKey);
-    jwk.kid = "test-key";
-    jwk.alg = "ES256";
+    const jwk = {
+      ...(await exportJWK(pair.publicKey)),
+      kid: "test-key",
+      alg: "ES256",
+    } as unknown as JsonWebKey;
     return new FakeOpenAuthAuthority(pair.privateKey, jwk);
   }
 
@@ -298,7 +311,9 @@ class FakeOpenAuthAuthority {
   }
 
   async fetch(input: RequestInfo | URL): Promise<Response> {
-    const url = new URL(input instanceof Request ? input.url : input.toString());
+    const url = new URL(
+      input instanceof Request ? input.url : input.toString(),
+    );
     if (url.pathname === "/.well-known/oauth-authorization-server") {
       return Response.json({ jwks_uri: `${issuer}/.well-known/jwks.json` });
     }
@@ -327,7 +342,9 @@ const signDelegation = async (
       await crypto.subtle.sign(
         { name: "ECDSA", hash: "SHA-256" },
         rootKey,
-        new TextEncoder().encode(serializeDropDeviceDelegationForSignature(input)),
+        new TextEncoder().encode(
+          serializeDropDeviceDelegationForSignature(input),
+        ),
       ),
     ),
   },
@@ -357,7 +374,10 @@ describe("CLI auth Pages service", () => {
       true,
       ["encrypt", "decrypt"],
     )) as CryptoKeyPair;
-    const recipientPublicJwk = await crypto.subtle.exportKey("jwk", recipientPair.publicKey);
+    const recipientPublicJwk = await crypto.subtle.exportKey(
+      "jwk",
+      recipientPair.publicKey,
+    );
     const canonicalRecipientPublicJwk = {
       kty: recipientPublicJwk.kty,
       n: recipientPublicJwk.n,
@@ -386,13 +406,21 @@ describe("CLI auth Pages service", () => {
         }),
       }),
     );
-    const start = await responseJson<CliDeviceStartResponse>(started);
+    const startWire = await responseJson(started);
+    const start = decodeCliDeviceStartResponse(startWire)!;
+    expect(startWire).toEqual(
+      expect.objectContaining({ kind: "nulldown.cli-device.v1" }),
+    );
     const ticket = [...database.tickets.values()][0]!;
     expect(ticket.credential_id).toBeTruthy();
     expect(ticket.credential_expires_at).toBeGreaterThan(Date.now());
     expect(JSON.stringify(ticket)).not.toContain('"d"');
 
-    const browserRequest = (url: string, accountId = "account-1", origin = appOrigin) =>
+    const browserRequest = (
+      url: string,
+      accountId = "account-1",
+      origin = appOrigin,
+    ) =>
       new Request(url, {
         method: "POST",
         headers: {
@@ -425,13 +453,15 @@ describe("CLI auth Pages service", () => {
     expect(
       await prepareCliDeviceResponse(
         env,
-        browserRequest(`${appOrigin}/api/auth/cli/prepare`, "account-1", "https://evil.test"),
+        browserRequest(
+          `${appOrigin}/api/auth/cli/prepare`,
+          "account-1",
+          "https://evil.test",
+        ),
       ),
     ).toHaveProperty("status", 403);
 
     const delegation = await signDelegation(rootPair.privateKey, {
-      schema: DROP_DEVICE_DELEGATION_SCHEMA,
-      version: DROP_DEVICE_DELEGATION_VERSION,
       accountId: "account-1",
       credentialId: ticket.credential_id!,
       delegateSigningPublicJwk: device.authoring!.signingPublicJwk,
@@ -448,7 +478,9 @@ describe("CLI auth Pages service", () => {
         key_ops: ["encrypt"],
       }),
     );
-    const approveDelegation = (candidate: DropDeviceDelegation): Promise<Response> =>
+    const approveDelegation = (
+      candidate: DropDeviceDelegation,
+    ): Promise<Response> =>
       approveCliDeviceResponse(
         env,
         new Request(`${appOrigin}/api/auth/cli/approve`, {
@@ -461,14 +493,16 @@ describe("CLI auth Pages service", () => {
           body: JSON.stringify({
             userCode: start.userCode,
             accountId: "account-1",
-            delegation: candidate,
+            delegation: encodeDropDeviceDelegation(candidate),
           }),
         }),
       );
 
     const unpinned = await approveDelegation(delegation);
     expect(unpinned.status).toBe(400);
-    await expect(unpinned.json()).resolves.toEqual({ error: "invalid_cli_delegation" });
+    await expect(unpinned.json()).resolves.toEqual({
+      error: "invalid_cli_delegation",
+    });
     expect(ticket.approved_at).toBeNull();
     expect(database.credentials.size).toBe(0);
     database.accountEncryptionRecipients.set("account-1", {
@@ -495,7 +529,9 @@ describe("CLI auth Pages service", () => {
     });
     const rejectedRecipient = await approveDelegation(mismatchedRecipient);
     expect(rejectedRecipient.status).toBe(400);
-    await expect(rejectedRecipient.json()).resolves.toEqual({ error: "invalid_cli_delegation" });
+    await expect(rejectedRecipient.json()).resolves.toEqual({
+      error: "invalid_cli_delegation",
+    });
     expect(ticket.approved_at).toBeNull();
     expect(database.credentials.size).toBe(0);
 
@@ -505,7 +541,9 @@ describe("CLI auth Pages service", () => {
     });
     const rejectedKid = await approveDelegation(mismatchedKid);
     expect(rejectedKid.status).toBe(400);
-    await expect(rejectedKid.json()).resolves.toEqual({ error: "invalid_cli_delegation" });
+    await expect(rejectedKid.json()).resolves.toEqual({
+      error: "invalid_cli_delegation",
+    });
     expect(ticket.approved_at).toBeNull();
     expect(database.credentials.size).toBe(0);
 
@@ -521,10 +559,13 @@ describe("CLI auth Pages service", () => {
         body: JSON.stringify({
           userCode: start.userCode,
           accountId: "account-1",
-          delegation: {
+          delegation: encodeDropDeviceDelegation({
             ...delegation,
-            signature: { ...delegation.signature, sig: `${delegation.signature.sig}A` },
-          },
+            signature: {
+              ...delegation.signature,
+              sig: `${delegation.signature.sig}A`,
+            },
+          }),
         }),
       }),
     );
@@ -542,10 +583,10 @@ describe("CLI auth Pages service", () => {
         body: JSON.stringify({
           userCode: start.userCode,
           accountId: "account-1",
-          delegation: {
+          delegation: encodeDropDeviceDelegation({
             ...delegation,
             delegateSigningPublicJwk: changedSigner.authoring!.signingPublicJwk,
-          },
+          }),
         }),
       }),
     );
@@ -571,9 +612,12 @@ describe("CLI auth Pages service", () => {
       device.authoring,
     );
     expect(credential.authoring?.deviceDelegation).toEqual(delegation);
-    expect(JSON.stringify([...database.tickets.values(), ...database.credentials.values()])).not.toContain(
-      '"d"',
-    );
+    expect(
+      JSON.stringify([
+        ...database.tickets.values(),
+        ...database.credentials.values(),
+      ]),
+    ).not.toContain('"d"');
   });
 
   it("issues isolated tickets, approves through OpenAuth, redeems once, rotates, and revokes", async () => {
@@ -597,20 +641,30 @@ describe("CLI auth Pages service", () => {
       env,
       new Request(`${appOrigin}/api/auth/cli/device`, {
         method: "POST",
-        body: JSON.stringify({ publicKey: firstKeyPair.publicKey, clientName: "test-cli" }),
+        body: JSON.stringify({
+          publicKey: firstKeyPair.publicKey,
+          clientName: "test-cli",
+        }),
       }),
     );
     expect(firstStarted.status).toBe(201);
-    const firstDevice = await responseJson<CliDeviceStartResponse>(firstStarted);
+    const firstDevice = decodeCliDeviceStartResponse(
+      await responseJson(firstStarted),
+    )!;
     const secondStarted = await createCliDeviceResponse(
       env,
       new Request(`${appOrigin}/api/auth/cli/device`, {
         method: "POST",
-        body: JSON.stringify({ publicKey: secondKeyPair.publicKey, clientName: "second-cli" }),
+        body: JSON.stringify({
+          publicKey: secondKeyPair.publicKey,
+          clientName: "second-cli",
+        }),
       }),
     );
     expect(secondStarted.status).toBe(201);
-    const secondDevice = await responseJson<CliDeviceStartResponse>(secondStarted);
+    const secondDevice = decodeCliDeviceStartResponse(
+      await responseJson(secondStarted),
+    )!;
     expect(firstDevice.verificationUri).toBe(`${appOrigin}/auth/cli`);
     expect(secondDevice.verificationUri).toBe(`${appOrigin}/auth/cli`);
     expect(firstDevice.verificationUri).not.toContain("code");
@@ -635,12 +689,21 @@ describe("CLI auth Pages service", () => {
     }`;
     const mutated = await approve(mutatedCode);
     expect(mutated.status).toBe(409);
-    await expect(mutated.json()).resolves.toEqual({ error: "invalid_or_expired_cli_code" });
-    expect([...database.tickets.values()].every((ticket) => ticket.approved_at === null)).toBe(true);
+    await expect(mutated.json()).resolves.toEqual({
+      error: "invalid_or_expired_cli_code",
+    });
+    expect(
+      [...database.tickets.values()].every(
+        (ticket) => ticket.approved_at === null,
+      ),
+    ).toBe(true);
 
     const approved = await approve(firstDevice.userCode);
     expect(approved.status).toBe(200);
-    await expect(approved.json()).resolves.toEqual({ approved: true, accountId: "account-1" });
+    await expect(approved.json()).resolves.toEqual({
+      approved: true,
+      accountId: "account-1",
+    });
     const tickets = [...database.tickets.values()];
     expect(tickets[0]?.approved_user_id).toBe("user-1");
     expect(tickets[1]?.approved_at).toBeNull();
@@ -652,13 +715,17 @@ describe("CLI auth Pages service", () => {
         body: JSON.stringify({ deviceCode: secondDevice.deviceCode }),
       }),
     );
-    expect(await responseJson(pending)).toEqual(expect.objectContaining({ status: "pending" }));
+    expect(await responseJson(pending)).toEqual(
+      expect.objectContaining({ status: "pending" }),
+    );
 
     const secondTicket = tickets[1]!;
     secondTicket.expires_at = Date.now();
     const expired = await approve(secondDevice.userCode);
     expect(expired.status).toBe(409);
-    await expect(expired.json()).resolves.toEqual({ error: "invalid_or_expired_cli_code" });
+    await expect(expired.json()).resolves.toEqual({
+      error: "invalid_or_expired_cli_code",
+    });
     expect(secondTicket.approved_at).toBeNull();
 
     const approvedPoll = await pollCliDeviceResponse(
@@ -704,10 +771,14 @@ describe("CLI auth Pages service", () => {
       }),
     );
     expect(refreshed.status).toBe(200);
-    const refreshedBody = await responseJson<CliCredentialBundleV1>(refreshed);
-    expect(refreshedBody.kind).toBe(CLI_CREDENTIAL_KIND_V1);
-    expect(refreshedBody.version).toBe(1);
-    expect(isCliCredentialBundle(refreshedBody)).toBe(true);
+    const refreshedWire = await responseJson(refreshed);
+    expect(refreshedWire).toEqual(
+      expect.objectContaining({
+        kind: CLI_CREDENTIAL_KIND_V1,
+        version: 1,
+      }),
+    );
+    const refreshedBody = decodeCliCredentialBundle(refreshedWire)!;
     expect(refreshedBody.refreshToken).not.toBe(credential.refreshToken);
     expect(refreshedBody.accountId).toBe("account-1");
     await expect(
@@ -735,8 +806,9 @@ describe("CLI auth Pages service", () => {
       }),
     );
     expect(refreshedAgain.status).toBe(200);
-    const refreshedAgainBody = await responseJson<CliCredentialBundleV1>(refreshedAgain);
-    expect(isCliCredentialBundle(refreshedAgainBody)).toBe(true);
+    const refreshedAgainBody = decodeCliCredentialBundle(
+      await responseJson(refreshedAgain),
+    )!;
 
     const revoked = await revokeCliCredentialResponse(
       env,

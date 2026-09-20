@@ -25,12 +25,7 @@ export type RuntimeGrantKind =
   | "policy.evaluate";
 
 export type RuntimeGrantScope =
-  | "self"
-  | "linked"
-  | "explicit"
-  | "branch"
-  | "root"
-  | "network";
+  "self" | "linked" | "explicit" | "branch" | "root" | "network";
 
 export interface RuntimeGrant {
   kind: RuntimeGrantKind;
@@ -363,9 +358,7 @@ const normalizeRootRuntimePolicyCandidate = (
 
 export const resolveRootRuntimePolicy = (
   metadata:
-    | { runtimePolicy?: unknown; allowedUrls?: unknown }
-    | null
-    | undefined,
+    { runtimePolicy?: unknown; allowedUrls?: unknown } | null | undefined,
   fallbackAllowedHosts: readonly string[] = DEFAULT_RUNTIME_NETWORK_ALLOWLIST,
 ): RootRuntimePolicy => {
   const fromRuntimePolicy = normalizeRootRuntimePolicyCandidate(
