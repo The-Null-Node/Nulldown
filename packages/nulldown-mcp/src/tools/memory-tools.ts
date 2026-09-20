@@ -16,7 +16,8 @@ export const registerMemoryTools = (server: McpServer): void => {
     "memory_stale_check",
     {
       title: "Check Stale NullMem",
-      description: "Evaluate branch-scoped NullMem records for staleness and supersession.",
+      description:
+        "Evaluate branch-scoped NullMem records for staleness and supersession.",
       inputSchema: {
         ...clientArgsSchema,
         ...mcpResponseArgsSchema,
@@ -47,7 +48,8 @@ export const registerMemoryTools = (server: McpServer): void => {
     "memory_query",
     {
       title: "Query NullMem",
-      description: "Query branch-scoped NullMem facts, procedures, and capabilities.",
+      description:
+        "Query branch-scoped NullMem facts, procedures, and capabilities.",
       inputSchema: {
         ...clientArgsSchema,
         ...mcpResponseArgsSchema,
@@ -60,11 +62,15 @@ export const registerMemoryTools = (server: McpServer): void => {
         procedureId: z
           .string()
           .optional()
-          .describe("Exact procedure record id for compact next-step projection."),
+          .describe(
+            "Exact procedure record id for compact next-step projection.",
+          ),
         afterStep: z
           .number()
           .optional()
-          .describe("Return procedure steps with index greater than this cursor."),
+          .describe(
+            "Return procedure steps with index greater than this cursor.",
+          ),
         stepLimit: z
           .number()
           .int()
@@ -75,7 +81,9 @@ export const registerMemoryTools = (server: McpServer): void => {
         includeRecords: z
           .boolean()
           .optional()
-          .describe("Return full records alongside compact capsules and procedure steps."),
+          .describe(
+            "Return full records alongside compact capsules and procedure steps.",
+          ),
         includeFreshness: z
           .boolean()
           .optional()
@@ -83,7 +91,10 @@ export const registerMemoryTools = (server: McpServer): void => {
       },
     },
     async (args) =>
-      asCompact(await createClient(args).queryMemory(args), extractMcpResponseArgs(args)),
+      asCompact(
+        await createClient(args).queryMemory(args),
+        extractMcpResponseArgs(args),
+      ),
   );
 
   server.registerTool(

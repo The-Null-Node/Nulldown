@@ -43,13 +43,24 @@ export const registerStrategyTools = (server: McpServer): void => {
         ...clientArgsSchema,
         ...mcpResponseArgsSchema,
         id: z.string().describe("Canonical or short drop id."),
-        branchId: z.string().min(1).optional().describe("Explicit branch override; otherwise use plaintext strategyRef or read the root."),
+        branchId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Explicit branch override; otherwise use plaintext strategyRef or read the root.",
+          ),
         query: z.string().optional(),
-        snapshotId: z.union([z.string(), z.number().int().nonnegative()]).optional(),
+        snapshotId: z
+          .union([z.string(), z.number().int().nonnegative()])
+          .optional(),
         top: z.number().int().min(1).optional(),
       },
     },
     async (args) =>
-      asCompact(await createClient(args).readStrategy(args), extractMcpResponseArgs(args)),
+      asCompact(
+        await createClient(args).readStrategy(args),
+        extractMcpResponseArgs(args),
+      ),
   );
 };

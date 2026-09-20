@@ -8,7 +8,7 @@ import {
   DropDiffEventIdSchema,
   DropDiffEventMetadataSchema,
   DropDiffOpSchema,
-} from "../diffSchemas";
+} from "../diff-schemas";
 import { asCompact, asJsonText } from "../response";
 import {
   clientArgsSchema,
@@ -26,7 +26,9 @@ const diffApplyInputSchema = z
     metadata: DropDiffEventMetadataSchema.optional(),
     eventDropId: z.string().optional(),
     eventId: DropDiffEventIdSchema.optional(),
-    createdAt: z.number().finite().int().min(0).optional(),
+    createdAt: z.number().finite().int().min(0).refine(Number.isSafeInteger, {
+      message: "createdAt must be a safe integer.",
+    }).optional(),
   })
   .superRefine((value, context) => {
     if ((value.eventId === undefined) !== (value.createdAt === undefined)) {
@@ -43,7 +45,8 @@ export const registerBranchTools = (server: McpServer): void => {
     "branch_resolve",
     {
       title: "Resolve Branch",
-      description: "Resolve or create the current actor branch for a root drop.",
+      description:
+        "Resolve or create the current actor branch for a root drop.",
       inputSchema: {
         ...clientArgsSchema,
         ...mcpResponseArgsSchema,
@@ -61,7 +64,8 @@ export const registerBranchTools = (server: McpServer): void => {
     "branch_content",
     {
       title: "Get Branch Content",
-      description: "Fetch materialized branch content; request format full for exact content.",
+      description:
+        "Fetch materialized branch content; request format full for exact content.",
       inputSchema: {
         ...clientArgsSchema,
         ...mcpResponseArgsSchema,
@@ -103,7 +107,10 @@ export const registerBranchTools = (server: McpServer): void => {
       },
     },
     async (args) =>
-      asCompact(await createClient(args).queryBranch(args), extractMcpResponseArgs(args)),
+      asCompact(
+        await createClient(args).queryBranch(args),
+        extractMcpResponseArgs(args),
+      ),
   );
 
   server.registerTool(

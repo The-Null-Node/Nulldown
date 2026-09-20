@@ -8,23 +8,29 @@ import {
 } from "@thenullnode/nulldown/client";
 import {
   sealDropForAuthoring,
-  type DropProviderEncryptionMaterial,
+  type ProviderEncryptionMaterial,
   type SealDropForAuthoringInput,
 } from "@thenullnode/nulldown/drop/authoring";
 import {
   createFileCliCredentialTokenProvider,
   normalizeCliCredentialBaseUrl,
   readCliCredential,
-} from "./cliCredential";
+} from "@thenullnode/nulldown/auth/cliCredential";
 import { mcpLog } from "./logging";
 
-const credentialProviders = new Map<string, ReturnType<typeof createFileCliCredentialTokenProvider>>();
-const AUTHORING_REENROLL_MESSAGE = "Run nd auth login again to enable account-owned authoring.";
+const credentialProviders = new Map<
+  string,
+  ReturnType<typeof createFileCliCredentialTokenProvider>
+>();
+const AUTHORING_REENROLL_MESSAGE =
+  "Run nd auth login again to enable account-owned authoring.";
 type DropVisibility = SealDropForAuthoringInput["visibility"];
 
 const warnLegacyPlaintext = (): void => {
   if (process.env.ND_MCP_LOG_LEVEL?.trim().toLowerCase() === "silent") return;
-  process.stderr.write('{"level":"warn","event":"mcp.drop.legacy_plaintext"}\n');
+  process.stderr.write(
+    '{"level":"warn","event":"mcp.drop.legacy_plaintext"}\n',
+  );
 };
 
 interface CreateMcpClientOptions {
@@ -41,27 +47,34 @@ const importEncryptionKey = async (jwk: JsonWebKey): Promise<CryptoKey> =>
     ["encrypt"],
   );
 
-const getProviderEncryption = async (): Promise<DropProviderEncryptionMaterial> => {
+const getProviderEncryption = async (): Promise<ProviderEncryptionMaterial> => {
   const raw = process.env.VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK;
   if (!raw) {
-    throw new Error("Provider unlock policy requires VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK.");
+    throw new Error(
+      "Provider unlock policy requires VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK.",
+    );
   }
   let jwk: JsonWebKey;
   try {
     jwk = JSON.parse(raw) as JsonWebKey;
   } catch {
-    throw new Error("VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK must contain a public RSA JWK.");
+    throw new Error(
+      "VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK must contain a public RSA JWK.",
+    );
   }
   let publicKey: CryptoKey;
   try {
     publicKey = await importEncryptionKey(jwk);
   } catch {
-    throw new Error("VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK must contain a public RSA JWK.");
+    throw new Error(
+      "VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK must contain a public RSA JWK.",
+    );
   }
   return {
-    kid: typeof (jwk as Record<string, unknown>).kid === "string"
-      ? String((jwk as Record<string, unknown>).kid)
-      : "provider",
+    kid:
+      typeof (jwk as Record<string, unknown>).kid === "string"
+        ? String((jwk as Record<string, unknown>).kid)
+        : "provider",
     publicKey,
   };
 };
@@ -82,17 +95,20 @@ const createAccountEnvelopeProvider = (
       throw new Error(AUTHORING_REENROLL_MESSAGE);
     }
     const accountEncryption = authoring.deviceDelegation.encryptionPublicJwk;
-    const [encryptionPublicKey, signingPrivateKey, providerEncryption] = await Promise.all([
-      importEncryptionKey(accountEncryption),
-      crypto.subtle.importKey(
-        "jwk",
-        authoring.signingPrivateJwk,
-        { name: "ECDSA", namedCurve: "P-256" },
-        false,
-        ["sign"],
-      ),
-      visibility === "private" ? Promise.resolve(undefined) : getProviderEncryption(),
-    ]);
+    const [encryptionPublicKey, signingPrivateKey, providerEncryption] =
+      await Promise.all([
+        importEncryptionKey(accountEncryption),
+        crypto.subtle.importKey(
+          "jwk",
+          authoring.signingPrivateJwk,
+          { name: "ECDSA", namedCurve: "P-256" },
+          false,
+          ["sign"],
+        ),
+        visibility === "private"
+          ? Promise.resolve(undefined)
+          : getProviderEncryption(),
+      ]);
     return await sealDropForAuthoring({
       payload: { content, metadata },
       accountEncryption: {
@@ -155,27 +171,44 @@ export interface ClientArgs {
 }
 
 /** Creates a Nulldown API client from MCP tool arguments. */
-export const createClient = (args: ClientArgs = {}, createOptions: CreateMcpClientOptions = {}) => {
+export const createClient = (
+  args: ClientArgs = {},
+  createOptions: CreateMcpClientOptions = {},
+) => {
   const options: CreateNulldownClientOptions = {
     baseUrl: args.baseUrl,
     clientId: args.clientId,
   };
   const authFile = process.env.ND_AUTH_FILE?.trim();
   const staticToken = process.env.ND_TOKEN?.trim();
-  if (createOptions.visibility && !createOptions.legacyPlaintext && !authFile && staticToken) {
+  if (
+    createOptions.visibility &&
+    !createOptions.legacyPlaintext &&
+    !authFile &&
+    staticToken
+  ) {
     throw new Error(AUTHORING_REENROLL_MESSAGE);
   }
   if (createOptions.legacyPlaintext && (authFile || staticToken)) {
     warnLegacyPlaintext();
   }
   if (authFile) {
-    const baseUrl = args.baseUrl ?? process.env.ND_BASE_URL ?? DEFAULT_NULLDOWN_BASE_URL;
+    const baseUrl =
+      args.baseUrl ?? process.env.ND_BASE_URL ?? DEFAULT_NULLDOWN_BASE_URL;
     options.token = null;
     options.accountId = args.accountId ?? null;
     const key = `${baseUrl}\n${authFile}`;
     let provider = credentialProviders.get(key);
     if (!provider) {
-      provider = createFileCliCredentialTokenProvider({ filePath: authFile, baseUrl, onRefresh: (event) => mcpLog(`mcp.auth.refresh_${event}` as const, event === "failed" ? "warn" : "info") });
+      provider = createFileCliCredentialTokenProvider({
+        filePath: authFile,
+        baseUrl,
+        onRefresh: (event) =>
+          mcpLog(
+            `mcp.auth.refresh_${event}` as const,
+            event === "failed" ? "warn" : "info",
+          ),
+      });
       credentialProviders.set(key, provider);
     }
     options.bearerProvider = provider;
@@ -200,13 +233,24 @@ export interface McpResponseArgs {
 }
 
 export const mcpResponseArgsSchema = {
-  preview: z.boolean().optional().describe("Return compact preview (default true)."),
-  maxTokens: z.number().int().min(100).max(8000).optional().describe("Hard token cap (default 800)."),
+  preview: z
+    .boolean()
+    .optional()
+    .describe("Return compact preview (default true)."),
+  maxTokens: z
+    .number()
+    .int()
+    .min(100)
+    .max(8000)
+    .optional()
+    .describe("Hard token cap (default 800)."),
   format: z.enum(["compact", "full"]).optional().describe("Response format."),
 };
 
 /** Extracts response control flags from tool args. */
-export const extractMcpResponseArgs = (args: Record<string, unknown>): McpResponseArgs => ({
+export const extractMcpResponseArgs = (
+  args: Record<string, unknown>,
+): McpResponseArgs => ({
   preview: args.preview as boolean | undefined,
   maxTokens: args.maxTokens as number | undefined,
   format: args.format as "compact" | "full" | undefined,

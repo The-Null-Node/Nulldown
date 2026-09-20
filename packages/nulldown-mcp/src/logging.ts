@@ -18,17 +18,21 @@ const logOrder: Record<McpLogLevel, number> = {
 /** Writes fixed, credential-safe diagnostics to the stdio server's stderr stream. */
 export const createMcpLogger = (environment = process.env) => {
   const requested = environment.ND_MCP_LOG_LEVEL?.trim().toLowerCase();
-  const level: McpLogLevel = requested && requested in logOrder
-    ? requested as McpLogLevel
-    : "info";
+  const level: McpLogLevel =
+    requested && requested in logOrder ? (requested as McpLogLevel) : "info";
 
-  return (event: McpLogEvent, eventLevel: Exclude<McpLogLevel, "silent"> = "info") => {
+  return (
+    event: McpLogEvent,
+    eventLevel: Exclude<McpLogLevel, "silent"> = "info",
+  ) => {
     if (logOrder[eventLevel] < logOrder[level]) return;
-    process.stderr.write(`${JSON.stringify({
-      ts: new Date().toISOString(),
-      level: eventLevel,
-      event,
-    })}\n`);
+    process.stderr.write(
+      `${JSON.stringify({
+        ts: new Date().toISOString(),
+        level: eventLevel,
+        event,
+      })}\n`,
+    );
   };
 };
 

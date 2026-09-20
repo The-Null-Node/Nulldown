@@ -1,10 +1,6 @@
-import { asCompact as asSourceCompact } from "./response";
-import { asCompact as asPackageCompact } from "../../packages/nulldown-mcp/src/response";
+import { asCompact } from "./response";
 
-describe.each([
-  ["source", asSourceCompact],
-  ["package", asPackageCompact],
-])("asCompact (%s)", (_name, asCompact) => {
+describe("asCompact", () => {
   it("preserves small responses as valid JSON", () => {
     const response = asCompact({ ok: true }, { maxTokens: 100 });
 
@@ -12,7 +8,10 @@ describe.each([
   });
 
   it("returns a valid truncation envelope within the requested budget", () => {
-    const response = asCompact({ content: "x".repeat(1_000) }, { maxTokens: 100 });
+    const response = asCompact(
+      { content: "x".repeat(1_000) },
+      { maxTokens: 100 },
+    );
     const text = response.content[0]!.text;
     const parsed = JSON.parse(text) as {
       truncated: boolean;

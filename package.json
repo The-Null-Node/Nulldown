@@ -76,7 +76,7 @@
   "scripts": {
     "nd": "bun run bin/nulldown.ts",
     "cli": "bun run bin/nulldown.ts",
-    "mcp": "bun run bin/nulldown-mcp.ts",
+    "mcp": "bun run packages/nulldown-mcp/bin/nulldown-mcp.ts",
     "cli:build": "bun run cli:build:current",
     "cli:build:current": "bun build --compile --minify --sourcemap --bytecode bin/nulldown.ts --outfile dist/nulldown",
     "mcp:build:current": "bun build --compile --minify --sourcemap --bytecode packages/nulldown-mcp/bin/nulldown-mcp.ts --outfile dist/nulldown-mcp",
