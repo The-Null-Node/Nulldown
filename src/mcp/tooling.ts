@@ -12,8 +12,8 @@ import {
   readCliCredential,
 } from "../cli/cliCredential";
 import { sealDropForAuthoring } from "../../shared/drop/authoringCrypto";
-import { isDropEncryptionPublicJwk } from "../../shared/drop/deviceDelegation";
-import type { DropEnvelopeV1, DropVisibility } from "../../shared/drop/types";
+import { isDropEncryptionPublicJwk } from "../../shared/drop/codecs/device-delegation-v1";
+import type { DropEnvelope, DropVisibility } from "../../shared/drop/types";
 import { mcpLog } from "./logging";
 
 const credentialProviders = new Map<string, ReturnType<typeof createFileCliCredentialTokenProvider>>();
@@ -65,7 +65,7 @@ const createAccountEnvelopeProvider = (
   baseUrl: string,
   visibility: DropVisibility,
 ): NulldownEnvelopeProvider => ({
-  seal: async ({ content, metadata }): Promise<DropEnvelopeV1> => {
+  seal: async ({ content, metadata }): Promise<DropEnvelope> => {
     const credential = await readCliCredential(filePath);
     const authoring = credential?.authoring;
     if (

@@ -16,12 +16,12 @@ import {
   DIFF_SIGNATURE_HEADER,
   DIFF_SIGNATURE_PREFIX,
   DIFF_TIMESTAMP_HEADER,
-  type DiffAuthRegisterResponse,
+  decodeDiffAuthRegisterResponse,
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved/constants";
-import type { CliCredentialBundleV1 } from "../../shared/auth/cliDevice";
-import { isCliCredentialBundle } from "../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
+import { decodeCliCredentialBundle } from "../../shared/auth/codecs/cli-device-v1";
 import { createAdminCommand } from "./commands/admin";
 import { createAuthCommand } from "./commands/auth";
 import { createBranchCommand } from "./commands/branches";
@@ -40,6 +40,7 @@ import {
   readCliCredential,
   writeCliCredential,
 } from "./auth";
+import { mergeCliCredentialAuthoring } from "./cliCredential";
 import { flagString, hasFlag, parseArgs, type ParsedArgs } from "./core/args";
 import { findCliCommand, type CliCommand } from "./core/command";
 import {
@@ -80,7 +81,7 @@ interface CliConfig {
   diffAuthToken: string | null;
   diffAuthTokenPath: string;
   authFilePath: string;
-  authCredential: CliCredentialBundleV1 | null;
+  authCredential: CliCredentialBundle | null;
   authRefreshPromise: Promise<boolean> | null;
   json: boolean;
   quiet: boolean;
@@ -509,9 +510,9 @@ const refreshStoredCliCredential = async (
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken: current.refreshToken }),
       }, dependencies, diagnostics);
-      const parsed = response.data;
+      const parsed = decodeCliCredentialBundle(response.data);
       if (
-        !isCliCredentialBundle(parsed) ||
+        !parsed ||
         !isCliCredentialForBaseUrl(parsed, config.baseUrl)
       ) {
         return false;
@@ -1050,7 +1051,7 @@ const createRegisteredCommands = (
       encodeDiffAuthToken,
       decodeDiffAuthToken,
       async registerDiffAuth(dropId, keys) {
-        const response = await request<DiffAuthRegisterResponse>(
+        const response = await request(
           config,
           `/api/diff-auth/register/${encodeURIComponent(dropId)}`,
           {
@@ -1064,10 +1065,11 @@ const createRegisteredCommands = (
           dependencies,
           diagnostics,
         );
-        if (!response.data) {
-          throw new CliError("Diff auth registration returned no body.");
+        const registration = decodeDiffAuthRegisterResponse(response.data);
+        if (!registration) {
+          throw new CliError("Diff auth registration returned an invalid body.");
         }
-        return response.data;
+        return registration;
       },
       unwrapSecret,
       writeCredential: (entry) => writeCredential(config, entry),

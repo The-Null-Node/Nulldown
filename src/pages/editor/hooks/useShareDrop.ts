@@ -5,7 +5,7 @@ This hook prepares the payload and reports UI state; it does not talk to provide
 */
 
 import { useCallback, useState } from "react";
-import type { DropDraftPackV1 } from "../../../../shared/drop/types";
+import type { DropDraftPack } from "../../../../shared/drop/types";
 import { useTheme } from "../../../theme/themeContext";
 import useDropStore, {
   type DropPayload,
@@ -20,7 +20,7 @@ export function useShareDrop(
     rootDropId?: string | null;
     existingDropId?: string | null;
     snapshotId?: number | null;
-    buildDraftPack?: () => DropDraftPackV1 | undefined;
+    buildDraftPack?: () => DropDraftPack | undefined;
     publishBranch?: () => Promise<{ url: string; offline?: boolean }>;
   },
 ) {

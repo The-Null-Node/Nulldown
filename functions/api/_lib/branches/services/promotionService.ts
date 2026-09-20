@@ -30,7 +30,8 @@ import {
   readJsonBodyWithSchema,
   resolveParam,
 } from "../../core/http/responses";
-import { createPromotedEnvelope } from "../../crypto/void/envelopes/promotion";
+import { createPromotedEnvelope } from "../../crypto/envelopes/promotion";
+import { encodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
 import {
   createReservedRemoteJsonDrop,
   releaseReservedRemoteJsonDropId,
@@ -206,13 +207,13 @@ export const promoteBranchSnapshot = async (
         const providerSigningPrivateJwk = env.PROVIDER_SIGNING_PRIVATE_JWK;
         const promotedPayload = (typeof providerEncryptionPrivateJwk === "string" &&
         typeof providerSigningPrivateJwk === "string"
-          ? await createPromotedEnvelope({
+          ? encodeDropEnvelope(await createPromotedEnvelope({
               content,
               accountId: branch.writerAccountId ?? branch.ownerAccountId ?? accountId,
               metadata: promotedMetadata,
               providerEncryptionPrivateJwk,
               providerSigningPrivateJwk,
-            })
+            }))
           : { content, metadata: promotedMetadata }) as Record<string, unknown>;
 
         await lock.beginCommit();

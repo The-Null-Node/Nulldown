@@ -1,11 +1,14 @@
 import {
-  createDefaultAccountPreferences,
-  isAccountPreferenceValue,
-  parseAccountPreferenceMutation,
   type AccountPreferenceField,
   type AccountPreferences,
   type VersionedAccountPreference,
 } from "../../../../../shared/auth/accountPreferences";
+import {
+  createDefaultAccountPreferences,
+  decodeAccountPreferenceMutation,
+  encodeAccountPreferences,
+  isAccountPreferenceValue,
+} from "../../../../../shared/auth/codecs/account-preferences-v1";
 import {
   advanceAccountPreferenceField,
   listAccountPreferenceRows,
@@ -83,7 +86,9 @@ export const readAccountPreferencesResponse = async (
   if (identity instanceof Response) return identity;
   try {
     return responseJson(
-      toSnapshot(await listAccountPreferenceRows(identity.db, identity.userId)),
+      encodeAccountPreferences(
+        toSnapshot(await listAccountPreferenceRows(identity.db, identity.userId)),
+      ),
       identity.responseHeaders,
     );
   } catch {
@@ -112,7 +117,7 @@ export const updateAccountPreferenceResponse = async (
   } catch {
     throw new AccountPreferencesError(400, "invalid_account_preference", "Preference input must be JSON.");
   }
-  const mutation = parseAccountPreferenceMutation(body);
+  const mutation = decodeAccountPreferenceMutation(body);
   if (!mutation) {
     throw new AccountPreferencesError(400, "invalid_account_preference", "Preference input is invalid.");
   }

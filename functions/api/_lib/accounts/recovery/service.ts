@@ -1,8 +1,12 @@
 import {
-  parseEncryptedAccountRecoveryPackage,
-  serializeAccountRecoveryPackage,
-  type EncryptedAccountRecoveryPackageV1,
+  type EncryptedAccountRecoveryPackage,
 } from "../../../../../shared/auth/recovery";
+import {
+  decodeEncryptedAccountRecoveryPackage,
+  encodeAccountRecoveryPackageMetadata,
+  encodeEncryptedAccountRecoveryPackage,
+  serializeAccountRecoveryPackage,
+} from "../../../../../shared/auth/codecs/account-recovery-v1";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 import { readAccountRecord, resolveAuthenticatedAccountId } from "../session/auth";
 import {
@@ -67,11 +71,11 @@ const ciphertextDigest = async (ciphertext: string): Promise<string> =>
 const parseStoredPackage = async (
   bucket: VoidBlobStore,
   objectKey: string,
-): Promise<EncryptedAccountRecoveryPackageV1 | null> => {
+): Promise<EncryptedAccountRecoveryPackage | null> => {
   const object = await bucket.get(objectKey);
   if (!object) return null;
   try {
-    return parseEncryptedAccountRecoveryPackage(await object.json<unknown>());
+    return decodeEncryptedAccountRecoveryPackage(await object.json<unknown>());
   } catch {
     return null;
   }
@@ -101,7 +105,11 @@ export const readRecoveryPackageResponse = async (
   ) {
     return responseJson({ error: "recovery_package_unavailable" }, 503, identity);
   }
-  return responseJson({ available: true, package: stored }, 200, identity);
+  return responseJson(
+    { available: true, package: encodeEncryptedAccountRecoveryPackage(stored) },
+    200,
+    identity,
+  );
 };
 
 /** Stores an opaque encrypted package after matching both user and V1 account authority. */
@@ -136,7 +144,7 @@ export const writeRecoveryPackageResponse = async (
     return responseJson({ error: "invalid_recovery_package" }, 400, identity);
   }
   const requestBody = body as Record<string, unknown>;
-  const encryptedPackage = parseEncryptedAccountRecoveryPackage(requestBody.package);
+  const encryptedPackage = decodeEncryptedAccountRecoveryPackage(requestBody.package);
   const signature = requestBody.signature;
   if (
     !encryptedPackage ||
@@ -186,7 +194,7 @@ export const writeRecoveryPackageResponse = async (
   }
 
   const current = await readRecoveryPackageForAccount(identity.db, accountId);
-  const metadataJson = JSON.stringify(metadata);
+  const metadataJson = JSON.stringify(encodeAccountRecoveryPackageMetadata(metadata));
   if (
     current?.user_id === identity.userId &&
     current.ciphertext_digest === digest &&
@@ -206,7 +214,7 @@ export const writeRecoveryPackageResponse = async (
   }
 
   const objectKey = `${RECOVERY_OBJECT_PREFIX}${accountId}/${metadata.revision}-${digest.slice("sha256:".length)}.json`;
-  const serializedPackage = JSON.stringify(encryptedPackage);
+  const serializedPackage = JSON.stringify(encodeEncryptedAccountRecoveryPackage(encryptedPackage));
   const storedObject = await env.R2_BUCKET.put(objectKey, serializedPackage, {
     httpMetadata: { contentType: "application/json" },
     onlyIf: { etagDoesNotMatch: "*" },

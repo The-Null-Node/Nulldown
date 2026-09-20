@@ -3,10 +3,8 @@ import type {
   VoidBlobStore,
   VoidSqlStore,
 } from "../../../../../src/server/ports";
-import {
-  isDropEnvelopeV1,
-  type DropEnvelopeV1,
-} from "../../../../../shared/drop/types";
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
+import type { DropEnvelope } from "../../../../../shared/drop/types";
 
 /** R2 key prefix for public drop index entries. */
 export const REMOTE_PUBLIC_DROP_INDEX_PREFIX = "__drop_public_index__/";
@@ -165,7 +163,7 @@ export const removePublicDropIndexEntry = async (
 export const syncPublicDropIndexForEnvelope = async (
   bucket: VoidBlobStore,
   id: string,
-  envelope: DropEnvelopeV1 | null,
+  envelope: DropEnvelope | null,
   updatedAt = Date.now(),
   db?: VoidSqlStore,
 ): Promise<void> => {
@@ -185,8 +183,9 @@ export const syncPublicDropIndexForPayload = async (
   updatedAt = Date.now(),
   db?: VoidSqlStore,
 ): Promise<void> => {
-  if (isDropEnvelopeV1(payload)) {
-    await syncPublicDropIndexForEnvelope(bucket, id, payload, updatedAt, db);
+  const envelope = decodeDropEnvelope(payload);
+  if (envelope) {
+    await syncPublicDropIndexForEnvelope(bucket, id, envelope, updatedAt, db);
     return;
   }
 

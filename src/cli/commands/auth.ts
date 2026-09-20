@@ -8,7 +8,7 @@ import {
   type CliDeviceKeyPair,
 } from "../auth";
 import { mergeCliCredentialAuthoring } from "../cliCredential";
-import type { CliCredentialBundleV1 } from "../../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../../shared/auth/cliDevice";
 import type { NulldownRuntime } from "../runtime/types";
 
 /** Dependencies used by modular auth commands. */
@@ -24,9 +24,9 @@ export interface AuthCommandDependencies {
   /** Path used for the local refreshable credential. */
   authFilePath(): string;
   /** Reads a credential already selected for the current API origin. */
-  readCredential(): Promise<CliCredentialBundleV1 | null>;
+  readCredential(): Promise<CliCredentialBundle | null>;
   /** Atomically persists a credential. */
-  writeCredential(credential: CliCredentialBundleV1): Promise<void>;
+  writeCredential(credential: CliCredentialBundle): Promise<void>;
   /** Removes the local credential file. */
   clearCredential(): Promise<void>;
   /** Opens the browser verification URI. */
@@ -35,7 +35,7 @@ export interface AuthCommandDependencies {
   sleep(milliseconds: number): Promise<void>;
 }
 
-const credentialStatus = (credential: CliCredentialBundleV1 | null) =>
+const credentialStatus = (credential: CliCredentialBundle | null) =>
   credential
     ? {
         authenticated: true,
@@ -59,7 +59,7 @@ const createDeviceCredential = async (
   deviceCode: string,
   expiresAt: number,
   interval: number,
-): Promise<CliCredentialBundleV1> => {
+): Promise<CliCredentialBundle> => {
   let nextPollAt = Date.now();
   while (Date.now() < expiresAt) {
     const wait = nextPollAt - Date.now();

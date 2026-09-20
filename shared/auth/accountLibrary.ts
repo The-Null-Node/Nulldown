@@ -19,8 +19,7 @@ export interface AccountLibraryDeletedEntry {
 
 /** A metadata-only account-library item. */
 export type AccountLibraryEntry =
-  | AccountLibraryActiveEntry
-  | AccountLibraryDeletedEntry;
+  AccountLibraryActiveEntry | AccountLibraryDeletedEntry;
 
 /** A stable page of account-library items. */
 export interface AccountLibraryPage {
@@ -29,20 +28,24 @@ export interface AccountLibraryPage {
 }
 
 /** Validates a metadata-only account-library response. */
-export const isAccountLibraryPage = (value: unknown): value is AccountLibraryPage => {
+export const isAccountLibraryPage = (
+  value: unknown,
+): value is AccountLibraryPage => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const page = value as { items?: unknown; cursor?: unknown };
   if (!Array.isArray(page.items)) return false;
   if (page.cursor !== null && typeof page.cursor !== "string") return false;
 
   return page.items.every((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry))
+      return false;
     const item = entry as Record<string, unknown>;
     if (typeof item.id !== "string") return false;
     if (item.state === "deleted") {
       return (
-        Object.keys(item).every((key) => ["state", "id", "deletedAt"].includes(key)) &&
-        typeof item.deletedAt === "number"
+        Object.keys(item).every((key) =>
+          ["state", "id", "deletedAt"].includes(key),
+        ) && typeof item.deletedAt === "number"
       );
     }
     return (

@@ -1,14 +1,14 @@
 import {
   serializeDropEnvelopeForDeviceSignature,
   toDropEnvelopeSignable,
-  type DropEnvelopeV1,
-} from "../../../../../../shared/drop/types";
+} from "../../../../../shared/drop/codecs/envelopeV1";
+import type { DropEnvelope } from "../../../../../shared/drop/types";
 import {
   isDropDeviceDelegation,
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-  type DropDeviceDelegation,
-} from "../../../../../../shared/drop/deviceDelegation";
+} from "../../../../../shared/drop/codecs/device-delegation-v1";
+import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
 
 const textEncoder = new TextEncoder();
 
@@ -42,7 +42,7 @@ export const sameEncryptionRecipientKey = (
 
 /** Verifies a sealed envelope's device signature with the embedded signing key. */
 export const verifyDropEnvelopeDeviceSignature = async (
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
 ): Promise<boolean> => {
   if (!envelope.deviceSignerPublicJwk) return false;
 

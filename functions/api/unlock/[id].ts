@@ -1,5 +1,5 @@
 import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { isDropEnvelopeV1 } from "../../../shared/drop/types";
+import { decodeDropEnvelope } from "../../../shared/drop/codecs/envelopeV1";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, serializeError, toLogRef } from "../_lib/core/logging/logger";
 import { serverVoidCrypto } from "../_lib/crypto/void/serverVoidCrypto";
@@ -142,7 +142,8 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("Drop payload is not JSON.", { status: 400 });
     }
 
-    if (!isDropEnvelopeV1(parsed)) {
+    const envelope = decodeDropEnvelope(parsed);
+    if (!envelope) {
       logger.warn("unlock.stored_payload_not_envelope", {
         requestedDropRef: toLogRef(requestedId),
         canonicalDropRef,
@@ -157,18 +158,18 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       });
     }
 
-    if (parsed.unlockPolicy !== "provider-escrow" || !parsed.providerEscrow) {
+    if (envelope.unlockPolicy !== "provider-escrow" || !envelope.providerEscrow) {
       logger.warn("unlock.policy_forbidden", {
         requestedDropRef: toLogRef(requestedId),
         canonicalDropRef,
-        unlockPolicy: parsed.unlockPolicy,
-        hasProviderEscrow: Boolean(parsed.providerEscrow),
+        unlockPolicy: envelope.unlockPolicy,
+        hasProviderEscrow: Boolean(envelope.providerEscrow),
       });
       logger.logEnd(403, {
         reason: "policy_forbidden",
         requestedDropRef: toLogRef(requestedId),
         canonicalDropRef,
-        unlockPolicy: parsed.unlockPolicy,
+        unlockPolicy: envelope.unlockPolicy,
       });
       return new Response("Drop does not allow provider escrow unlock.", {
         status: 403,
@@ -217,7 +218,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
 
     const rawContentKey = await serverVoidCrypto.decryptProviderWrappedContentKey(
       providerPrivateKey,
-      parsed.providerEscrow.wrappedKey,
+      envelope.providerEscrow.wrappedKey,
     );
 
     const requesterWrappedKey =
@@ -229,7 +230,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     logger.logEnd(200, {
       requestedDropRef: toLogRef(requestedId),
       canonicalDropRef,
-      unlockPolicy: parsed.unlockPolicy,
+      unlockPolicy: envelope.unlockPolicy,
     });
 
     return new Response(

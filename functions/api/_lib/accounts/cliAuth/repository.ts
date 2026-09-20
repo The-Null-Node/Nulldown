@@ -1,6 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 
 import type { CliEncryptionPublicJwk } from "../../../../../shared/auth/cliDevice";
+import { encodeDropDeviceDelegation } from "../../../../../shared/drop/codecs/device-delegation-v1";
 import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
 
 export interface CliDeviceTicketRow {
@@ -134,7 +135,9 @@ export const approveCliDeviceTicket = (
       input.userId,
       input.accountId,
       input.approvedAt,
-      input.deviceDelegation ? JSON.stringify(input.deviceDelegation) : null,
+      input.deviceDelegation
+        ? JSON.stringify(encodeDropDeviceDelegation(input.deviceDelegation))
+        : null,
       input.ticketId,
       input.approvedAt,
     )

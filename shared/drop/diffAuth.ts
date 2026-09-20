@@ -26,6 +26,60 @@ export interface DiffAuthRegisterResponse {
   expiresAt: number | null;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.trim() === value && value.length > 0;
+
+const isBase64 = (value: unknown): value is string =>
+  isNonEmptyString(value) &&
+  value.length % 4 === 0 &&
+  /^[A-Za-z0-9+/]*={0,2}$/u.test(value);
+
+/** Decodes the untrusted HTTP response returned when registering a diff credential. */
+export const decodeDiffAuthRegisterResponse = (
+  value: unknown,
+): DiffAuthRegisterResponse | null => {
+  if (!isRecord(value)) return null;
+  const keys = [
+    "dropId",
+    "branchId",
+    "clientId",
+    "kid",
+    "wrappedSecret",
+    "expiresAt",
+  ];
+  if (
+    Object.keys(value).length !== keys.length ||
+    !keys.every((key) => key in value)
+  ) {
+    return null;
+  }
+  if (
+    !isNonEmptyString(value.dropId) ||
+    !isNonEmptyString(value.branchId) ||
+    !isNonEmptyString(value.clientId) ||
+    !isNonEmptyString(value.kid) ||
+    !isBase64(value.wrappedSecret) ||
+    (value.expiresAt !== null &&
+      (typeof value.expiresAt !== "number" ||
+        !Number.isSafeInteger(value.expiresAt) ||
+        value.expiresAt < 0))
+  ) {
+    return null;
+  }
+
+  return {
+    dropId: value.dropId,
+    branchId: value.branchId,
+    clientId: value.clientId,
+    kid: value.kid,
+    wrappedSecret: value.wrappedSecret,
+    expiresAt: value.expiresAt,
+  };
+};
+
 export const buildDiffSigningPayload = (
   method: string,
   path: string,

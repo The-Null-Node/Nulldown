@@ -1,24 +1,28 @@
-import type { D1Database } from "@cloudflare/workers-types";
-
+import type {
+  CliCredentialBundle,
+  CliCredentialEnvelope,
+  CliEncryptionPublicJwk,
+} from "../../../../../shared/auth/cliDevice";
 import {
-  CLI_CREDENTIAL_KIND_V1,
-  CLI_CREDENTIAL_ENVELOPE_KIND_V1,
+  encodeCliCredentialBundle,
+  encodeCliCredentialEnvelope,
+  encodeCliDeviceStartResponse,
   formatCliUserCode,
   isCliEncryptionPublicJwk,
   normalizeCliUserCode,
-  type CliCredentialBundleV1,
-  type CliCredentialEnvelopeV1,
-  type CliEncryptionPublicJwk,
-} from "../../../../../shared/auth/cliDevice";
+} from "../../../../../shared/auth/codecs/cli-device-v1";
 import {
+  decodeDropDeviceDelegation,
+  encodeDropDeviceDelegation,
   isDropDelegateSigningPublicJwk,
   isDropDeviceDelegation,
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-  type DropDeviceDelegation,
-} from "../../../../../shared/drop/deviceDelegation";
+} from "../../../../../shared/drop/codecs/device-delegation-v1";
+import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
 import { serializeCanonicalJson } from "../../../../../shared/drop/types";
-import { sameEncryptionRecipientKey } from "../../crypto/void/envelopes/verification";
+import type { VoidBlobStore } from "../../../../../src/server/ports";
+import { sameEncryptionRecipientKey } from "../../crypto/envelopes/verification";
 import {
   issueAccountSessionToken,
   readAccountRecord,
@@ -52,7 +56,7 @@ const textEncoder = new TextEncoder();
 
 /** Environment bindings used by the browser-mediated CLI authorization flow. */
 export interface CliAuthEnvironment extends OpenAuthBffEnvironment {
-  R2_BUCKET?: import("../../../../../src/server/ports").VoidBlobStore;
+  R2_BUCKET?: VoidBlobStore;
   ACCOUNT_AUTH_SECRET?: string;
   ACCOUNT_AUTH_TOKEN_TTL_MS?: string;
   CLI_DEVICE_TICKET_TTL_MS?: string;
@@ -142,8 +146,7 @@ const readStoredDelegateSigningKey = (json: string | null): JsonWebKey | null =>
 const readStoredDelegation = (json: string | null): DropDeviceDelegation | null => {
   if (!json) return null;
   try {
-    const delegation = JSON.parse(json);
-    return isDropDeviceDelegation(delegation) ? delegation : null;
+    return decodeDropDeviceDelegation(JSON.parse(json));
   } catch {
     return null;
   }
@@ -174,8 +177,13 @@ const issueCliAccessToken = (
 
 const encryptCredentialBundle = async (
   publicJwk: CliEncryptionPublicJwk,
-  bundle: CliCredentialBundleV1,
-): Promise<CliCredentialEnvelopeV1> => {
+  bundle: CliCredentialBundle,
+  authoring?: {
+    signingKid: string;
+    signingPublicJwk: JsonWebKey;
+    deviceDelegation: DropDeviceDelegation;
+  },
+): Promise<CliCredentialEnvelope> => {
   const publicKey = await crypto.subtle.importKey(
     "jwk",
     publicJwk,
@@ -188,21 +196,40 @@ const encryptCredentialBundle = async (
     true,
     ["encrypt"],
   );
+  if ("privateKey" in contentKey) {
+    throw new Error("AES-GCM content key generation returned a key pair");
+  }
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = textEncoder.encode(JSON.stringify(bundle));
+  const plaintext = textEncoder.encode(
+    JSON.stringify({
+      ...encodeCliCredentialBundle(bundle),
+      ...(authoring === undefined
+        ? {}
+        : {
+            authoring: {
+              ...authoring,
+              deviceDelegation: encodeDropDeviceDelegation(
+                authoring.deviceDelegation,
+              ),
+            },
+          }),
+    }),
+  );
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     contentKey,
     plaintext,
   );
-  const rawContentKey = new Uint8Array(await crypto.subtle.exportKey("raw", contentKey));
+  const rawContentKey = await crypto.subtle.exportKey("raw", contentKey);
+  if (!(rawContentKey instanceof ArrayBuffer)) {
+    throw new Error("AES-GCM content key export did not return raw bytes");
+  }
   const wrappedKey = await crypto.subtle.encrypt(
     { name: "RSA-OAEP" },
     publicKey,
-    rawContentKey,
+    new Uint8Array(rawContentKey),
   );
   return {
-    kind: CLI_CREDENTIAL_ENVELOPE_KIND_V1,
     wrappedKey: toBase64Url(new Uint8Array(wrappedKey)),
     iv: toBase64Url(iv),
     ciphertext: toBase64Url(new Uint8Array(ciphertext)),
@@ -223,7 +250,7 @@ const issueBundle = async (
     approved_user_id: string | null;
     approved_account_id: string | null;
   },
-): Promise<CliCredentialEnvelopeV1 | Response> => {
+): Promise<CliCredentialEnvelope | Response> => {
   if (!env.DB || !env.ACCOUNT_AUTH_SECRET) {
     return responseJson({ error: "cli_auth_unavailable" }, 503);
   }
@@ -248,9 +275,7 @@ const issueBundle = async (
     ticket.approved_account_id,
     ticket.credential_id,
   );
-  const bundle = {
-    kind: CLI_CREDENTIAL_KIND_V1,
-    version: 1,
+  const bundle: CliCredentialBundle = {
     baseUrl: new URL(request.url).origin,
     userId: ticket.approved_user_id,
     accountId: ticket.approved_account_id,
@@ -260,19 +285,20 @@ const issueBundle = async (
     accessExpiresAt: access.payload.exp,
     credentialExpiresAt: ticket.credential_expires_at,
     createdAt,
-    ...(delegation
-      ? {
-          authoring: {
+  };
+  let envelope: CliCredentialEnvelope;
+  try {
+    envelope = await encryptCredentialBundle(
+      publicKey,
+      bundle,
+      delegation
+        ? {
             signingKid: delegation.signature.kid,
             signingPublicJwk: delegation.delegateSigningPublicJwk,
             deviceDelegation: delegation,
-          },
-        }
-      : {}),
-  };
-  let envelope: CliCredentialEnvelopeV1;
-  try {
-    envelope = await encryptCredentialBundle(publicKey, bundle);
+          }
+        : undefined,
+    );
   } catch {
     return responseJson({ error: "credential_encryption_failed" }, 503);
   }
@@ -337,14 +363,13 @@ export const createCliDeviceResponse = async (
     Math.floor(parsePositiveNumber(env.CLI_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS)),
   );
   return responseJson(
-    {
-      kind: "nulldown.cli-device.v1",
+    encodeCliDeviceStartResponse({
       deviceCode,
       userCode: formatCliUserCode(userCode),
       verificationUri: `${new URL(request.url).origin}/auth/cli`,
       expiresAt,
       interval,
-    },
+    }),
     201,
   );
 };
@@ -494,7 +519,10 @@ export const approveCliDeviceResponse = async (
         : withIdentityHeaders(identity, { error: "cli_code_already_approved" }, 409);
     }
 
-    const delegation = body?.delegation;
+    const delegation =
+      body?.delegation === undefined
+        ? undefined
+        : decodeDropDeviceDelegation(body.delegation);
     if (
       (ticket.authoring_requested &&
         !(await verifiesTicketDelegation(env, accountId, ticket, delegation))) ||
@@ -508,11 +536,11 @@ export const approveCliDeviceResponse = async (
       userId: identity.userId,
       accountId,
       approvedAt: Date.now(),
-      deviceDelegation: ticket.authoring_requested ? (delegation as DropDeviceDelegation) : null,
+        deviceDelegation: ticket.authoring_requested ? delegation! : null,
     });
     if (approved) return withIdentityHeaders(identity, { approved: true, accountId }, 200);
 
-    const current = await readCliDeviceTicketByUserHash(env.DB, await hashToken(userCode));
+    const current = await readCliDeviceTicketByUserHash(env.DB, ticket.user_code_hash);
     return current?.approved_user_id === identity.userId &&
       current.approved_account_id === accountId
       ? withIdentityHeaders(identity, { approved: true, accountId }, 200)
@@ -558,7 +586,10 @@ export const pollCliDeviceResponse = async (
 
     const envelope = await issueBundle(env, request, ticket);
     if (envelope instanceof Response) return envelope;
-    return responseJson({ status: "approved", envelope }, 200);
+    return responseJson(
+      { status: "approved", envelope: encodeCliCredentialEnvelope(envelope) },
+      200,
+    );
   } catch {
     return responseJson({ error: "cli_auth_unavailable" }, 503);
   }
@@ -599,9 +630,7 @@ export const refreshCliCredentialResponse = async (
       credential.credential_id,
     );
     return responseJson(
-      {
-        kind: CLI_CREDENTIAL_KIND_V1,
-        version: 1,
+      encodeCliCredentialBundle({
         credentialId: credential.credential_id,
         userId: credential.user_id,
         accountId: credential.account_id,
@@ -611,7 +640,7 @@ export const refreshCliCredentialResponse = async (
         credentialExpiresAt: credential.expires_at,
         createdAt: credential.created_at,
         baseUrl: new URL(request.url).origin,
-      },
+      }),
       200,
     );
   } catch {

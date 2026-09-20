@@ -1,11 +1,14 @@
-import {
-  isCliCredentialBundle,
-  isCliCredentialEnvelope,
-  isCliDeviceAuthoring,
-  type CliCredentialBundleV1,
-  type CliCredentialEnvelopeV1,
-  type CliEncryptionPublicJwk,
+import type {
+  CliCredentialBundle,
+  CliCredentialEnvelope,
+  CliEncryptionPublicJwk,
 } from "../../shared/auth/cliDevice";
+import {
+  decodeCliCredentialBundle,
+  decodeCliCredentialEnvelope,
+  decodeCliDeviceAuthoring,
+  encodeCliCredentialEnvelope,
+} from "../../shared/auth/codecs/cli-device-v1";
 import { normalizeCliCredentialBaseUrl } from "./cliCredential";
 import { serializeCanonicalJson } from "../../shared/drop/types";
 
@@ -82,11 +85,14 @@ export const generateCliDeviceKeyPair = async (
 
 /** Decrypts and validates the one-time credential returned by the poll endpoint. */
 export const decryptCliCredentialEnvelope = async (
-  envelope: CliCredentialEnvelopeV1,
+  envelope: CliCredentialEnvelope,
   privateJwk: JsonWebKey,
   authoring: CliAuthoringKeyPair | null = null,
-): Promise<CliCredentialBundleV1> => {
-  if (!isCliCredentialEnvelope(envelope)) {
+): Promise<CliCredentialBundle> => {
+  const validatedEnvelope = decodeCliCredentialEnvelope(
+    encodeCliCredentialEnvelope(envelope),
+  );
+  if (!validatedEnvelope) {
     throw new Error("CLI credential response is invalid.");
   }
   const privateKey = await crypto.subtle.importKey(
@@ -99,7 +105,7 @@ export const decryptCliCredentialEnvelope = async (
   const rawContentKey = await crypto.subtle.decrypt(
     { name: "RSA-OAEP" },
     privateKey,
-    toBytes(envelope.wrappedKey),
+    toBytes(validatedEnvelope.wrappedKey),
   );
   const contentKey = await crypto.subtle.importKey(
     "raw",
@@ -109,9 +115,9 @@ export const decryptCliCredentialEnvelope = async (
     ["decrypt"],
   );
   const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: toBytes(envelope.iv) },
+    { name: "AES-GCM", iv: toBytes(validatedEnvelope.iv) },
     contentKey,
-    toBytes(envelope.ciphertext),
+    toBytes(validatedEnvelope.ciphertext),
   );
   let parsed: unknown;
   try {
@@ -122,8 +128,9 @@ export const decryptCliCredentialEnvelope = async (
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("CLI credential response is invalid.");
   }
-  const { authoring: serverAuthoring, ...bundle } = parsed as Record<string, unknown>;
-  if (!isCliCredentialBundle(bundle)) throw new Error("CLI credential response is invalid.");
+  const { authoring: serverAuthoring, ...wireBundle } = parsed as Record<string, unknown>;
+  const bundle = decodeCliCredentialBundle(wireBundle);
+  if (!bundle) throw new Error("CLI credential response is invalid.");
   if (serverAuthoring === undefined) {
     return {
       ...bundle,
@@ -134,26 +141,23 @@ export const decryptCliCredentialEnvelope = async (
     throw new Error("CLI authoring credential response is invalid.");
   }
   const server = serverAuthoring as Record<string, unknown>;
-  const candidate = {
-    ...bundle,
-    authoring: {
-      signingKid: authoring.signingKid,
-      signingPublicJwk: authoring.signingPublicJwk,
-      signingPrivateJwk: authoring.signingPrivateJwk,
-      deviceDelegation: server.deviceDelegation,
-    },
-  };
+  const candidate = decodeCliDeviceAuthoring({
+    signingKid: authoring.signingKid,
+    signingPublicJwk: authoring.signingPublicJwk,
+    signingPrivateJwk: authoring.signingPrivateJwk,
+    deviceDelegation: server.deviceDelegation,
+  });
   if (
     server.signingPublicJwk === undefined ||
     serializeCanonicalJson(server.signingPublicJwk) !==
       serializeCanonicalJson(authoring.signingPublicJwk) ||
-    !isCliDeviceAuthoring(candidate.authoring) ||
-    !isCliCredentialBundle(candidate)
+    !candidate
   ) {
     throw new Error("CLI authoring credential response is invalid.");
   }
   return {
-    ...candidate,
-    baseUrl: normalizeCliCredentialBaseUrl(candidate.baseUrl),
+    ...bundle,
+    baseUrl: normalizeCliCredentialBaseUrl(bundle.baseUrl),
+    authoring: candidate,
   };
 };

@@ -4,18 +4,20 @@ JSON-safe payloads sent through branch and diff APIs. It preserves the older
 string-based op shape while carrying the native encoded diff alongside it.
 */
 
-import { DiffOp, type Diff, type DiffRange } from "../nulledit/types";
-import { decodeText, encodeText } from "../nulledit/textDiff";
+import type { Diff, DiffOp, DiffRange } from "../nulledit/types";
 import {
   isNullplugUiRuntimeFact,
   type NullplugUiRuntimeFact,
 } from "../nullplug/ui";
 import {
-  DropDiffEnvelopeSchema,
-  DropDiffEventMetadataSchema,
-  DropDiffEventSchema,
-  DropDiffOpSchema,
-} from "./diffSchemas";
+  diffToDropDiffOpV1,
+  dropDiffOpV1ToDiff,
+  isDropBranchRuntimeFactV1,
+  isDropDiffEnvelopeV1,
+  isDropDiffEventMetadataV1,
+  isDropDiffEventV1,
+  isDropDiffOpV1,
+} from "./codecs/diff-v1";
 
 /** Legacy JSON-safe operation kind carried alongside native diff ops. */
 export type DropDiffOpType = "insert" | "delete";
@@ -32,9 +34,7 @@ export type DropDiffEventKind =
 export type JsonPrimitive = string | number | boolean | null;
 /** JSON value allowed in diff event metadata. */
 export type JsonValue =
-  | JsonPrimitive
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 /** Native editor diff op encoded for JSON transport. */
 export interface DropDiffNativeOp {
@@ -200,16 +200,17 @@ const isString = (value: unknown): value is string => typeof value === "string";
 const isNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
+const isNonNegativeSafeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
 const isAcknowledgement = (
   value: unknown,
 ): value is DropDiffEventAcknowledgement => {
   if (!isRecord(value)) return false;
   return (
     isString(value.eventId) &&
-    Number.isInteger(value.seq) &&
-    value.seq >= 0 &&
-    Number.isInteger(value.snapshotId) &&
-    value.snapshotId >= 0 &&
+    isNonNegativeSafeInteger(value.seq) &&
+    isNonNegativeSafeInteger(value.snapshotId) &&
     (value.status === "accepted" || value.status === "duplicate")
   );
 };
@@ -220,15 +221,11 @@ export const isDropDiffAppendResponse = (
 ): value is DropDiffAppendResponse => {
   if (!isRecord(value)) return false;
   return (
-    Number.isInteger(value.accepted) &&
-    value.accepted >= 0 &&
-    Number.isInteger(value.deduplicated) &&
-    value.deduplicated >= 0 &&
+    isNonNegativeSafeInteger(value.accepted) &&
+    isNonNegativeSafeInteger(value.deduplicated) &&
     isString(value.branchId) &&
-    Number.isInteger(value.snapshotId) &&
-    value.snapshotId >= 0 &&
-    Number.isInteger(value.totalStored) &&
-    value.totalStored >= 0 &&
+    isNonNegativeSafeInteger(value.snapshotId) &&
+    isNonNegativeSafeInteger(value.totalStored) &&
     Array.isArray(value.acknowledgements) &&
     value.acknowledgements.every(isAcknowledgement)
   );
@@ -274,19 +271,8 @@ export const hasConfirmedDropDiffAppendReceipt = (
 /** Checks whether a value is a branch-local, cursor-addressable runtime fact. */
 export const isDropBranchRuntimeFact = (
   value: unknown,
-): value is DropBranchRuntimeFact => {
-  if (!isRecord(value)) return false;
-  if (value.version !== 1) return false;
-  if (!isString(value.rootDropId) || !isString(value.branchId)) return false;
-  if (!Number.isInteger(value.seq) || value.seq < 0) return false;
-  if (!isString(value.factId) || !isNumber(value.createdAt)) return false;
-  if (!isNullplugUiRuntimeFact(value.fact)) return false;
-
-  return (
-    value.fact.source.rootDropId === value.rootDropId &&
-    value.fact.source.branchId === value.branchId
-  );
-};
+): value is DropBranchRuntimeFact =>
+  isDropBranchRuntimeFactV1(value, isNullplugUiRuntimeFact);
 
 /** Formats an event id as a renderable diff reference. */
 export const createDropDiffRenderableRef = (
@@ -334,85 +320,24 @@ export const isDropDiffRef = (value: unknown): value is DropDiffRef => {
 /** Returns true when `value` is valid diff event metadata. */
 export const isDropDiffEventMetadata = (
   value: unknown,
-): value is DropDiffEventMetadata =>
-  DropDiffEventMetadataSchema.safeParse(value).success;
-
-const toBase64 = (value: ArrayBuffer): string => {
-  const bytes = new Uint8Array(value);
-  let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary);
-};
-
-const fromBase64 = (value: string): ArrayBuffer => {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes.buffer;
-};
+): value is DropDiffEventMetadata => isDropDiffEventMetadataV1(value);
 
 /** Returns true when `value` is a valid JSON-safe branch diff operation. */
 export const isDropDiffOp = (value: unknown): value is DropDiffOp =>
-  DropDiffOpSchema.safeParse(value).success;
+  isDropDiffOpV1(value);
 
 /** Returns true when `value` is a valid branch diff event. */
 export const isDropDiffEvent = (value: unknown): value is DropDiffEvent =>
-  DropDiffEventSchema.safeParse(value).success;
+  isDropDiffEventV1(value);
 
 /** Returns true when `value` is a valid diff transport envelope. */
 export const isDropDiffEnvelope = (value: unknown): value is DropDiffEnvelope =>
-  DropDiffEnvelopeSchema.safeParse(value).success;
+  isDropDiffEnvelopeV1(value);
 
 /** Converts an in-memory Nulledit diff to the branch transport operation shape. */
-export const diffToDropDiffOp = (diff: Diff): DropDiffOp => {
-  const range = diff.range ?? { start: 0, end: 0 };
-  const text = decodeText(diff.data);
-
-  // Keep the legacy text form populated so older readers and debugging tools stay useful.
-  return {
-    type: diff.op === DiffOp.DELETE ? "delete" : "insert",
-    start: range.start,
-    end: range.end,
-    text,
-    native: {
-      op: diff.op,
-      data: toBase64(diff.data),
-      range,
-    },
-  };
-};
+export const diffToDropDiffOp = (diff: Diff): DropDiffOp =>
+  diffToDropDiffOpV1(diff);
 
 /** Converts a branch transport operation back to an in-memory Nulledit diff. */
-export const dropDiffOpToDiff = (op: DropDiffOp): Diff | null => {
-  if (op.native) {
-    // Native ops are authoritative because they preserve the editor's original byte payload.
-    const range = op.native.range ?? { start: 0, end: 0 };
-    return {
-      op: op.native.op,
-      data: fromBase64(op.native.data),
-      range,
-    };
-  }
-
-  if (
-    (op.type === "insert" || op.type === "delete") &&
-    typeof op.start === "number" &&
-    typeof op.end === "number" &&
-    typeof op.text === "string"
-  ) {
-    return {
-      op: op.type === "insert" ? DiffOp.INSERT : DiffOp.DELETE,
-      data: encodeText(op.text),
-      range: {
-        start: op.start,
-        end: op.end,
-      },
-    };
-  }
-
-  return null;
-};
+export const dropDiffOpToDiff = (op: DropDiffOp): Diff | null =>
+  dropDiffOpV1ToDiff(op);

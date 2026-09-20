@@ -6,7 +6,8 @@ import {
   createVoidProviderRegistry,
 } from "./provider";
 import type { VoidCrypto } from "./crypto/browserVoidCrypto";
-import type { DropEnvelopeV1, DropPayload } from "../../../shared/drop/types";
+import { encodeDropEnvelope } from "../../../shared/drop/codecs/envelopeV1";
+import type { DropEnvelope, DropPayload } from "../../../shared/drop/types";
 
 const ensureWindowWithIndexedDb = () => {
   const currentWindow = (globalThis as { window?: unknown }).window as
@@ -28,9 +29,7 @@ const ensureWindowWithIndexedDb = () => {
   currentWindow.location = { origin: "https://nulldown.test" };
 };
 
-const createEnvelope = (): DropEnvelopeV1 => ({
-  schema: "nmdn.drop.v1",
-  version: 1,
+const createEnvelope = (): DropEnvelope => ({
   createdAt: Date.now(),
   accountId: "account-1",
   metadata: { themeId: "system" },
@@ -132,7 +131,7 @@ describe("void providers", () => {
     });
 
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify(envelope), {
+      new Response(JSON.stringify(encodeDropEnvelope(envelope)), {
         status: 200,
         headers: {
           "Content-Type": "application/json",

@@ -1,16 +1,21 @@
 /*
-This module seals browser-authored payloads into `nmdn.drop.v1` envelopes and reopens
-them later. Device signatures are verified before content keys are trusted, and provider
-escrow is only used as a fallback when the local vault cannot unwrap the stored key.
+This module seals browser-authored payloads into canonical envelopes and reopens them
+later. Device signatures are verified before content keys are trusted, and provider escrow
+is only used as a fallback when the local vault cannot unwrap the stored key.
 */
 
 import {
-  isDropDraftPackV1,
   serializeDropEnvelopeForDeviceSignature,
   serializeDropEnvelopeForProviderSignature,
   toDropEnvelopeSignable,
-  type DropDraftPackV1,
-  type DropEnvelopeV1,
+} from "../../../../shared/drop/codecs/envelopeV1";
+import {
+  decodeDropDraftPack,
+  encodeDropDraftPack,
+} from "../../../../shared/drop/codecs/draft-pack-v1";
+import {
+  type DropDraftPack,
+  type DropEnvelope,
   type DropPayload,
   type DropUnlockPolicy,
   type DropVisibility,
@@ -37,16 +42,16 @@ export interface VoidOpenOptions {
 /**
  * Cryptographic boundary for the void runtime.
  *
- * Implementations seal plaintext into `DropEnvelopeV1` records and open sealed
- * envelopes back into payloads, but they do not own persistence.
+ * Implementations seal plaintext into and open canonical `DropEnvelope` records,
+ * but they do not own persistence or wire-format conversion.
  */
 export interface VoidCrypto {
   seal: (
     payload: DropPayload,
     options?: VoidSealOptions,
-  ) => Promise<DropEnvelopeV1>;
+  ) => Promise<DropEnvelope>;
   open: (
-    envelope: DropEnvelopeV1,
+    envelope: DropEnvelope,
     options?: VoidOpenOptions,
   ) => Promise<DropPayload>;
 }
@@ -127,7 +132,7 @@ export class BrowserVoidCrypto implements VoidCrypto {
   async seal(
     payload: DropPayload,
     options: VoidSealOptions = {},
-  ): Promise<DropEnvelopeV1> {
+  ): Promise<DropEnvelope> {
     const vault = await this.vault.getUnlockedVault();
     const visibility = options.visibility ?? "unlisted";
     const unlockPolicy = options.unlockPolicy ?? "vault-only";
@@ -143,8 +148,14 @@ export class BrowserVoidCrypto implements VoidCrypto {
         );
       }
     }
+    const payloadForEncryption = payload.draftPack
+      ? {
+          ...payload,
+          draftPack: encodeDropDraftPack(payload.draftPack),
+        }
+      : payload;
     return sealDropForAuthoring({
-      payload,
+      payload: payloadForEncryption,
       accountEncryption: {
         accountId: vault.accountId,
         encryptionKid: vault.encryptionKid,
@@ -166,7 +177,7 @@ export class BrowserVoidCrypto implements VoidCrypto {
   }
 
   async open(
-    envelope: DropEnvelopeV1,
+    envelope: DropEnvelope,
     options: VoidOpenOptions = {},
   ): Promise<DropPayload> {
     const dropLabel = getDropLabel(options.dropId);
@@ -259,9 +270,9 @@ export class BrowserVoidCrypto implements VoidCrypto {
   }
 
   private async openDraftPack(
-    envelope: DropEnvelopeV1,
+    envelope: DropEnvelope,
     contentKey: CryptoKey,
-  ): Promise<DropDraftPackV1 | undefined> {
+  ): Promise<DropDraftPack | undefined> {
     if (!envelope.draftCipher) {
       return undefined;
     }
@@ -277,11 +288,7 @@ export class BrowserVoidCrypto implements VoidCrypto {
       );
 
       const parsed = JSON.parse(textDecoder.decode(draftPlaintext)) as unknown;
-      if (!isDropDraftPackV1(parsed)) {
-        return undefined;
-      }
-
-      return parsed;
+      return decodeDropDraftPack(parsed) ?? undefined;
     } catch (error) {
       console.warn("Failed to decode draft pack from drop envelope:", error);
       return undefined;
@@ -404,7 +411,7 @@ export class BrowserVoidCrypto implements VoidCrypto {
     return this.providerEncryptionKeyPromise;
   }
 
-  private async verifyProviderSignature(envelope: DropEnvelopeV1) {
+  private async verifyProviderSignature(envelope: DropEnvelope) {
     const signature = envelope.signatures.provider;
     if (!signature) return;
 
@@ -432,7 +439,7 @@ export class BrowserVoidCrypto implements VoidCrypto {
   }
 
   private async verifyDeviceSignature(
-    envelope: DropEnvelopeV1,
+    envelope: DropEnvelope,
     vault: UnlockedVault,
   ) {
     const signablePayload = serializeDropEnvelopeForDeviceSignature(

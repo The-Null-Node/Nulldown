@@ -1,15 +1,15 @@
 import {
+  type AccountBindingChallenge,
+} from "./accountBinding";
+import {
   ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
   ACCOUNT_BINDING_OPERATION_V1,
-  parseAccountBindingChallenge,
+  decodeAccountBindingChallenge,
+  encodeAccountBindingChallenge,
   serializeAccountBindingChallenge,
-  type AccountBindingChallengeV1,
-} from "./accountBinding";
+} from "./codecs/account-binding-v1";
 
-const challenge: AccountBindingChallengeV1 = {
-  schema: ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
-  version: 1,
-  operation: ACCOUNT_BINDING_OPERATION_V1,
+const challenge: AccountBindingChallenge = {
   challengeId: "a".repeat(43),
   nonce: "b".repeat(43),
   userId: "user_01",
@@ -39,11 +39,44 @@ describe("account-binding challenge contract", () => {
     );
   });
 
+  it("decodes and round-trips the legacy challenge without retaining wire fields", () => {
+    const raw = JSON.stringify({
+      schema: ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
+      version: 1,
+      operation: ACCOUNT_BINDING_OPERATION_V1,
+      ...challenge,
+    });
+    const decoded = decodeAccountBindingChallenge(JSON.parse(raw));
+
+    expect(decoded).toEqual(challenge);
+    expect(decoded).not.toHaveProperty("schema");
+    expect(JSON.stringify(encodeAccountBindingChallenge(decoded!))).toBe(raw);
+  });
+
   it("rejects missing, extra, malformed, and non-HTTPS authority fields", () => {
-    expect(parseAccountBindingChallenge(challenge)).toEqual(challenge);
-    expect(parseAccountBindingChallenge({ ...challenge, userId: "other\nuser" })).toBeNull();
-    expect(parseAccountBindingChallenge({ ...challenge, origin: "http://nulldown.app" })).toBeNull();
-    expect(parseAccountBindingChallenge({ ...challenge, expiresAt: challenge.issuedAt })).toBeNull();
-    expect(parseAccountBindingChallenge({ ...challenge, extra: true })).toBeNull();
+    expect(
+      decodeAccountBindingChallenge({
+        ...encodeAccountBindingChallenge(challenge),
+        userId: "other\nuser",
+      }),
+    ).toBeNull();
+    expect(
+      decodeAccountBindingChallenge({
+        ...encodeAccountBindingChallenge(challenge),
+        origin: "http://nulldown.app",
+      }),
+    ).toBeNull();
+    expect(
+      decodeAccountBindingChallenge({
+        ...encodeAccountBindingChallenge(challenge),
+        expiresAt: challenge.issuedAt,
+      }),
+    ).toBeNull();
+    expect(
+      decodeAccountBindingChallenge({
+        ...encodeAccountBindingChallenge(challenge),
+        extra: true,
+      }),
+    ).toBeNull();
   });
 });

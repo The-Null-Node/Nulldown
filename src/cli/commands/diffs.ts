@@ -12,7 +12,7 @@ import {
   DIFF_TIMESTAMP_HEADER,
   type DiffAuthRegisterResponse,
 } from "../../../shared/drop/diffAuth";
-import { DropDiffEventIdSchema } from "../../../shared/drop/diffSchemas";
+import { DropDiffEventIdSchema } from "../../../shared/drop/codecs/diff-v1";
 import { computeDiffOps } from "../../../shared/nulledit/textDiff";
 import { flagString, hasFlag, type ParsedArgs } from "../core/args";
 import type { CliCommand } from "../core/command";
@@ -84,7 +84,9 @@ const branchContentFromResponse = (
   if (
     record.headEventSeq !== undefined &&
     record.headEventSeq !== null &&
-    (!Number.isInteger(record.headEventSeq) || record.headEventSeq < -1)
+    (typeof record.headEventSeq !== "number" ||
+      !Number.isInteger(record.headEventSeq) ||
+      record.headEventSeq < -1)
   ) {
     throw new Error("Branch content response contains an invalid head event cursor.");
   }
@@ -164,8 +166,8 @@ const eventIdentityFromArgs = (
     throw new Error("--event-id must be 1-120 characters without surrounding whitespace.");
   }
   const createdAt = Number(createdAtRaw);
-  if (!createdAtRaw.trim() || !Number.isInteger(createdAt) || createdAt < 0) {
-    throw new Error("--created-at must be a non-negative integer.");
+  if (!createdAtRaw.trim() || !Number.isSafeInteger(createdAt) || createdAt < 0) {
+    throw new Error("--created-at must be a non-negative safe integer.");
   }
   return { eventId, createdAt };
 };
@@ -526,7 +528,6 @@ export const createDiffCommand = <TConfig>(
           ...metadata,
           followsSeq: branchContent?.headEventSeq ?? -1,
         },
-        ...eventIdentity,
       });
       const posted = await dependencies.runtime.diffs.postEnvelope({
         dropId,

@@ -1,8 +1,9 @@
 import {
-  isDropEnvelopeV1,
-  isDropPayload,
-  type DropEnvelopeV1,
-} from "../../../../shared/drop/types";
+  decodeDropEnvelope,
+  encodeDropEnvelope,
+} from "../../../../shared/drop/codecs/envelopeV1";
+import { isDropPayload } from "../../../../shared/drop/codecs/draft-pack-v1";
+import type { DropEnvelope } from "../../../../shared/drop/types";
 import { createHttpErrorFromResponse } from "../provider/errors";
 import { getAccountAuthHeaders } from "../../auth/accountSession";
 import type {
@@ -23,12 +24,21 @@ interface ListApiResponse {
   error?: string;
 }
 
+const looksLikeSealedEnvelope = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  ("schema" in value ||
+    "version" in value ||
+    "cipher" in value ||
+    "keyEnvelope" in value ||
+    "signatures" in value);
+
 /** HTTP-backed sealed storage for remote void provider ports. */
 export class HttpVoidStorage implements VoidStorage {
   readonly scope = "remote" as const;
 
   async create(
-    envelope: DropEnvelopeV1,
+    envelope: DropEnvelope,
     options: VoidStorageCreateOptions = {},
   ): Promise<{ id: string; url: string }> {
     const response = await fetch("/api/store", {
@@ -41,7 +51,7 @@ export class HttpVoidStorage implements VoidStorage {
         id: options.id,
         upsert: options.upsert,
         expectedRevision: options.expectedRevision,
-        envelope,
+        envelope: encodeDropEnvelope(envelope),
       }),
     });
 
@@ -86,16 +96,21 @@ export class HttpVoidStorage implements VoidStorage {
     if (contentType.includes("application/json")) {
       const payload = (await response.json()) as unknown;
 
-      if (isDropEnvelopeV1(payload)) {
+      const envelope = decodeDropEnvelope(payload);
+      if (envelope) {
         const revisionHeader = response.headers.get("X-Drop-Revision");
         return {
           kind: "sealed",
           id: canonicalId,
-          envelope: payload,
-          createdAt: payload.createdAt,
-          updatedAt: payload.createdAt,
+          envelope,
+          createdAt: envelope.createdAt,
+          updatedAt: envelope.createdAt,
           revision: revisionHeader,
         };
+      }
+
+      if (looksLikeSealedEnvelope(payload)) {
+        throw new Error("Remote provider returned an invalid sealed envelope.");
       }
 
       if (isDropPayload(payload)) {

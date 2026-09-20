@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DropDiffEnvelopeSchema } from "../drop/diffSchemas";
+import { DropDiffEnvelopeSchema } from "../drop/codecs/diff-v1";
 import type { DropDiffEnvelope } from "../drop/diff";
 import type { JsonValue } from "./types";
 import type {

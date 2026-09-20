@@ -2,9 +2,11 @@
 
 import { jest } from "@jest/globals";
 import {
-  ACCOUNT_PREFERENCE_MUTATION_SCHEMA_V1,
+  createAccountPreferenceMutation,
   createDefaultAccountPreferences,
-} from "../../../shared/auth/accountPreferences";
+  encodeAccountPreferenceMutation,
+  encodeAccountPreferences,
+} from "../../../shared/auth/codecs/account-preferences-v1";
 import {
   AccountPreferenceConflictError,
   fetchAccountPreferences,
@@ -23,14 +25,18 @@ describe("account preferences client", () => {
     if (originalFetch) Object.defineProperty(globalThis, "fetch", originalFetch);
   });
 
-  it("loads only a strict bounded snapshot with same-origin cookies", async () => {
+  it("decodes a strict bounded V1 snapshot into a canonical cache shape", async () => {
+    const snapshot = createDefaultAccountPreferences();
     const fetch = jest.fn<typeof globalThis.fetch>().mockResolvedValue({
       ok: true,
-      json: async () => createDefaultAccountPreferences(),
+      json: async () => encodeAccountPreferences(snapshot),
     } as Response);
     installFetch(fetch);
 
-    await expect(fetchAccountPreferences()).resolves.toEqual(createDefaultAccountPreferences());
+    const result = await fetchAccountPreferences();
+    expect(result).toEqual(snapshot);
+    expect(result).not.toHaveProperty("schema");
+    expect(result).not.toHaveProperty("version");
     expect(fetch).toHaveBeenCalledWith("/api/account/preferences", {
       credentials: "same-origin",
       cache: "no-store",
@@ -38,7 +44,7 @@ describe("account preferences client", () => {
   });
 
   it("rejects unexpected snapshot fields rather than caching them", async () => {
-    const snapshot = { ...createDefaultAccountPreferences(), userId: "not-accepted" };
+    const snapshot = { ...encodeAccountPreferences(createDefaultAccountPreferences()), userId: "not-accepted" };
     installFetch(
       jest.fn<typeof globalThis.fetch>().mockResolvedValue({
         ok: true,
@@ -50,13 +56,7 @@ describe("account preferences client", () => {
   });
 
   it("sends one revision-guarded field mutation and exposes conflicts", async () => {
-    const mutation = {
-      schema: ACCOUNT_PREFERENCE_MUTATION_SCHEMA_V1,
-      version: 1 as const,
-      field: "syntaxMode" as const,
-      value: "source" as const,
-      expectedRevision: 3,
-    };
+    const mutation = createAccountPreferenceMutation("syntaxMode", "source", 3);
     const current = { value: "rendered", revision: 4, updatedAt: 10 };
     const fetch = jest.fn<typeof globalThis.fetch>().mockResolvedValue({
       ok: false,
@@ -73,7 +73,7 @@ describe("account preferences client", () => {
       credentials: "same-origin",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(mutation),
+      body: JSON.stringify(encodeAccountPreferenceMutation(mutation)),
     });
   });
 });

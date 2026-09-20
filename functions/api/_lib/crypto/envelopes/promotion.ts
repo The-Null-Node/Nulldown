@@ -1,11 +1,11 @@
 import {
-  DROP_ENVELOPE_SCHEMA_V1,
-  DROP_ENVELOPE_VERSION_V1,
   serializeDropEnvelopeForDeviceSignature,
-  type DropEnvelopeV1,
-  type DropMetadata,
-} from "../../../../../../shared/drop/types";
-import { serverVoidCrypto } from "../serverVoidCrypto";
+} from "../../../../../shared/drop/codecs/envelopeV1";
+import type {
+  DropEnvelope,
+  DropMetadata,
+} from "../../../../../shared/drop/types";
+import { serverVoidCrypto } from "../void/serverVoidCrypto";
 
 /** Inputs for creating a provider-sealed drop envelope from promoted branch content. */
 export interface CreatePromotedEnvelopeInput {
@@ -19,7 +19,7 @@ export interface CreatePromotedEnvelopeInput {
 /** Creates a signed provider-escrow envelope for promoted branch content. */
 export const createPromotedEnvelope = async (
   input: CreatePromotedEnvelopeInput,
-): Promise<DropEnvelopeV1> => {
+): Promise<DropEnvelope> => {
   const encryptionPrivateJwk = JSON.parse(
     input.providerEncryptionPrivateJwk,
   ) as JsonWebKey;
@@ -53,8 +53,6 @@ export const createPromotedEnvelope = async (
   const now = Date.now();
 
   const signableEnvelope = {
-    schema: DROP_ENVELOPE_SCHEMA_V1,
-    version: DROP_ENVELOPE_VERSION_V1,
     createdAt: now,
     accountId: input.accountId,
     visibility: "unlisted" as const,

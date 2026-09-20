@@ -1,12 +1,14 @@
 import {
-  ACCOUNT_RECOVERY_PACKAGE_SCHEMA_V1,
-  parseAccountRecoveryPayload,
-  parseEncryptedAccountRecoveryPackage,
-  serializeAccountRecoveryPackageAad,
-  type AccountRecoveryPackageMetadataV1,
-  type AccountRecoveryPayloadV1,
-  type EncryptedAccountRecoveryPackageV1,
+  type AccountRecoveryPackageMetadata,
+  type AccountRecoveryPayload,
+  type EncryptedAccountRecoveryPackage,
 } from "../../../../../shared/auth/recovery";
+import {
+  decodeAccountRecoveryPayload,
+  decodeEncryptedAccountRecoveryPackage,
+  encodeAccountRecoveryPayload,
+  serializeAccountRecoveryPackageAad,
+} from "../../../../../shared/auth/codecs/account-recovery-v1";
 
 const RECOVERY_INFO = "nulldown.account-recovery-key.v1";
 
@@ -66,20 +68,18 @@ export const createAccountRecoveryCode = (): string =>
 
 /** Encrypts the complete current V1 account payload without exposing it to the service. */
 export const encryptAccountRecoveryPayload = async (input: Readonly<{
-  payload: AccountRecoveryPayloadV1;
+  payload: AccountRecoveryPayload;
   userId: string;
   revision: number;
   recoveryCode?: string;
-}>): Promise<{ recoveryCode: string; package: EncryptedAccountRecoveryPackageV1 }> => {
-  const payload = parseAccountRecoveryPayload(input.payload);
+}>): Promise<{ recoveryCode: string; package: EncryptedAccountRecoveryPackage }> => {
+  const payload = decodeAccountRecoveryPayload(encodeAccountRecoveryPayload(input.payload));
   if (!payload) throw new TypeError("Recovery payload is invalid.");
   const recoveryCode = input.recoveryCode ?? createAccountRecoveryCode();
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const signingKeyFingerprint = await fingerprintRecoverySigningKey(payload.signingPublicJwk);
-  const metadataWithoutCiphertext: AccountRecoveryPackageMetadataV1 = {
-    schema: ACCOUNT_RECOVERY_PACKAGE_SCHEMA_V1,
-    version: 1,
+  const metadataWithoutCiphertext: AccountRecoveryPackageMetadata = {
     userId: input.userId,
     accountId: payload.accountId,
     revision: input.revision,
@@ -104,7 +104,7 @@ export const encryptAccountRecoveryPayload = async (input: Readonly<{
         ),
       },
       key,
-      encodeText(JSON.stringify(payload)),
+      encodeText(JSON.stringify(encodeAccountRecoveryPayload(payload))),
     ),
   );
   const ciphertext = toBase64Url(ciphertextBytes);
@@ -121,7 +121,7 @@ export const encryptAccountRecoveryPayload = async (input: Readonly<{
   };
 };
 
-const verifyRecoveredKeyPairs = async (payload: AccountRecoveryPayloadV1): Promise<void> => {
+const verifyRecoveredKeyPairs = async (payload: AccountRecoveryPayload): Promise<void> => {
   const [rsaPublic, rsaPrivate, signingPublic, signingPrivate] = await Promise.all([
     crypto.subtle.importKey(
       "jwk",
@@ -181,8 +181,8 @@ const verifyRecoveredKeyPairs = async (payload: AccountRecoveryPayloadV1): Promi
 export const decryptAccountRecoveryPackage = async (
   encryptedValue: unknown,
   recoveryCode: string,
-): Promise<AccountRecoveryPayloadV1> => {
-  const encryptedPackage = parseEncryptedAccountRecoveryPackage(encryptedValue);
+): Promise<AccountRecoveryPayload> => {
+  const encryptedPackage = decodeEncryptedAccountRecoveryPackage(encryptedValue);
   if (!encryptedPackage) throw new TypeError("Recovery package is invalid.");
   const { metadata, ciphertext } = encryptedPackage;
   if ((await hash(ciphertext)) !== metadata.ciphertextDigest) {
@@ -218,7 +218,7 @@ export const decryptAccountRecoveryPackage = async (
   } catch {
     throw new Error("Recovered account data is invalid.");
   }
-  const payload = parseAccountRecoveryPayload(parsed);
+  const payload = decodeAccountRecoveryPayload(parsed);
   if (
     !payload ||
     payload.accountId !== metadata.accountId ||

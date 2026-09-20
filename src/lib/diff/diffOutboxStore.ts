@@ -1,5 +1,5 @@
 import type { DropDiffEvent } from "../../../shared/drop/diff";
-import { DropDiffEventSchema } from "../../../shared/drop/diffSchemas";
+import { DropDiffEventSchema } from "../../../shared/drop/codecs/diff-v1";
 import { serializeCanonicalJson } from "../../../shared/drop/types";
 import {
   NULLDOWN_DIFF_OUTBOX_BRANCH_QUEUE_INDEX,

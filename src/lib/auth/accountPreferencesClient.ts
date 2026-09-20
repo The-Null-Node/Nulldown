@@ -1,12 +1,15 @@
 import {
-  isAccountPreferences,
-  isAccountPreferenceValue,
-  parseAccountPreferenceMutation,
   type AccountPreferenceField,
   type AccountPreferenceMutation,
   type AccountPreferences,
   type VersionedAccountPreference,
 } from "../../../shared/auth/accountPreferences";
+import {
+  decodeAccountPreferenceMutation,
+  decodeAccountPreferences,
+  encodeAccountPreferenceMutation,
+  isAccountPreferenceValue,
+} from "../../../shared/auth/codecs/account-preferences-v1";
 
 const PREFERENCES_PATH = "/api/account/preferences";
 
@@ -61,10 +64,11 @@ export const fetchAccountPreferences = async (): Promise<AccountPreferences> => 
   });
   if (!response.ok) throw new Error("Failed to load account preferences.");
   const snapshot: unknown = await response.json();
-  if (!isAccountPreferences(snapshot)) {
+  const preferences = decodeAccountPreferences(snapshot);
+  if (!preferences) {
     throw new Error("The account preferences response is invalid.");
   }
-  return snapshot;
+  return preferences;
 };
 
 /** Mutates one preference only when the caller has its current field revision. */
@@ -74,7 +78,8 @@ export const updateAccountPreference = async (
   field: AccountPreferenceField;
   current: VersionedAccountPreference<AccountPreferenceField>;
 }> => {
-  if (!parseAccountPreferenceMutation(mutation)) {
+  const encodedMutation = encodeAccountPreferenceMutation(mutation);
+  if (!decodeAccountPreferenceMutation(encodedMutation)) {
     throw new Error("The account preference mutation is invalid.");
   }
   const response = await fetch(PREFERENCES_PATH, {
@@ -82,7 +87,7 @@ export const updateAccountPreference = async (
     credentials: "same-origin",
     cache: "no-store",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(mutation),
+    body: JSON.stringify(encodedMutation),
   });
   const body: unknown = await response.json().catch(() => null);
   if (response.status === 409) {

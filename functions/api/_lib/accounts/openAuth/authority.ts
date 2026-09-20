@@ -1,10 +1,12 @@
 import { createClient } from "@openauthjs/openauth/client";
 
 import {
+  decodeNulldownUserPrincipal,
+  decodeNulldownUserSubject,
+} from "../../../../../shared/auth/codecs/user-subject-v1";
+import {
   NULDOWN_USER_SUBJECT_TYPE,
-  parseNulldownUserPrincipal,
-  parseNulldownUserSubject,
-  type NulldownUserPrincipalV1,
+  type NulldownUserPrincipal,
 } from "../../../../../shared/auth/subjects";
 
 const CONFIG_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/;
@@ -44,7 +46,7 @@ export interface OpenAuthTokens {
 /** Verified OpenAuth principal and its canonical issuer. */
 export interface VerifiedOpenAuthPrincipal {
   issuer: string;
-  principal: NulldownUserPrincipalV1;
+  principal: NulldownUserPrincipal;
   refreshedTokens?: OpenAuthTokens;
 }
 
@@ -102,14 +104,14 @@ const isTokens = (value: unknown): value is OpenAuthTokens => {
 
 const openAuthSubjects = {
   [NULDOWN_USER_SUBJECT_TYPE]: {
-    "~standard": {
-      validate: async (value: unknown) => {
-        const parsed = parseNulldownUserSubject(value);
-        return parsed
-          ? { value: parsed }
-          : { issues: [{ message: "Invalid nulldown-user subject." }] };
+      "~standard": {
+        validate: async (value: unknown) => {
+          if (!decodeNulldownUserSubject(value)) {
+            return { issues: [{ message: "Invalid nulldown-user subject." }] };
+          }
+          return { value };
+        },
       },
-    },
   },
 };
 
@@ -158,7 +160,7 @@ export const createOpenAuthAuthority = (
       );
       if ("err" in verified || verified.aud !== audience) return null;
 
-      const principal = parseNulldownUserPrincipal(verified.subject);
+      const principal = decodeNulldownUserPrincipal(verified.subject);
       const refreshedTokens =
         "tokens" in verified && isTokens(verified.tokens)
           ? verified.tokens

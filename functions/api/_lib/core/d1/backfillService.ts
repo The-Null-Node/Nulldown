@@ -1,8 +1,9 @@
 import { isDropIdToken, toShortDropId } from "../../../../../shared/drop/id";
 import {
-  isDropEnvelopeV1,
-  isDropPayload,
-} from "../../../../../shared/drop/types";
+  decodeDropEnvelope,
+} from "../../../../../shared/drop/codecs/envelopeV1";
+import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
+import type { DropEnvelope } from "../../../../../shared/drop/types";
 import { isDropDiffEvent } from "../../../../../shared/drop/diff";
 import {
   isDropBranchRecord,
@@ -161,6 +162,17 @@ const readObjectJson = async <T>(
   }
 };
 
+const readDropEnvelope = async (
+  object: { json: <U = unknown>() => Promise<U> } | null,
+): Promise<DropEnvelope | null> => {
+  if (!object) return null;
+  try {
+    return decodeDropEnvelope(await object.json<unknown>());
+  } catch {
+    return null;
+  }
+};
+
 interface AccountOwnedDropRow {
   id: string;
 }
@@ -186,13 +198,14 @@ const backfillAccountLibraryObject = async (
     skipAccountLibrary(stats, "plaintext");
     return;
   }
-  if (!isDropEnvelopeV1(parsed)) {
+  const envelope = decodeDropEnvelope(parsed);
+  if (!envelope) {
     skipAccountLibrary(stats, "malformed");
     return;
   }
   const verified = await verifyAccountLibraryEnvelopeOwnership(
     env,
-    parsed,
+    envelope,
     null,
     null,
   );
@@ -207,8 +220,8 @@ const backfillAccountLibraryObject = async (
   await upsertAccountLibraryEntry(env.DB, {
     dropId: id,
     accountId: verified.accountId,
-    visibility: parsed.visibility ?? "unlisted",
-    createdAt: parsed.createdAt,
+    visibility: envelope.visibility ?? "unlisted",
+    createdAt: envelope.createdAt,
     updatedAt: object?.uploaded?.getTime() ?? Date.now(),
   });
   stats.accountLibraryUpserted += 1;
@@ -286,9 +299,10 @@ const upsertDropMetadataFromObject = async (
       return "invalid-json";
     }
 
-    if (isDropEnvelopeV1(parsed)) {
-      visibility = parsed.visibility ?? "unlisted";
-      metadataJson = JSON.stringify(parsed.metadata);
+    const envelope = decodeDropEnvelope(parsed);
+    if (envelope) {
+      visibility = envelope.visibility ?? "unlisted";
+      metadataJson = JSON.stringify(envelope.metadata);
     } else if (isDropPayload(parsed)) {
       ownerAccountId =
         typeof parsed.metadata?.ownerAccountId === "string"
@@ -593,10 +607,7 @@ const handleBackfillObject = async (
   stats.dropsUpserted += 1;
 
   // Project only envelopes that pass the same direct/delegated ownership verification.
-  const envelope = await readObjectJson(
-    await env.R2_BUCKET.get(key),
-    isDropEnvelopeV1,
-  );
+  const envelope = await readDropEnvelope(await env.R2_BUCKET.get(key));
   if (envelope) {
     const verified = await verifyAccountLibraryEnvelopeOwnership(
       env,

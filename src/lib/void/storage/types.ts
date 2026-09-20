@@ -1,5 +1,5 @@
 import type {
-  DropEnvelopeV1,
+  DropEnvelope,
   DropPayload,
 } from "../../../../shared/drop/types";
 
@@ -9,7 +9,7 @@ export type VoidProviderScope = "local" | "remote";
 /** Sealed drop record stored by provider-port CRUD operations. */
 export interface DropCrudRecord {
   id: string;
-  envelope: DropEnvelopeV1;
+  envelope: DropEnvelope;
   createdAt: number;
   updatedAt: number;
   revision?: string | null;
@@ -20,7 +20,7 @@ export type StoredDropRecord =
   | {
       kind: "sealed";
       id: string;
-      envelope: DropEnvelopeV1;
+      envelope: DropEnvelope;
       createdAt: number;
       updatedAt: number;
       revision?: string | null;
@@ -43,7 +43,7 @@ export interface VoidStorageCreateOptions {
 export interface VoidStorage {
   scope: VoidProviderScope;
   create: (
-    envelope: DropEnvelopeV1,
+    envelope: DropEnvelope,
     options?: VoidStorageCreateOptions,
   ) => Promise<{ id: string; url: string }>;
   get: (id: string) => Promise<StoredDropRecord | null>;

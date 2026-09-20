@@ -31,12 +31,15 @@ import type {
 import {
   hasConfirmedDropDiffAppendReceipt,
   isDropDiffAppendResponse,
+  type DropDiffAppendResponse,
 } from "../../../shared/drop/diff";
-import type {
-  CliCredentialBundleV1,
-  CliDevicePollResponse,
-  CliDeviceStartResponse,
-} from "../../../shared/auth/cliDevice";
+import type { CliDevicePollResponse } from "../../../shared/auth/cliDevice";
+import {
+  decodeCliCredentialBundle,
+  decodeCliCredentialEnvelope,
+  decodeCliDeviceStartResponse,
+} from "../../../shared/auth/codecs/cli-device-v1";
+import { encodeDropEnvelope } from "../../../shared/drop/codecs/envelopeV1";
 
 const encodeBranchPathSegment = (value: string): string =>
   encodeURIComponent(value).replace(/%3A/gi, ":");
@@ -113,6 +116,43 @@ const maybeSet = (
   if (value !== null && value !== undefined) body[key] = value;
 };
 
+const decodeCliDevicePollResponse = (
+  value: unknown,
+): CliDevicePollResponse | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const response = value as Record<string, unknown>;
+  if (response.status === "expired") return { status: "expired" };
+  if (response.status === "pending" && typeof response.interval === "number") {
+    return { status: "pending", interval: response.interval };
+  }
+  const envelope = response.status === "approved"
+    ? decodeCliCredentialEnvelope(response.envelope)
+    : null;
+  return envelope ? { status: "approved", envelope } : null;
+};
+
+const requireDiffAppendReceipt = (
+  value: unknown,
+  request: DiffEnvelopePostRequest,
+): DropDiffAppendResponse => {
+  if (!isDropDiffAppendResponse(value)) {
+    throw new Error(
+      "Diff response did not include a durable acknowledgement. Upgrade the server before retrying.",
+    );
+  }
+  if (
+    !hasConfirmedDropDiffAppendReceipt(value, {
+      branchId: request.branchId ?? undefined,
+      eventIds: request.envelope.events.map((event) => event.eventId),
+    })
+  ) {
+    throw new Error(
+      "Diff response did not confirm every submitted event. Retry the exact same envelope.",
+    );
+  }
+  return value;
+};
+
 interface RuntimeHttpResponse<T> {
   data: T | null;
 }
@@ -138,16 +178,20 @@ export const createHttpNulldownRuntime = (
 ): NulldownRuntime => ({
   drops: {
     async create(request: DropCreateRequest): Promise<DropCreateResult> {
-      const response = await dependencies.request<DropCreateResult>("/api/store", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...(request.envelope
-            ? { envelope: request.envelope }
-            : { content: request.content, metadata: request.metadata }),
-        }),
-      });
-      if (!response.data) throw new Error("Create response did not include a drop.");
+      const response = await dependencies.request<DropCreateResult>(
+        "/api/store",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...(request.envelope
+              ? { envelope: encodeDropEnvelope(request.envelope) }
+              : { content: request.content, metadata: request.metadata }),
+          }),
+        },
+      );
+      if (!response.data)
+        throw new Error("Create response did not include a drop.");
       return response.data;
     },
     async update(request: DropUpdateRequest): Promise<DropUpdateResult> {
@@ -155,16 +199,21 @@ export const createHttpNulldownRuntime = (
         id: request.id,
         upsert: true,
         ...(request.envelope
-          ? { envelope: request.envelope }
+          ? { envelope: encodeDropEnvelope(request.envelope) }
           : { content: request.content, metadata: request.metadata }),
       };
-      if (request.expectedRevision) body.expectedRevision = request.expectedRevision;
-      const response = await dependencies.request<DropUpdateResult>("/api/store", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.data) throw new Error("Update response did not include a drop.");
+      if (request.expectedRevision)
+        body.expectedRevision = request.expectedRevision;
+      const response = await dependencies.request<DropUpdateResult>(
+        "/api/store",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response.data)
+        throw new Error("Update response did not include a drop.");
       return response.data;
     },
     get: (id) => dependencies.readDrop(id),
@@ -187,7 +236,10 @@ export const createHttpNulldownRuntime = (
       const response = await dependencies.request(`/api/search?${params}`);
       return response.data;
     },
-    async delete(id: string, request: DropDeleteRequest = {}): Promise<DropDeleteResult> {
+    async delete(
+      id: string,
+      request: DropDeleteRequest = {},
+    ): Promise<DropDeleteResult> {
       const headers: Record<string, string> = {};
       if (!request.force) {
         const current = await dependencies.readDrop(id);
@@ -282,22 +334,7 @@ export const createHttpNulldownRuntime = (
         },
         body,
       });
-      if (!isDropDiffAppendResponse(response.data)) {
-        throw new Error(
-          "Diff response did not include a durable acknowledgement. Upgrade the server before retrying.",
-        );
-      }
-      if (
-        !hasConfirmedDropDiffAppendReceipt(response.data, {
-          branchId: request.branchId ?? undefined,
-          eventIds: request.envelope.events.map((event) => event.eventId),
-        })
-      ) {
-        throw new Error(
-          "Diff response did not confirm every submitted event. Retry the exact same event.",
-        );
-      }
-      return response.data;
+      return requireDiffAppendReceipt(response.data, request);
     },
   },
   auth: {
@@ -305,33 +342,45 @@ export const createHttpNulldownRuntime = (
       const response = await dependencies.request("/api/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId: request.accountId, ...request.proof }),
+        body: JSON.stringify({
+          accountId: request.accountId,
+          ...request.proof,
+        }),
       });
       return response.data;
     },
     async device(request: AuthDeviceRequest) {
-      const response = await dependencies.request<CliDeviceStartResponse>("/api/auth/cli/device", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
-      return response.data;
+      const response = await dependencies.request(
+        "/api/auth/cli/device",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        },
+      );
+      return decodeCliDeviceStartResponse(response.data);
     },
     async poll(request: AuthDevicePollRequest) {
-      const response = await dependencies.request<CliDevicePollResponse>("/api/auth/cli/poll", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
-      return response.data;
+      const response = await dependencies.request(
+        "/api/auth/cli/poll",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        },
+      );
+      return decodeCliDevicePollResponse(response.data);
     },
     async refresh(request: AuthRefreshRequest) {
-      const response = await dependencies.request<CliCredentialBundleV1>("/api/auth/cli/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
-      return response.data;
+      const response = await dependencies.request(
+        "/api/auth/cli/refresh",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        },
+      );
+      return decodeCliCredentialBundle(response.data);
     },
     async revoke(request: AuthRevokeRequest) {
       const response = await dependencies.request("/api/auth/cli/revoke", {

@@ -1,12 +1,9 @@
-import type { D1Database } from "@cloudflare/workers-types";
-
+import type { AccountBindingChallenge } from "../../../../../shared/auth/accountBinding";
 import {
-  ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
-  ACCOUNT_BINDING_OPERATION_V1,
-  parseAccountBindingChallenge,
+  decodeAccountBindingChallenge,
+  encodeAccountBindingChallenge,
   serializeAccountBindingChallenge,
-  type AccountBindingChallengeV1,
-} from "../../../../../shared/auth/accountBinding";
+} from "../../../../../shared/auth/codecs/account-binding-v1";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 import {
   readAccountRecord,
@@ -138,10 +135,7 @@ export const createBindingChallengeResponse = async (
   }
 
   const issuedAt = Date.now();
-  const challenge: AccountBindingChallengeV1 = {
-    schema: ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
-    version: 1,
-    operation: ACCOUNT_BINDING_OPERATION_V1,
+  const challenge: AccountBindingChallenge = {
     challengeId: randomToken(),
     nonce: randomToken(),
     userId: identity.userId,
@@ -162,7 +156,7 @@ export const createBindingChallengeResponse = async (
     expires_at: challenge.expiresAt,
     consumed_at: null,
   });
-  return responseJson({ bound: false, challenge }, 201, identity);
+  return responseJson({ bound: false, challenge: encodeAccountBindingChallenge(challenge) }, 201, identity);
 };
 
 export const verifyAccountSignature = async (
@@ -210,7 +204,7 @@ export const bindAccountResponse = async (
     return responseJson({ error: "invalid_binding_request" }, 400, identity);
   }
   const requestBody = body as Record<string, unknown>;
-  const challenge = parseAccountBindingChallenge(requestBody.challenge);
+  const challenge = decodeAccountBindingChallenge(requestBody.challenge);
   const signature = requestBody.signature;
   if (!challenge || typeof signature !== "string" || Object.keys(requestBody).length !== 2) {
     return responseJson({ error: "invalid_binding_request" }, 400, identity);

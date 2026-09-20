@@ -17,6 +17,7 @@ import {
   hasConfirmedDropDiffAppendReceipt,
   isDropDiffEvent,
 } from "../../../shared/drop/diff";
+import { DropDiffAppendEnvelopeSchema } from "../../../shared/drop/codecs/diff-v1";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../shared/drop/branch";
 import { serializeCanonicalJson } from "../../../shared/drop/types";
 import { emitEvent } from "../events/eventBus";
@@ -211,7 +212,12 @@ export const createRemoteDiffChannel = (
   const publishEvent = async (
     candidate: DropDiffEvent,
   ): Promise<DropDiffAppendResponse> => {
-    if (!isDropDiffEvent(candidate) || candidate.dropId !== dropId) {
+    if (
+      !isDropDiffEvent(candidate) ||
+      !DropDiffAppendEnvelopeSchema.safeParse({ version: 1, events: [candidate] })
+        .success ||
+      candidate.dropId !== dropId
+    ) {
       throw new Error("Invalid immutable diff event for this channel.");
     }
     const existing = preparedEvents.get(candidate.eventId);
@@ -258,7 +264,7 @@ export const createRemoteDiffChannel = (
     const data = await response.json();
     if (
       !hasConfirmedDropDiffAppendReceipt(data, {
-        branchId,
+        branchId: branchId ?? undefined,
         eventIds: [event.eventId],
       })
     ) {
