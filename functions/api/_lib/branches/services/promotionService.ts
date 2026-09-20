@@ -31,7 +31,7 @@ import {
   resolveParam,
 } from "../../core/http/responses";
 import { createPromotedEnvelope } from "../../crypto/envelopes/promotion";
-import { encodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
+import { encodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
 import {
   createReservedRemoteJsonDrop,
   releaseReservedRemoteJsonDropId,

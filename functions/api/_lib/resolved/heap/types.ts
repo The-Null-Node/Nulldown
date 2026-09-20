@@ -1,5 +1,5 @@
 import type { AccountAuthEnv } from "../../accounts/session/auth";
-import {
+import type {
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
 } from "../../../../../shared/drop/resolved/constants";
@@ -10,6 +10,10 @@ import type {
   NullplugUiStatePatchFact,
   NullplugUiStateSnapshot,
 } from "../../../../../shared/nullplug/ui";
+import type {
+  NulleditNextRequest,
+  NulleditNextResult,
+} from "../../../../../src/server/nulledit/types";
 import type {
   VoidBlobStore,
   VoidSqlStore,
@@ -64,6 +68,11 @@ export interface ResolvedHeapQueryOptions {
   ) => Promise<void> | void;
   /** Observes repair failures without failing the query. */
   onRepairError?: (error: unknown, target: ResolvedHeapQueryRepairTarget) => void;
+  /** Dispatches an authorized non-document snapshotter query. */
+  querySnapshotter?: (
+    snapshotterId: string,
+    request: NulleditNextRequest,
+  ) => NulleditNextResult | Promise<NulleditNextResult> | undefined;
 }
 
 /** Parsed request payload for rebuilding one or more resolved heap projections. */

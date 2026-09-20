@@ -5,10 +5,15 @@ how to interpret plaintext payloads versus sealed envelopes.
 */
 
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
-import { readAccountLibraryEntry } from "../_lib/accounts/library/repository";
-import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/auth";
+import {
+  createCloudflareBlobStore,
+  createCloudflareSqlStore,
+} from "../_lib/core/platform/cloudflarePorts";
+import {
+  getRootDrop,
+  type GetRootDropServiceEnv,
+} from "../_lib/drops/services/getRootDrop";
 
 interface Env {
   R2_BUCKET: R2Bucket;
@@ -19,24 +24,18 @@ interface Env {
 
 const READ_SUCCESS_SAMPLE_RATE = 0.1;
 
-function validateEnv(env: Env): void {
-  if (!env.R2_BUCKET)
-    throw new Error(
-      "R2_BUCKET binding is required. Configure in Cloudflare Pages > Settings > Functions > R2 bucket bindings",
-    );
-}
+const createGetRootDropEnv = (env: Env): GetRootDropServiceEnv => ({
+  blobs: createCloudflareBlobStore(env.R2_BUCKET),
+  sql: createCloudflareSqlStore(env.DB),
+  ACCOUNT_AUTH_SECRET: env.ACCOUNT_AUTH_SECRET,
+  ALLOW_INSECURE_ACCOUNT_HEADER: env.ALLOW_INSECURE_ACCOUNT_HEADER,
+});
 
 export const onRequestGet: PagesFunction<Env, "id"> = async ({
   env,
   params,
   request,
 }) => {
-  const copyHeaders = (headers: Headers, object: R2Object) => {
-    Object.entries(object.httpMetadata || {}).forEach(([key, value]) => {
-      headers.set(key, value as string);
-    });
-  };
-
   const logger = createRequestLogger({
     request,
     env,
@@ -51,89 +50,12 @@ export const onRequestGet: PagesFunction<Env, "id"> = async ({
     requestedDropRef: toLogRef(requestedId),
   });
 
-  try {
-    validateEnv(env);
-
-    const dropIdentityRepository = createDropIdentityRepository({
-      blobs: env.R2_BUCKET,
-      sql: env.DB,
-    });
-    const id = await dropIdentityRepository.resolveRemoteDropId(
-      requestedId,
-      logger,
-    );
-
-    if (!id) {
-      logger.warn("get.invalid_drop_id", {
-        requestedDropRef: toLogRef(requestedId),
-      });
-      logger.logEnd(400, {
-        reason: "invalid_drop_id",
-        requestedDropRef: toLogRef(requestedId),
-      });
-      return new Response("Drop ID is required.", { status: 400 });
-    }
-
-    const canonicalDropRef = toLogRef(id);
-
-    const entry = env.DB ? await readAccountLibraryEntry(env.DB, id) : null;
-    // Legacy private drops are intentionally left on their pre-library behavior until backfill
-    // creates a verified projection; only a projection can safely establish ownership.
-    if (entry?.visibility === "private") {
-      const accountId = await resolveAuthenticatedAccountId(request, env);
-      if (!accountId || entry.account_id !== accountId || entry.deleted_at !== null) {
-        logger.logEnd(404, { reason: "private_drop_not_found", canonicalDropRef });
-        return new Response("Drop not found.", { status: 404 });
-      }
-    }
-
-    const object = await env.R2_BUCKET.get(id);
-
-    if (object === null) {
-      logger.warn("get.drop_not_found", {
-        requestedDropRef: toLogRef(requestedId),
-        canonicalDropRef,
-      });
-      logger.logEnd(404, {
-        reason: "drop_not_found",
-        requestedDropRef: toLogRef(requestedId),
-        canonicalDropRef,
-      });
-      return new Response("Drop not found.", { status: 404 });
-    }
-
-    const headers = new Headers({
-      "Content-Type": object.httpMetadata?.contentType || "text/plain",
-      ETag: object.httpEtag,
-      "X-Drop-Revision": object.httpEtag,
-      "X-Drop-Canonical-Id": id,
-    });
-
-    copyHeaders(headers, object);
-
-    logger.logEnd(200, {
-      requestedDropRef: toLogRef(requestedId),
-      canonicalDropRef,
-      contentType: object.httpMetadata?.contentType || "text/plain",
-    });
-
-    return new Response(object.body, {
-      status: 200,
-      headers: headers,
-    });
-  } catch (error: unknown) {
-    logger.logError("get.unhandled_error", error, {
-      requestedDropRef: toLogRef(requestedId),
-    });
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.logEnd(500, {
-      reason: "unhandled_error",
-      requestedDropRef: toLogRef(requestedId),
-    });
-    return new Response(`Failed to retrieve drop: ${errorMessage}`, {
-      status: 500,
-    });
-  }
+  return getRootDrop({
+    request,
+    requestedId,
+    env: createGetRootDropEnv(env),
+    logger,
+  });
 };
 
 export const onRequest: PagesFunction<Env, "id"> = async (context) => {

@@ -33,18 +33,28 @@ describe("branch mutation lock", () => {
       firstStarted = resolve;
     });
 
-    const first = withBranchMutationLock(store, "root-1", "branch-1", async (lock) => {
-      await lock.beginCommit();
-      order.push("first-start");
-      firstStarted?.();
-      await firstMayFinish;
-      order.push("first-end");
-    });
+    const first = withBranchMutationLock(
+      store,
+      "root-1",
+      "branch-1",
+      async (lock) => {
+        await lock.beginCommit();
+        order.push("first-start");
+        firstStarted?.();
+        await firstMayFinish;
+        order.push("first-end");
+      },
+    );
     await firstHasStarted;
-    const second = withBranchMutationLock(store, "root-1", "branch-1", async (lock) => {
-      await lock.beginCommit();
-      order.push("second");
-    });
+    const second = withBranchMutationLock(
+      store,
+      "root-1",
+      "branch-1",
+      async (lock) => {
+        await lock.beginCommit();
+        order.push("second");
+      },
+    );
 
     releaseFirst?.();
     await Promise.all([first, second]);
@@ -58,7 +68,10 @@ describe("branch mutation lock", () => {
 
     await expect(
       withBranchMutationLock(store, "root-1", "branch-1", async (lock) => {
-        await store.put(key, JSON.stringify({ token: "other", createdAt: Date.now() }));
+        await store.put(
+          key,
+          JSON.stringify({ token: "other", createdAt: Date.now() }),
+        );
         await lock.beginCommit();
       }),
     ).rejects.toMatchObject({
@@ -70,10 +83,18 @@ describe("branch mutation lock", () => {
   it("times out without committing when another lease remains current", async () => {
     const store = createFilesystemBlobStore({ rootDir });
     const key = createBranchLockKey("root-1", "branch-1");
-    await store.put(key, JSON.stringify({ token: "other", createdAt: Date.now() }));
+    await store.put(
+      key,
+      JSON.stringify({ token: "other", createdAt: Date.now() }),
+    );
 
     await expect(
-      withBranchMutationLock(store, "root-1", "branch-1", async () => "unreachable"),
+      withBranchMutationLock(
+        store,
+        "root-1",
+        "branch-1",
+        async () => "unreachable",
+      ),
     ).rejects.toMatchObject({
       code: "branch_lock_timeout",
       outcome: "not_committed",
@@ -85,13 +106,19 @@ describe("branch mutation lock", () => {
     const store: VoidBlobStore = {
       get: delegate.get,
       head: delegate.head,
-      put: delegate.put,
-      delete: async () => {
-        throw new Error("delete response lost");
+      put: async (key, value, options) => {
+        const persisted = await delegate.put(key, value, options);
+        if (typeof value === "string" && value.includes('"releasedAt"')) {
+          throw new Error("release response lost");
+        }
+        return persisted;
       },
+      delete: delegate.delete,
       list: delegate.list,
     };
-    const warning = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = jest
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
 
     try {
       await expect(
@@ -100,7 +127,13 @@ describe("branch mutation lock", () => {
           return "committed";
         }),
       ).resolves.toBe("committed");
-      expect(warning).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith({
+        code: "branch_mutation_lock_cleanup_unconfirmed",
+        outcome: "committed_with_cleanup_warning",
+        rootDropId: "root-1",
+        branchId: "branch-1",
+        releaseOutcome: "unknown",
+      });
     } finally {
       warning.mockRestore();
     }
@@ -118,7 +151,9 @@ describe("branch mutation lock", () => {
       },
       list: delegate.list,
     };
-    const warning = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = jest
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
 
     try {
       await expect(
@@ -136,13 +171,18 @@ describe("branch mutation lock", () => {
   it("reports an unknown outcome when lock ownership is lost after commit begins", async () => {
     const store = createFilesystemBlobStore({ rootDir });
     const key = createBranchLockKey("root-1", "branch-1");
-    const warning = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = jest
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
 
     try {
       await expect(
         withBranchMutationLock(store, "root-1", "branch-1", async (lock) => {
           await lock.beginCommit();
-          await store.put(key, JSON.stringify({ token: "other", createdAt: Date.now() }));
+          await store.put(
+            key,
+            JSON.stringify({ token: "other", createdAt: Date.now() }),
+          );
           return "committed";
         }),
       ).rejects.toMatchObject({
@@ -168,7 +208,9 @@ describe("branch mutation lock", () => {
       delete: delegate.delete,
       list: delegate.list,
     };
-    const warning = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = jest
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
 
     try {
       await expect(

@@ -400,7 +400,10 @@ describe("functions api branch resolved query contracts", () => {
         `https://nulldown.test/api/branches/${rootDropId}/${branch.branchId}/resolved/update`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-nulldown-account-id": accountId,
+          },
           body: JSON.stringify({
             resolverId: RESOLVED_RUNTIME_REFS_RESOLVER_ID,
             uiPrimitives: [
@@ -414,7 +417,10 @@ describe("functions api branch resolved query contracts", () => {
           }),
         },
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { rootId: rootDropId, branchId: branch.branchId },
     } as unknown as Parameters<typeof onResolvedUpdateRequest>[0]);
 
@@ -434,8 +440,12 @@ describe("functions api branch resolved query contracts", () => {
         `https://nulldown.test/api/branches/${rootDropId}/${branch.branchId}/resolved/query?resolverId=${encodeURIComponent(
           RESOLVED_RUNTIME_REFS_RESOLVER_ID,
         )}&q=approve&kind=ui.primitive,ui.response,ui.state`,
+        { headers: { "x-nulldown-account-id": accountId } },
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { rootId: rootDropId, branchId: branch.branchId },
     } as unknown as Parameters<typeof onResolvedQueryRequest>[0]);
 

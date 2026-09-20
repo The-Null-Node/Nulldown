@@ -11,7 +11,9 @@ import {
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
 } from "../../../../../shared/drop/resolved/constants";
 import { hashBranchSnapshotSource } from "../../../../../shared/drop/resolved/hash";
-import { resolveResolvedBranchTarget } from "./context";
+import { resolveAuthenticatedAccountId } from "../../accounts/session/auth";
+import { canReadSensitiveBranch } from "../../security/readAuthorization";
+import { resolveReadableResolvedBranchTarget } from "./context";
 import { projectResolvedHeap } from "./projector";
 import { parseResolvedUpdateBody } from "./request";
 import type { ResolvedHeapEnv, ResolvedHeapParams } from "./types";
@@ -25,9 +27,26 @@ export const updateResolvedHeap = async (
   request: Request,
 ): Promise<Response> => {
   try {
-    const target = await resolveResolvedBranchTarget(env, params);
+    const accountId = await resolveAuthenticatedAccountId(request, env);
+    if (!accountId) {
+      return jsonErrorResponse(
+        401,
+        "account_required",
+        "Authenticated account session is required.",
+      );
+    }
+
+    const target = await resolveReadableResolvedBranchTarget(request, env, params);
     if ("error" in target) return target.error;
     const { rootDropId, branchId, branch } = target;
+
+    if (!(await canReadSensitiveBranch(request, env, rootDropId, branch))) {
+      return jsonErrorResponse(
+        403,
+        "forbidden",
+        "Authenticated branch capability is required.",
+      );
+    }
 
     const rawBody = await readRequestTextWithLimit(
       request,

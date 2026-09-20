@@ -3,7 +3,7 @@ import {
   type DropSnapshotRecord,
 } from "../../../../../shared/drop/branch";
 import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
-import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
 import type {
   VoidBlobStore,
   VoidSqlStore,
@@ -262,7 +262,7 @@ export const ensureBranchHeapV2ForMutation = async (
 };
 
 /** Upgrades a branch to heap-v2 event storage without removing legacy fallback data. */
-export const ensureBranchHeapV2 = async (
+export const ensureBranchSnapshotHeap = async (
   bucket: VoidBlobStore,
   branch: DropBranchRecord,
   db?: VoidSqlStore,
@@ -443,7 +443,7 @@ export const resolveBranchForActor = async (
       OWNER_BRANCH_ID,
     );
     if (existing) {
-      const upgraded = await ensureBranchHeapV2(bucket, existing, db);
+      const upgraded = await ensureBranchSnapshotHeap(bucket, existing, db);
       return { branch: upgraded, created: false };
     }
 
@@ -474,7 +474,7 @@ export const resolveBranchForActor = async (
       existingBranchId,
     );
     if (existingBranch) {
-      const upgraded = await ensureBranchHeapV2(bucket, existingBranch, db);
+      const upgraded = await ensureBranchSnapshotHeap(bucket, existingBranch, db);
       return { branch: upgraded, created: false };
     }
   }
@@ -482,7 +482,7 @@ export const resolveBranchForActor = async (
   const branchId = createCloneBranchId(writerKey);
   const existing = await branchRepository.readBranch(rootDropId, branchId);
   if (existing) {
-    const upgraded = await ensureBranchHeapV2(bucket, existing, db);
+    const upgraded = await ensureBranchSnapshotHeap(bucket, existing, db);
     return { branch: upgraded, created: false };
   }
 
@@ -504,7 +504,7 @@ export const resolveBranchForActor = async (
 };
 
 /** Migrates one branch to heap-v2 snapshot/event storage under the branch mutation lock. */
-export const backfillBranchToSnapshotHeapV2 = async (
+export const backfillBranchToSnapshotHeap = async (
   bucket: VoidBlobStore,
   rootDropId: string,
   branchId: string,

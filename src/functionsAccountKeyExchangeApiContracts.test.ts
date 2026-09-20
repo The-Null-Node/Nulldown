@@ -11,13 +11,19 @@ import type { AccountBindingEnvironment } from "../functions/api/_lib/accounts/b
 import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
 import type { VoidBlobObject, VoidBlobStore } from "./server/ports";
 import {
-  ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
-  serializeAccountRecoveryPackage,
-  type EncryptedAccountRecoveryPackageV1,
-  type AccountRecoveryPayloadV1,
+  type AccountRecoveryPayload,
+  type EncryptedAccountRecoveryPackage,
 } from "../shared/auth/recovery";
-import { serializeAccountBindingChallenge } from "../shared/auth/accountBinding";
-import { encryptAccountRecoveryPayload } from "./lib/void/vault/recovery/crypto";
+import {
+  encodeEncryptedAccountRecoveryPackage,
+  serializeAccountRecoveryPackage,
+} from "../shared/auth/codecs/account-recovery-v1";
+import {
+  decodeAccountBindingChallenge,
+  encodeAccountBindingChallenge,
+  serializeAccountBindingChallenge,
+} from "../shared/auth/codecs/account-binding-v1";
+import { encryptAccountRecoveryPayload } from "./lib/auth/vault/recovery/crypto";
 
 const origin = "https://app.test";
 const issuer = "https://issuer.test";
@@ -86,7 +92,10 @@ class MemoryStatement {
 
 class MemoryDatabase {
   readonly users = new Set<string>();
-  readonly accounts = new Map<string, { signing_public_jwk: string; created_at: number; updated_at: number }>();
+  readonly accounts = new Map<
+    string,
+    { signing_public_jwk: string; created_at: number; updated_at: number }
+  >();
   readonly bindings = new Map<string, BindingRow>();
   readonly challenges = new Map<string, ChallengeRow>();
   readonly packages = new Map<string, RecoveryRow>();
@@ -143,7 +152,11 @@ class MemoryDatabase {
     if (sql.includes("UPDATE auth_account_recovery_packages")) {
       const accountId = String(params[6]);
       const current = this.packages.get(accountId);
-      if (current && current.user_id === String(params[7]) && current.revision === Number(params[8])) {
+      if (
+        current &&
+        current.user_id === String(params[7]) &&
+        current.revision === Number(params[8])
+      ) {
         this.packages.set(accountId, {
           ...current,
           revision: Number(params[0]),
@@ -170,9 +183,17 @@ class MemoryDatabase {
     if (sql.includes("FROM auth_account_bindings")) {
       return this.bindings.get(String(params[0])) ?? null;
     }
-    if (sql.startsWith("\n      UPDATE auth_account_binding_challenges") || sql.includes("UPDATE auth_account_binding_challenges")) {
+    if (
+      sql.startsWith("\n      UPDATE auth_account_binding_challenges") ||
+      sql.includes("UPDATE auth_account_binding_challenges")
+    ) {
       const row = this.challenges.get(String(params[1]));
-      if (!row || row.consumed_at !== null || row.expires_at <= Number(params[2])) return null;
+      if (
+        !row ||
+        row.consumed_at !== null ||
+        row.expires_at <= Number(params[2])
+      )
+        return null;
       row.consumed_at = Number(params[0]);
       return { challenge_id: row.challenge_id };
     }
@@ -181,9 +202,11 @@ class MemoryDatabase {
     }
     if (sql.includes("FROM auth_account_recovery_packages")) {
       if (sql.includes("WHERE user_id")) {
-        return [...this.packages.values()]
-          .filter((row) => row.user_id === String(params[0]))
-          .sort((a, b) => b.updated_at - a.updated_at)[0] ?? null;
+        return (
+          [...this.packages.values()]
+            .filter((row) => row.user_id === String(params[0]))
+            .sort((a, b) => b.updated_at - a.updated_at)[0] ?? null
+        );
       }
       return this.packages.get(String(params[0])) ?? null;
     }
@@ -226,11 +249,15 @@ class MemoryBucket implements VoidBlobStore {
   }
 
   async delete(keys: string | string[]): Promise<void> {
-    for (const key of Array.isArray(keys) ? keys : [keys]) this.objects.delete(key);
+    for (const key of Array.isArray(keys) ? keys : [keys])
+      this.objects.delete(key);
   }
 
   async list() {
-    return { objects: [...this.objects.keys()].map((key) => ({ key })), truncated: false };
+    return {
+      objects: [...this.objects.keys()].map((key) => ({ key })),
+      truncated: false,
+    };
   }
 }
 
@@ -244,9 +271,11 @@ class FakeAuthority {
 
   static async create(): Promise<FakeAuthority> {
     const pair = await generateKeyPair("ES256");
-    const jwk = await exportJWK(pair.publicKey);
-    jwk.kid = "test-key";
-    jwk.alg = "ES256";
+    const jwk = {
+      ...(await exportJWK(pair.publicKey)),
+      kid: "test-key",
+      alg: "ES256",
+    } as unknown as JsonWebKey;
     return new FakeAuthority(pair.privateKey as CryptoKey, jwk);
   }
 
@@ -297,7 +326,10 @@ const createHarness = async (userId = "user_01") => {
     ["sign", "verify"],
   )) as CryptoKeyPair;
   const accountId = "account-01";
-  const signingPublicJwk = await crypto.subtle.exportKey("jwk", signingPair.publicKey);
+  const signingPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    signingPair.publicKey,
+  );
   database.accounts.set(accountId, {
     signing_public_jwk: JSON.stringify(signingPublicJwk),
     created_at: 1_000,
@@ -321,21 +353,39 @@ const createHarness = async (userId = "user_01") => {
     Cookie: `${accessCookieName}=${access}`,
     Authorization: `Bearer ${accountToken}`,
   };
-  return { database, bucket, authority, env, headers, accountId, signingPair, signingPublicJwk };
+  return {
+    database,
+    bucket,
+    authority,
+    env,
+    headers,
+    accountId,
+    signingPair,
+    signingPublicJwk,
+  };
 };
 
-const bindHarnessAccount = async (harness: Awaited<ReturnType<typeof createHarness>>) => {
+const bindHarnessAccount = async (
+  harness: Awaited<ReturnType<typeof createHarness>>,
+) => {
   const challengeResponse = await challengeRoute(
     requestContext(
-      new Request(`${origin}/api/account/challenge`, { method: "POST", headers: harness.headers }),
+      new Request(`${origin}/api/account/challenge`, {
+        method: "POST",
+        headers: harness.headers,
+      }),
       harness.env,
     ),
   );
-  const challengeBody = (await challengeResponse.json()) as { challenge: Parameters<typeof serializeAccountBindingChallenge>[0] };
+  const challengeBody = (await challengeResponse.json()) as {
+    challenge: unknown;
+  };
+  const challenge = decodeAccountBindingChallenge(challengeBody.challenge);
+  if (!challenge) throw new Error("Expected a V1 account-binding challenge.");
   const signature = await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     harness.signingPair.privateKey,
-    new TextEncoder().encode(serializeAccountBindingChallenge(challengeBody.challenge)),
+    new TextEncoder().encode(serializeAccountBindingChallenge(challenge)),
   );
   const bindResponse = await bindRoute(
     requestContext(
@@ -343,19 +393,19 @@ const bindHarnessAccount = async (harness: Awaited<ReturnType<typeof createHarne
         method: "POST",
         headers: { ...harness.headers, "Content-Type": "application/json" },
         body: JSON.stringify({
-          challenge: challengeBody.challenge,
+          challenge: encodeAccountBindingChallenge(challenge),
           signature: toBase64Url(new Uint8Array(signature)),
         }),
       }),
       harness.env,
     ),
   );
-  return { challengeBody, bindResponse };
+  return { challenge, bindResponse };
 };
 
 const createRecoveryPayload = async (
   harness: Awaited<ReturnType<typeof createHarness>>,
-): Promise<AccountRecoveryPayloadV1> => {
+): Promise<AccountRecoveryPayload> => {
   const encryptionPair = (await crypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
@@ -367,22 +417,29 @@ const createRecoveryPayload = async (
     ["encrypt", "decrypt"],
   )) as CryptoKeyPair;
   return {
-    schema: ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
-    version: 1,
     accountId: harness.accountId,
     encryptionKid: "enc_01",
     signingKid: "sig_01",
-    encryptionPublicJwk: await crypto.subtle.exportKey("jwk", encryptionPair.publicKey),
-    encryptionPrivateJwk: await crypto.subtle.exportKey("jwk", encryptionPair.privateKey),
+    encryptionPublicJwk: await crypto.subtle.exportKey(
+      "jwk",
+      encryptionPair.publicKey,
+    ),
+    encryptionPrivateJwk: await crypto.subtle.exportKey(
+      "jwk",
+      encryptionPair.privateKey,
+    ),
     signingPublicJwk: harness.signingPublicJwk,
-    signingPrivateJwk: await crypto.subtle.exportKey("jwk", harness.signingPair.privateKey),
+    signingPrivateJwk: await crypto.subtle.exportKey(
+      "jwk",
+      harness.signingPair.privateKey,
+    ),
     createdAt: 1_000,
   };
 };
 
 const signedRecoveryUpload = async (
   harness: Awaited<ReturnType<typeof createHarness>>,
-  encryptedPackage: EncryptedAccountRecoveryPackageV1,
+  encryptedPackage: EncryptedAccountRecoveryPackage,
   privateKey = harness.signingPair.privateKey,
 ) => {
   const signature = await crypto.subtle.sign(
@@ -391,7 +448,7 @@ const signedRecoveryUpload = async (
     new TextEncoder().encode(serializeAccountRecoveryPackage(encryptedPackage)),
   );
   return {
-    package: encryptedPackage,
+    package: encodeEncryptedAccountRecoveryPackage(encryptedPackage),
     signature: toBase64Url(new Uint8Array(signature)),
   };
 };
@@ -414,14 +471,16 @@ describe("account key-exchange Pages contracts", () => {
 
   it("binds only a valid pinned-key challenge and does not mutate on replay", async () => {
     const harness = await createHarness();
-    const { challengeBody, bindResponse } = await bindHarnessAccount(harness);
+    const { challenge, bindResponse } = await bindHarnessAccount(harness);
     expect(bindResponse.status).toBe(201);
-    expect(harness.database.bindings.get(harness.accountId)?.user_id).toBe("user_01");
+    expect(harness.database.bindings.get(harness.accountId)?.user_id).toBe(
+      "user_01",
+    );
 
     const replaySignature = await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" },
       harness.signingPair.privateKey,
-      new TextEncoder().encode(serializeAccountBindingChallenge(challengeBody.challenge)),
+      new TextEncoder().encode(serializeAccountBindingChallenge(challenge)),
     );
     const replay = await bindRoute(
       requestContext(
@@ -429,7 +488,7 @@ describe("account key-exchange Pages contracts", () => {
           method: "POST",
           headers: { ...harness.headers, "Content-Type": "application/json" },
           body: JSON.stringify({
-            challenge: challengeBody.challenge,
+            challenge: encodeAccountBindingChallenge(challenge),
             signature: toBase64Url(new Uint8Array(replaySignature)),
           }),
         }),
@@ -444,11 +503,18 @@ describe("account key-exchange Pages contracts", () => {
     const harness = await createHarness();
     const challengeResponse = await challengeRoute(
       requestContext(
-        new Request(`${origin}/api/account/challenge`, { method: "POST", headers: harness.headers }),
+        new Request(`${origin}/api/account/challenge`, {
+          method: "POST",
+          headers: harness.headers,
+        }),
         harness.env,
       ),
     );
-    const challengeBody = (await challengeResponse.json()) as { challenge: Parameters<typeof serializeAccountBindingChallenge>[0] };
+    const challengeBody = (await challengeResponse.json()) as {
+      challenge: unknown;
+    };
+    const challenge = decodeAccountBindingChallenge(challengeBody.challenge);
+    if (!challenge) throw new Error("Expected a V1 account-binding challenge.");
     const other = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
@@ -457,7 +523,7 @@ describe("account key-exchange Pages contracts", () => {
     const signature = await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" },
       other.privateKey,
-      new TextEncoder().encode(serializeAccountBindingChallenge(challengeBody.challenge)),
+      new TextEncoder().encode(serializeAccountBindingChallenge(challenge)),
     );
     const response = await bindRoute(
       requestContext(
@@ -465,7 +531,7 @@ describe("account key-exchange Pages contracts", () => {
           method: "POST",
           headers: { ...harness.headers, "Content-Type": "application/json" },
           body: JSON.stringify({
-            challenge: challengeBody.challenge,
+            challenge: encodeAccountBindingChallenge(challenge),
             signature: toBase64Url(new Uint8Array(signature)),
           }),
         }),
@@ -474,18 +540,26 @@ describe("account key-exchange Pages contracts", () => {
     );
     expect(response.status).toBe(401);
     expect(harness.database.bindings.size).toBe(0);
-    expect(harness.database.challenges.get(challengeBody.challenge.challengeId)?.consumed_at).toBeNull();
+    expect(
+      harness.database.challenges.get(challenge.challengeId)?.consumed_at,
+    ).toBeNull();
   });
 
   it("rejects an expired challenge without creating a binding", async () => {
     const harness = await createHarness();
     const challengeResponse = await challengeRoute(
       requestContext(
-        new Request(`${origin}/api/account/challenge`, { method: "POST", headers: harness.headers }),
+        new Request(`${origin}/api/account/challenge`, {
+          method: "POST",
+          headers: harness.headers,
+        }),
         harness.env,
       ),
     );
-    const challenge = ((await challengeResponse.json()) as { challenge: Parameters<typeof serializeAccountBindingChallenge>[0] }).challenge;
+    const challenge = decodeAccountBindingChallenge(
+      ((await challengeResponse.json()) as { challenge: unknown }).challenge,
+    );
+    if (!challenge) throw new Error("Expected a V1 account-binding challenge.");
     const stored = harness.database.challenges.get(challenge.challengeId);
     if (!stored) throw new Error("Expected persisted challenge.");
     stored.expires_at = Date.now() - 1;
@@ -500,7 +574,7 @@ describe("account key-exchange Pages contracts", () => {
           method: "POST",
           headers: { ...harness.headers, "Content-Type": "application/json" },
           body: JSON.stringify({
-            challenge,
+            challenge: encodeAccountBindingChallenge(challenge),
             signature: toBase64Url(new Uint8Array(signature)),
           }),
         }),
@@ -519,35 +593,48 @@ describe("account key-exchange Pages contracts", () => {
       ...harness.headers,
       Cookie: `${accessCookieName}=${secondAccess}`,
     };
-    const [firstChallengeResponse, secondChallengeResponse] = await Promise.all([
-      challengeRoute(
-        requestContext(
-          new Request(`${origin}/api/account/challenge`, {
-            method: "POST",
-            headers: harness.headers,
-          }),
-          harness.env,
+    const [firstChallengeResponse, secondChallengeResponse] = await Promise.all(
+      [
+        challengeRoute(
+          requestContext(
+            new Request(`${origin}/api/account/challenge`, {
+              method: "POST",
+              headers: harness.headers,
+            }),
+            harness.env,
+          ),
         ),
-      ),
-      challengeRoute(
-        requestContext(
-          new Request(`${origin}/api/account/challenge`, {
-            method: "POST",
-            headers: secondHeaders,
-          }),
-          harness.env,
+        challengeRoute(
+          requestContext(
+            new Request(`${origin}/api/account/challenge`, {
+              method: "POST",
+              headers: secondHeaders,
+            }),
+            harness.env,
+          ),
         ),
-      ),
-    ]);
-    const firstChallenge = ((await firstChallengeResponse.json()) as { challenge: Parameters<typeof serializeAccountBindingChallenge>[0] }).challenge;
-    const secondChallenge = ((await secondChallengeResponse.json()) as { challenge: Parameters<typeof serializeAccountBindingChallenge>[0] }).challenge;
+      ],
+    );
+    const firstChallenge = decodeAccountBindingChallenge(
+      ((await firstChallengeResponse.json()) as { challenge: unknown })
+        .challenge,
+    );
+    const secondChallenge = decodeAccountBindingChallenge(
+      ((await secondChallengeResponse.json()) as { challenge: unknown })
+        .challenge,
+    );
+    if (!firstChallenge || !secondChallenge) {
+      throw new Error("Expected V1 account-binding challenges.");
+    }
     const sign = async (challenge: typeof firstChallenge) =>
       toBase64Url(
         new Uint8Array(
           await crypto.subtle.sign(
             { name: "ECDSA", hash: "SHA-256" },
             harness.signingPair.privateKey,
-            new TextEncoder().encode(serializeAccountBindingChallenge(challenge)),
+            new TextEncoder().encode(
+              serializeAccountBindingChallenge(challenge),
+            ),
           ),
         ),
       );
@@ -557,7 +644,10 @@ describe("account key-exchange Pages contracts", () => {
           new Request(`${origin}/api/account/bind`, {
             method: "POST",
             headers: { ...harness.headers, "Content-Type": "application/json" },
-            body: JSON.stringify({ challenge: firstChallenge, signature: await sign(firstChallenge) }),
+            body: JSON.stringify({
+              challenge: encodeAccountBindingChallenge(firstChallenge),
+              signature: await sign(firstChallenge),
+            }),
           }),
           harness.env,
         ),
@@ -567,7 +657,10 @@ describe("account key-exchange Pages contracts", () => {
           new Request(`${origin}/api/account/bind`, {
             method: "POST",
             headers: { ...secondHeaders, "Content-Type": "application/json" },
-            body: JSON.stringify({ challenge: secondChallenge, signature: await sign(secondChallenge) }),
+            body: JSON.stringify({
+              challenge: encodeAccountBindingChallenge(secondChallenge),
+              signature: await sign(secondChallenge),
+            }),
           }),
           harness.env,
         ),
@@ -590,7 +683,9 @@ describe("account key-exchange Pages contracts", () => {
         new Request(`${origin}/api/account/recovery`, {
           method: "PUT",
           headers: { ...harness.headers, "Content-Type": "application/json" },
-          body: JSON.stringify(await signedRecoveryUpload(harness, encrypted.package)),
+          body: JSON.stringify(
+            await signedRecoveryUpload(harness, encrypted.package),
+          ),
         }),
         harness.env,
       ),
@@ -609,7 +704,17 @@ describe("account key-exchange Pages contracts", () => {
       ),
     );
     expect(get.status).toBe(200);
-    await expect(get.json()).resolves.toEqual({ available: true, package: encrypted.package });
+    await expect(get.json()).resolves.toEqual({
+      available: true,
+      package: encodeEncryptedAccountRecoveryPackage(encrypted.package),
+    });
+    expect(
+      harness.database.packages.get(harness.accountId)?.metadata_json,
+    ).toBe(
+      JSON.stringify(
+        encodeEncryptedAccountRecoveryPackage(encrypted.package).metadata,
+      ),
+    );
 
     harness.database.users.add("user_02");
     const otherAccess = await harness.authority.token("user_02");
@@ -631,10 +736,12 @@ describe("account key-exchange Pages contracts", () => {
         new Request(`${origin}/api/account/recovery`, {
           method: "PUT",
           headers: { ...harness.headers, "Content-Type": "application/json" },
-          body: JSON.stringify(await signedRecoveryUpload(harness, {
-            ...encrypted.package,
-            ciphertext: tamperedCiphertext,
-          })),
+          body: JSON.stringify(
+            await signedRecoveryUpload(harness, {
+              ...encrypted.package,
+              ciphertext: tamperedCiphertext,
+            }),
+          ),
         }),
         harness.env,
       ),
@@ -651,7 +758,9 @@ describe("account key-exchange Pages contracts", () => {
         new Request(`${origin}/api/account/recovery`, {
           method: "PUT",
           headers: { ...harness.headers, "Content-Type": "application/json" },
-          body: JSON.stringify(await signedRecoveryUpload(harness, stalePackage.package)),
+          body: JSON.stringify(
+            await signedRecoveryUpload(harness, stalePackage.package),
+          ),
         }),
         harness.env,
       ),
@@ -696,7 +805,9 @@ describe("account key-exchange Pages contracts", () => {
         new Request(`${origin}/api/account/recovery`, {
           method: "PUT",
           headers: { ...harness.headers, "Content-Type": "application/json" },
-          body: JSON.stringify(await signedRecoveryUpload(harness, rotatedPackage.package)),
+          body: JSON.stringify(
+            await signedRecoveryUpload(harness, rotatedPackage.package),
+          ),
         }),
         harness.env,
       ),

@@ -19,7 +19,8 @@ import {
   queryResolvedDocumentNodes,
 } from "../../../../../shared/drop/resolved/query/document";
 import { queryResolvedRuntimeNodes } from "../../../../../shared/drop/resolved/query/runtime";
-import { resolveResolvedBranchTarget } from "./context";
+import { canReadSensitiveBranch } from "../../security/readAuthorization";
+import { resolveReadableResolvedBranchTarget } from "./context";
 import { ensureResolvedHeapProjection } from "./projector";
 import { createResolvedHeapRepository } from "./repository";
 import {
@@ -85,19 +86,68 @@ const compactResolvedDocumentItems = (
   return { items, truncated };
 };
 
+const snapshotterRequestFromUrl = (url: URL) => {
+  const top = url.searchParams.get("k")
+    ? Number(url.searchParams.get("k"))
+    : undefined;
+  const maxTokens = url.searchParams.get("maxTokens")
+    ? Number(url.searchParams.get("maxTokens"))
+    : undefined;
+  const labelsParam = url.searchParams.get("labels");
+
+  return {
+    query: url.searchParams.get("q") || url.searchParams.get("query") || undefined,
+    top: Number.isFinite(top) ? top : undefined,
+    maxTokens: Number.isFinite(maxTokens) ? maxTokens : undefined,
+    preview: url.searchParams.has("preview")
+      ? url.searchParams.get("preview") === "true"
+      : undefined,
+    labels: labelsParam ? labelsParam.split(",").filter(Boolean) : undefined,
+  };
+};
+
 const queryResolvedHeapUnsafe = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
   request: Request,
   options?: ResolvedHeapQueryOptions,
 ): Promise<Response> => {
-  const target = await resolveResolvedBranchTarget(env, params);
+  const target = await resolveReadableResolvedBranchTarget(request, env, params);
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
 
   const url = new URL(request.url);
   const resolverId =
     url.searchParams.get("resolverId") || RESOLVED_DOCUMENT_RESOLVER_ID;
+  const snapshotterId = url.searchParams.get("snapshotterId");
+  const isNonDocumentSnapshotter =
+    Boolean(snapshotterId) && snapshotterId !== RESOLVED_DOCUMENT_SNAPSHOTTER_ID;
+  const canReadSensitive = await canReadSensitiveBranch(
+    request,
+    env,
+    rootDropId,
+    branch,
+  );
+  if (
+    (resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID ||
+      isNonDocumentSnapshotter) &&
+    !canReadSensitive
+  ) {
+    return jsonErrorResponse(
+      403,
+      "forbidden",
+      "Authenticated branch capability is required.",
+    );
+  }
+
+  if (snapshotterId && isNonDocumentSnapshotter) {
+    const result = await options?.querySnapshotter?.(
+      snapshotterId,
+      snapshotterRequestFromUrl(url),
+    );
+    return jsonResponse(result ?? { items: [] });
+  }
+
   const snapshotParam = url.searchParams.get("snapshotId") || "latest";
   const snapshotId =
     snapshotParam === "latest"
@@ -167,9 +217,11 @@ const queryResolvedHeapUnsafe = async (
     );
   }
 
-  const priorityScoring = await createResolvedHeapRepository({
-    sql: env.DB,
-  }).readPriorityScoring(rootDropId, branchId, state.resolverId);
+  const priorityScoring = canReadSensitive
+    ? await createResolvedHeapRepository({
+        sql: env.DB,
+      }).readPriorityScoring(rootDropId, branchId, state.resolverId)
+    : {};
 
   if (state.resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
     const nodes = queryResolvedRuntimeNodes(state, {
@@ -234,7 +286,7 @@ const queryResolvedHeapUnsafe = async (
     heapPriority: priorityScoring.heapPriority,
   });
 
-  if (url.searchParams.get("snapshotterId") === RESOLVED_DOCUMENT_SNAPSHOTTER_ID) {
+  if (snapshotterId === RESOLVED_DOCUMENT_SNAPSHOTTER_ID) {
     const compact = compactResolvedDocumentItems(nodes, url);
     return jsonResponse({
       rootDropId,

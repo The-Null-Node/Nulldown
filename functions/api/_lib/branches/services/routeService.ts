@@ -6,7 +6,7 @@ import {
   type AccountAuthEnv,
 } from "../../accounts/session/auth";
 import {
-  backfillBranchToSnapshotHeapV2,
+  backfillBranchToSnapshotHeap,
   resolveBranchForActor,
 } from "../lifecycle/service";
 import { readBranchContent } from "../content/replay";
@@ -23,6 +23,11 @@ import {
   type JsonValue,
 } from "../../core/http/responses";
 import { createRequestLogger, toLogRef } from "../../core/logging/logger";
+import {
+  canReadBranch,
+  canReadRoot,
+  resolveRootReadAuthorization,
+} from "../../security/readAuthorization";
 
 /** Environment required by branch route services. */
 export interface BranchRouteEnv extends AccountAuthEnv {
@@ -80,7 +85,7 @@ const parseBranchBackfillQuery = (request: Request): BranchBackfillQuery => {
   );
 };
 
-const resolveRootDropId = async (
+const resolveRootDropIdForReadRequest = async (
   env: Pick<BranchRouteEnv, "R2_BUCKET" | "DB">,
   idParam: string | string[] | undefined,
 ): Promise<string | null> => {
@@ -88,7 +93,9 @@ const resolveRootDropId = async (
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  return dropIdentityRepository.resolveRemoteDropId(resolveParam(idParam));
+  return dropIdentityRepository.resolveRemoteDropIdForReadRequest(
+    resolveParam(idParam),
+  );
 };
 
 const resolveBranchTarget = async (
@@ -102,7 +109,7 @@ const resolveBranchTarget = async (
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  const rootDropId = await dropIdentityRepository.resolveRemoteDropId(
+  const rootDropId = await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
     resolveParam(params.rootId),
   );
   const branchId = sanitizeDiffAuthToken(resolveParam(params.branchId));
@@ -124,18 +131,32 @@ const createBranchRouteRepository = (env: BranchRouteEnv) =>
 export const listBranchesForDrop = async (
   env: BranchRouteEnv,
   params: BranchRootParams,
+  request: Request,
 ): Promise<Response> => {
   if (!env.R2_BUCKET) {
     return new Response("R2 bucket binding is required.", { status: 500 });
   }
 
-  const id = await resolveRootDropId(env, params.id);
+  const id = await resolveRootDropIdForReadRequest(env, params.id);
   if (!id) {
     return new Response("Drop ID is required.", { status: 400 });
   }
 
+  const authorization = await resolveRootReadAuthorization(request, env, id);
+  if (authorization.kind === "denied") {
+    return new Response("Branch not found.", { status: 404 });
+  }
+
   const branchRepository = createBranchRouteRepository(env);
-  const branches = await branchRepository.listBranchesForRoot(id);
+  let branches = await branchRepository.listBranchesForRoot(id);
+  if (authorization.kind === "private" && !authorization.isCanonicalOwner) {
+    branches = branches.filter(
+      (branch) => branch.writerAccountId === authorization.accountId,
+    );
+    if (!branches.length) {
+      return new Response("Branch not found.", { status: 404 });
+    }
+  }
   return new Response(JSON.stringify({ rootDropId: id, branches }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -152,17 +173,29 @@ export const resolveBranchForRequest = async (
     return new Response("R2 bucket binding is required.", { status: 500 });
   }
 
-  const id = await resolveRootDropId(env, params.id);
-  if (!id) {
-    return new Response("Drop ID is required.", { status: 400 });
-  }
-
   const accountId = await resolveAuthenticatedAccountId(request, env);
   if (!accountId) {
     return new Response("Authenticated account session is required.", {
       status: 401,
     });
   }
+
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const id = await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
+    resolveParam(params.id),
+  );
+  if (!id) {
+    return new Response("Drop ID is required.", { status: 400 });
+  }
+
+  const authorization = await resolveRootReadAuthorization(request, env, id);
+  if (!canReadRoot(authorization)) {
+    return new Response("Branch not found.", { status: 404 });
+  }
+
   const clientId = sanitizeDiffAuthToken(
     request.headers.get("x-nulldown-client-id") ||
       new URL(request.url).searchParams.get("clientId"),
@@ -203,6 +236,7 @@ export const resolveBranchForRequest = async (
 export const getBranchContent = async (
   env: BranchRouteEnv,
   params: BranchTargetParams,
+  request: Request,
 ): Promise<Response> => {
   if (!env.R2_BUCKET) {
     return new Response("R2 bucket binding is required.", { status: 500 });
@@ -212,9 +246,18 @@ export const getBranchContent = async (
   if ("error" in target) return target.error;
   const { rootDropId, branchId } = target;
 
+  const authorization = await resolveRootReadAuthorization(
+    request,
+    env,
+    rootDropId,
+  );
+  if (authorization.kind === "denied") {
+    return new Response("Branch not found.", { status: 404 });
+  }
+
   const branchRepository = createBranchRouteRepository(env);
   const branch = await branchRepository.readBranch(rootDropId, branchId);
-  if (!branch) {
+  if (!branch || !canReadBranch(authorization, branch)) {
     return new Response("Branch not found.", { status: 404 });
   }
 
@@ -249,6 +292,7 @@ export const getBranchContent = async (
 export const listBranchSnapshots = async (
   env: BranchRouteEnv,
   params: BranchTargetParams,
+  request: Request,
 ): Promise<Response> => {
   if (!env.R2_BUCKET) {
     return new Response("R2 bucket binding is required.", { status: 500 });
@@ -258,9 +302,18 @@ export const listBranchSnapshots = async (
   if ("error" in target) return target.error;
   const { rootDropId, branchId } = target;
 
+  const authorization = await resolveRootReadAuthorization(
+    request,
+    env,
+    rootDropId,
+  );
+  if (authorization.kind === "denied") {
+    return new Response("Branch not found.", { status: 404 });
+  }
+
   const branchRepository = createBranchRouteRepository(env);
   const branch = await branchRepository.readBranch(rootDropId, branchId);
-  if (!branch) {
+  if (!branch || !canReadBranch(authorization, branch)) {
     return new Response("Branch not found.", { status: 404 });
   }
 
@@ -355,7 +408,7 @@ export const backfillBranchesForDrop = async (
         typeof branch.headEventSeq === "number";
 
       try {
-        const upgraded = await backfillBranchToSnapshotHeapV2(
+        const upgraded = await backfillBranchToSnapshotHeap(
           env.R2_BUCKET,
           rootDropId,
           branch.branchId,

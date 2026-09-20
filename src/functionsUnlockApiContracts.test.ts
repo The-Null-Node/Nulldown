@@ -1,13 +1,25 @@
-import { createHash, webcrypto } from "node:crypto";
+import {
+  createHash,
+  webcrypto,
+  type webcrypto as NodeWebCrypto,
+} from "node:crypto";
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequestPost } from "../functions/api/unlock/[id]";
+import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
+import { providerCrypto } from "../functions/api/_lib/crypto/provider-crypto";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import {
-  DROP_ENVELOPE_SCHEMA_V1,
-  DROP_ENVELOPE_VERSION_V1,
-  type DropEnvelopeV1,
-} from "../shared/drop/types";
+  canReadRoot,
+  type RootReadAuthorizationDecision,
+} from "../functions/api/_lib/security/readAuthorization";
+import { encodeDropEnvelope } from "../shared/drop/codecs/envelope-v1";
+import type { DropEnvelope } from "../shared/drop/types";
+import type {
+  VoidSqlBindableValue,
+  VoidSqlStatement,
+  VoidSqlStore,
+} from "./server/ports";
 
 interface StoredObject {
   value: string;
@@ -18,6 +30,8 @@ interface StoredObject {
 
 class MemoryR2Bucket {
   private readonly objects = new Map<string, StoredObject>();
+  rootReads = 0;
+  aliasReads = 0;
 
   seed(key: string, value: string, contentType = "application/json"): void {
     const uploaded = new Date();
@@ -32,6 +46,8 @@ class MemoryR2Bucket {
   }
 
   async get(key: string): Promise<any> {
+    if (key.startsWith("__drop_alias__/")) this.aliasReads += 1;
+    else this.rootReads += 1;
     const existing = this.objects.get(key);
     if (!existing) return null;
 
@@ -49,20 +65,86 @@ class MemoryR2Bucket {
   }
 }
 
+interface ProjectionRow {
+  entry_seq: number;
+  drop_id: string;
+  account_id: string;
+  visibility: unknown;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+}
+
+class ProjectionDatabase implements VoidSqlStore {
+  runs = 0;
+  aliasReads = 0;
+  projectionReads = 0;
+
+  constructor(
+    private readonly rows = new Map<string, ProjectionRow>(),
+    private readonly aliases = new Map<string, string>(),
+  ) {}
+
+  prepare(sql: string): VoidSqlStatement {
+    let values: VoidSqlBindableValue[] = [];
+    const statement: VoidSqlStatement = {
+      bind: (...bound) => {
+        values = bound;
+        return statement;
+      },
+      run: async () => {
+        this.runs += 1;
+        return { success: true };
+      },
+      first: async <T>() => {
+        if (sql.includes("FROM drop_aliases")) {
+          this.aliasReads += 1;
+          const fullId = this.aliases.get(String(values[0]));
+          return fullId ? ({ full_id: fullId } as T) : null;
+        }
+        if (sql.includes("FROM account_library_entries")) {
+          this.projectionReads += 1;
+          return (this.rows.get(String(values[0])) as T | undefined) ?? null;
+        }
+        return null;
+      },
+      all: async <T>() => ({ results: [] as T[] }),
+    };
+    return statement;
+  }
+}
+
+const projection = (
+  dropId: string,
+  visibility: unknown,
+  accountId = "account-link-only",
+  deletedAt: number | null = null,
+): ProjectionRow => ({
+  entry_seq: 1,
+  drop_id: dropId,
+  account_id: accountId,
+  visibility,
+  created_at: 1,
+  updated_at: 1,
+  deleted_at: deletedAt,
+});
+
 interface UnlockFixture {
   accountId: string;
-  envelope: DropEnvelopeV1;
+  envelope: DropEnvelope;
   plaintext: string;
   providerPrivateJwk: JsonWebKey;
   providerPrivateJwkJson: string;
   rawContentKey: ArrayBuffer;
-  requesterPrivateKey: CryptoKey;
+  requesterPrivateKey: NodeCryptoKey;
   requesterPublicJwk: JsonWebKey;
   vaultKeyId: string;
 }
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+type NodeCryptoKey = NodeWebCrypto.CryptoKey;
+type NodeCryptoKeyPair = NodeWebCrypto.CryptoKeyPair;
 
 const toArrayBuffer = (value: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(value.byteLength);
@@ -71,12 +153,14 @@ const toArrayBuffer = (value: Uint8Array): ArrayBuffer => {
 };
 
 const toBase64 = (value: ArrayBuffer | Uint8Array): string =>
-  Buffer.from(value).toString("base64");
+  Buffer.from(
+    value instanceof Uint8Array ? value : new Uint8Array(value),
+  ).toString("base64");
 
 const fromBase64 = (value: string): Uint8Array =>
   new Uint8Array(Buffer.from(value, "base64"));
 
-const generateRsaOaepKeyPair = async (): Promise<CryptoKeyPair> =>
+const generateRsaOaepKeyPair = async (): Promise<NodeCryptoKeyPair> =>
   (await webcrypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
@@ -86,19 +170,19 @@ const generateRsaOaepKeyPair = async (): Promise<CryptoKeyPair> =>
     },
     true,
     ["encrypt", "decrypt"],
-  )) as CryptoKeyPair;
+  )) as NodeCryptoKeyPair;
 
 const createFixture = async (): Promise<UnlockFixture> => {
   const providerKeyPair = await generateRsaOaepKeyPair();
   const requesterKeyPair = await generateRsaOaepKeyPair();
-  const providerPrivateJwk = await webcrypto.subtle.exportKey(
+  const providerPrivateJwk = (await webcrypto.subtle.exportKey(
     "jwk",
     providerKeyPair.privateKey,
-  );
-  const requesterPublicJwk = await webcrypto.subtle.exportKey(
+  )) as unknown as JsonWebKey;
+  const requesterPublicJwk = (await webcrypto.subtle.exportKey(
     "jwk",
     requesterKeyPair.publicKey,
-  );
+  )) as unknown as JsonWebKey;
   const rawContentKeyBytes = webcrypto.getRandomValues(new Uint8Array(32));
   const rawContentKey = toArrayBuffer(rawContentKeyBytes);
   const contentKey = await webcrypto.subtle.importKey(
@@ -133,8 +217,6 @@ const createFixture = async (): Promise<UnlockFixture> => {
     requesterPublicJwk,
     vaultKeyId,
     envelope: {
-      schema: DROP_ENVELOPE_SCHEMA_V1,
-      version: DROP_ENVELOPE_VERSION_V1,
       createdAt: Date.now(),
       accountId,
       visibility: "unlisted",
@@ -166,10 +248,13 @@ const createFixture = async (): Promise<UnlockFixture> => {
   };
 };
 
-const createRequest = (requesterPublicJwk: JsonWebKey): Request =>
+const createRequest = (
+  requesterPublicJwk: JsonWebKey,
+  headers: Record<string, string> = {},
+): Request =>
   new Request("https://nulldown.test/api/unlock/drop", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify({ requesterPublicJwk }),
   });
 
@@ -178,12 +263,19 @@ const callUnlock = async (
   id: string,
   requesterPublicJwk: JsonWebKey,
   providerPrivateJwk?: string,
+  options: {
+    db?: VoidSqlStore;
+    headers?: Record<string, string>;
+    env?: Record<string, string>;
+  } = {},
 ): Promise<Response> =>
   onRequestPost({
-    request: createRequest(requesterPublicJwk),
+    request: createRequest(requesterPublicJwk, options.headers),
     env: {
       R2_BUCKET: bucket as unknown as R2Bucket,
       PROVIDER_ENCRYPTION_PRIVATE_JWK: providerPrivateJwk,
+      DB: options.db,
+      ...options.env,
     },
     params: { id },
   } as unknown as Parameters<typeof onRequestPost>[0]);
@@ -192,10 +284,10 @@ const seedLinkedEnvelope = (
   bucket: MemoryR2Bucket,
   shortId: string,
   fullId: string,
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
 ): void => {
   bucket.seed(createRemoteAliasKey(shortId), fullId, "text/plain");
-  bucket.seed(fullId, JSON.stringify(envelope));
+  bucket.seed(fullId, JSON.stringify(encodeDropEnvelope(envelope)));
 };
 
 const expectNoSensitiveResponseMaterial = (
@@ -230,9 +322,19 @@ describe("provider escrow link access contracts", () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     infoSpy.mockRestore();
     warnSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+
+  it.each<[RootReadAuthorizationDecision, boolean]>([
+    [{ kind: "identifier-readable" }, true],
+    [{ kind: "private", accountId: "owner", isCanonicalOwner: true }, true],
+    [{ kind: "private", accountId: "writer", isCanonicalOwner: false }, false],
+    [{ kind: "denied" }, false],
+  ])("makes a pure root decision for %j", (decision, allowed) => {
+    expect(canReadRoot(decision)).toBe(allowed);
   });
 
   it("unauthenticated link requester gets only requester-wrapped content key and can decrypt it", async () => {
@@ -286,11 +388,292 @@ describe("provider escrow link access contracts", () => {
     expect(textDecoder.decode(plaintext)).toBe(fixture.plaintext);
   });
 
+  it.each(["public", "unlisted"] as const)(
+    "allows anonymous projected %s unlock",
+    async (visibility) => {
+      const id = visibility === "public" ? "PublicRoot01" : "UnlistRoot01";
+      const bucket = new MemoryR2Bucket();
+      bucket.seed(
+        id,
+        JSON.stringify(encodeDropEnvelope({ ...fixture.envelope, visibility })),
+      );
+      const db = new ProjectionDatabase(
+        new Map([[id, projection(id, visibility)]]),
+      );
+
+      const response = await callUnlock(
+        bucket,
+        id,
+        fixture.requesterPublicJwk,
+        fixture.providerPrivateJwkJson,
+        { db },
+      );
+
+      expect(response.status).toBe(200);
+      expect(db.projectionReads).toBe(1);
+    },
+  );
+
+  it("allows the projected private owner with the development credential", async () => {
+    const id = "PrivateRoot01";
+    const bucket = new MemoryR2Bucket();
+    bucket.seed(
+      id,
+      JSON.stringify(
+        encodeDropEnvelope({ ...fixture.envelope, visibility: "private" }),
+      ),
+    );
+    const db = new ProjectionDatabase(
+      new Map([[id, projection(id, "private")]]),
+    );
+
+    const response = await callUnlock(
+      bucket,
+      id,
+      fixture.requesterPublicJwk,
+      fixture.providerPrivateJwkJson,
+      {
+        db,
+        headers: { "x-nulldown-account-id": fixture.accountId },
+        env: { ALLOW_INSECURE_ACCOUNT_HEADER: "1" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("allows the projected private owner with a bearer credential", async () => {
+    const id = "BearerRoot01";
+    const secret = "unlock-test-secret";
+    const { token } = await issueAccountSessionToken(fixture.accountId, {
+      ACCOUNT_AUTH_SECRET: secret,
+    });
+    const bucket = new MemoryR2Bucket();
+    bucket.seed(
+      id,
+      JSON.stringify(
+        encodeDropEnvelope({ ...fixture.envelope, visibility: "private" }),
+      ),
+    );
+    const db = new ProjectionDatabase(
+      new Map([[id, projection(id, "private")]]),
+    );
+
+    const response = await callUnlock(
+      bucket,
+      id,
+      fixture.requesterPublicJwk,
+      fixture.providerPrivateJwkJson,
+      {
+        db,
+        headers: { Authorization: `Bearer ${token}` },
+        env: { ACCOUNT_AUTH_SECRET: secret },
+      },
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it.each([
+    ["anonymous", {}],
+    ["unrelated", { "x-nulldown-account-id": "account-unrelated" }],
+    ["branch-writer-only", { "x-nulldown-account-id": "account-writer" }],
+  ])(
+    "denies private %s access with the exact generic 404",
+    async (_label, headers) => {
+      const id = "DeniedRoot01";
+      const bucket = new MemoryR2Bucket();
+      bucket.seed(
+        id,
+        JSON.stringify(
+          encodeDropEnvelope({ ...fixture.envelope, visibility: "private" }),
+        ),
+      );
+      const db = new ProjectionDatabase(
+        new Map([[id, projection(id, "private")]]),
+      );
+
+      const response = await callUnlock(
+        bucket,
+        id,
+        fixture.requesterPublicJwk,
+        fixture.providerPrivateJwkJson,
+        {
+          db,
+          headers,
+          env: { ALLOW_INSECURE_ACCOUNT_HEADER: "1" },
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("Drop not found.");
+      expect(bucket.rootReads).toBe(0);
+    },
+  );
+
+  it.each(["public", "unlisted", "private"])(
+    "denies tombstoned %s projections",
+    async (visibility) => {
+      const id = `Tomb${visibility.slice(0, 4)}01`;
+      const bucket = new MemoryR2Bucket();
+      bucket.seed(id, JSON.stringify(encodeDropEnvelope(fixture.envelope)));
+      const db = new ProjectionDatabase(
+        new Map([[id, projection(id, visibility, fixture.accountId, 2)]]),
+      );
+      const response = await callUnlock(
+        bucket,
+        id,
+        fixture.requesterPublicJwk,
+        fixture.providerPrivateJwkJson,
+        {
+          db,
+          headers: { "x-nulldown-account-id": fixture.accountId },
+          env: { ALLOW_INSECURE_ACCOUNT_HEADER: "1" },
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("Drop not found.");
+      expect(bucket.rootReads).toBe(0);
+    },
+  );
+
+  it("denies malformed projected visibility", async () => {
+    const id = "BadVisRoot01";
+    const bucket = new MemoryR2Bucket();
+    bucket.seed(id, JSON.stringify(encodeDropEnvelope(fixture.envelope)));
+    const db = new ProjectionDatabase(
+      new Map([[id, projection(id, "friends")]]),
+    );
+    const response = await callUnlock(
+      bucket,
+      id,
+      fixture.requesterPublicJwk,
+      fixture.providerPrivateJwkJson,
+      { db },
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("Drop not found.");
+    expect(bucket.rootReads).toBe(0);
+  });
+
+  it("retains projection-absent legacy unlock behavior", async () => {
+    const id = "LegacyRoot01";
+    const bucket = new MemoryR2Bucket();
+    bucket.seed(id, JSON.stringify(encodeDropEnvelope(fixture.envelope)));
+    const db = new ProjectionDatabase();
+
+    const response = await callUnlock(
+      bucket,
+      id,
+      fixture.requesterPublicJwk,
+      fixture.providerPrivateJwkJson,
+      { db },
+    );
+
+    expect(response.status).toBe(200);
+    expect(db.projectionReads).toBe(1);
+  });
+
+  it("does not fall back to the development credential for a mixed-case invalid bearer", async () => {
+    const id = "BadBearRoot1";
+    const bucket = new MemoryR2Bucket();
+    bucket.seed(id, JSON.stringify(encodeDropEnvelope(fixture.envelope)));
+    const db = new ProjectionDatabase(
+      new Map([[id, projection(id, "private")]]),
+    );
+    const response = await callUnlock(
+      bucket,
+      id,
+      fixture.requesterPublicJwk,
+      fixture.providerPrivateJwkJson,
+      {
+        db,
+        headers: {
+          Authorization: "bEaReR invalid",
+          "x-nulldown-account-id": fixture.accountId,
+        },
+        env: {
+          ACCOUNT_AUTH_SECRET: "unlock-test-secret",
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        },
+      },
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("Drop not found.");
+    expect(bucket.rootReads).toBe(0);
+  });
+
+  it("resolves an R2-only short alias without SQL writes", async () => {
+    const shortId = "R2Only";
+    const fullId = "R2OnlyRoot01";
+    const bucket = new MemoryR2Bucket();
+    seedLinkedEnvelope(bucket, shortId, fullId, fixture.envelope);
+    const db = new ProjectionDatabase(
+      new Map([[fullId, projection(fullId, "unlisted")]]),
+    );
+
+    const response = await callUnlock(
+      bucket,
+      shortId,
+      fixture.requesterPublicJwk,
+      fixture.providerPrivateJwkJson,
+      { db },
+    );
+
+    expect(response.status).toBe(200);
+    expect(db.runs).toBe(0);
+    expect(db.aliasReads).toBe(1);
+    expect(bucket.aliasReads).toBe(1);
+  });
+
+  it("denies before body parsing, provider configuration, root reads, and crypto", async () => {
+    const id = "EarlyDeny001";
+    const bucket = new MemoryR2Bucket();
+    bucket.seed(id, JSON.stringify(encodeDropEnvelope(fixture.envelope)));
+    const db = new ProjectionDatabase(
+      new Map([[id, projection(id, "private")]]),
+    );
+    const request = createRequest(fixture.requesterPublicJwk);
+    const jsonSpy = jest.spyOn(request, "json");
+    const cryptoSpies = [
+      jest.spyOn(providerCrypto, "importProviderPrivateKey"),
+      jest.spyOn(providerCrypto, "importRequesterPublicKey"),
+      jest.spyOn(providerCrypto, "decryptProviderWrappedContentKey"),
+      jest.spyOn(providerCrypto, "wrapRawContentKeyWithRequesterPublicKey"),
+    ];
+
+    const response = await onRequestPost({
+      request,
+      env: { R2_BUCKET: bucket as unknown as R2Bucket, DB: db },
+      params: { id },
+    } as unknown as Parameters<typeof onRequestPost>[0]);
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("Drop not found.");
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(bucket.rootReads).toBe(0);
+    cryptoSpies.forEach((spy) => expect(spy).not.toHaveBeenCalled());
+  });
+
+  it.each(["bad id", ""])("retains invalid ID behavior for %j", async (id) => {
+    const response = await callUnlock(
+      new MemoryR2Bucket(),
+      id,
+      fixture.requesterPublicJwk,
+      fixture.providerPrivateJwkJson,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Drop ID is required.");
+  });
+
   it("vault-only rejects even with valid requester key", async () => {
     const bucket = new MemoryR2Bucket();
     const shortId = "Vault1";
     const fullId = "Vault1AbCdEf";
-    const envelope: DropEnvelopeV1 = {
+    const envelope: DropEnvelope = {
       ...fixture.envelope,
       unlockPolicy: "vault-only",
       providerEscrow: undefined,
@@ -315,9 +698,11 @@ describe("provider escrow link access contracts", () => {
     const bucket = new MemoryR2Bucket();
     const shortId = "Tamp01";
     const fullId = "Tamp01AbCdEf";
-    const tamperedBytes = fromBase64(fixture.envelope.providerEscrow!.wrappedKey);
+    const tamperedBytes = fromBase64(
+      fixture.envelope.providerEscrow!.wrappedKey,
+    );
     tamperedBytes[0] ^= 0xff;
-    const envelope: DropEnvelopeV1 = {
+    const envelope: DropEnvelope = {
       ...fixture.envelope,
       providerEscrow: {
         ...fixture.envelope.providerEscrow!,
@@ -335,6 +720,7 @@ describe("provider escrow link access contracts", () => {
     const responseText = await response.text();
 
     expect(response.status).toBe(500);
+    expect(responseText).toBe("Failed to unlock drop.");
     expect(responseText).not.toContain("wrappedKey");
     expectNoSensitiveResponseMaterial(responseText, fixture);
   });
@@ -373,6 +759,24 @@ describe("provider escrow link access contracts", () => {
     expectNoSensitiveResponseMaterial(responseText, fixture);
   });
 
+  it("invalid provider private key retains the authorized 500 response", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "BadKeyRoot01";
+    bucket.seed(id, JSON.stringify(encodeDropEnvelope(fixture.envelope)));
+
+    const response = await callUnlock(
+      bucket,
+      id,
+      fixture.requesterPublicJwk,
+      "not-json",
+    );
+    const responseText = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(responseText).toBe("Provider escrow key is invalid.");
+    expectNoSensitiveResponseMaterial(responseText, fixture);
+  });
+
   it("missing linked drop 404", async () => {
     const bucket = new MemoryR2Bucket();
     const shortId = "Gone01";
@@ -400,7 +804,10 @@ describe("provider escrow link access contracts", () => {
     bucket.seed(createRemoteAliasKey(shortId), fullId, "text/plain");
     bucket.seed(
       fullId,
-      JSON.stringify({ content: fixture.plaintext, accountId: fixture.accountId }),
+      JSON.stringify({
+        content: fixture.plaintext,
+        accountId: fixture.accountId,
+      }),
     );
 
     const response = await callUnlock(

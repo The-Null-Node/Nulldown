@@ -1,4 +1,4 @@
-import { webcrypto } from "node:crypto";
+import { webcrypto, type webcrypto as NodeWebCrypto } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest, onRequestPost } from "../functions/api/auth/session";
@@ -11,13 +11,18 @@ import {
 import { serializeCanonicalJson } from "../shared/drop/types";
 
 const crypto = webcrypto;
+type NodeCryptoKeyPair = NodeWebCrypto.CryptoKeyPair;
 const textEncoder = new TextEncoder();
 const accountId = "acct-session-contract";
 const accountRecordKey = `${ACCOUNT_RECORD_PREFIX}${accountId}.json`;
 const accountSecret = "account-session-contract-secret";
 
-const signAccountToken = async (payload: Record<string, unknown>): Promise<string> => {
-  const encodedPayload = toBase64Url(textEncoder.encode(JSON.stringify(payload)));
+const signAccountToken = async (
+  payload: Record<string, unknown>,
+): Promise<string> => {
+  const encodedPayload = toBase64Url(
+    textEncoder.encode(JSON.stringify(payload)),
+  );
   const signingInput = `ndacc.v1.${encodedPayload}`;
   const key = await crypto.subtle.importKey(
     "raw",
@@ -26,7 +31,11 @@ const signAccountToken = async (payload: Record<string, unknown>): Promise<strin
     false,
     ["sign"],
   );
-  const signature = await crypto.subtle.sign("HMAC", key, textEncoder.encode(signingInput));
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    textEncoder.encode(signingInput),
+  );
   return `${signingInput}.${toBase64Url(new Uint8Array(signature))}`;
 };
 
@@ -60,7 +69,9 @@ class MemoryR2Bucket {
 
   async head(key: string): Promise<any> {
     const stored = this.objects.get(key);
-    return stored ? { key, httpMetadata: { contentType: stored.contentType } } : null;
+    return stored
+      ? { key, httpMetadata: { contentType: stored.contentType } }
+      : null;
   }
 
   async put(key: string, value: unknown, options?: any): Promise<any> {
@@ -68,7 +79,10 @@ class MemoryR2Bucket {
       return null;
     }
 
-    const text = typeof value === "string" ? value : await new Response(value as BodyInit).text();
+    const text =
+      typeof value === "string"
+        ? value
+        : await new Response(value as BodyInit).text();
     this.objects.set(key, {
       value: text,
       contentType: options?.httpMetadata?.contentType ?? "application/json",
@@ -146,7 +160,11 @@ class MemoryD1Database {
     if (sql.includes("UPDATE accounts")) {
       const account = String(params[3]);
       const existing = this.accounts.get(account);
-      if (existing && !existing.encryption_kid && !existing.encryption_public_jwk) {
+      if (
+        existing &&
+        !existing.encryption_kid &&
+        !existing.encryption_public_jwk
+      ) {
         this.accounts.set(account, {
           ...existing,
           encryption_kid: String(params[0]),
@@ -182,7 +200,7 @@ class MemoryD1Database {
 
 interface AccountProof {
   publicJwk: JsonWebKey;
-  keyPair: CryptoKeyPair;
+  keyPair: NodeCryptoKeyPair;
   signedAt: number;
   signature: string;
 }
@@ -197,20 +215,25 @@ const toBase64Url = (input: Uint8Array): string => {
   input.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 };
 
 const createProof = async (
   proofAccountId = accountId,
   signedAt = Date.now(),
   recipient?: EncryptionRecipient,
-  keyPair?: CryptoKeyPair,
+  keyPair?: NodeCryptoKeyPair,
 ): Promise<AccountProof> => {
-  const pair = keyPair ?? (await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
+  const pair =
+    keyPair ??
+    ((await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    )) as NodeCryptoKeyPair);
   const message = recipient
     ? `nulldown-account-auth\n${proofAccountId}\n${signedAt}\n${serializeCanonicalJson(recipient)}`
     : `nulldown-account-auth\n${proofAccountId}\n${signedAt}`;
@@ -221,14 +244,19 @@ const createProof = async (
   );
 
   return {
-    publicJwk: await crypto.subtle.exportKey("jwk", pair.publicKey),
+    publicJwk: (await crypto.subtle.exportKey(
+      "jwk",
+      pair.publicKey,
+    )) as unknown as JsonWebKey,
     keyPair: pair,
     signedAt,
     signature: toBase64Url(new Uint8Array(signature)),
   };
 };
 
-const createRecipient = async (kid = "enc_recipient"): Promise<EncryptionRecipient> => {
+const createRecipient = async (
+  kid = "enc_recipient",
+): Promise<EncryptionRecipient> => {
   const pair = (await crypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
@@ -238,8 +266,11 @@ const createRecipient = async (kid = "enc_recipient"): Promise<EncryptionRecipie
     },
     true,
     ["encrypt", "decrypt"],
-  )) as CryptoKeyPair;
-  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  )) as NodeCryptoKeyPair;
+  const publicJwk = (await crypto.subtle.exportKey(
+    "jwk",
+    pair.publicKey,
+  )) as unknown as JsonWebKey;
   return {
     encryptionKid: kid,
     encryptionPublicJwk: { kty: "RSA", n: publicJwk.n, e: publicJwk.e },
@@ -291,7 +322,10 @@ describe("functions account session API contracts", () => {
       ...requestBody(proof),
       credentialId: "AAAAAAAAAAAAAAAAAAAAAA",
     });
-    const body = (await response.json()) as { accountId: string; token: string };
+    const body = (await response.json()) as {
+      accountId: string;
+      token: string;
+    };
     const r2Record = JSON.parse(bucket.text(accountRecordKey) ?? "null");
     const d1Record = database.account(accountId);
 
@@ -306,7 +340,9 @@ describe("functions account session API contracts", () => {
     expect(r2Record).toEqual(
       expect.objectContaining({ accountId, signingPublicJwk: proof.publicJwk }),
     );
-    expect(JSON.parse(d1Record?.signing_public_jwk ?? "null")).toEqual(proof.publicJwk);
+    expect(JSON.parse(d1Record?.signing_public_jwk ?? "null")).toEqual(
+      proof.publicJwk,
+    );
   });
 
   it("keeps the first pinned key when a different proof claims the account", async () => {
@@ -315,10 +351,16 @@ describe("functions account session API contracts", () => {
     const first = await createProof();
     const competing = await createProof();
 
-    expect((await postSession(bucket, database, requestBody(first))).status).toBe(200);
+    expect(
+      (await postSession(bucket, database, requestBody(first))).status,
+    ).toBe(200);
     const originalR2 = bucket.text(accountRecordKey);
     const originalD1 = database.account(accountId)?.signing_public_jwk;
-    const response = await postSession(bucket, database, requestBody(competing));
+    const response = await postSession(
+      bucket,
+      database,
+      requestBody(competing),
+    );
 
     expect(response.status).toBe(401);
     expect(bucket.text(accountRecordKey)).toBe(originalR2);
@@ -331,7 +373,11 @@ describe("functions account session API contracts", () => {
     const recipient = await createRecipient();
     const proof = await createProof(accountId, Date.now(), recipient);
 
-    const response = await postSession(bucket, database, requestBody(proof, accountId, recipient));
+    const response = await postSession(
+      bucket,
+      database,
+      requestBody(proof, accountId, recipient),
+    );
     const r2Record = JSON.parse(bucket.text(accountRecordKey) ?? "null");
     const d1Record = database.account(accountId);
 
@@ -348,13 +394,21 @@ describe("functions account session API contracts", () => {
     const database = new MemoryD1Database();
     const recipient = await createRecipient();
     const proof = await createProof(accountId, Date.now(), recipient);
-    await postSession(bucket, database, requestBody(proof, accountId, recipient));
+    await postSession(
+      bucket,
+      database,
+      requestBody(proof, accountId, recipient),
+    );
     const original = bucket.text(accountRecordKey);
 
-    const response = await postSession(bucket, database, requestBody(proof, accountId, {
-      ...recipient,
-      encryptionKid: "enc_tampered",
-    }));
+    const response = await postSession(
+      bucket,
+      database,
+      requestBody(proof, accountId, {
+        ...recipient,
+        encryptionKid: "enc_tampered",
+      }),
+    );
 
     expect(response.status).toBe(401);
     expect(bucket.text(accountRecordKey)).toBe(original);
@@ -365,10 +419,18 @@ describe("functions account session API contracts", () => {
     const database = new MemoryD1Database();
     const recipient = await createRecipient();
     const proof = await createProof(accountId, Date.now(), recipient);
-    await postSession(bucket, database, requestBody(proof, accountId, recipient));
+    await postSession(
+      bucket,
+      database,
+      requestBody(proof, accountId, recipient),
+    );
     const original = bucket.text(accountRecordKey);
     const competingRecipient = await createRecipient("enc_competing");
-    const competingProof = await createProof(accountId, Date.now(), competingRecipient);
+    const competingProof = await createProof(
+      accountId,
+      Date.now(),
+      competingRecipient,
+    );
 
     const response = await postSession(
       bucket,
@@ -409,17 +471,31 @@ describe("functions account session API contracts", () => {
     );
 
     expect(
-      (await postSession(bucket, database, requestBody(first, accountId, recipient))).status,
+      (
+        await postSession(
+          bucket,
+          database,
+          requestBody(first, accountId, recipient),
+        )
+      ).status,
     ).toBe(200);
     expect(
-      (await postSession(bucket, database, requestBody(first, accountId, recipient))).status,
+      (
+        await postSession(
+          bucket,
+          database,
+          requestBody(first, accountId, recipient),
+        )
+      ).status,
     ).toBe(200);
     expect(
-      (await postSession(
-        bucket,
-        database,
-        requestBody(replacementProof, accountId, replacement),
-      )).status,
+      (
+        await postSession(
+          bucket,
+          database,
+          requestBody(replacementProof, accountId, replacement),
+        )
+      ).status,
     ).toBe(409);
     expect(JSON.parse(bucket.text(accountRecordKey) ?? "null")).toEqual(
       expect.objectContaining(recipient),
@@ -448,9 +524,9 @@ describe("functions account session API contracts", () => {
     const response = await postSession(bucket, database, requestBody(proof));
 
     expect(response.status).toBe(200);
-    expect(JSON.parse(bucket.text(accountRecordKey) ?? "null")).not.toHaveProperty(
-      "encryptionPublicJwk",
-    );
+    expect(
+      JSON.parse(bucket.text(accountRecordKey) ?? "null"),
+    ).not.toHaveProperty("encryptionPublicJwk");
     expect(database.account(accountId)?.encryption_public_jwk).toBeNull();
   });
 
@@ -465,41 +541,60 @@ describe("functions account session API contracts", () => {
       postSession(bucket, database, requestBody(competing)),
     ]);
     const winner = responses.find((response) => response.status === 200);
-    const storedJwk = JSON.parse(database.account(accountId)?.signing_public_jwk ?? "null");
+    const storedJwk = JSON.parse(
+      database.account(accountId)?.signing_public_jwk ?? "null",
+    );
 
-    expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      200, 401,
+    ]);
     expect(database.accountCount()).toBe(1);
     expect([first.publicJwk, competing.publicJwk]).toContainEqual(storedJwk);
-    expect(JSON.parse(bucket.text(accountRecordKey) ?? "null").signingPublicJwk).toEqual(
-      storedJwk,
-    );
+    expect(
+      JSON.parse(bucket.text(accountRecordKey) ?? "null").signingPublicJwk,
+    ).toEqual(storedJwk);
     expect(winner).toBeDefined();
   });
 
   it.each([
-    ["stale proof", async () => {
-      const proof = await createProof(accountId, Date.now() - 5 * 60 * 1000 - 1);
-      return requestBody(proof);
-    }],
-    ["malformed signature", async () => {
-      const proof = await createProof();
-      return { ...requestBody(proof), signature: "%%%" };
-    }],
-    ["malformed P-256 JWK", async () => ({
-      accountId,
-      signingPublicJwk: { kty: "EC", crv: "P-256", x: "bad", y: "bad" },
-      signedAt: Date.now(),
-      signature: "invalid",
-    })],
-  ])("rejects %s without creating either account record", async (_name, createBody) => {
-    const bucket = new MemoryR2Bucket();
-    const database = new MemoryD1Database();
-    const response = await postSession(bucket, database, await createBody());
+    [
+      "stale proof",
+      async () => {
+        const proof = await createProof(
+          accountId,
+          Date.now() - 5 * 60 * 1000 - 1,
+        );
+        return requestBody(proof);
+      },
+    ],
+    [
+      "malformed signature",
+      async () => {
+        const proof = await createProof();
+        return { ...requestBody(proof), signature: "%%%" };
+      },
+    ],
+    [
+      "malformed P-256 JWK",
+      async () => ({
+        accountId,
+        signingPublicJwk: { kty: "EC", crv: "P-256", x: "bad", y: "bad" },
+        signedAt: Date.now(),
+        signature: "invalid",
+      }),
+    ],
+  ])(
+    "rejects %s without creating either account record",
+    async (_name, createBody) => {
+      const bucket = new MemoryR2Bucket();
+      const database = new MemoryD1Database();
+      const response = await postSession(bucket, database, await createBody());
 
-    expect(response.status).toBe(401);
-    expect(bucket.text(accountRecordKey)).toBeNull();
-    expect(database.accountCount()).toBe(0);
-  });
+      expect(response.status).toBe(401);
+      expect(bucket.text(accountRecordKey)).toBeNull();
+      expect(database.accountCount()).toBe(0);
+    },
+  );
 
   it.each(["missing", "malformed"] as const)(
     "falls back to R2 and repairs a %s D1 account record without accepting a new key",
@@ -525,13 +620,19 @@ describe("functions account session API contracts", () => {
         });
       }
 
-      const response = await postSession(bucket, database, requestBody(competing));
+      const response = await postSession(
+        bucket,
+        database,
+        requestBody(competing),
+      );
 
       expect(response.status).toBe(401);
-      expect(JSON.parse(database.account(accountId)?.signing_public_jwk ?? "null")).toEqual(
-        original.publicJwk,
+      expect(
+        JSON.parse(database.account(accountId)?.signing_public_jwk ?? "null"),
+      ).toEqual(original.publicJwk);
+      expect(JSON.parse(bucket.text(accountRecordKey) ?? "null")).toEqual(
+        record,
       );
-      expect(JSON.parse(bucket.text(accountRecordKey) ?? "null")).toEqual(record);
     },
   );
 
@@ -546,19 +647,29 @@ describe("functions account session API contracts", () => {
       request: createRequest({}),
       env: { R2_BUCKET: bucket as unknown as R2Bucket },
     } as unknown as Parameters<typeof onRequestPost>[0]);
-    const invalidAccountId = await postSession(bucket, undefined, { accountId: "not valid/" });
+    const invalidAccountId = await postSession(bucket, undefined, {
+      accountId: "not valid/",
+    });
     const missingProof = await postSession(bucket, undefined, { accountId });
     const methodNotAllowed = await onRequest({
-      request: new Request("https://nulldown.test/api/auth/session", { method: "GET" }),
+      request: new Request("https://nulldown.test/api/auth/session", {
+        method: "GET",
+      }),
       env: createEnv(bucket),
     } as unknown as Parameters<typeof onRequest>[0]);
 
     expect(missingBucket.status).toBe(500);
-    await expect(missingBucket.text()).resolves.toBe("R2 bucket binding is required.");
+    await expect(missingBucket.text()).resolves.toBe(
+      "R2 bucket binding is required.",
+    );
     expect(missingSecret.status).toBe(503);
-    await expect(missingSecret.text()).resolves.toBe("ACCOUNT_AUTH_SECRET is required.");
+    await expect(missingSecret.text()).resolves.toBe(
+      "ACCOUNT_AUTH_SECRET is required.",
+    );
     expect(invalidAccountId.status).toBe(400);
-    await expect(invalidAccountId.text()).resolves.toBe("Valid accountId is required.");
+    await expect(invalidAccountId.text()).resolves.toBe(
+      "Valid accountId is required.",
+    );
     expect(missingProof.status).toBe(400);
     await expect(missingProof.text()).resolves.toBe(
       "signingPublicJwk, signedAt, and signature are required.",
@@ -599,15 +710,20 @@ describe("functions account session API contracts", () => {
       }),
     ).resolves.toBeNull();
     await expect(
-      verifyAccountSessionToken(`${token}x`, { ACCOUNT_AUTH_SECRET: accountSecret }),
+      verifyAccountSessionToken(`${token}x`, {
+        ACCOUNT_AUTH_SECRET: accountSecret,
+      }),
     ).resolves.toBeNull();
     await expect(
       verifyAccountSessionToken(token, { ACCOUNT_AUTH_SECRET: "wrong-secret" }),
     ).resolves.toBeNull();
     await expect(
-      verifyAccountSessionToken(`${token.slice(0, token.lastIndexOf(".") + 1)}%%%`, {
-        ACCOUNT_AUTH_SECRET: accountSecret,
-      }),
+      verifyAccountSessionToken(
+        `${token.slice(0, token.lastIndexOf(".") + 1)}%%%`,
+        {
+          ACCOUNT_AUTH_SECRET: accountSecret,
+        },
+      ),
     ).resolves.toBeNull();
     now.mockRestore();
   });
@@ -631,7 +747,9 @@ describe("functions account session API contracts", () => {
     });
 
     await expect(
-      verifyAccountSessionToken(cli.token, { ACCOUNT_AUTH_SECRET: accountSecret }),
+      verifyAccountSessionToken(cli.token, {
+        ACCOUNT_AUTH_SECRET: accountSecret,
+      }),
     ).resolves.toEqual(expect.objectContaining({ accountId, credentialId }));
     const browserPayload = await verifyAccountSessionToken(browser.token, {
       ACCOUNT_AUTH_SECRET: accountSecret,
@@ -639,7 +757,9 @@ describe("functions account session API contracts", () => {
     expect(browserPayload).toMatchObject({ accountId });
     expect(browserPayload?.credentialId).toBeUndefined();
     await expect(
-      verifyAccountSessionToken(malformed, { ACCOUNT_AUTH_SECRET: accountSecret }),
+      verifyAccountSessionToken(malformed, {
+        ACCOUNT_AUTH_SECRET: accountSecret,
+      }),
     ).resolves.toBeNull();
     await expect(
       issueAccountSessionToken(
@@ -650,19 +770,85 @@ describe("functions account session API contracts", () => {
     ).rejects.toThrow("credential id is invalid");
   });
 
-  it("rejects insecure account headers when a secret is configured unless the explicit escape is enabled", async () => {
+  it("rejects an insecure account header when the account auth secret is missing", async () => {
     const request = new Request("https://nulldown.test/api/diff", {
       headers: { "x-nulldown-account-id": accountId },
     });
 
     await expect(
-      resolveAuthenticatedAccountId(request, { ACCOUNT_AUTH_SECRET: accountSecret }),
+      resolveAuthenticatedAccountId(request, {}),
     ).resolves.toBeNull();
+  });
+
+  it("rejects an insecure account header when a secret is configured", async () => {
+    const request = new Request("https://nulldown.test/api/diff", {
+      headers: { "x-nulldown-account-id": accountId },
+    });
+
     await expect(
       resolveAuthenticatedAccountId(request, {
         ACCOUNT_AUTH_SECRET: accountSecret,
-        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it.each([undefined, accountSecret])(
+    "allows an insecure account header only under the explicit development flag (secret %s)",
+    async (secret) => {
+      const request = new Request("https://nulldown.test/api/diff", {
+        headers: { "x-nulldown-account-id": accountId },
+      });
+
+      await expect(
+        resolveAuthenticatedAccountId(request, {
+          ...(secret ? { ACCOUNT_AUTH_SECRET: secret } : {}),
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        }),
+      ).resolves.toBe(accountId);
+    },
+  );
+
+  it("accepts a valid lowercase bearer scheme", async () => {
+    const { token } = await issueAccountSessionToken(accountId, {
+      ACCOUNT_AUTH_SECRET: accountSecret,
+    });
+    const request = new Request("https://nulldown.test/api/diff", {
+      headers: { Authorization: `bearer ${token}` },
+    });
+
+    await expect(
+      resolveAuthenticatedAccountId(request, {
+        ACCOUNT_AUTH_SECRET: accountSecret,
       }),
     ).resolves.toBe(accountId);
   });
+
+  it.each([
+    ["invalid bearer", "Bearer invalid-token"],
+    ["lowercase invalid bearer", "bearer invalid-token"],
+    ["bare bearer", "Bearer"],
+    ["empty bearer", "Bearer   "],
+    ["malformed bearer whitespace", "BeArEr\tinvalid-token"],
+  ])(
+    "does not fall back to an enabled insecure account header after %s",
+    async (_label, authorization) => {
+      const request = {
+        headers: {
+          get: (name: string) => {
+            if (name.toLowerCase() === "authorization") return authorization;
+            if (name.toLowerCase() === "x-nulldown-account-id")
+              return accountId;
+            return null;
+          },
+        },
+      };
+
+      await expect(
+        resolveAuthenticatedAccountId(request, {
+          ACCOUNT_AUTH_SECRET: accountSecret,
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        }),
+      ).resolves.toBeNull();
+    },
+  );
 });

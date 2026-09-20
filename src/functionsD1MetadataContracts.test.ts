@@ -1,34 +1,48 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import { NULLDOWN_ACCOUNT_ID_HEADER, type DropBranchRecord, type DropSnapshotRecord } from "../shared/drop/branch";
+import {
+  NULLDOWN_ACCOUNT_ID_HEADER,
+  type DropBranchRecord,
+  type DropSnapshotRecord,
+} from "../shared/drop/branch";
 import type { DropDiffEvent } from "../shared/drop/diff";
 import type { NullplugUiResponseFact } from "../shared/nullplug/ui";
 import {
-  DROP_ENVELOPE_SCHEMA_V1,
+  encodeDropEnvelope,
   serializeDropEnvelopeForDeviceSignature,
   toDropEnvelopeSignable,
-  type DropEnvelopeV1,
-} from "../shared/drop/types";
+} from "../shared/drop/codecs/envelope-v1";
 import {
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-  type DropDeviceDelegation,
-} from "../shared/drop/deviceDelegation";
+} from "../shared/drop/codecs/device-delegation-v1";
+import type { DropEnvelope } from "../shared/drop/types";
+import type { DropDeviceDelegation } from "../shared/drop/deviceDelegation";
 import { toShortDropId } from "../shared/drop/id";
 import { dropResolvedHeapKey } from "../shared/drop/sidecar";
-import { createResolvedPriorityFact, deleteResolvedPriorityFact, listResolvedPriorityFacts, queryResolvedHeap } from "../functions/api/_lib/resolved/heap/service";
-import { createNullMemFact, createNullMemProcedure, createNullMemService, deleteNullMemRecord, queryNullMem } from "../functions/api/_lib/nullmem/service";
+import {
+  createResolvedPriorityFact,
+  deleteResolvedPriorityFact,
+  listResolvedPriorityFacts,
+  queryResolvedHeap,
+} from "../functions/api/_lib/resolved/heap/service";
+import {
+  createNullMemFact,
+  createNullMemProcedure,
+  createNullMemService,
+  deleteNullMemRecord,
+  queryNullMem,
+} from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
-import { putNullplugUiResponseFact, listNullplugRuntimeFacts } from "../functions/api/_lib/nullplug/facts/repository";
+import {
+  putNullplugUiResponseFact,
+  listNullplugRuntimeFacts,
+} from "../functions/api/_lib/nullplug/facts/repository";
 import {
   NULLPLUG_INVOKE_CONTENT_TYPE,
   writeRemoteNullplugManifest,
 } from "../shared/nullplug/registry";
-import {
-  RESOLVED_DOCUMENT_RESOLVER_ID,
-} from "../shared/drop/resolved/constants";
-import type {
-  ResolvedNulldownState,
-} from "../shared/drop/resolved/types";
+import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../shared/drop/resolved/constants";
+import type { ResolvedNulldownState } from "../shared/drop/resolved/types";
 import {
   readBranch,
   readSnapshot,
@@ -126,25 +140,28 @@ const toBase64Url = (bytes: ArrayBuffer): string => {
   new Uint8Array(bytes).forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 };
 
 const createMismatchedDelegatedEnvelope = async (): Promise<{
-  envelope: DropEnvelopeV1;
+  envelope: DropEnvelope;
   accountPublicJwk: JsonWebKey;
   encryptionPublicJwk: JsonWebKey;
 }> => {
-  const accountPair = await crypto.subtle.generateKey(
+  const accountPair = (await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
     ["sign", "verify"],
-  );
-  const delegatePair = await crypto.subtle.generateKey(
+  )) as CryptoKeyPair;
+  const delegatePair = (await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
     ["sign", "verify"],
-  );
-  const encryptionPair = await crypto.subtle.generateKey(
+  )) as CryptoKeyPair;
+  const encryptionPair = (await crypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
       modulusLength: 2048,
@@ -153,18 +170,25 @@ const createMismatchedDelegatedEnvelope = async (): Promise<{
     },
     true,
     ["encrypt", "decrypt"],
+  )) as CryptoKeyPair;
+  const accountPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    accountPair.publicKey,
   );
-  const accountPublicJwk = await crypto.subtle.exportKey("jwk", accountPair.publicKey);
-  const delegateSigningPublicJwk = await crypto.subtle.exportKey("jwk", delegatePair.publicKey);
-  const exportedEncryptionPublicJwk = await crypto.subtle.exportKey("jwk", encryptionPair.publicKey);
+  const delegateSigningPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    delegatePair.publicKey,
+  );
+  const exportedEncryptionPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    encryptionPair.publicKey,
+  );
   const encryptionPublicJwk = {
     kty: exportedEncryptionPublicJwk.kty,
     n: exportedEncryptionPublicJwk.n,
     e: exportedEncryptionPublicJwk.e,
   };
   const delegation: DropDeviceDelegation = {
-    schema: "nulldown.drop-device-delegation.v1",
-    version: 1,
     accountId: "account_a",
     credentialId: "A".repeat(22),
     delegateSigningPublicJwk,
@@ -172,25 +196,33 @@ const createMismatchedDelegatedEnvelope = async (): Promise<{
     encryptionPublicJwk: { kty: "RSA", n: "A".repeat(342), e: "AQAB" },
     issuedAt: Date.now() - 1,
     expiresAt: Date.now() + 60_000,
-    signature: { kid: "account_a", alg: "ECDSA_P256_SHA256", sig: "placeholder" },
+    signature: {
+      kid: "account_a",
+      alg: "ECDSA_P256_SHA256",
+      sig: "placeholder",
+    },
   };
   delegation.signature.sig = toBase64Url(
     await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" },
       accountPair.privateKey,
       new TextEncoder().encode(
-        serializeDropDeviceDelegationForSignature(toDropDeviceDelegationSignable(delegation)),
+        serializeDropDeviceDelegationForSignature(
+          toDropDeviceDelegationSignable(delegation),
+        ),
       ),
     ),
   );
-  const envelope: DropEnvelopeV1 = {
-    schema: DROP_ENVELOPE_SCHEMA_V1,
-    version: 1,
+  const envelope: DropEnvelope = {
     createdAt: Date.now(),
     accountId: "account_a",
     visibility: "private",
     cipher: { alg: "A256GCM", iv: "iv", ciphertext: "ciphertext-secret" },
-    keyEnvelope: { mode: "account-vault-rsa-oaep", kid: "enc_a", wrappedKey: "wrapped-secret" },
+    keyEnvelope: {
+      mode: "account-vault-rsa-oaep",
+      kid: "enc_a",
+      wrappedKey: "wrapped-secret",
+    },
     deviceSignerPublicJwk: delegateSigningPublicJwk,
     deviceDelegation: delegation,
     signatures: {
@@ -202,7 +234,9 @@ const createMismatchedDelegatedEnvelope = async (): Promise<{
       { name: "ECDSA", hash: "SHA-256" },
       delegatePair.privateKey,
       new TextEncoder().encode(
-        serializeDropEnvelopeForDeviceSignature(toDropEnvelopeSignable(envelope)),
+        serializeDropEnvelopeForDeviceSignature(
+          toDropEnvelopeSignable(envelope),
+        ),
       ),
     ),
   );
@@ -238,28 +272,85 @@ class MemoryD1Statement {
 
 class MemoryD1Database {
   readonly sqlLog: string[] = [];
-  readonly branches = new Map<string, { record_json: string; created_at: number }>();
-  readonly snapshots = new Map<string, { record_json: string; snapshot_id: number; created_at: number }>();
-  readonly events = new Map<string, { event_json: string; seq: number; event_id: string; source_client_id: string }>();
-  readonly facts = new Map<string, { fact_json: string; fact_kind: string; root_drop_id: string; branch_id: string; created_at: number }>();
+  readonly branches = new Map<
+    string,
+    { record_json: string; created_at: number }
+  >();
+  readonly snapshots = new Map<
+    string,
+    { record_json: string; snapshot_id: number; created_at: number }
+  >();
+  readonly events = new Map<
+    string,
+    {
+      event_json: string;
+      seq: number;
+      event_id: string;
+      source_client_id: string;
+    }
+  >();
+  readonly facts = new Map<
+    string,
+    {
+      fact_json: string;
+      fact_kind: string;
+      root_drop_id: string;
+      branch_id: string;
+      created_at: number;
+    }
+  >();
   readonly heaps = new Map<string, { state_json: string }>();
-  readonly nodes = new Map<string, { node_id: string; node_json: string; text: string }>();
+  readonly nodes = new Map<
+    string,
+    { node_id: string; node_json: string; text: string }
+  >();
   readonly heapDeltas = new Map<string, { heap_delta_json: string }>();
-  readonly nodeRefs = new Map<string, { ref_json: string; node_hash: string }>();
+  readonly nodeRefs = new Map<
+    string,
+    { ref_json: string; node_hash: string }
+  >();
   readonly nodePayloads = new Map<string, { node_json: string }>();
-  readonly priorityFacts = new Map<string, { fact_json: string; root_drop_id: string; branch_id: string; resolver_id: string; created_at: number }>();
-  readonly nullmemRecords = new Map<string, { record_json: string; root_drop_id: string; branch_id: string; record_kind: string; created_at: number; priority: number }>();
+  readonly priorityFacts = new Map<
+    string,
+    {
+      fact_json: string;
+      root_drop_id: string;
+      branch_id: string;
+      resolver_id: string;
+      created_at: number;
+    }
+  >();
+  readonly nullmemRecords = new Map<
+    string,
+    {
+      record_json: string;
+      root_drop_id: string;
+      branch_id: string;
+      record_kind: string;
+      created_at: number;
+      priority: number;
+    }
+  >();
   readonly aliases = new Map<string, { full_id: string }>();
-  readonly drops = new Map<string, { id: string; visibility: string; owner_account_id: string | null }>();
-  readonly accounts = new Map<string, {
-    account_id: string;
-    signing_public_jwk: string;
-    encryption_kid: string | null;
-    encryption_public_jwk: string | null;
-    created_at: number;
-    updated_at: number;
-  }>();
-  readonly publicDrops = new Map<string, { id: string; created_at: number; updated_at: number }>();
+  readonly drops = new Map<
+    string,
+    { id: string; visibility: string; owner_account_id: string | null }
+  >();
+  readonly accounts = new Map<
+    string,
+    {
+      account_id: string;
+      signing_public_jwk: string;
+      encryption_kid: string | null;
+      encryption_public_jwk: string | null;
+      created_at: number;
+      updated_at: number;
+    }
+  >();
+  readonly publicDrops = new Map<
+    string,
+    { id: string; created_at: number; updated_at: number }
+  >();
   readonly writers = new Map<string, { branch_id: string }>();
 
   prepare(sql: string) {
@@ -310,7 +401,9 @@ class MemoryD1Database {
     }
 
     if (sql.includes("INSERT INTO branch_writers")) {
-      this.writers.set(`${params[0]}/${params[1]}`, { branch_id: String(params[2]) });
+      this.writers.set(`${params[0]}/${params[1]}`, {
+        branch_id: String(params[2]),
+      });
       return;
     }
 
@@ -358,9 +451,12 @@ class MemoryD1Database {
     }
 
     if (sql.includes("INSERT INTO resolved_heap_deltas")) {
-      this.heapDeltas.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`, {
-        heap_delta_json: String(params[12]),
-      });
+      this.heapDeltas.set(
+        `${params[0]}/${params[1]}/${params[2]}/${params[3]}`,
+        {
+          heap_delta_json: String(params[12]),
+        },
+      );
       return;
     }
 
@@ -381,10 +477,13 @@ class MemoryD1Database {
     }
 
     if (sql.includes("INSERT INTO resolved_node_refs")) {
-      this.nodeRefs.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/${params[4]}`, {
-        node_hash: String(params[6]),
-        ref_json: String(params[12]),
-      });
+      this.nodeRefs.set(
+        `${params[0]}/${params[1]}/${params[2]}/${params[3]}/${params[4]}`,
+        {
+          node_hash: String(params[6]),
+          ref_json: String(params[12]),
+        },
+      );
       return;
     }
 
@@ -401,27 +500,38 @@ class MemoryD1Database {
 
     if (sql.includes("DELETE FROM resolved_priority_facts")) {
       const fact = this.priorityFacts.get(String(params[2]));
-      if (fact?.root_drop_id === params[0] && fact.branch_id === params[1]) {
+      if (
+        fact &&
+        fact.root_drop_id === params[0] &&
+        fact.branch_id === params[1]
+      ) {
         this.priorityFacts.delete(String(params[2]));
       }
       return;
     }
 
     if (sql.includes("INSERT INTO nullmem_records")) {
-      this.nullmemRecords.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`, {
-        root_drop_id: String(params[0]),
-        branch_id: String(params[1]),
-        record_kind: String(params[2]),
-        record_json: String(params[12]),
-        priority: Number(params[8] ?? 0),
-        created_at: Number(params[10]),
-      });
+      this.nullmemRecords.set(
+        `${params[0]}/${params[1]}/${params[2]}/${params[3]}`,
+        {
+          root_drop_id: String(params[0]),
+          branch_id: String(params[1]),
+          record_kind: String(params[2]),
+          record_json: String(params[12]),
+          priority: Number(params[8] ?? 0),
+          created_at: Number(params[10]),
+        },
+      );
       return;
     }
 
     if (sql.includes("DELETE FROM nullmem_records")) {
       [...this.nullmemRecords.keys()]
-        .filter((key) => key === `${params[0]}/${params[1]}/fact/${params[2]}` || key === `${params[0]}/${params[1]}/procedure/${params[2]}`)
+        .filter(
+          (key) =>
+            key === `${params[0]}/${params[1]}/fact/${params[2]}` ||
+            key === `${params[0]}/${params[1]}/procedure/${params[2]}`,
+        )
         .forEach((key) => this.nullmemRecords.delete(key));
       return;
     }
@@ -435,11 +545,14 @@ class MemoryD1Database {
     }
 
     if (sql.includes("INSERT INTO resolved_nodes")) {
-      this.nodes.set(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/${params[4]}`, {
-        node_id: String(params[4]),
-        node_json: String(params[10]),
-        text: String(params[8]),
-      });
+      this.nodes.set(
+        `${params[0]}/${params[1]}/${params[2]}/${params[3]}/${params[4]}`,
+        {
+          node_id: String(params[4]),
+          node_json: String(params[10]),
+          text: String(params[8]),
+        },
+      );
     }
   }
 
@@ -457,14 +570,19 @@ class MemoryD1Database {
     }
 
     if (sql.includes("FROM branch_snapshots")) {
-      return this.snapshots.get(`${params[0]}/${params[1]}/${params[2]}`) ?? null;
+      return (
+        this.snapshots.get(`${params[0]}/${params[1]}/${params[2]}`) ?? null
+      );
     }
 
     if (sql.includes("FROM branch_events") && sql.includes("seq = ?")) {
       return this.events.get(`${params[0]}/${params[1]}/${params[2]}`) ?? null;
     }
 
-    if (sql.includes("SELECT 1 AS found") && sql.includes("FROM branch_events")) {
+    if (
+      sql.includes("SELECT 1 AS found") &&
+      sql.includes("FROM branch_events")
+    ) {
       const found = [...this.events.values()].some(
         (event) =>
           event.event_id === params[2] &&
@@ -474,17 +592,28 @@ class MemoryD1Database {
     }
 
     if (sql.includes("FROM resolved_heaps")) {
-      return this.heaps.get(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`) ?? null;
+      return (
+        this.heaps.get(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`) ??
+        null
+      );
     }
 
     if (sql.includes("FROM resolved_heap_deltas")) {
-      return this.heapDeltas.get(`${params[0]}/${params[1]}/${params[2]}/${params[3]}`) ?? null;
+      return (
+        this.heapDeltas.get(
+          `${params[0]}/${params[1]}/${params[2]}/${params[3]}`,
+        ) ?? null
+      );
     }
 
     if (sql.includes("FROM resolved_priority_facts")) {
       const fact = this.priorityFacts.get(String(params[2]));
-      if (fact?.root_drop_id === params[0] && fact.branch_id === params[1]) {
-        return fact;
+      if (
+        fact &&
+        fact.root_drop_id === params[0] &&
+        fact.branch_id === params[1]
+      ) {
+        return fact as unknown as Record<string, unknown>;
       }
       return null;
     }
@@ -497,7 +626,10 @@ class MemoryD1Database {
   }
 
   all(sql: string, params: unknown[]): Record<string, unknown>[] {
-    if (sql.includes("FROM drops") && sql.includes("owner_account_id IS NOT NULL")) {
+    if (
+      sql.includes("FROM drops") &&
+      sql.includes("owner_account_id IS NOT NULL")
+    ) {
       const afterId = sql.includes("id > ?") ? String(params[0]) : null;
       const limit = Number(params.at(-1));
       return [...this.drops.values()]
@@ -528,7 +660,9 @@ class MemoryD1Database {
       const limit = Number(hasExclude ? params[4] : params[3]);
       return rows
         .filter((row) => row.seq > afterSeq)
-        .filter((row) => (excludeClient ? row.source_client_id !== excludeClient : true))
+        .filter((row) =>
+          excludeClient ? row.source_client_id !== excludeClient : true,
+        )
         .slice(0, limit);
     }
 
@@ -545,13 +679,21 @@ class MemoryD1Database {
 
     if (sql.includes("FROM resolved_node_refs")) {
       return [...this.nodeRefs.entries()]
-        .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/`))
+        .filter(([key]) =>
+          key.startsWith(
+            `${params[0]}/${params[1]}/${params[2]}/${params[3]}/`,
+          ),
+        )
         .map(([, value]) => value);
     }
 
     if (sql.includes("FROM resolved_nodes")) {
       return [...this.nodes.entries()]
-        .filter(([key]) => key.startsWith(`${params[0]}/${params[1]}/${params[2]}/${params[3]}/`))
+        .filter(([key]) =>
+          key.startsWith(
+            `${params[0]}/${params[1]}/${params[2]}/${params[3]}/`,
+          ),
+        )
         .map(([, value]) => value);
     }
 
@@ -580,9 +722,14 @@ class MemoryD1Database {
               targetId?: string;
             },
           }))
-          .filter(({ fact }) => fact.root_drop_id === params[0] && fact.branch_id === params[1])
+          .filter(
+            ({ fact }) =>
+              fact.root_drop_id === params[0] && fact.branch_id === params[1],
+          )
           .filter(({ fact }) => !resolverId || fact.resolver_id === resolverId)
-          .filter(({ parsed }) => !targetKind || parsed.targetKind === targetKind)
+          .filter(
+            ({ parsed }) => !targetKind || parsed.targetKind === targetKind,
+          )
           .filter(({ parsed }) => !targetId || parsed.targetId === targetId)
           .map(({ fact }) => fact)
           .sort((left, right) => right.created_at - left.created_at)
@@ -609,11 +756,13 @@ class MemoryD1Database {
         .filter(
           (record) =>
             (record.root_drop_id === "" && record.branch_id === "") ||
-            (record.root_drop_id === params[0] && record.branch_id === params[1]),
+            (record.root_drop_id === params[0] &&
+              record.branch_id === params[1]),
         )
         .filter((record) => !kind || record.record_kind === kind)
         .sort((left, right) => {
-          if (right.priority !== left.priority) return right.priority - left.priority;
+          if (right.priority !== left.priority)
+            return right.priority - left.priority;
           return right.created_at - left.created_at;
         })
         .slice(0, limit);
@@ -623,7 +772,9 @@ class MemoryD1Database {
   }
 }
 
-const createBranch = (overrides: Partial<DropBranchRecord> = {}): DropBranchRecord => ({
+const createBranch = (
+  overrides: Partial<DropBranchRecord> = {},
+): DropBranchRecord => ({
   version: 1,
   branchId: "owner",
   rootDropId: "drop_123456789",
@@ -642,7 +793,9 @@ const createBranch = (overrides: Partial<DropBranchRecord> = {}): DropBranchReco
   ...overrides,
 });
 
-const createSnapshot = (overrides: Partial<DropSnapshotRecord> = {}): DropSnapshotRecord => {
+const createSnapshot = (
+  overrides: Partial<DropSnapshotRecord> = {},
+): DropSnapshotRecord => {
   const snapshotId = overrides.snapshotId ?? 0;
   return {
     version: 1,
@@ -680,8 +833,16 @@ describe("D1 metadata contracts", () => {
     const snapshot = createSnapshot();
     const event = createEvent();
 
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
-    await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
+    await writeSnapshot(
+      bucket as unknown as R2Bucket,
+      snapshot,
+      db as unknown as D1Database,
+    );
     await writeBranchDiffEvent(
       bucket as unknown as R2Bucket,
       branch.rootDropId,
@@ -692,13 +853,30 @@ describe("D1 metadata contracts", () => {
 
     const emptyBucket = new MemoryR2Bucket();
     await expect(
-      readBranch(emptyBucket as unknown as R2Bucket, branch.rootDropId, branch.branchId, db as unknown as D1Database),
+      readBranch(
+        emptyBucket as unknown as R2Bucket,
+        branch.rootDropId,
+        branch.branchId,
+        db as unknown as D1Database,
+      ),
     ).resolves.toEqual(branch);
     await expect(
-      readSnapshot(emptyBucket as unknown as R2Bucket, snapshot.rootDropId, snapshot.branchId, snapshot.snapshotId, db as unknown as D1Database),
+      readSnapshot(
+        emptyBucket as unknown as R2Bucket,
+        snapshot.rootDropId,
+        snapshot.branchId,
+        snapshot.snapshotId,
+        db as unknown as D1Database,
+      ),
     ).resolves.toEqual(snapshot);
     await expect(
-      readBranchDiffEventBySeq(emptyBucket as unknown as R2Bucket, event.dropId, branch.branchId, event.seq, db as unknown as D1Database),
+      readBranchDiffEventBySeq(
+        emptyBucket as unknown as R2Bucket,
+        event.dropId,
+        branch.branchId,
+        event.seq,
+        db as unknown as D1Database,
+      ),
     ).resolves.toEqual(event);
 
     const page = await pollBranchDiffEventsSince(
@@ -718,7 +896,11 @@ describe("D1 metadata contracts", () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
     const branch = createBranch({ headEventSeq: 2 });
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
     const first = createEvent();
     const second = { ...createEvent(), eventId: "evt_2", seq: 1 };
     const third = { ...createEvent(), eventId: "evt_3", seq: 2 };
@@ -754,7 +936,10 @@ describe("D1 metadata contracts", () => {
         db as unknown as D1Database,
       ),
     ).resolves.toEqual(
-      expect.objectContaining({ events: [first, second, third], nextCursor: 2 }),
+      expect.objectContaining({
+        events: [first, second, third],
+        nextCursor: 2,
+      }),
     );
   });
 
@@ -763,7 +948,12 @@ describe("D1 metadata contracts", () => {
     const branch = createBranch({ headEventSeq: 0 });
     await writeBranch(bucket as unknown as R2Bucket, branch);
     const committed = createEvent();
-    const orphan = { ...createEvent(), eventId: "evt_orphan", seq: 1, snapshotId: 2 };
+    const orphan = {
+      ...createEvent(),
+      eventId: "evt_orphan",
+      seq: 1,
+      snapshotId: 2,
+    };
     await writeBranchDiffEvent(
       bucket as unknown as R2Bucket,
       branch.rootDropId,
@@ -786,7 +976,11 @@ describe("D1 metadata contracts", () => {
         10,
       ),
     ).resolves.toEqual(
-      expect.objectContaining({ events: [committed], nextCursor: 0, headSeq: 0 }),
+      expect.objectContaining({
+        events: [committed],
+        nextCursor: 0,
+        headSeq: 0,
+      }),
     );
   });
 
@@ -817,7 +1011,9 @@ describe("D1 metadata contracts", () => {
         undefined,
         unavailableD1 as never,
       ),
-    ).resolves.toEqual(expect.objectContaining({ events: [event], nextCursor: 0 }));
+    ).resolves.toEqual(
+      expect.objectContaining({ events: [event], nextCursor: 0 }),
+    );
   });
 
   it("lists nullplug runtime facts from D1 without R2 records", async () => {
@@ -858,8 +1054,16 @@ describe("D1 metadata contracts", () => {
     const snapshot = createSnapshot();
     const content = "# D1 Test\n\nA searchable paragraph.";
 
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
-    await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
+    await writeSnapshot(
+      bucket as unknown as R2Bucket,
+      snapshot,
+      db as unknown as D1Database,
+    );
     await writeSnapshotCheckpoint(
       bucket as unknown as R2Bucket,
       snapshot.rootDropId,
@@ -870,7 +1074,10 @@ describe("D1 metadata contracts", () => {
     );
 
     const response = await queryResolvedHeap(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+      },
       { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
       new Request("https://example.test/api/resolved/query?query=searchable"),
     );
@@ -881,12 +1088,16 @@ describe("D1 metadata contracts", () => {
     expect(db.heapDeltas.size).toBe(1);
     expect(db.nodeRefs.size).toBe(db.nodes.size);
     expect(db.nodePayloads.size).toBe(db.nodes.size);
-    const delta = JSON.parse([...db.heapDeltas.values()][0].heap_delta_json) as {
+    const delta = JSON.parse(
+      [...db.heapDeltas.values()][0].heap_delta_json,
+    ) as {
       version: number;
       checkpointed: boolean;
       nodeRefs: unknown[];
     };
-    expect(delta).toEqual(expect.objectContaining({ version: 1, checkpointed: true }));
+    expect(delta).toEqual(
+      expect.objectContaining({ version: 1, checkpointed: true }),
+    );
     expect(delta.nodeRefs.length).toBe(db.nodeRefs.size);
 
     await bucket.delete(
@@ -898,7 +1109,10 @@ describe("D1 metadata contracts", () => {
       ),
     );
     const projectedResponse = await queryResolvedHeap(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+      },
       { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
       new Request("https://example.test/api/resolved/query?query=searchable"),
     );
@@ -913,11 +1127,25 @@ describe("D1 metadata contracts", () => {
     expect(db.heaps.size).toBe(0);
 
     const prioritizedNode = [...db.nodes.values()]
-      .map((entry) => JSON.parse(entry.node_json) as { id: string; kind: string; text: string })
-      .find((node) => node.kind === "paragraph" && node.text.includes("searchable"));
-    if (!prioritizedNode) throw new Error("Expected a searchable paragraph node.");
+      .map(
+        (entry) =>
+          JSON.parse(entry.node_json) as {
+            id: string;
+            kind: string;
+            text: string;
+          },
+      )
+      .find(
+        (node) => node.kind === "paragraph" && node.text.includes("searchable"),
+      );
+    if (!prioritizedNode)
+      throw new Error("Expected a searchable paragraph node.");
     const factResponse = await createResolvedPriorityFact(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
       new Request("https://example.test/api/resolved/priority", {
         method: "POST",
@@ -941,11 +1169,20 @@ describe("D1 metadata contracts", () => {
     expect(db.priorityFacts.size).toBe(1);
 
     const listResponse = await listResolvedPriorityFacts(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
-      new Request("https://example.test/api/resolved/priority?targetKind=node", {
-        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
-      }),
+      new Request(
+        "https://example.test/api/resolved/priority?targetKind=node",
+        {
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
+        },
+      ),
     );
     const listBody = (await listResponse.json()) as {
       facts: Array<{ factId: string }>;
@@ -956,9 +1193,17 @@ describe("D1 metadata contracts", () => {
     ]);
 
     const priorityResponse = await queryResolvedHeap(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
-      new Request("https://example.test/api/resolved/query?top=1"),
+      new Request("https://example.test/api/resolved/query?top=1", {
+        headers: {
+          [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+        },
+      }),
     );
     const priorityBody = (await priorityResponse.json()) as {
       heapGenerated: boolean;
@@ -971,7 +1216,11 @@ describe("D1 metadata contracts", () => {
     expect(priorityBody.nodes[0].reasons).toContain("priority-fact");
 
     const deleteResponse = await deleteResolvedPriorityFact(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       {
         rootId: snapshot.rootDropId,
         branchId: snapshot.branchId,
@@ -981,7 +1230,9 @@ describe("D1 metadata contracts", () => {
         `https://example.test/api/resolved/priority/${encodeURIComponent(factBody.fact.factId)}`,
         {
           method: "DELETE",
-          headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
         },
       ),
     );
@@ -996,13 +1247,28 @@ describe("D1 metadata contracts", () => {
     const db = new MemoryD1Database();
     const branch = createBranch();
     const snapshot = createSnapshot({ textLength: 45 });
-    const repairs: Array<{ rootDropId: string; branchId: string; snapshotId: number }> = [];
+    const repairs: Array<{
+      rootDropId: string;
+      branchId: string;
+      snapshotId: number;
+    }> = [];
 
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
-    await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
+    await writeSnapshot(
+      bucket as unknown as R2Bucket,
+      snapshot,
+      db as unknown as D1Database,
+    );
 
     const response = await queryResolvedHeap(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+      },
       { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
       new Request("https://example.test/api/resolved/query?query=repair"),
       {
@@ -1044,14 +1310,25 @@ describe("D1 metadata contracts", () => {
     const db = new MemoryD1Database();
     const branch = createBranch();
 
-    await bucket.put(branch.rootDropId, JSON.stringify({ content: "# Memory Root" }));
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    await bucket.put(
+      branch.rootDropId,
+      JSON.stringify({ content: "# Memory Root" }),
+    );
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
 
     const headers = {
       "Content-Type": "application/json",
       [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
     };
-    const env = { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database };
+    const env = {
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      DB: db as unknown as D1Database,
+      ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+    };
     const params = { rootId: branch.rootDropId, branchId: branch.branchId };
 
     await writeRemoteNullplugManifest(
@@ -1103,17 +1380,20 @@ describe("D1 metadata contracts", () => {
         headers,
         body: JSON.stringify({
           goal: "Build a stateful approval widget",
-          summary: "Query memory, choose the approval nullplug, write UI state facts, then verify runtime refs.",
+          summary:
+            "Query memory, choose the approval nullplug, write UI state facts, then verify runtime refs.",
           steps: [
             {
               index: 0,
               kind: "query",
               name: "nd branch memory query",
-              description: "Find prior capability guidance before selecting a nullplug.",
+              description:
+                "Find prior capability guidance before selecting a nullplug.",
               callHint: {
                 target: "cli",
                 name: "nd branch memory query",
-                argsSummary: "Query the current branch for approval nullplug guidance.",
+                argsSummary:
+                  "Query the current branch for approval nullplug guidance.",
               },
               exitCondition: "Approval nullplug guidance is found.",
               minStep: true,
@@ -1124,7 +1404,8 @@ describe("D1 metadata contracts", () => {
               index: 1,
               kind: "mcp.call",
               name: "branch_query",
-              description: "Verify runtime refs for the branch after choosing the nullplug.",
+              description:
+                "Verify runtime refs for the branch after choosing the nullplug.",
               status: "partial",
               resultSummary: "Runtime refs still need verification.",
             },
@@ -1143,9 +1424,14 @@ describe("D1 metadata contracts", () => {
     const queryResponse = await queryNullMem(
       env,
       params,
-      new Request("https://example.test/api/memory/query?query=approval%20nullplug&limit=5", {
-        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
-      }),
+      new Request(
+        "https://example.test/api/memory/query?query=approval%20nullplug&limit=5",
+        {
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
+        },
+      ),
     );
     const queryBody = (await queryResponse.json()) as {
       capsules: Array<{ kind: string; summary: string }>;
@@ -1154,8 +1440,14 @@ describe("D1 metadata contracts", () => {
     expect(queryResponse.status).toBe(200);
     expect(queryBody.capsules).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "fact", summary: expect.stringContaining("approval action") }),
-        expect.objectContaining({ kind: "procedure", summary: expect.stringContaining("runtime refs") }),
+        expect.objectContaining({
+          kind: "fact",
+          summary: expect.stringContaining("approval action"),
+        }),
+        expect.objectContaining({
+          kind: "procedure",
+          summary: expect.stringContaining("runtime refs"),
+        }),
       ]),
     );
 
@@ -1165,7 +1457,9 @@ describe("D1 metadata contracts", () => {
       new Request(
         `https://example.test/api/memory/query?procedureId=${encodeURIComponent(procedureBody.record.recordId)}&afterStep=-1&stepLimit=1&includeRecords=false`,
         {
-          headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
         },
       ),
     );
@@ -1186,7 +1480,9 @@ describe("D1 metadata contracts", () => {
         procedureId: procedureBody.record.recordId,
         step: expect.objectContaining({
           index: 0,
-          description: expect.stringContaining("Find prior capability guidance"),
+          description: expect.stringContaining(
+            "Find prior capability guidance",
+          ),
           exitCondition: "Approval nullplug guidance is found.",
         }),
         nextCursor: 0,
@@ -1197,9 +1493,14 @@ describe("D1 metadata contracts", () => {
     const capabilityResponse = await queryNullMem(
       env,
       params,
-      new Request("https://example.test/api/memory/query?query=branch%20memory%20query&kind=capability", {
-        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
-      }),
+      new Request(
+        "https://example.test/api/memory/query?query=branch%20memory%20query&kind=capability",
+        {
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
+        },
+      ),
     );
     const capabilityBody = (await capabilityResponse.json()) as {
       capsules: Array<{ recordId: string }>;
@@ -1208,16 +1509,23 @@ describe("D1 metadata contracts", () => {
     expect(capabilityResponse.status).toBe(200);
     expect(capabilityBody.capsules).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ recordId: "capability:tool:nd-branch-memory-query" }),
+        expect.objectContaining({
+          recordId: "capability:tool:nd-branch-memory-query",
+        }),
       ]),
     );
 
     const cliCapabilityResponse = await queryNullMem(
       env,
       params,
-      new Request("https://example.test/api/memory/query?query=atomic%20branch%20diff&kind=capability&labels=nd-cli", {
-        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
-      }),
+      new Request(
+        "https://example.test/api/memory/query?query=atomic%20branch%20diff&kind=capability&labels=nd-cli",
+        {
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
+        },
+      ),
     );
     const cliCapabilityBody = (await cliCapabilityResponse.json()) as {
       capsules: Array<{ recordId: string; title?: string }>;
@@ -1236,9 +1544,14 @@ describe("D1 metadata contracts", () => {
     const mcpCapabilityResponse = await queryNullMem(
       env,
       params,
-      new Request("https://example.test/api/memory/query?query=semantic%20branch%20heap&kind=capability&labels=mcp-catalog", {
-        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
-      }),
+      new Request(
+        "https://example.test/api/memory/query?query=semantic%20branch%20heap&kind=capability&labels=mcp-catalog",
+        {
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
+        },
+      ),
     );
     const mcpCapabilityBody = (await mcpCapabilityResponse.json()) as {
       capsules: Array<{ recordId: string; title?: string }>;
@@ -1257,9 +1570,14 @@ describe("D1 metadata contracts", () => {
     const remoteCapabilityResponse = await queryNullMem(
       env,
       params,
-      new Request("https://example.test/api/memory/query?query=summarizes%20linked%20drop&kind=capability&labels=remote-nullplug", {
-        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
-      }),
+      new Request(
+        "https://example.test/api/memory/query?query=summarizes%20linked%20drop&kind=capability&labels=remote-nullplug",
+        {
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
+        },
+      ),
     );
     const remoteCapabilityBody = (await remoteCapabilityResponse.json()) as {
       capsules: Array<{ recordId: string; title?: string }>;
@@ -1278,9 +1596,14 @@ describe("D1 metadata contracts", () => {
     const themeCapabilityResponse = await queryNullMem(
       env,
       params,
-      new Request("https://example.test/api/memory/query?query=warm%20parchment&kind=capability&labels=theme-catalog", {
-        headers: { [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1" },
-      }),
+      new Request(
+        "https://example.test/api/memory/query?query=warm%20parchment&kind=capability&labels=theme-catalog",
+        {
+          headers: {
+            [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
+          },
+        },
+      ),
     );
     const themeCapabilityBody = (await themeCapabilityResponse.json()) as {
       capsules: Array<{ recordId: string; title?: string }>;
@@ -1302,19 +1625,25 @@ describe("D1 metadata contracts", () => {
     const deleteResponse = await deleteNullMemRecord(
       env,
       { ...params, recordId: createdFact.record.recordId },
-      new Request(`https://example.test/api/memory/${encodeURIComponent(createdFact.record.recordId)}`, {
-        method: "DELETE",
-        headers,
-      }),
+      new Request(
+        `https://example.test/api/memory/${encodeURIComponent(createdFact.record.recordId)}`,
+        {
+          method: "DELETE",
+          headers,
+        },
+      ),
     );
     expect(deleteResponse.status).toBe(200);
 
     const afterDeleteResponse = await queryNullMem(
       env,
       params,
-      new Request("https://example.test/api/memory/query?query=approval%20action&kind=fact", {
-        headers,
-      }),
+      new Request(
+        "https://example.test/api/memory/query?query=approval%20action&kind=fact",
+        {
+          headers,
+        },
+      ),
     );
     const afterDeleteBody = (await afterDeleteResponse.json()) as {
       capsules: Array<{ recordId: string }>;
@@ -1330,15 +1659,26 @@ describe("D1 metadata contracts", () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
     const branch = createBranch();
-    const env = { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database };
+    const env = {
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      DB: db as unknown as D1Database,
+      ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+    };
     const params = { rootId: branch.rootDropId, branchId: branch.branchId };
     const authenticatedHeaders = {
       "Content-Type": "application/json",
       [NULLDOWN_ACCOUNT_ID_HEADER]: branch.writerAccountId ?? "acct_1",
     };
 
-    await bucket.put(branch.rootDropId, JSON.stringify({ content: "# Memory Root" }));
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    await bucket.put(
+      branch.rootDropId,
+      JSON.stringify({ content: "# Memory Root" }),
+    );
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
 
     const privateFact = await createNullMemFact(
       env,
@@ -1394,7 +1734,9 @@ describe("D1 metadata contracts", () => {
       new Request("https://example.test/api/memory/facts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: "Unauthenticated writes remain forbidden." }),
+        body: JSON.stringify({
+          text: "Unauthenticated writes remain forbidden.",
+        }),
       }),
     );
     expect(anonymousWrite.status).toBe(401);
@@ -1416,7 +1758,11 @@ describe("D1 metadata contracts", () => {
     const data = createMemoryVoidDataStore();
     const branch = createBranch({ headSnapshotId: 3 });
 
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
     await data.put(
       createNullMemFreshnessWatermarkKey(branch.rootDropId, branch.branchId),
       {
@@ -1478,8 +1824,16 @@ describe("D1 metadata contracts", () => {
       const snapshot = createSnapshot();
       const content = "# Empty Branch\n\nInitial content.";
 
-      await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
-      await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+      await writeBranch(
+        bucket as unknown as R2Bucket,
+        branch,
+        db as unknown as D1Database,
+      );
+      await writeSnapshot(
+        bucket as unknown as R2Bucket,
+        snapshot,
+        db as unknown as D1Database,
+      );
       await writeSnapshotCheckpoint(
         bucket as unknown as R2Bucket,
         snapshot.rootDropId,
@@ -1490,9 +1844,14 @@ describe("D1 metadata contracts", () => {
       );
 
       const response = await queryResolvedHeap(
-        { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+        {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+        },
         { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
-        new Request("https://example.test/api/resolved/query?snapshotId=0&query=initial"),
+        new Request(
+          "https://example.test/api/resolved/query?snapshotId=0&query=initial",
+        ),
       );
       const body = (await response.json()) as {
         heapGenerated: boolean;
@@ -1503,7 +1862,9 @@ describe("D1 metadata contracts", () => {
       expect(response.status).toBe(200);
       expect(body.heapGenerated).toBe(true);
       expect(body.sourceContentHash).toMatch(/^sha256:/);
-      expect(body.nodes?.some((entry) => entry.node.text.includes("Initial"))).toBe(true);
+      expect(
+        body.nodes?.some((entry) => entry.node.text.includes("Initial")),
+      ).toBe(true);
     });
   }
 
@@ -1522,9 +1883,17 @@ describe("D1 metadata contracts", () => {
       "# Chain\n\nFinal compact paragraph.",
     ];
 
-    await writeBranch(bucket as unknown as R2Bucket, branch, db as unknown as D1Database);
+    await writeBranch(
+      bucket as unknown as R2Bucket,
+      branch,
+      db as unknown as D1Database,
+    );
     for (const [index, snapshot] of snapshots.entries()) {
-      await writeSnapshot(bucket as unknown as R2Bucket, snapshot, db as unknown as D1Database);
+      await writeSnapshot(
+        bucket as unknown as R2Bucket,
+        snapshot,
+        db as unknown as D1Database,
+      );
       await writeSnapshotCheckpoint(
         bucket as unknown as R2Bucket,
         snapshot.rootDropId,
@@ -1534,22 +1903,34 @@ describe("D1 metadata contracts", () => {
         snapshot.checkpointKey,
       );
       const response = await queryResolvedHeap(
-        { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+        {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+        },
         { rootId: snapshot.rootDropId, branchId: snapshot.branchId },
-        new Request(`https://example.test/api/resolved/query?snapshotId=${snapshot.snapshotId}&query=Chain`),
+        new Request(
+          `https://example.test/api/resolved/query?snapshotId=${snapshot.snapshotId}&query=Chain`,
+        ),
       );
       expect(response.status).toBe(200);
     }
 
     const deltas = [...db.heapDeltas.values()]
-      .map((entry) => JSON.parse(entry.heap_delta_json) as {
-        snapshotId: number;
-        checkpointed: boolean;
-        nodeRefs?: unknown[];
-        nodeOps?: Array<{ op: string }>;
-      })
+      .map(
+        (entry) =>
+          JSON.parse(entry.heap_delta_json) as {
+            snapshotId: number;
+            checkpointed: boolean;
+            nodeRefs?: unknown[];
+            nodeOps?: Array<{ op: string }>;
+          },
+      )
       .sort((left, right) => left.snapshotId - right.snapshotId);
-    expect(deltas.map((delta) => delta.checkpointed)).toEqual([true, false, false]);
+    expect(deltas.map((delta) => delta.checkpointed)).toEqual([
+      true,
+      false,
+      false,
+    ]);
     expect(deltas[1].nodeRefs).toBeUndefined();
     expect(deltas[1].nodeOps?.some((op) => op.op === "upsert")).toBe(true);
     expect(deltas[1].nodeOps?.some((op) => op.op === "delete")).toBe(true);
@@ -1557,14 +1938,18 @@ describe("D1 metadata contracts", () => {
       db.sqlLog.some(
         (sql) =>
           sql.includes("INSERT INTO resolved_nodes") &&
-          sql.includes("ON CONFLICT(root_drop_id, branch_id, snapshot_id, resolver_id, node_id)"),
+          sql.includes(
+            "ON CONFLICT(root_drop_id, branch_id, snapshot_id, resolver_id, node_id)",
+          ),
       ),
     ).toBe(true);
     expect(
       db.sqlLog.some(
         (sql) =>
           sql.includes("INSERT INTO resolved_node_refs") &&
-          sql.includes("ON CONFLICT(root_drop_id, branch_id, snapshot_id, resolver_id, node_id)"),
+          sql.includes(
+            "ON CONFLICT(root_drop_id, branch_id, snapshot_id, resolver_id, node_id)",
+          ),
       ),
     ).toBe(true);
 
@@ -1581,9 +1966,14 @@ describe("D1 metadata contracts", () => {
     db.heaps.clear();
 
     const compactResponse = await queryResolvedHeap(
-      { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database },
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+      },
       { rootId: branch.rootDropId, branchId: branch.branchId },
-      new Request("https://example.test/api/resolved/query?snapshotId=2&query=final&top=10"),
+      new Request(
+        "https://example.test/api/resolved/query?snapshotId=2&query=final&top=10",
+      ),
     );
     const compactBody = (await compactResponse.json()) as {
       heapGenerated: boolean;
@@ -1592,8 +1982,14 @@ describe("D1 metadata contracts", () => {
 
     expect(compactResponse.status).toBe(200);
     expect(compactBody.heapGenerated).toBe(false);
-    expect(compactBody.nodes.some((entry) => entry.node.text.includes("Final compact"))).toBe(true);
-    expect(compactBody.nodes.some((entry) => entry.node.text.includes("Alpha"))).toBe(false);
+    expect(
+      compactBody.nodes.some((entry) =>
+        entry.node.text.includes("Final compact"),
+      ),
+    ).toBe(true);
+    expect(
+      compactBody.nodes.some((entry) => entry.node.text.includes("Alpha")),
+    ).toBe(false);
   });
 
   it("backfills R2 drop and branch metadata into D1", async () => {
@@ -1604,23 +2000,23 @@ describe("D1 metadata contracts", () => {
 
     await bucket.put(
       rootDropId,
-      JSON.stringify({
-        schema: DROP_ENVELOPE_SCHEMA_V1,
-        version: 1,
-        createdAt: 1000,
-        accountId: "acct_1",
-        visibility: "public",
-        metadata: { topic: "d1" },
-        cipher: { alg: "A256GCM", iv: "iv", ciphertext: "ciphertext" },
-        keyEnvelope: {
-          mode: "account-vault-rsa-oaep",
-          kid: "kid_1",
-          wrappedKey: "wrapped",
-        },
-        signatures: {
-          device: { kid: "kid_1", alg: "ECDSA_P256_SHA256", sig: "sig" },
-        },
-      }),
+      JSON.stringify(
+        encodeDropEnvelope({
+          createdAt: 1000,
+          accountId: "acct_1",
+          visibility: "public",
+          metadata: { topic: "d1" },
+          cipher: { alg: "A256GCM", iv: "iv", ciphertext: "ciphertext" },
+          keyEnvelope: {
+            mode: "account-vault-rsa-oaep",
+            kid: "kid_1",
+            wrappedKey: "wrapped",
+          },
+          signatures: {
+            device: { kid: "kid_1", alg: "ECDSA_P256_SHA256", sig: "sig" },
+          },
+        }),
+      ),
       { httpMetadata: { contentType: "application/json" } },
     );
     await writeBranch(bucket as unknown as R2Bucket, branch);
@@ -1663,23 +2059,23 @@ describe("D1 metadata contracts", () => {
 
     await bucket.put(
       rootDropId,
-      JSON.stringify({
-        schema: DROP_ENVELOPE_SCHEMA_V1,
-        version: 1,
-        createdAt: 1000,
-        accountId: "acct_1",
-        visibility: "unlisted",
-        metadata: { topic: "library" },
-        cipher: { alg: "A256GCM", iv: "iv", ciphertext: "ciphertext" },
-        keyEnvelope: {
-          mode: "account-vault-rsa-oaep",
-          kid: "kid_1",
-          wrappedKey: "wrapped",
-        },
-        signatures: {
-          device: { kid: "kid_1", alg: "ECDSA_P256_SHA256", sig: "sig" },
-        },
-      }),
+      JSON.stringify(
+        encodeDropEnvelope({
+          createdAt: 1000,
+          accountId: "acct_1",
+          visibility: "unlisted",
+          metadata: { topic: "library" },
+          cipher: { alg: "A256GCM", iv: "iv", ciphertext: "ciphertext" },
+          keyEnvelope: {
+            mode: "account-vault-rsa-oaep",
+            kid: "kid_1",
+            wrappedKey: "wrapped",
+          },
+          signatures: {
+            device: { kid: "kid_1", alg: "ECDSA_P256_SHA256", sig: "sig" },
+          },
+        }),
+      ),
       { httpMetadata: { contentType: "application/json" } },
     );
     db.drops.set(rootDropId, {
@@ -1724,7 +2120,7 @@ describe("D1 metadata contracts", () => {
       await createMismatchedDelegatedEnvelope();
     const dropId = "RecipientMismatch123";
 
-    await bucket.put(dropId, JSON.stringify(envelope), {
+    await bucket.put(dropId, JSON.stringify(encodeDropEnvelope(envelope)), {
       httpMetadata: { contentType: "application/json" },
     });
     db.drops.set(dropId, {
@@ -1756,7 +2152,10 @@ describe("D1 metadata contracts", () => {
       ),
     );
     const body = (await response.json()) as {
-      stats: { accountLibraryUpserted: number; accountLibrarySkipped: Record<string, number> };
+      stats: {
+        accountLibraryUpserted: number;
+        accountLibrarySkipped: Record<string, number>;
+      };
     };
     const serialized = JSON.stringify(body);
 

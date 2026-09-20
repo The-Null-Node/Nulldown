@@ -83,19 +83,23 @@ const parseLimit = (value: string | null): number => {
   return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 100) : 50;
 };
 
+const bearerToken = (request: AccountAuthRequest): string | null => {
+  const match = /^Bearer\s+(.+)$/i.exec(request.headers.get("Authorization") || "");
+  return match?.[1]?.trim() || null;
+};
+
 const hasBearer = (request: AccountAuthRequest): boolean =>
-  request.headers.get("Authorization")?.startsWith("Bearer ") ?? false;
+  /^Bearer(?:\s|$)/i.test(request.headers.get("Authorization") || "");
 
 const resolveAuthenticatedAccountClaims = async (
   request: AccountAuthRequest,
   env: AccountAuthEnv,
 ): Promise<{ accountId: string | null; credentialId: string | null }> => {
-  const authorization = request.headers.get("Authorization") || "";
-  if (!authorization.startsWith("Bearer ")) {
+  const token = bearerToken(request);
+  if (!token) {
     return { accountId: await resolveAuthenticatedAccountId(request, env), credentialId: null };
   }
-  const token = authorization.slice("Bearer ".length).trim();
-  const payload = token ? await verifyAccountSessionToken(token, env) : null;
+  const payload = await verifyAccountSessionToken(token, env);
   return {
     accountId: payload?.accountId ?? null,
     credentialId: payload?.credentialId ?? null,
@@ -182,9 +186,11 @@ export const verifyAccountLibraryEnvelope = async (
   request: AccountAuthRequest,
   env: AccountLibraryProjectionEnv,
   envelope: DropEnvelope,
+  options?: { requireAccount?: boolean },
 ): Promise<string | null> => {
   const authenticated = await resolveAuthenticatedAccountClaims(request, env);
-  const requiresAccount = hasBearer(request) || envelope.visibility === "private";
+  const requiresAccount =
+    options?.requireAccount === true || hasBearer(request) || envelope.visibility === "private";
   if (!requiresAccount) return null;
   if (!authenticated.accountId) {
     throw new AccountLibraryError(401, "account_auth_required", "An authenticated account session is required.");

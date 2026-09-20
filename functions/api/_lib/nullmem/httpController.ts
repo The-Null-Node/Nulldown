@@ -10,6 +10,11 @@ import {
   resolveParam,
 } from "../core/http/responses";
 import { createDropIdentityRepository } from "../drops/identity/id";
+import {
+  canReadBranch,
+  canReadSensitiveBranch,
+  resolveRootReadAuthorization,
+} from "../security/readAuthorization";
 import { createNullMemService } from "./applicationService";
 import {
   type NullMemFactRecord,
@@ -18,12 +23,17 @@ import {
   type NullMemSourceRef,
 } from "../../../../shared/nullmem/types";
 import type { JsonValue } from "../../../../shared/nullplug/types";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../src/server/ports";
+import { NULLPLUG_REGISTRY_LATEST_KEY_PREFIX } from "../../../../shared/nullplug/registry";
 import type {
-  VoidMemory,
-  VoidMemoryFactInput,
-  VoidMemoryProcedureInput,
-} from "../../../../src/server/provider";
+  VoidBlobStore,
+  VoidDataStore,
+  VoidSqlStore,
+} from "../../../../src/server/ports";
+import type {
+  BranchMemoryService,
+  BranchMemoryFactInput,
+  BranchMemoryProcedureInput,
+} from "../../../../src/server/runtime";
 
 /** Environment required by branch-scoped NullMem services. */
 export interface NullMemEnv extends AccountAuthEnv {
@@ -72,7 +82,9 @@ interface NullMemProcedureRequest {
 }
 
 interface NullMemHttpServices {
-  memory: VoidMemory;
+  /** Optional runtime data store used to read derived freshness watermarks. */
+  data?: VoidDataStore;
+  memory: BranchMemoryService;
 }
 
 const NULLMEM_BODY_MAX_BYTES = 256_000;
@@ -80,6 +92,10 @@ const PUBLIC_MEMORY_LABEL = "public-memory";
 
 interface NullMemAccess {
   isAnonymous: boolean;
+}
+
+interface ResolvedNullMemQueryTarget extends ResolvedNullMemTarget {
+  canReadSensitive: boolean;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -229,6 +245,88 @@ const resolveNullMemTarget = async (
   return { rootDropId, branchId: requestedBranchId, branch };
 };
 
+const branchNotFoundResponse = (): Response =>
+  jsonErrorResponse(404, "branch_not_found", "Branch not found.");
+
+const resolveNullMemQueryTarget = async (
+  request: Request,
+  env: NullMemEnv,
+  params: NullMemParams,
+): Promise<ResolvedNullMemQueryTarget | { error: Response }> => {
+  const requestedRootId = resolveParam(params.rootId);
+  const requestedBranchId = resolveParam(params.branchId);
+  if (!requestedRootId || !requestedBranchId) {
+    return {
+      error: jsonErrorResponse(
+        400,
+        "validation_failed",
+        "rootId and branchId are required.",
+      ),
+    };
+  }
+
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const rootDropId =
+    await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
+      requestedRootId,
+    );
+  if (!rootDropId) {
+    return {
+      error: jsonErrorResponse(
+        404,
+        "root_drop_not_found",
+        "Root drop not found.",
+      ),
+    };
+  }
+
+  const rootDecision = await resolveRootReadAuthorization(
+    request,
+    env,
+    rootDropId,
+  );
+  if (rootDecision.kind === "denied") {
+    return { error: branchNotFoundResponse() };
+  }
+
+  const branchRepository = createBranchRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const branch = await branchRepository.readBranch(rootDropId, requestedBranchId);
+  if (!branch || !canReadBranch(rootDecision, branch)) {
+    return { error: branchNotFoundResponse() };
+  }
+
+  return {
+    rootDropId,
+    branchId: requestedBranchId,
+    branch,
+    canReadSensitive: await canReadSensitiveBranch(
+      request,
+      env,
+      rootDropId,
+      branch,
+    ),
+  };
+};
+
+const withoutRemoteCapabilityCatalog = (
+  blobs: VoidBlobStore,
+): VoidBlobStore => ({
+  get: (key) => blobs.get(key),
+  head: (key) => blobs.head(key),
+  put: (key, value, options) => blobs.put(key, value, options),
+  delete: (keys) => blobs.delete(keys),
+  list: (options) =>
+    options?.prefix === NULLPLUG_REGISTRY_LATEST_KEY_PREFIX
+      ? Promise.resolve({ objects: [], truncated: false })
+      : blobs.list(options),
+});
+
 const authorizeNullMemAccess = async (
   request: Request,
   env: NullMemEnv,
@@ -277,7 +375,11 @@ const createNullMemHttpServices = (
   if (services?.memory) return { memory: services.memory };
 
   return {
-    memory: createNullMemService({ blobs: env.R2_BUCKET, sql: env.DB }),
+    memory: createNullMemService({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+      data: services?.data,
+    }),
   };
 };
 
@@ -292,15 +394,8 @@ export const queryNullMem = async (
   if ("error" in memoryServices) return memoryServices.error;
 
   try {
-    const target = await resolveNullMemTarget(env, params);
+    const target = await resolveNullMemQueryTarget(request, env, params);
     if ("error" in target) return target.error;
-    const access = await authorizeNullMemAccess(
-      request,
-      env,
-      target.branch,
-      "query",
-    );
-    if (access instanceof Response) return access;
 
     const url = new URL(request.url);
     const kind = url.searchParams.get("kind") as NullMemRecord["kind"] | null;
@@ -321,9 +416,9 @@ export const queryNullMem = async (
     const requestedLabels = parseLabelsParam(
       url.searchParams.get("labels") ?? url.searchParams.get("label"),
     );
-    const labels = access.isAnonymous
-      ? [...new Set([...requestedLabels, PUBLIC_MEMORY_LABEL])]
-      : requestedLabels;
+    const labels = target.canReadSensitive
+      ? requestedLabels
+      : [...new Set([...requestedLabels, PUBLIC_MEMORY_LABEL])];
     const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
     const procedureId =
       url.searchParams.get("procedureId") ??
@@ -347,7 +442,15 @@ export const queryNullMem = async (
       procedureId || typeof afterStep === "number" || typeof stepLimit === "number",
     );
 
-    const result = await memoryServices.memory.query({
+    const memory =
+      target.canReadSensitive || services?.memory
+        ? memoryServices.memory
+        : createNullMemService({
+            blobs: withoutRemoteCapabilityCatalog(env.R2_BUCKET),
+            sql: env.DB,
+            data: services?.data,
+          });
+    const result = await memory.query({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
       q,
@@ -416,7 +519,7 @@ export const createNullMemFact = async (
     const result = await memoryServices.memory.createFact({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
-      fact: parsed as VoidMemoryFactInput,
+      fact: parsed as BranchMemoryFactInput,
     });
     return jsonResponse(result, 201);
   } catch (error) {
@@ -465,7 +568,7 @@ export const createNullMemProcedure = async (
     const result = await memoryServices.memory.createProcedure({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
-      procedure: parsed as VoidMemoryProcedureInput,
+      procedure: parsed as BranchMemoryProcedureInput,
     });
     return jsonResponse(result, 201);
   } catch (error) {

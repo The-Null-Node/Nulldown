@@ -8,6 +8,7 @@ export interface PutDropObjectOptions {
   contentType: string;
   upsert?: boolean;
   expectedRevision?: string | null;
+  createOnly?: boolean;
 }
 
 /** Ports used by drop object repositories. */
@@ -50,6 +51,17 @@ export class BlobDropObjectRepository implements DropObjectRepository {
         });
 
         return updated ? "stored" : "precondition_failed";
+      }
+
+      if (options.createOnly) {
+        const created = await this.blobs.put(id, payload, {
+          onlyIf: {
+            etagDoesNotMatch: "*",
+          },
+          httpMetadata: { contentType: options.contentType },
+        });
+
+        return created ? "stored" : "precondition_failed";
       }
 
       await this.blobs.put(id, payload, {

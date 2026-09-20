@@ -2,10 +2,16 @@ import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
+import { acquireRootMutationLock } from "../functions/api/_lib/drops/storage/mutationLock";
 import { onRequestDelete } from "../functions/api/delete/[id]";
 import { onRequestGet } from "../functions/api/get/[id]";
 import { onRequestPost as onStorePost } from "../functions/api/store";
-import type { DropEnvelopeV1 } from "../shared/drop/types";
+import {
+  encodeDropEnvelope,
+  serializeDropEnvelopeForDeviceSignature,
+  toDropEnvelopeSignable,
+} from "../shared/drop/codecs/envelope-v1";
+import type { DropEnvelope } from "../shared/drop/types";
 
 interface StoredObject {
   value: string;
@@ -61,15 +67,22 @@ class MemoryR2Bucket {
     };
   }
 
+  async head(key: string): Promise<any> {
+    const existing = this.objects.get(key);
+    if (!existing) return null;
+    return {
+      httpEtag: existing.etag,
+      etag: existing.etag,
+      key,
+      size: existing.value.length,
+      uploaded: existing.uploaded,
+    };
+  }
+
   async put(
     key: string,
     value:
-      | string
-      | ArrayBuffer
-      | ArrayBufferView
-      | Blob
-      | ReadableStream
-      | null,
+      string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null,
     options?: any,
   ): Promise<any> {
     const existing = this.objects.get(key);
@@ -143,12 +156,7 @@ class MemoryR2Bucket {
 
   private async toText(
     value:
-      | string
-      | ArrayBuffer
-      | ArrayBufferView
-      | Blob
-      | ReadableStream
-      | null,
+      string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null,
   ): Promise<string> {
     if (typeof value === "string") {
       return value;
@@ -162,9 +170,23 @@ class MemoryR2Bucket {
   }
 }
 
-const createEnvelope = (accountId = "account-1"): DropEnvelopeV1 => ({
-  schema: "nmdn.drop.v1",
-  version: 1,
+class RacingMemoryR2Bucket extends MemoryR2Bucket {
+  private didRace = false;
+
+  override async put(
+    key: string,
+    value: Parameters<MemoryR2Bucket["put"]>[1],
+    options?: unknown,
+  ): Promise<any> {
+    if (!this.didRace && key === "RaceLock00005") {
+      this.didRace = true;
+      this.seed(key, "concurrent replacement", "text/plain");
+    }
+    return super.put(key, value, options);
+  }
+}
+
+const createEnvelope = (accountId = "account-1"): DropEnvelope => ({
   createdAt: Date.now(),
   accountId,
   visibility: "unlisted",
@@ -189,20 +211,126 @@ const createEnvelope = (accountId = "account-1"): DropEnvelopeV1 => ({
   },
 });
 
-const createStoreRequest = (body: unknown): Request =>
-  new Request("https://nulldown.test/api/store", {
+const serializeEnvelope = (envelope: DropEnvelope): string =>
+  JSON.stringify(encodeDropEnvelope(envelope));
+
+const toBase64Url = (value: ArrayBuffer): string => {
+  let binary = "";
+  new Uint8Array(value).forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+};
+
+const createSignedOwnerEnvelope = async (accountId: string) => {
+  const pair = (await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const signingPublicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  const envelope = createEnvelope(accountId);
+  envelope.deviceSignerPublicJwk = signingPublicJwk;
+  envelope.signatures.device.sig = toBase64Url(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      pair.privateKey,
+      new TextEncoder().encode(
+        serializeDropEnvelopeForDeviceSignature(
+          toDropEnvelopeSignable(envelope),
+        ),
+      ),
+    ),
+  );
+  return { envelope, signingPublicJwk };
+};
+
+const createProviderSigningPrivateJwk = async (): Promise<JsonWebKey> => {
+  const pair = (await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  return {
+    ...(await crypto.subtle.exportKey("jwk", pair.privateKey)),
+    kid: "provider-test",
+  } as JsonWebKey;
+};
+
+const createStoreDatabase = (input?: {
+  entry?: {
+    entry_seq: number;
+    drop_id: string;
+    account_id: string;
+    visibility: "private" | "unlisted" | "public";
+    created_at: number;
+    updated_at: number;
+    deleted_at: number | null;
+  } | null;
+  accounts?: Map<string, { account_id: string; signing_public_jwk: string }>;
+}) => ({
+  prepare(sql: string) {
+    let values: unknown[] = [];
+    const statement = {
+      bind: (...bound: unknown[]) => {
+        values = bound;
+        return statement;
+      },
+      first: async () => {
+        if (sql.includes("FROM account_library_entries")) {
+          return input?.entry ?? null;
+        }
+        if (sql.includes("FROM accounts")) {
+          return input?.accounts?.get(String(values[0])) ?? null;
+        }
+        return null;
+      },
+      all: async () => ({ results: [] }),
+      run: async () => ({ success: true }),
+    };
+    return statement;
+  },
+});
+
+const createStoreRequest = (body: unknown, accountId?: string): Request => {
+  const envelope =
+    typeof body === "object" && body !== null && "envelope" in body
+      ? (body as { envelope?: unknown }).envelope
+      : null;
+  const wireBody =
+    envelope &&
+    typeof envelope === "object" &&
+    "createdAt" in envelope &&
+    "signatures" in envelope
+      ? {
+          ...(body as Record<string, unknown>),
+          envelope: encodeDropEnvelope(envelope as DropEnvelope),
+        }
+      : body;
+
+  return new Request("https://nulldown.test/api/store", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...(accountId ? { "x-nulldown-account-id": accountId } : {}),
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(wireBody),
   });
+};
 
-const createDeleteRequest = (id: string, revision: string): Request =>
+const createDeleteRequest = (
+  id: string,
+  revision?: string,
+  accountId?: string,
+): Request =>
   new Request(`https://nulldown.test/api/delete/${id}`, {
     method: "DELETE",
     headers: {
-      "If-Match": revision,
+      ...(revision ? { "If-Match": revision } : {}),
+      ...(accountId ? { "x-nulldown-account-id": accountId } : {}),
     },
   });
 
@@ -237,10 +365,11 @@ describe("functions api conflict contracts", () => {
       request: createStoreRequest({
         id: requestedId,
         upsert: false,
-        envelope: createEnvelope(),
+        envelope: { content: "alias collision" },
       }),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: createStoreDatabase() as never,
         PUBLIC_BASE_URL: "https://nulldown.test",
       },
     } as unknown as Parameters<typeof onStorePost>[0]);
@@ -260,19 +389,53 @@ describe("functions api conflict contracts", () => {
   it("returns 412 revision_precondition_failed from /api/store as structured JSON", async () => {
     const bucket = new MemoryR2Bucket();
     const id = "QweRty123456";
+    const accountId = "account-owner";
+    const { envelope, signingPublicJwk } =
+      await createSignedOwnerEnvelope(accountId);
 
-    bucket.seed(id, JSON.stringify(createEnvelope()), "application/json");
+    bucket.seed(
+      id,
+      serializeEnvelope(createEnvelope(accountId)),
+      "application/json",
+    );
     bucket.seed(createRemoteAliasKey("QweRty"), id, "text/plain");
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: accountId,
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+      accounts: new Map([
+        [
+          accountId,
+          {
+            account_id: accountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
+            created_at: 1,
+            updated_at: 1,
+          },
+        ],
+      ]),
+    });
 
     const response = await onStorePost({
-      request: createStoreRequest({
-        id,
-        upsert: true,
-        expectedRevision: "mismatched-etag",
-        envelope: createEnvelope(),
-      }),
+      request: createStoreRequest(
+        {
+          id,
+          upsert: true,
+          expectedRevision: "mismatched-etag",
+          envelope,
+        },
+        accountId,
+      ),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
         PUBLIC_BASE_URL: "https://nulldown.test",
       },
     } as unknown as Parameters<typeof onStorePost>[0]);
@@ -289,11 +452,12 @@ describe("functions api conflict contracts", () => {
     expect(body.error).toContain("Refresh and try again");
   });
 
-  it("accepts quoted revision tokens from /api/get headers for /api/store upserts", async () => {
+  it("fails closed when an existing root has no ownership projection despite a valid revision", async () => {
     const bucket = new MemoryR2Bucket();
     const id = "QuoteRev1234";
+    const original = serializeEnvelope(createEnvelope());
 
-    const etag = bucket.seed(id, JSON.stringify(createEnvelope()), "application/json");
+    const etag = bucket.seed(id, original, "application/json");
     bucket.seed(createRemoteAliasKey("QuoteR"), id, "text/plain");
 
     const response = await onStorePost({
@@ -305,25 +469,491 @@ describe("functions api conflict contracts", () => {
       }),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: createStoreDatabase() as never,
         PUBLIC_BASE_URL: "https://nulldown.test",
       },
     } as unknown as Parameters<typeof onStorePost>[0]);
 
-    const body = (await response.json()) as { id: string; url: string };
+    const body = (await response.json()) as { code: string };
+
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("account_library_unavailable");
+    await expect((await bucket.get(id))?.text()).resolves.toBe(original);
+  });
+
+  it.each(["public", "unlisted"] as const)(
+    "does not provider-sign an anonymous %s account envelope creation",
+    async (visibility) => {
+      const bucket = new MemoryR2Bucket();
+      const id = `Anonymous${visibility}`;
+      const envelope = createEnvelope("account-owner");
+      envelope.visibility = visibility;
+      const providerSigningPrivateJwk = await createProviderSigningPrivateJwk();
+
+      const response = await onStorePost({
+        request: createStoreRequest({ id, upsert: true, envelope }),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: createStoreDatabase() as never,
+          PROVIDER_SIGNING_PRIVATE_JWK: JSON.stringify(
+            providerSigningPrivateJwk,
+          ),
+          LOG_LEVEL: "debug",
+          PUBLIC_BASE_URL: "https://nulldown.test",
+        },
+      } as unknown as Parameters<typeof onStorePost>[0]);
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual(
+        expect.objectContaining({ code: "account_auth_required" }),
+      );
+      expect(debugSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('"event":"store.provider_signature_applied"'),
+      );
+      await expect(bucket.get(id)).resolves.toBeNull();
+    },
+  );
+
+  it("allows a verified owner to create a provider-signed envelope", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "VerifiedCreate1";
+    const accountId = "account-owner";
+    const { envelope, signingPublicJwk } =
+      await createSignedOwnerEnvelope(accountId);
+    const providerSigningPrivateJwk = await createProviderSigningPrivateJwk();
+    const db = createStoreDatabase({
+      accounts: new Map([
+        [
+          accountId,
+          {
+            account_id: accountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
+            created_at: 1,
+            updated_at: 1,
+          },
+        ],
+      ]),
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest({ id, upsert: true, envelope }, accountId),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        PROVIDER_SIGNING_PRIVATE_JWK: JSON.stringify(providerSigningPrivateJwk),
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
 
     expect(response.status).toBe(200);
-    expect(body.id).toBe(id);
+    await expect((await bucket.get(id))?.json()).resolves.toMatchObject({
+      schema: "nmdn.drop.v1",
+      version: 1,
+      accountId,
+      signatures: {
+        provider: {
+          kid: "provider-test",
+          alg: "ECDSA_P256_SHA256",
+          sig: expect.any(String),
+        },
+      },
+    });
+  });
+
+  it("rejects an anonymous unlisted envelope overwrite before replacing a protected root", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "ProtectedAnon01";
+    const original = serializeEnvelope(createEnvelope("account-owner"));
+    bucket.seed(id, original, "application/json");
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: "account-owner",
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest({
+        id,
+        upsert: true,
+        envelope: createEnvelope("account-owner"),
+      }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ code: "account_auth_required" }),
+    );
+    await expect((await bucket.get(id))?.text()).resolves.toBe(original);
+  });
+
+  it("rejects a plaintext overwrite of a protected root", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "ProtectedPlain02";
+    const original = serializeEnvelope(createEnvelope("account-owner"));
+    bucket.seed(id, original, "application/json");
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: "account-owner",
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest({
+        id,
+        upsert: true,
+        envelope: { content: "replacement" },
+      }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ code: "account_owned_envelope_required" }),
+    );
+    await expect((await bucket.get(id))?.text()).resolves.toBe(original);
+  });
+
+  it("fails closed when metadata is unavailable for an existing root upsert", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "ProtectedNoDb003";
+    const original = serializeEnvelope(createEnvelope("account-owner"));
+    bucket.seed(id, original, "application/json");
+
+    const response = await onStorePost({
+      request: createStoreRequest({
+        id,
+        upsert: true,
+        envelope: createEnvelope("account-owner"),
+      }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ code: "account_library_unavailable" }),
+    );
+    await expect((await bucket.get(id))?.text()).resolves.toBe(original);
+  });
+
+  it("allows a verified owner to replace a protected root", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "ProtectedOwner4";
+    const accountId = "account-owner";
+    const original = serializeEnvelope(createEnvelope(accountId));
+    const etag = bucket.seed(id, original, "application/json");
+    const { envelope, signingPublicJwk } =
+      await createSignedOwnerEnvelope(accountId);
+    const providerSigningPrivateJwk = await createProviderSigningPrivateJwk();
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: accountId,
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+      accounts: new Map([
+        [
+          accountId,
+          {
+            account_id: accountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
+            created_at: 1,
+            updated_at: 1,
+          },
+        ],
+      ]),
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest(
+        { id, upsert: true, expectedRevision: etag, envelope },
+        accountId,
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        PROVIDER_SIGNING_PRIVATE_JWK: JSON.stringify(providerSigningPrivateJwk),
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(200);
+    await expect((await bucket.get(id))?.json()).resolves.toMatchObject({
+      accountId,
+      signatures: {
+        device: expect.any(Object),
+        provider: expect.objectContaining({ kid: "provider-test" }),
+      },
+    });
+  });
+
+  it("rejects a verified non-owner before replacing a protected root", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "ProtectedForeign";
+    const ownerAccountId = "account-owner";
+    const foreignAccountId = "account-foreign";
+    const original = serializeEnvelope(createEnvelope(ownerAccountId));
+    bucket.seed(id, original, "application/json");
+    const { envelope, signingPublicJwk } =
+      await createSignedOwnerEnvelope(foreignAccountId);
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: ownerAccountId,
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+      accounts: new Map([
+        [
+          foreignAccountId,
+          {
+            account_id: foreignAccountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
+            created_at: 1,
+            updated_at: 1,
+          },
+        ],
+      ]),
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest(
+        { id, upsert: true, envelope },
+        foreignAccountId,
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ code: "account_mismatch" }),
+    );
+    await expect((await bucket.get(id))?.text()).resolves.toBe(original);
+  });
+
+  it("does not overwrite a root that changes after its ownership check", async () => {
+    const bucket = new RacingMemoryR2Bucket();
+    const id = "RaceLock00005";
+    const accountId = "account-owner";
+    const original = serializeEnvelope(createEnvelope(accountId));
+    bucket.seed(id, original, "application/json");
+    const { envelope, signingPublicJwk } =
+      await createSignedOwnerEnvelope(accountId);
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: accountId,
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+      accounts: new Map([
+        [
+          accountId,
+          {
+            account_id: accountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
+            created_at: 1,
+            updated_at: 1,
+          },
+        ],
+      ]),
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest({ id, upsert: true, envelope }, accountId),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(412);
+    await expect((await bucket.get(id))?.text()).resolves.toBe(
+      "concurrent replacement",
+    );
+  });
+
+  it("requires the tombstoned owner to recreate a deleted root", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "ProtectedTomb06";
+    const ownerAccountId = "account-owner";
+    const foreignAccountId = "account-foreign";
+    const { envelope, signingPublicJwk } =
+      await createSignedOwnerEnvelope(foreignAccountId);
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: ownerAccountId,
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: 2,
+      },
+      accounts: new Map([
+        [
+          foreignAccountId,
+          {
+            account_id: foreignAccountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
+            created_at: 1,
+            updated_at: 1,
+          },
+        ],
+      ]),
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest(
+        { id, upsert: true, envelope },
+        foreignAccountId,
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ code: "account_mismatch" }),
+    );
+    await expect(bucket.get(id)).resolves.toBeNull();
+  });
+
+  it("allows a verified owner to reclaim a tombstoned root", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "TombOwner0007";
+    const accountId = "account-owner";
+    const { envelope, signingPublicJwk } =
+      await createSignedOwnerEnvelope(accountId);
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: accountId,
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: 2,
+      },
+      accounts: new Map([
+        [
+          accountId,
+          {
+            account_id: accountId,
+            signing_public_jwk: JSON.stringify(signingPublicJwk),
+            created_at: 1,
+            updated_at: 1,
+          },
+        ],
+      ]),
+    });
+
+    const response = await onStorePost({
+      request: createStoreRequest({ id, upsert: true, envelope }, accountId),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(200);
+    await expect((await bucket.get(id))?.json()).resolves.toMatchObject({
+      accountId,
+    });
+  });
+
+  it("rejects an empty bearer token for an unlisted envelope", async () => {
+    const bucket = new MemoryR2Bucket();
+    const request = createStoreRequest({
+      envelope: createEnvelope("account-owner"),
+    });
+    request.headers.set("Authorization", "Bearer");
+
+    const response = await onStorePost({
+      request,
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: createStoreDatabase() as never,
+        PUBLIC_BASE_URL: "https://nulldown.test",
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ code: "account_auth_required" }),
+    );
   });
 
   it("returns 412 revision_precondition_failed from /api/delete/:id as structured JSON", async () => {
     const bucket = new MemoryR2Bucket();
     const id = "ZxCvBn123456";
     bucket.seed(id, "drop body", "text/plain");
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: "account-owner",
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+    });
 
     const response = await onRequestDelete({
-      request: createDeleteRequest(id, "wrong-revision"),
+      request: createDeleteRequest(id, "wrong-revision", "account-owner"),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
       },
       params: {
         id,
@@ -341,6 +971,203 @@ describe("functions api conflict contracts", () => {
     expect(body.code).toBe("revision_precondition_failed");
     expect(body.error).toContain("Refresh and try again");
     expect(await bucket.get(id)).not.toBeNull();
+  });
+
+  it("requires an authenticated owner and revision before deleting a projected root", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "DeleteGuard001";
+    const etag = bucket.seed(id, "drop body", "text/plain");
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: "account-owner",
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+    });
+    const env = {
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      DB: db as never,
+      ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+    };
+
+    const anonymous = await onRequestDelete({
+      request: createDeleteRequest(id, etag),
+      env,
+      params: { id },
+    } as unknown as Parameters<typeof onRequestDelete>[0]);
+    const foreign = await onRequestDelete({
+      request: createDeleteRequest(id, etag, "account-foreign"),
+      env,
+      params: { id },
+    } as unknown as Parameters<typeof onRequestDelete>[0]);
+    const missingRevision = await onRequestDelete({
+      request: createDeleteRequest(id, undefined, "account-owner"),
+      env,
+      params: { id },
+    } as unknown as Parameters<typeof onRequestDelete>[0]);
+
+    expect(anonymous.status).toBe(401);
+    expect(foreign.status).toBe(404);
+    expect(missingRevision.status).toBe(428);
+    await expect(bucket.get(id)).resolves.not.toBeNull();
+  });
+
+  it("deletes only an active projected root owned at the supplied revision", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "DeleteOwner002";
+    const etag = bucket.seed(id, "drop body", "text/plain");
+    const db = createStoreDatabase({
+      entry: {
+        entry_seq: 1,
+        drop_id: id,
+        account_id: "account-owner",
+        visibility: "unlisted",
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      },
+    });
+
+    const response = await onRequestDelete({
+      request: createDeleteRequest(id, `"${etag}"`, "account-owner"),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as never,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: { id },
+    } as unknown as Parameters<typeof onRequestDelete>[0]);
+
+    expect(response.status).toBe(204);
+    await expect(bucket.get(id)).resolves.toBeNull();
+  });
+
+  it("fails closed when account-library storage is unavailable for deletion", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "DeleteNoDb0003";
+    const etag = bucket.seed(id, "drop body", "text/plain");
+
+    const response = await onRequestDelete({
+      request: createDeleteRequest(id, etag, "account-owner"),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: { id },
+    } as unknown as Parameters<typeof onRequestDelete>[0]);
+
+    expect(response.status).toBe(503);
+    await expect(bucket.get(id)).resolves.not.toBeNull();
+  });
+
+  it("serializes protected root writers and deleters through one root lease", async () => {
+    const bucket = new MemoryR2Bucket();
+    const first = await acquireRootMutationLock(
+      bucket as never,
+      "DeleteLock004",
+    );
+    let acquiredSecond = false;
+    const secondPromise = acquireRootMutationLock(
+      bucket as never,
+      "DeleteLock004",
+    ).then((lock) => {
+      acquiredSecond = true;
+      return lock;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(acquiredSecond).toBe(false);
+
+    await first.release();
+    const second = await secondPromise;
+    expect(acquiredSecond).toBe(true);
+    await second.release();
+  });
+
+  it("rejects a stale root mutation after another actor takes over its lease", async () => {
+    const bucket = new MemoryR2Bucket();
+    const now = Date.now();
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(now);
+    const first = await acquireRootMutationLock(
+      bucket as never,
+      "DeleteLock005",
+    );
+    nowSpy.mockReturnValue(now + 300_001);
+    const second = await acquireRootMutationLock(
+      bucket as never,
+      "DeleteLock005",
+    );
+
+    await expect(first.beginCommit()).rejects.toMatchObject({
+      code: "root_mutation_lock_lost",
+    });
+    nowSpy.mockRestore();
+    await first.release();
+    await second.release();
+  });
+
+  it("tombstones a root before a failed metadata cleanup can leave it readable", async () => {
+    const bucket = new MemoryR2Bucket();
+    const id = "DeleteTomb005";
+    const etag = bucket.seed(id, "drop body", "text/plain");
+    const entry = {
+      entry_seq: 1,
+      drop_id: id,
+      account_id: "account-owner",
+      visibility: "unlisted" as const,
+      created_at: 1,
+      updated_at: 1,
+      deleted_at: null as number | null,
+    };
+    const db = {
+      prepare(sql: string) {
+        const statement = {
+          bind: () => statement,
+          first: async () =>
+            sql.includes("FROM account_library_entries") ? entry : null,
+          all: async () => ({ results: [] }),
+          run: async () => {
+            if (sql.includes("UPDATE account_library_entries")) {
+              entry.deleted_at = Date.now();
+              return { success: true };
+            }
+            if (sql.includes("DELETE FROM drops")) {
+              throw new Error("metadata cleanup failed");
+            }
+            return { success: true };
+          },
+        };
+        return statement;
+      },
+    };
+    const env = {
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      DB: db as never,
+      ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+    };
+
+    const response = await onRequestDelete({
+      request: createDeleteRequest(id, etag, "account-owner"),
+      env,
+      params: { id },
+    } as unknown as Parameters<typeof onRequestDelete>[0]);
+    const read = await onRequestGet({
+      request: new Request(`https://nulldown.test/api/get/${id}`),
+      env,
+      params: { id },
+    } as unknown as Parameters<typeof onRequestGet>[0]);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({ error: "Failed to delete drop." }),
+    );
+    expect(entry.deleted_at).not.toBeNull();
+    await expect(bucket.get(id)).resolves.not.toBeNull();
+    expect(read.status).toBe(404);
   });
 
   it("keeps projected public and unlisted links readable while private links remain account-gated", async () => {
