@@ -21,6 +21,7 @@ interface AliasCacheEntry {
 }
 
 const aliasCache = new Map<string, AliasCacheEntry>();
+const aliasesNeedingD1Backfill = new Set<string>();
 
 type DropIdLogger = Pick<RequestLogger, "debug" | "info" | "warn">;
 
@@ -50,6 +51,11 @@ export interface DropIdentityRepository {
   ): Promise<void>;
   /** Resolves a user-supplied full or short drop id to a canonical remote drop id. */
   resolveRemoteDropId(id: string, logger?: DropIdLogger): Promise<string | null>;
+  /** Resolves a read-request full or short drop id without persistent writes. */
+  resolveRemoteDropIdForReadRequest(
+    id: string,
+    logger?: DropIdLogger,
+  ): Promise<string | null>;
 }
 
 const readAliasCache = (shortId: string): string | null => {
@@ -60,6 +66,7 @@ const readAliasCache = (shortId: string): string | null => {
 
   if (cached.expiresAt <= Date.now()) {
     aliasCache.delete(shortId);
+    aliasesNeedingD1Backfill.delete(shortId);
     return null;
   }
 
@@ -75,6 +82,7 @@ const writeAliasCache = (shortId: string, fullId: string): void => {
 
 const removeAliasCache = (shortId: string): void => {
   aliasCache.delete(shortId);
+  aliasesNeedingD1Backfill.delete(shortId);
 };
 
 const readObjectText = async (
@@ -119,6 +127,7 @@ export const writeRemoteAliasToD1 = async (
     )
     .bind(shortId, fullId, now, now)
     .run();
+  aliasesNeedingD1Backfill.delete(shortId);
 };
 
 /** Builds the R2 key for a short-link alias. */
@@ -133,12 +142,17 @@ export const readRemoteAlias = async (
 ): Promise<string | null> => {
   const cached = readAliasCache(shortId);
   if (cached) {
+    if (db && aliasesNeedingD1Backfill.has(shortId)) {
+      await writeRemoteAliasToD1(db, shortId, cached);
+      aliasesNeedingD1Backfill.delete(shortId);
+    }
     return cached;
   }
 
   const d1Value = await readRemoteAliasFromD1(db, shortId);
   if (d1Value) {
     writeAliasCache(shortId, d1Value);
+    aliasesNeedingD1Backfill.delete(shortId);
     return d1Value;
   }
 
@@ -146,7 +160,36 @@ export const readRemoteAlias = async (
   const value = await readObjectText(object);
   if (value) {
     writeAliasCache(shortId, value);
+    if (!db) {
+      aliasesNeedingD1Backfill.add(shortId);
+    }
     await writeRemoteAliasToD1(db, shortId, value);
+  }
+  return value;
+};
+
+const readRemoteAliasWithoutPersistentWrites = async (
+  bucket: VoidBlobStore,
+  shortId: string,
+  db?: VoidSqlStore,
+): Promise<string | null> => {
+  const cached = readAliasCache(shortId);
+  if (cached) {
+    return cached;
+  }
+
+  const d1Value = await readRemoteAliasFromD1(db, shortId);
+  if (d1Value) {
+    writeAliasCache(shortId, d1Value);
+    aliasesNeedingD1Backfill.delete(shortId);
+    return d1Value;
+  }
+
+  const object = await bucket.get(createRemoteAliasKey(shortId));
+  const value = await readObjectText(object);
+  if (value) {
+    writeAliasCache(shortId, value);
+    aliasesNeedingD1Backfill.add(shortId);
   }
   return value;
 };
@@ -194,6 +237,9 @@ export const reserveRemoteAlias = async (
       dropRef: toLogRef(fullId),
     });
     writeAliasCache(shortId, fullId);
+    if (!db) {
+      aliasesNeedingD1Backfill.add(shortId);
+    }
     await writeRemoteAliasToD1(db, shortId, fullId);
     return "reserved";
   }
@@ -292,6 +338,47 @@ export const resolveRemoteDropId = async (
   return candidate;
 };
 
+/** Resolves a read-request full or short drop id without persistent writes. */
+export const resolveRemoteDropIdForReadRequest = async (
+  bucket: VoidBlobStore,
+  id: string,
+  logger?: DropIdLogger,
+  db?: VoidSqlStore,
+): Promise<string | null> => {
+  const candidate = id.trim();
+  if (!candidate || !isDropIdToken(candidate)) {
+    logger?.warn("drop.id.resolve_invalid", {
+      providedLength: id.length,
+    });
+    return null;
+  }
+
+  if (candidate.length !== DROP_LINK_ID_LENGTH) {
+    logger?.debug("drop.id.resolve_full_id", {
+      dropRef: toLogRef(candidate),
+    });
+    return candidate;
+  }
+
+  const aliased = await readRemoteAliasWithoutPersistentWrites(
+    bucket,
+    candidate,
+    db,
+  );
+  if (aliased) {
+    logger?.debug("drop.id.resolve_alias_hit", {
+      shortIdRef: toLogRef(candidate),
+      dropRef: toLogRef(aliased),
+    });
+    return aliased;
+  }
+
+  logger?.debug("drop.id.resolve_alias_miss", {
+    shortIdRef: toLogRef(candidate),
+  });
+  return candidate;
+};
+
 /** Creates a drop identity repository bound to composed blob and SQL ports. */
 export const createDropIdentityRepository = ({
   blobs,
@@ -306,4 +393,6 @@ export const createDropIdentityRepository = ({
     removeRemoteAliasIfMatch(blobs, fullId, logger, sql),
   resolveRemoteDropId: (id, logger) =>
     resolveRemoteDropId(blobs, id, logger, sql),
+  resolveRemoteDropIdForReadRequest: (id, logger) =>
+    resolveRemoteDropIdForReadRequest(blobs, id, logger, sql),
 });

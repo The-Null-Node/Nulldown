@@ -23,9 +23,9 @@ import type {
   VoidSqlStore,
 } from "../../../../src/server/ports";
 import type {
-  VoidMemory,
-  VoidMemoryDeleteRequest,
-} from "../../../../src/server/provider";
+  BranchMemoryService,
+  BranchMemoryDeleteRequest,
+} from "../../../../src/server/runtime";
 
 /** Dependencies required to compose the NullMem application service. */
 export interface CreateNullMemServiceOptions {
@@ -38,7 +38,7 @@ export interface CreateNullMemServiceOptions {
 }
 
 /** Application service that orchestrates NullMem records, catalogs, and freshness. */
-export type NullMemApplicationService = VoidMemory;
+export type NullMemApplicationService = BranchMemoryService;
 
 const recordLabels = (record: NullMemRecord): string[] => record.labels ?? [];
 
@@ -265,7 +265,7 @@ export const createNullMemService = ({
       await repository.writeRecord(record);
       return { rootDropId, branchId, record };
     },
-    delete: async ({ rootDropId, branchId, recordId }: VoidMemoryDeleteRequest) => {
+    delete: async ({ rootDropId, branchId, recordId }: BranchMemoryDeleteRequest) => {
       if (!sql)
         throw new Error("SQL metadata store is required to delete memory records.");
       await repository.deleteRecord(rootDropId, branchId, recordId);

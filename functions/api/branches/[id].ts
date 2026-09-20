@@ -1,15 +1,25 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type {
+  D1Database,
+  PagesFunction,
+  R2Bucket,
+} from "@cloudflare/workers-types";
 import {
   listBranchesForDrop,
   type BranchRouteEnv,
 } from "../_lib/branches/services/routeService";
+import { createCloudflareStorageServiceEnv } from "../_lib/core/platform/cloudflarePorts";
 
-interface Env extends BranchRouteEnv {
+interface Env extends Omit<BranchRouteEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
-export const onRequestGet: PagesFunction<Env, "id"> = ({ env, params }) =>
-  listBranchesForDrop(env, params);
+export const onRequestGet: PagesFunction<Env, "id"> = ({
+  request,
+  env,
+  params,
+}) =>
+  listBranchesForDrop(createCloudflareStorageServiceEnv(env), params, request);
 
 export const onRequest: PagesFunction<Env, "id"> = async (context) => {
   if (context.request.method === "GET") {

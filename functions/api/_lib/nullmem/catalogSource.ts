@@ -17,7 +17,9 @@ export interface NullMemCatalogSourcePorts {
 /** Source for derived capability records that are queried alongside persisted memory. */
 export interface NullMemCatalogSource {
   /** Reads catalog records matching the requested memory kind. */
-  readRecords(options?: { kind?: NullMemRecord["kind"] }): Promise<NullMemRecord[]>;
+  readRecords(options?: {
+    kind?: NullMemRecord["kind"];
+  }): Promise<NullMemRecord[]>;
 }
 
 const readRemoteNullplugCapabilityRecords = async (
@@ -54,7 +56,7 @@ const readRemoteNullplugCapabilityRecords = async (
 
     records.push(
       ...pageRecords.filter(
-        (record): record is NullMemRecord => record !== null,
+        (record): record is NonNullable<typeof record> => record !== null,
       ),
     );
     cursor = listed.truncated ? listed.cursor : undefined;
@@ -70,9 +72,8 @@ export const createNullMemCatalogSource = ({
   readRecords: async ({ kind } = {}) => {
     if (kind && kind !== "capability") return [];
 
-    const remoteNullplugCapabilities = await readRemoteNullplugCapabilityRecords(
-      blobs,
-    ).catch(() => []);
+    const remoteNullplugCapabilities =
+      await readRemoteNullplugCapabilityRecords(blobs).catch(() => []);
 
     return [
       ...createBuiltInNullMemCapabilities(0),

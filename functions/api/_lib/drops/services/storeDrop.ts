@@ -12,11 +12,13 @@ import {
   toShortDropId,
 } from "../../../../../shared/drop/id";
 import {
+  type DropEnvelope,
+} from "../../../../../shared/drop/types";
+import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
+import {
   decodeDropEnvelope,
   encodeDropEnvelope,
-} from "../../../../../shared/drop/codecs/envelopeV1";
-import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
-import type { DropEnvelope } from "../../../../../shared/drop/types";
+} from "../../../../../shared/drop/codecs/envelope-v1";
 import { signProviderEnvelope, type ProviderSigningEnv } from "../../crypto/envelopes/signing";
 import { syncPublicDropIndexForEnvelope } from "../index/repository";
 import { createDropIdentityRepository } from "../identity/id";
@@ -24,6 +26,10 @@ import {
   createDropObjectRepository,
   type PutDropObjectResult,
 } from "../storage/objectRepository";
+import {
+  acquireRootMutationLock,
+  type RootMutationLock,
+} from "../storage/mutationLock";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
 import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
 import {
@@ -237,6 +243,7 @@ export const storeDrop = async ({
   env,
   logger,
 }: StoreDropInput): Promise<Response> => {
+  let rootMutationLock: RootMutationLock | null = null;
   try {
     validateEnv(env);
 
@@ -252,6 +259,9 @@ export const storeDrop = async ({
       "plain_text";
     let storedEnvelope: DropEnvelope | null = null;
     let verifiedAccountId: string | null = null;
+    let protectedRootOwnerAccountId: string | null = null;
+    let writeExpectedRevision: string | null = null;
+    let createOnly = false;
     let allocationAttempts = 0;
     let aliasConflictCount = 0;
     let objectConflictCount = 0;
@@ -284,27 +294,64 @@ export const storeDrop = async ({
       requestedId = parsedRequest.id;
       upsert = parsedRequest.upsert;
       expectedRevision = parsedRequest.expectedRevision;
+      writeExpectedRevision = expectedRevision;
+
+      if (requestedId && upsert) {
+        rootMutationLock = await acquireRootMutationLock(env.blobs, requestedId);
+        const existingObject = await env.blobs.head(requestedId);
+        const existingAccountLibraryEntry = env.sql
+          ? await readAccountLibraryEntry(env.sql, requestedId)
+          : null;
+        if (existingObject && !existingAccountLibraryEntry) {
+          logger.logEnd(503, {
+            reason: "account_library_unavailable",
+            requestedDropRef: toLogRef(requestedId),
+          });
+          return jsonErrorResponse(
+            503,
+            "account_library_unavailable",
+            "An account-library ownership projection is required to update an existing drop.",
+          );
+        }
+
+        protectedRootOwnerAccountId = existingAccountLibraryEntry?.account_id ?? null;
+
+        if (existingObject && !writeExpectedRevision) {
+          writeExpectedRevision = existingObject.etag ?? existingObject.httpEtag ?? null;
+          if (!writeExpectedRevision) {
+            logger.logEnd(503, {
+              reason: "object_revision_unavailable",
+              requestedDropRef: toLogRef(requestedId),
+            });
+            return jsonErrorResponse(
+              503,
+              "object_revision_unavailable",
+              "The current drop revision is unavailable for a safe update.",
+            );
+          }
+        }
+        createOnly = existingObject === null;
+      }
 
       const envelope = decodeDropEnvelope(parsedRequest.payload);
       if (envelope) {
         payloadKind = "drop_envelope";
-        // Provider signatures are attached server-side so the server only attests to what it actually stored.
-        const signedEnvelope = await signProviderEnvelope(
-          envelope,
-          env,
-          logger,
-        );
         try {
           verifiedAccountId = await verifyAccountLibraryEnvelope(
             request,
             { ...env, R2_BUCKET: env.blobs, DB: env.sql },
-            signedEnvelope,
+            envelope,
+            { requireAccount: true },
           );
-          if (requestedId && verifiedAccountId && env.sql) {
-            const existing = await readAccountLibraryEntry(env.sql, requestedId);
-            if (existing && existing.account_id !== verifiedAccountId) {
-              throw new AccountLibraryError(403, "account_mismatch", "The drop is owned by a different account.");
-            }
+          if (
+            protectedRootOwnerAccountId !== null &&
+            verifiedAccountId !== protectedRootOwnerAccountId
+          ) {
+            throw new AccountLibraryError(
+              403,
+              "account_mismatch",
+              "The drop is owned by a different account.",
+            );
           }
         } catch (error) {
           if (error instanceof AccountLibraryError) {
@@ -314,6 +361,12 @@ export const storeDrop = async ({
           }
           throw error;
         }
+        // Provider signatures are attached only after account ownership is verified.
+        const signedEnvelope = await signProviderEnvelope(
+          envelope,
+          env,
+          logger,
+        );
         storedEnvelope = signedEnvelope;
         storedPayload = JSON.stringify(encodeDropEnvelope(signedEnvelope));
       } else if (isDropPayload(parsedRequest.payload)) {
@@ -369,6 +422,18 @@ export const storeDrop = async ({
       );
     }
 
+    if (protectedRootOwnerAccountId !== null && payloadKind !== "drop_envelope") {
+      logger.logEnd(403, {
+        reason: "account_owned_envelope_required",
+        requestedDropRef: toLogRef(requestedId),
+      });
+      return jsonErrorResponse(
+        403,
+        "account_owned_envelope_required",
+        "An account-owned envelope is required to update this drop.",
+      );
+    }
+
     let id: string | null = null;
 
     if (requestedId) {
@@ -399,10 +464,12 @@ export const storeDrop = async ({
       let storeResult: PutDropObjectResult = "conflict";
 
       try {
+        if (rootMutationLock) await rootMutationLock.beginCommit();
         storeResult = await dropRepository.put(requestedId, storedPayload, {
           contentType: storedContentType,
           upsert,
-          expectedRevision,
+          expectedRevision: writeExpectedRevision,
+          createOnly,
         });
       } catch (error) {
         if (aliasState === "reserved") {
@@ -599,5 +666,7 @@ export const storeDrop = async ({
       "unhandled_error",
       `Failed to store drop: ${errorMessage}`,
     );
+  } finally {
+    if (rootMutationLock) await rootMutationLock.release();
   }
 };

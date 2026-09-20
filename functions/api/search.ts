@@ -1,6 +1,6 @@
 import type { PagesFunction } from "@cloudflare/workers-types";
 import { createSearchDatabase } from "../../src/lib/db/searchDatabase";
-import { createRequestLogger, toLogRef } from "./_lib/core/logging/logger";
+import { createRequestLogger } from "./_lib/core/logging/logger";
 
 interface Env {
   DB: D1Database;
@@ -25,7 +25,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
     const url = new URL(request.url);
     const query = url.searchParams.get("q") || "";
     const ownerAccountId = url.searchParams.get("owner") || undefined;
-    const visibility = url.searchParams.get("visibility") || undefined;
     const limitParam = Number.parseInt(url.searchParams.get("limit") || "", 10);
     const limit = Number.isFinite(limitParam)
       ? Math.max(1, Math.min(100, limitParam))
@@ -38,12 +37,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, request }) => {
 
     const db = createSearchDatabase(env.DB);
 
-    const visibilities = visibility ? visibility.split(",") : undefined;
-
     const result = await db.search({
       query,
       ownerAccountId: ownerAccountId || null,
-      visibility: visibilities,
+      visibility: ["public"],
       limit,
       offset,
     });

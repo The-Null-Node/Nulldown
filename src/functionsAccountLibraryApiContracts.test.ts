@@ -5,7 +5,6 @@ import {
   upsertAccountLibraryEntry,
 } from "../functions/api/_lib/accounts/library/repository";
 import {
-  AccountLibraryError,
   projectAccountLibraryEnvelope,
   verifyAccountLibraryEnvelope,
   verifyAccountLibraryEnvelopeOwnership,
@@ -15,20 +14,24 @@ import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session
 import {
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-  type DropDeviceDelegation,
-} from "../shared/drop/deviceDelegation";
+} from "../shared/drop/codecs/device-delegation-v1";
+import type { DropDeviceDelegation } from "../shared/drop/deviceDelegation";
 import {
   serializeDropEnvelopeForDeviceSignature,
   toDropEnvelopeSignable,
-  type DropEnvelopeV1,
-} from "../shared/drop/types";
+} from "../shared/drop/codecs/envelope-v1";
+import type { DropEnvelope } from "../shared/drop/types";
+import type { VoidBlobStore, VoidSqlStore } from "./server/ports";
 
 const toBase64Url = (bytes: ArrayBuffer): string => {
   let binary = "";
   new Uint8Array(bytes).forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 };
 
 const credentialId = "A".repeat(22);
@@ -42,19 +45,26 @@ const signDelegation = async (
       { name: "ECDSA", hash: "SHA-256" },
       signingKey,
       new TextEncoder().encode(
-        serializeDropDeviceDelegationForSignature(toDropDeviceDelegationSignable(delegation)),
+        serializeDropDeviceDelegationForSignature(
+          toDropDeviceDelegationSignable(delegation),
+        ),
       ),
     ),
   );
 };
 
-const signEnvelope = async (envelope: DropEnvelopeV1, signingKey: CryptoKey): Promise<void> => {
+const signEnvelope = async (
+  envelope: DropEnvelope,
+  signingKey: CryptoKey,
+): Promise<void> => {
   envelope.signatures.device.sig = toBase64Url(
     await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" },
       signingKey,
       new TextEncoder().encode(
-        serializeDropEnvelopeForDeviceSignature(toDropEnvelopeSignable(envelope)),
+        serializeDropEnvelopeForDeviceSignature(
+          toDropEnvelopeSignable(envelope),
+        ),
       ),
     ),
   );
@@ -94,28 +104,31 @@ const createDatabase = () => {
   const bind = jest.fn().mockReturnThis();
   const all = jest.fn().mockResolvedValue({ results: rows });
   const run = jest.fn().mockResolvedValue({ success: true });
-  const prepare = jest.fn(() => ({ bind, all, run }));
+  const prepare = jest.fn((sql: string) => {
+    void sql;
+    return { bind, all, run };
+  });
   return { prepare, bind, all, run };
 };
 
 const signDelegatedEnvelope = async (): Promise<{
-  envelope: DropEnvelopeV1;
+  envelope: DropEnvelope;
   accountPublicJwk: JsonWebKey;
   accountPrivateKey: CryptoKey;
   delegatePrivateKey: CryptoKey;
   encryptionPublicJwk: JsonWebKey;
 }> => {
-  const accountPair = await crypto.subtle.generateKey(
+  const accountPair = (await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
     ["sign", "verify"],
-  );
-  const delegatePair = await crypto.subtle.generateKey(
+  )) as CryptoKeyPair;
+  const delegatePair = (await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
     ["sign", "verify"],
-  );
-  const encryptionPair = await crypto.subtle.generateKey(
+  )) as CryptoKeyPair;
+  const encryptionPair = (await crypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
       modulusLength: 2048,
@@ -124,18 +137,25 @@ const signDelegatedEnvelope = async (): Promise<{
     },
     true,
     ["encrypt", "decrypt"],
+  )) as CryptoKeyPair;
+  const accountPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    accountPair.publicKey,
   );
-  const accountPublicJwk = await crypto.subtle.exportKey("jwk", accountPair.publicKey);
-  const delegateSigningPublicJwk = await crypto.subtle.exportKey("jwk", delegatePair.publicKey);
-  const exportedEncryptionPublicJwk = await crypto.subtle.exportKey("jwk", encryptionPair.publicKey);
+  const delegateSigningPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    delegatePair.publicKey,
+  );
+  const exportedEncryptionPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    encryptionPair.publicKey,
+  );
   const encryptionPublicJwk = {
     kty: exportedEncryptionPublicJwk.kty,
     n: exportedEncryptionPublicJwk.n,
     e: exportedEncryptionPublicJwk.e,
   };
   const delegation: DropDeviceDelegation = {
-    schema: "nulldown.drop-device-delegation.v1",
-    version: 1,
     accountId: "account_a",
     credentialId,
     delegateSigningPublicJwk,
@@ -143,17 +163,23 @@ const signDelegatedEnvelope = async (): Promise<{
     encryptionPublicJwk: exportedEncryptionPublicJwk,
     issuedAt: Date.now() - 1,
     expiresAt: Date.now() + 60_000,
-    signature: { kid: "account_a", alg: "ECDSA_P256_SHA256", sig: "placeholder" },
+    signature: {
+      kid: "account_a",
+      alg: "ECDSA_P256_SHA256",
+      sig: "placeholder",
+    },
   };
   await signDelegation(delegation, accountPair.privateKey);
-  const envelope: DropEnvelopeV1 = {
-    schema: "nmdn.drop.v1",
-    version: 1,
+  const envelope: DropEnvelope = {
     createdAt: Date.now(),
     accountId: "account_a",
     visibility: "private",
     cipher: { alg: "A256GCM", iv: "iv", ciphertext: "cipher" },
-    keyEnvelope: { mode: "account-vault-rsa-oaep", kid: "enc_a", wrappedKey: "wrapped" },
+    keyEnvelope: {
+      mode: "account-vault-rsa-oaep",
+      kid: "enc_a",
+      wrappedKey: "wrapped",
+    },
     deviceSignerPublicJwk: delegateSigningPublicJwk,
     deviceDelegation: delegation,
     signatures: {
@@ -172,7 +198,10 @@ const signDelegatedEnvelope = async (): Promise<{
 
 const createVerificationEnvironment = (
   accountPublicJwk: JsonWebKey,
-  encryptionRecipient?: { encryptionKid: string; encryptionPublicJwk: JsonWebKey },
+  encryptionRecipient?: {
+    encryptionKid: string;
+    encryptionPublicJwk: JsonWebKey;
+  },
 ) => {
   const credential = {
     credential_id: credentialId,
@@ -202,11 +231,19 @@ const createVerificationEnvironment = (
     statement.bind.mockReturnValue(statement);
     return statement;
   });
+  const blobs: VoidBlobStore = {
+    get: async () => null,
+    head: async () => null,
+    put: async (key) => ({ key }),
+    delete: async () => undefined,
+    list: async () => ({ objects: [], truncated: false }),
+  };
+  const sql = { prepare } as unknown as VoidSqlStore;
   return {
     DB: { prepare },
     env: {
-      R2_BUCKET: { get: jest.fn() },
-      DB: { prepare },
+      R2_BUCKET: blobs,
+      DB: sql,
       ACCOUNT_AUTH_SECRET: "test-secret",
     },
   };
@@ -223,7 +260,9 @@ describe("account-library repository", () => {
       null,
     );
 
-    expect(db.prepare.mock.calls[0]?.[0]).toContain("entry_seq <= ? AND entry_seq < ?");
+    expect(db.prepare.mock.calls[0]?.[0]).toContain(
+      "entry_seq <= ? AND entry_seq < ?",
+    );
     expect(db.prepare.mock.calls[0]?.[0]).not.toContain("OFFSET");
     expect(db.bind).toHaveBeenCalledWith(
       "account_a",
@@ -256,8 +295,12 @@ describe("account-library repository", () => {
     });
     await tombstoneAccountLibraryEntry(db as never, "drop_a", 3);
 
-    expect(db.prepare.mock.calls[0]?.[0]).not.toContain("created_at = excluded.created_at");
-    expect(db.prepare.mock.calls[1]?.[0]).toContain("SET deleted_at = ?, updated_at = ?");
+    expect(db.prepare.mock.calls[0]?.[0]).not.toContain(
+      "created_at = excluded.created_at",
+    );
+    expect(db.prepare.mock.calls[1]?.[0]).toContain(
+      "SET deleted_at = ?, updated_at = ?",
+    );
     expect(db.bind).toHaveBeenLastCalledWith(3, 3, "drop_a");
   });
 
@@ -273,22 +316,25 @@ describe("account-library repository", () => {
     });
 
     const statement = db.prepare.mock.calls[0]?.[0] as string;
-    expect(statement).not.toMatch(/DO UPDATE SET\s+account_id = excluded\.account_id/);
+    expect(statement).not.toMatch(
+      /DO UPDATE SET\s+account_id = excluded\.account_id/,
+    );
     expect(statement).toContain(
       "WHERE account_library_entries.account_id = excluded.account_id",
     );
   });
 
   it("rejects a forged account signature on a delegated signer certificate", async () => {
-    const accountPair = await crypto.subtle.generateKey(
+    const accountPair = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"],
+    )) as CryptoKeyPair;
+    const accountPublicJwk = await crypto.subtle.exportKey(
+      "jwk",
+      accountPair.publicKey,
     );
-    const accountPublicJwk = await crypto.subtle.exportKey("jwk", accountPair.publicKey);
     const delegation: DropDeviceDelegation = {
-      schema: "nulldown.drop-device-delegation.v1",
-      version: 1,
       accountId: "account_a",
       credentialId: "credential_a",
       delegateSigningPublicJwk: {
@@ -301,7 +347,11 @@ describe("account-library repository", () => {
       encryptionPublicJwk: { kty: "RSA", n: "encryption_n", e: "AQAB" },
       issuedAt: 1,
       expiresAt: Date.now() + 60_000,
-      signature: { kid: "account_a", alg: "ECDSA_P256_SHA256", sig: "placeholder" },
+      signature: {
+        kid: "account_a",
+        alg: "ECDSA_P256_SHA256",
+        sig: "placeholder",
+      },
     };
     delegation.signature.sig = toBase64Url(
       await crypto.subtle.sign(
@@ -320,14 +370,21 @@ describe("account-library repository", () => {
     ).resolves.toBe(true);
     await expect(
       verifyDropDeviceDelegationSignature(
-        { ...delegation, signature: { ...delegation.signature, sig: `${delegation.signature.sig}A` } },
+        {
+          ...delegation,
+          signature: {
+            ...delegation.signature,
+            sig: `${delegation.signature.sig}A`,
+          },
+        },
         accountPublicJwk,
       ),
     ).resolves.toBe(false);
   });
 
   it("projects a full-JWK delegated envelope against a canonical recipient pin and requires its credential claim", async () => {
-    const { envelope, accountPublicJwk, encryptionPublicJwk } = await signDelegatedEnvelope();
+    const { envelope, accountPublicJwk, encryptionPublicJwk } =
+      await signDelegatedEnvelope();
     const { DB, env } = createVerificationEnvironment(accountPublicJwk, {
       encryptionKid: "enc_a",
       encryptionPublicJwk,
@@ -352,25 +409,44 @@ describe("account-library repository", () => {
       }),
     );
     await expect(
-      verifyAccountLibraryEnvelopeOwnership(env, envelope, "account_a", credentialId),
+      verifyAccountLibraryEnvelopeOwnership(
+        env,
+        envelope,
+        "account_a",
+        credentialId,
+      ),
     ).resolves.toEqual({ accountId: "account_a", reason: null });
     await expect(
       verifyAccountLibraryEnvelope(requestFor(withClaim.token), env, envelope),
     ).resolves.toBe("account_a");
     await expect(
       verifyAccountLibraryEnvelope(requestFor(generic.token), env, envelope),
-    ).rejects.toEqual(expect.objectContaining<AccountLibraryError>({ code: "credential_claim_required" }));
+    ).rejects.toEqual(
+      expect.objectContaining({ code: "credential_claim_required" }),
+    );
     await expect(
       verifyAccountLibraryEnvelope(requestFor(mismatched.token), env, envelope),
-    ).rejects.toEqual(expect.objectContaining<AccountLibraryError>({ code: "credential_claim_required" }));
-    await projectAccountLibraryEnvelope(DB as never, "delegated_drop", "account_a", envelope, 1);
-    expect(DB.prepare).toHaveBeenCalledWith(expect.stringContaining("account_library_entries"));
+    ).rejects.toEqual(
+      expect.objectContaining({ code: "credential_claim_required" }),
+    );
+    await projectAccountLibraryEnvelope(
+      DB as never,
+      "delegated_drop",
+      "account_a",
+      envelope,
+      1,
+    );
+    expect(DB.prepare).toHaveBeenCalledWith(
+      expect.stringContaining("account_library_entries"),
+    );
   });
 
   it("rejects a delegated envelope when the account recipient pin is missing", async () => {
     const { envelope, accountPublicJwk } = await signDelegatedEnvelope();
     const { env } = createVerificationEnvironment(accountPublicJwk);
-    const session = await issueAccountSessionToken("account_a", env, { credentialId });
+    const session = await issueAccountSessionToken("account_a", env, {
+      credentialId,
+    });
 
     await expect(
       verifyAccountLibraryEnvelope(
@@ -378,7 +454,9 @@ describe("account-library repository", () => {
         env,
         envelope,
       ),
-    ).rejects.toEqual(expect.objectContaining<AccountLibraryError>({ code: "untrusted_device_signature" }));
+    ).rejects.toEqual(
+      expect.objectContaining({ code: "untrusted_device_signature" }),
+    );
   });
 
   it("rejects a delegated envelope whose signed recipient JWK differs from the account pin", async () => {
@@ -401,7 +479,9 @@ describe("account-library repository", () => {
     };
     await signDelegation(delegation, accountPrivateKey);
     await signEnvelope(envelope, delegatePrivateKey);
-    const session = await issueAccountSessionToken("account_a", env, { credentialId });
+    const session = await issueAccountSessionToken("account_a", env, {
+      credentialId,
+    });
 
     await expect(
       verifyAccountLibraryEnvelope(
@@ -409,7 +489,9 @@ describe("account-library repository", () => {
         env,
         envelope,
       ),
-    ).rejects.toEqual(expect.objectContaining<AccountLibraryError>({ code: "untrusted_device_signature" }));
+    ).rejects.toEqual(
+      expect.objectContaining({ code: "untrusted_device_signature" }),
+    );
   });
 
   it("rejects a delegated envelope whose recipient kid differs from the account pin", async () => {
@@ -429,7 +511,9 @@ describe("account-library repository", () => {
     envelope.keyEnvelope.kid = "enc_b";
     await signDelegation(delegation, accountPrivateKey);
     await signEnvelope(envelope, delegatePrivateKey);
-    const session = await issueAccountSessionToken("account_a", env, { credentialId });
+    const session = await issueAccountSessionToken("account_a", env, {
+      credentialId,
+    });
 
     await expect(
       verifyAccountLibraryEnvelope(
@@ -437,11 +521,14 @@ describe("account-library repository", () => {
         env,
         envelope,
       ),
-    ).rejects.toEqual(expect.objectContaining<AccountLibraryError>({ code: "untrusted_device_signature" }));
+    ).rejects.toEqual(
+      expect.objectContaining({ code: "untrusted_device_signature" }),
+    );
   });
 
   it("accepts an old direct browser envelope when the account has no recipient pin", async () => {
-    const { envelope, accountPublicJwk, accountPrivateKey } = await signDelegatedEnvelope();
+    const { envelope, accountPublicJwk, accountPrivateKey } =
+      await signDelegatedEnvelope();
     delete envelope.deviceDelegation;
     envelope.deviceSignerPublicJwk = accountPublicJwk;
     await signEnvelope(envelope, accountPrivateKey);

@@ -295,14 +295,16 @@ export const sanitizeAccountId = (value: unknown): string | null => {
 export const readRequestAccountId = (request: AccountAuthRequest): string | null =>
   sanitizeAccountId(request.headers.get(NULLDOWN_ACCOUNT_ID_HEADER));
 
-const readBearerToken = (request: AccountAuthRequest): string | null => {
+const readBearerToken = (
+  request: AccountAuthRequest,
+): { presented: boolean; token: string | null } => {
   const authorization = request.headers.get("Authorization") || "";
-  if (!authorization.startsWith("Bearer ")) {
-    return null;
+  if (!/^Bearer(?:\s|$)/i.test(authorization)) {
+    return { presented: false, token: null };
   }
 
-  const token = authorization.slice("Bearer ".length).trim();
-  return token || null;
+  const token = authorization.slice("Bearer".length).trim();
+  return { presented: true, token: token || null };
 };
 
 /** Issues an HMAC-signed account session token for an authenticated account. */
@@ -401,18 +403,18 @@ export const resolveAuthenticatedAccountId = async (
   request: AccountAuthRequest,
   env: AccountAuthEnv,
 ): Promise<string | null> => {
-  const bearerToken = readBearerToken(request);
-  if (bearerToken) {
-    const payload = await verifyAccountSessionToken(bearerToken, env);
+  const bearer = readBearerToken(request);
+  if (bearer.presented) {
+    if (!bearer.token) return null;
+
+    const payload = await verifyAccountSessionToken(bearer.token, env);
     if (payload) {
       return payload.accountId;
     }
     return null;
   }
 
-  const shouldAllowInsecureHeader =
-    env.ALLOW_INSECURE_ACCOUNT_HEADER === "1" || !env.ACCOUNT_AUTH_SECRET;
-  if (!shouldAllowInsecureHeader) {
+  if (env.ALLOW_INSECURE_ACCOUNT_HEADER !== "1") {
     return null;
   }
 

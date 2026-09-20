@@ -13,7 +13,11 @@ import {
 } from "../../../../../shared/drop/resolved/constants";
 import type { ResolvedPriorityFactRecord } from "../../../../../shared/drop/resolved/types";
 import { isResolvedPriorityFactRecord } from "../../../../../shared/drop/resolved/validators";
-import { authorizeResolvedPriorityFactWrite, resolveResolvedBranchTarget } from "./context";
+import {
+  authorizeResolvedPriorityFactRead,
+  authorizeResolvedPriorityFactWrite,
+  resolveReadableResolvedBranchTarget,
+} from "./context";
 import { createResolvedHeapRepository } from "./repository";
 import {
   decodeRouteParam,
@@ -43,13 +47,14 @@ const createResolvedPriorityFactUnsafe = async (
     );
   }
 
-  const target = await resolveResolvedBranchTarget(env, params);
+  const target = await resolveReadableResolvedBranchTarget(request, env, params);
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
 
   const authError = await authorizeResolvedPriorityFactWrite(
     request,
     env,
+    rootDropId,
     branch,
     "create",
   );
@@ -116,22 +121,15 @@ const listResolvedPriorityFactsUnsafe = async (
   params: ResolvedHeapParams,
   request: Request,
 ): Promise<Response> => {
-  if (!env.DB) {
-    return jsonErrorResponse(
-      500,
-      "sql_store_required",
-      "SQL metadata store is required to list resolved priority facts.",
-    );
-  }
-
-  const target = await resolveResolvedBranchTarget(env, params);
+  const target = await resolveReadableResolvedBranchTarget(request, env, params);
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
-  const authError = await authorizeResolvedPriorityFactWrite(
+
+  const authError = await authorizeResolvedPriorityFactRead(
     request,
     env,
+    rootDropId,
     branch,
-    "list",
   );
   if (authError) return authError;
 
@@ -142,22 +140,24 @@ const listResolvedPriorityFactsUnsafe = async (
     return jsonErrorResponse(400, "validation_failed", "Invalid targetKind.");
   }
 
-  const facts = await createResolvedHeapRepository({
-    sql: env.DB,
-  }).listBranchPriorityFacts(rootDropId, branchId, {
-    resolverId:
-      url.searchParams.get("resolverId") ??
-      url.searchParams.get("resolver") ??
-      undefined,
-    targetKind: targetKindParam ?? undefined,
-    targetId:
-      url.searchParams.get("targetId") ??
-      url.searchParams.get("target") ??
-      undefined,
-    factId:
-      url.searchParams.get("factId") ?? url.searchParams.get("fact") ?? undefined,
-    limit: parsePositiveInteger(url.searchParams.get("limit"), 100),
-  });
+  const facts = env.DB
+    ? await createResolvedHeapRepository({
+        sql: env.DB,
+      }).listBranchPriorityFacts(rootDropId, branchId, {
+        resolverId:
+          url.searchParams.get("resolverId") ??
+          url.searchParams.get("resolver") ??
+          undefined,
+        targetKind: targetKindParam ?? undefined,
+        targetId:
+          url.searchParams.get("targetId") ??
+          url.searchParams.get("target") ??
+          undefined,
+        factId:
+          url.searchParams.get("factId") ?? url.searchParams.get("fact") ?? undefined,
+        limit: parsePositiveInteger(url.searchParams.get("limit"), 100),
+      })
+    : [];
 
   return jsonResponse({ rootDropId, branchId, facts });
 };
@@ -175,12 +175,13 @@ const deleteResolvedPriorityFactUnsafe = async (
     );
   }
 
-  const target = await resolveResolvedBranchTarget(env, params);
+  const target = await resolveReadableResolvedBranchTarget(request, env, params);
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
   const authError = await authorizeResolvedPriorityFactWrite(
     request,
     env,
+    rootDropId,
     branch,
     "delete",
   );
@@ -231,7 +232,7 @@ export const createResolvedPriorityFact = async (
   }
 };
 
-/** Lists branch-scoped resolved priority facts for branch writers. */
+/** Lists branch-scoped resolved priority facts for trusted branch authorities. */
 export const listResolvedPriorityFacts = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,

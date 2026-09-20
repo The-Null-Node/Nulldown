@@ -3,7 +3,11 @@ import { createBranchRepository } from "../../branches/storage/repository";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { jsonErrorResponse, resolveParam } from "../../core/http/responses";
-import { isDropEnvelopeV1 } from "../../../../../shared/drop/types";
+import {
+  canReadBranch,
+  canReadSensitiveBranch,
+  resolveRootReadAuthorization,
+} from "../../security/readAuthorization";
 import type {
   ResolvedBranchTarget,
   ResolvedHeapEnv,
@@ -15,11 +19,16 @@ export type ResolvedBranchTargetResult =
   | ResolvedBranchTarget
   | { error: Response };
 
-/** Resolves and validates the root drop and branch for resolved heap handlers. */
-export const resolveResolvedBranchTarget = async (
+const branchNotFoundResponse = (): Response =>
+  jsonErrorResponse(404, "branch_not_found", "Branch not found.");
+
+const resolveResolvedBranchIdentity = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
-): Promise<ResolvedBranchTargetResult> => {
+): Promise<
+  | { rootDropId: string; branchId: string }
+  | { error: Response }
+> => {
   if (!env.R2_BUCKET) {
     return {
       error: new Response("R2 bucket binding is required.", { status: 500 }),
@@ -44,6 +53,53 @@ export const resolveResolvedBranchTarget = async (
     };
   }
 
+  return { rootDropId, branchId };
+};
+
+const resolveReadableResolvedBranchIdentity = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+): Promise<
+  | { rootDropId: string; branchId: string }
+  | { error: Response }
+> => {
+  if (!env.R2_BUCKET) {
+    return {
+      error: new Response("R2 bucket binding is required.", { status: 500 }),
+    };
+  }
+
+  const dropIdentityRepository = createDropIdentityRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const rootDropId =
+    await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
+      resolveParam(params.rootId),
+    );
+  const branchId = sanitizeDiffAuthToken(resolveParam(params.branchId));
+  if (!rootDropId || !branchId) {
+    return {
+      error: jsonErrorResponse(
+        400,
+        "validation_failed",
+        "Root drop ID and branch ID are required.",
+      ),
+    };
+  }
+
+  return { rootDropId, branchId };
+};
+
+/** Resolves and validates the root drop and branch for resolved heap handlers. */
+export const resolveResolvedBranchTarget = async (
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+): Promise<ResolvedBranchTargetResult> => {
+  const identity = await resolveResolvedBranchIdentity(env, params);
+  if ("error" in identity) return identity;
+  const { rootDropId, branchId } = identity;
+
   const branchRepository = createBranchRepository({
     blobs: env.R2_BUCKET,
     sql: env.DB,
@@ -58,54 +114,61 @@ export const resolveResolvedBranchTarget = async (
   return { rootDropId, branchId, branch };
 };
 
-/** Checks root plaintext-read rights before either cached or regenerated projections are exposed. */
-export const authorizeResolvedRootRead = async (
+/** Resolves a readable branch after authorizing its trusted canonical root. */
+export const resolveReadableResolvedBranchTarget = async (
+  request: Request,
+  env: ResolvedHeapEnv,
+  params: ResolvedHeapParams,
+): Promise<ResolvedBranchTargetResult> => {
+  const identity = await resolveReadableResolvedBranchIdentity(env, params);
+  if ("error" in identity) return identity;
+  const { rootDropId, branchId } = identity;
+
+  const authorization = await resolveRootReadAuthorization(
+    request,
+    env,
+    rootDropId,
+  );
+  if (authorization.kind === "denied") {
+    return { error: branchNotFoundResponse() };
+  }
+
+  const branch = await createBranchRepository({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  }).readBranch(rootDropId, branchId);
+  if (!branch || !canReadBranch(authorization, branch)) {
+    return { error: branchNotFoundResponse() };
+  }
+
+  return { rootDropId, branchId, branch };
+};
+
+/** Checks that the authenticated account may read sensitive priority overlays. */
+export const authorizeResolvedPriorityFactRead = async (
   request: Request,
   env: ResolvedHeapEnv,
   rootDropId: string,
+  branch: { writerAccountId?: string | null },
 ): Promise<Response | null> => {
-  const object = await env.R2_BUCKET.get(rootDropId);
-  if (!object) return jsonErrorResponse(404, "root_drop_not_found", "Root drop not found.");
-  const text = await object.text();
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return null; // Legacy plaintext roots remain publicly readable.
+  if (await canReadSensitiveBranch(request, env, rootDropId, branch)) {
+    return null;
   }
-  if (!value || typeof value !== "object" || !("schema" in value || "cipher" in value)) return null;
-  if (!isDropEnvelopeV1(value)) {
-    return jsonErrorResponse(403, "forbidden", "Root envelope cannot authorize plaintext access.");
-  }
-  if (value.visibility !== "private" && value.unlockPolicy === "provider-escrow" && value.providerEscrow) return null;
-  const accountId = await resolveAuthenticatedAccountId(request, env);
-  if (!accountId) return jsonErrorResponse(401, "account_required", "Authenticated account session is required.");
-  if (accountId !== value.accountId) return jsonErrorResponse(403, "forbidden", "You are not allowed to read this root's plaintext.");
-  return null;
-};
 
-/** Restricts runtime projections to the branch owner or writer. */
-export const authorizeResolvedRuntimeAccess = async (
-  request: Request,
-  env: ResolvedHeapEnv,
-  branch: { ownerAccountId?: string | null; writerAccountId?: string | null },
-): Promise<Response | null> => {
-  const accountId = await resolveAuthenticatedAccountId(request, env);
-  if (!accountId) {
-    return jsonErrorResponse(401, "account_required", "Authenticated account session is required.");
-  }
-  if (accountId !== branch.ownerAccountId && accountId !== branch.writerAccountId) {
-    return jsonErrorResponse(403, "forbidden", "You are not allowed to access runtime projections for this branch.");
-  }
-  return null;
+  return jsonErrorResponse(
+    403,
+    "forbidden",
+    "Authenticated branch capability is required.",
+  );
 };
 
 /** Checks that the authenticated account can mutate priority facts for a branch. */
 export const authorizeResolvedPriorityFactWrite = async (
   request: Request,
   env: ResolvedHeapEnv,
-  branch: { ownerAccountId?: string | null; writerAccountId?: string | null },
-  action: "create" | "list" | "delete",
+  rootDropId: string,
+  branch: { writerAccountId?: string | null },
+  action: "create" | "delete",
 ): Promise<Response | null> => {
   const accountId = await resolveAuthenticatedAccountId(request, env);
   if (!accountId) {
@@ -116,9 +179,7 @@ export const authorizeResolvedPriorityFactWrite = async (
     );
   }
 
-  const canWrite =
-    accountId === branch.ownerAccountId || accountId === branch.writerAccountId;
-  if (!canWrite) {
+  if (!(await canReadSensitiveBranch(request, env, rootDropId, branch))) {
     return jsonErrorResponse(
       403,
       "forbidden",
