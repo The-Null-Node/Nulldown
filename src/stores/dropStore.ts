@@ -18,7 +18,7 @@ import {
 } from "../lib/void/provider";
 import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
 import type {
-  DropEnvelopeV1,
+  DropEnvelope,
   DropDraftDiffPolicy,
   DropGraph,
   DropMetadata,
@@ -505,14 +505,14 @@ const useDropStore = create<DropStoreState>((set, get) => {
     code?: string | null;
     local: {
       id: string;
-      envelope: DropEnvelopeV1;
+      envelope: DropEnvelope;
       createdAt: number;
       updatedAt: number;
       revision?: string | null;
     };
     remote: {
       id: string;
-      envelope: DropEnvelopeV1;
+      envelope: DropEnvelope;
       createdAt: number;
       updatedAt: number;
       revision?: string | null;
@@ -555,7 +555,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     });
   };
 
-  const envelopeHash = (envelope: DropEnvelopeV1): string =>
+  const envelopeHash = (envelope: DropEnvelope): string =>
     serializeCanonicalJson(envelope);
 
   const runPublishIntent = async (

@@ -13,7 +13,8 @@ import {
   NulldownClientError,
   type NulldownEnvelopeProvider,
 } from "./nulldownClient";
-import type { DropEnvelopeV1 } from "../../shared/drop/types";
+import { encodeDropEnvelope } from "../../shared/drop/codecs/envelopeV1";
+import type { DropEnvelope } from "../../shared/drop/types";
 import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../shared/nullplug/registry";
 
 const base64UrlEncode = (value: string): string =>
@@ -23,9 +24,34 @@ const base64UrlEncode = (value: string): string =>
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
 
+const createEnvelope = (): DropEnvelope => ({
+  createdAt: 1_700_000_000_000,
+  accountId: "account-1",
+  visibility: "unlisted",
+  unlockPolicy: "provider-escrow",
+  metadata: { themeId: "system" },
+  cipher: {
+    alg: "A256GCM",
+    iv: "iv",
+    ciphertext: "cipher",
+  },
+  keyEnvelope: {
+    mode: "account-vault-rsa-oaep",
+    kid: "enc-kid",
+    wrappedKey: "wrapped",
+  },
+  signatures: {
+    device: {
+      kid: "sig-kid",
+      alg: "ECDSA_P256_SHA256",
+      sig: "sig",
+    },
+  },
+});
+
 describe("NulldownClient", () => {
   it("sends only a sealed envelope and store preconditions when configured", async () => {
-    const envelope = { schema: "nmdn.drop.v1", version: 1 } as DropEnvelopeV1;
+    const envelope = createEnvelope();
     const seal = jest.fn(async () => envelope);
     const captured: { body?: string } = {};
     const client = createNulldownClient({
@@ -49,11 +75,28 @@ describe("NulldownClient", () => {
       metadata: { themeId: "system" },
     });
     expect(JSON.parse(captured.body!)).toEqual({
-      envelope,
+      envelope: encodeDropEnvelope(envelope),
       id: "drop-1",
       upsert: true,
       expectedRevision: "revision-1",
     });
+  });
+
+  it("decodes V1 drop responses before returning them to client callers", async () => {
+    const envelope = createEnvelope();
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async () =>
+        new Response(JSON.stringify(encodeDropEnvelope(envelope)), {
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    const result = await client.getDrop("drop-1");
+
+    expect(result.body).toEqual(envelope);
+    expect(result.body).not.toHaveProperty("schema");
+    expect(result.body).not.toHaveProperty("version");
   });
 
   it("retains the plaintext create request when no envelope provider exists", async () => {
@@ -74,7 +117,7 @@ describe("NulldownClient", () => {
     });
   });
 
-  it("signs diff_apply requests with exported diff auth tokens", async () => {
+  it("signs the exact historical diff request body from an ndauth.v1 fixture", async () => {
     const token = `ndauth.v1.${base64UrlEncode(
       JSON.stringify({
         version: 1,
@@ -121,14 +164,20 @@ describe("NulldownClient", () => {
       },
     });
 
-    const result = await client.applyDiff({
-      dropId: "route-drop",
-      branchId: "branch-1",
-      eventDropId: "drop-canonical",
-      eventId: "stable-event-1",
-      createdAt: 1_725_000_000_000,
-      ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
-    });
+    const now = jest.spyOn(Date, "now").mockReturnValue(1_725_000_000_999);
+    let result: Awaited<ReturnType<typeof client.applyDiff>>;
+    try {
+      result = await client.applyDiff({
+        dropId: "route-drop",
+        branchId: "branch-1",
+        eventDropId: "drop-canonical",
+        eventId: "stable-event-1",
+        createdAt: 1_725_000_000_000,
+        ops: [{ type: "insert", start: 0, end: 0, text: "hello" }],
+      });
+    } finally {
+      now.mockRestore();
+    }
 
     expect(result?.acknowledgements[0]).toEqual({
       eventId: "stable-event-1",
@@ -140,6 +189,8 @@ describe("NulldownClient", () => {
     const headers = new Headers(captured.init?.headers);
     const timestamp = headers.get(DIFF_TIMESTAMP_HEADER) ?? "";
     const body = String(captured.init?.body ?? "");
+    const expectedBody = '{"version":1,"events":[{"eventId":"stable-event-1","seq":0,"dropId":"drop-canonical","sourceClientId":"nulldown-mcp","createdAt":1725000000000,"ops":[{"type":"insert","start":0,"end":0,"text":"hello"}]}]}';
+    const expectedSigningPayload = `POST\n/api/diff/route-drop\n1725000000999\n${expectedBody}`;
     const expectedSignature = `${DIFF_SIGNATURE_PREFIX}${createHmac(
       "sha256",
       "secret-1",
@@ -159,6 +210,11 @@ describe("NulldownClient", () => {
     );
     expect(headers.get(DIFF_CLIENT_ID_HEADER)).toBe("client-1");
     expect(headers.get(DIFF_SECRET_KID_HEADER)).toBe("kid-1");
+    expect(timestamp).toBe("1725000000999");
+    expect(body).toBe(expectedBody);
+    expect(buildDiffSigningPayload("POST", "/api/diff/route-drop", timestamp, body)).toBe(
+      expectedSigningPayload,
+    );
     expect(headers.get(DIFF_SIGNATURE_HEADER)).toBe(expectedSignature);
     expect(JSON.parse(body)).toEqual(
       expect.objectContaining({

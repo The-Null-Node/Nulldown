@@ -1,12 +1,16 @@
 import {
-  parseAccountBindingChallenge,
+  decodeAccountBindingChallenge,
+  encodeAccountBindingChallenge,
   serializeAccountBindingChallenge,
-} from "../../../shared/auth/accountBinding";
+} from "../../../shared/auth/codecs/account-binding-v1";
 import {
-  parseEncryptedAccountRecoveryPackage,
-  serializeAccountRecoveryPackage,
-  type EncryptedAccountRecoveryPackageV1,
+  type EncryptedAccountRecoveryPackage,
 } from "../../../shared/auth/recovery";
+import {
+  decodeEncryptedAccountRecoveryPackage,
+  encodeEncryptedAccountRecoveryPackage,
+  serializeAccountRecoveryPackage,
+} from "../../../shared/auth/codecs/account-recovery-v1";
 import {
   activateAccountSession,
   authenticateAccountSigningKey,
@@ -43,7 +47,7 @@ export type AccountSyncState =
       status: "restore";
       accountId: string;
       localAccountId: string | null;
-      package: EncryptedAccountRecoveryPackageV1;
+      package: EncryptedAccountRecoveryPackage;
     }
   | { status: "unconfirmed"; accountId: string; revision: number }
   | { status: "ready"; accountId: string; revision: number }
@@ -176,7 +180,7 @@ const accountHeaders = async (): Promise<Record<string, string>> => {
   return headers;
 };
 
-const readRecovery = async (): Promise<EncryptedAccountRecoveryPackageV1 | null> => {
+const readRecovery = async (): Promise<EncryptedAccountRecoveryPackage | null> => {
   const response = await fetch(RECOVERY_PATH, {
     credentials: "same-origin",
     cache: "no-store",
@@ -184,7 +188,7 @@ const readRecovery = async (): Promise<EncryptedAccountRecoveryPackageV1 | null>
   if (response.status === 404) return null;
   if (!response.ok) throw new Error("Account sync is unavailable.");
   const body = (await response.json()) as { package?: unknown };
-  const encryptedPackage = parseEncryptedAccountRecoveryPackage(body.package);
+  const encryptedPackage = decodeEncryptedAccountRecoveryPackage(body.package);
   if (!encryptedPackage) throw new Error("Synced account data is invalid.");
   return encryptedPackage;
 };
@@ -250,7 +254,7 @@ const bindCurrentAccount = async (): Promise<string> => {
   if (challengeBody.bound === true && typeof challengeBody.accountId === "string") {
     return challengeBody.accountId;
   }
-  const challenge = parseAccountBindingChallenge(challengeBody.challenge);
+  const challenge = decodeAccountBindingChallenge(challengeBody.challenge);
   if (!challenge) throw new Error("Account connection challenge is invalid.");
   const vault = await getUnlockedVault();
   if (vault.accountId !== challenge.accountId) {
@@ -267,7 +271,7 @@ const bindCurrentAccount = async (): Promise<string> => {
     cache: "no-store",
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({
-      challenge,
+      challenge: encodeAccountBindingChallenge(challenge),
       signature: toBase64Url(new Uint8Array(signature)),
     }),
   });
@@ -323,7 +327,10 @@ export const setupAccountSync = async (
         credentials: "same-origin",
         cache: "no-store",
         headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ package: encrypted.package, signature }),
+        body: JSON.stringify({
+          package: encodeEncryptedAccountRecoveryPackage(encrypted.package),
+          signature,
+        }),
       });
     } catch {
       throw new AccountSyncUploadUncertainError(
@@ -363,7 +370,10 @@ export const restoreAccountSync = async (
   if (!encryptedPackage || encryptedPackage.metadata.userId !== principal.userId) {
     throw new Error("No synced account is available for this user.");
   }
-  const payload = await decryptAccountRecoveryPackage(encryptedPackage, recoveryCode.trim());
+  const payload = await decryptAccountRecoveryPackage(
+    encodeEncryptedAccountRecoveryPackage(encryptedPackage),
+    recoveryCode.trim(),
+  );
   const signingPrivateKey = await crypto.subtle.importKey(
     "jwk",
     payload.signingPrivateJwk,

@@ -4,7 +4,7 @@ import {
   DropDiffEventIdSchema,
   DropDiffEventMetadataSchema,
   DropDiffOpSchema,
-} from "../../../shared/drop/diffSchemas";
+} from "../../../shared/drop/codecs/diff-v1";
 import type {
   DropDiffEventMetadata,
   DropDiffOp,

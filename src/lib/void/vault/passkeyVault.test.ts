@@ -1,3 +1,4 @@
+import { webcrypto } from "node:crypto";
 import { jest } from "@jest/globals";
 import { indexedDB } from "fake-indexeddb";
 import { getKvValue, resetNulldownDatabaseForTests, setKvValue } from "../../indexedDb";
@@ -10,9 +11,12 @@ import {
   type UnlockedVault,
 } from "./passkeyVault";
 import {
+  DROP_DEVICE_DELEGATION_SCHEMA_V1,
+  DROP_DEVICE_DELEGATION_VERSION_V1,
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-} from "../../../../shared/drop/deviceDelegation";
+} from "../../../../shared/drop/codecs/device-delegation-v1";
+import { serializeCanonicalJson } from "../../../../shared/drop/types";
 
 interface LocalStorageMock {
   getItem: (key: string) => string | null;
@@ -313,6 +317,80 @@ describe("passkey vault", () => {
     );
   });
 
+  it("loads nulldown_account_vault_v1 without rotating key ids or JWK fields", async () => {
+    Object.defineProperty(globalThis, "crypto", {
+      value: webcrypto,
+      configurable: true,
+    });
+    installIndexedDbWindow(createLocalStorageMock());
+    const [encryptionPair, signingPair] = (await Promise.all([
+      crypto.subtle.generateKey(
+        {
+          name: "RSA-OAEP",
+          modulusLength: 2048,
+          publicExponent: new Uint8Array([1, 0, 1]),
+          hash: "SHA-256",
+        },
+        true,
+        ["encrypt", "decrypt"],
+      ),
+      crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["sign", "verify"],
+      ),
+    ])) as [CryptoKeyPair, CryptoKeyPair];
+    const [
+      encryptionPublicJwk,
+      encryptionPrivateJwk,
+      signingPublicJwk,
+      signingPrivateJwk,
+    ] = await Promise.all([
+      crypto.subtle.exportKey("jwk", encryptionPair.publicKey),
+      crypto.subtle.exportKey("jwk", encryptionPair.privateKey),
+      crypto.subtle.exportKey("jwk", signingPair.publicKey),
+      crypto.subtle.exportKey("jwk", signingPair.privateKey),
+    ]);
+    const raw = JSON.stringify({
+      version: 1,
+      accountId: "fixture-account",
+      encryptionKid: "fixture-enc-kid",
+      signingKid: "fixture-sig-kid",
+      encryptionPublicJwk,
+      encryptionPrivateJwk,
+      signingPublicJwk,
+      signingPrivateJwk,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_100,
+    });
+    const fixture = JSON.parse(raw);
+    await setKvValue("nulldown_account_vault_v1", fixture);
+
+    const unlocked = await createPasskeyVault().getUnlockedVault();
+    const exported = await createPasskeyVault().exportRecoveryPayload();
+
+    expect(unlocked).toMatchObject({
+      accountId: "fixture-account",
+      encryptionKid: "fixture-enc-kid",
+      signingKid: "fixture-sig-kid",
+      encryptionPublicJwk,
+      signingPublicJwk,
+    });
+    expect(exported).toEqual({
+      accountId: "fixture-account",
+      encryptionKid: "fixture-enc-kid",
+      signingKid: "fixture-sig-kid",
+      encryptionPublicJwk,
+      encryptionPrivateJwk,
+      signingPublicJwk,
+      signingPrivateJwk,
+      createdAt: 1_700_000_000_000,
+    });
+    await expect(
+      getKvValue("nulldown_account_vault_v1"),
+    ).resolves.toEqual(fixture);
+  });
+
   it("enrolls one passkey on the next unlock after IndexedDB protection is enabled", async () => {
     const storageKey = nextStorageKey();
     const localStorage = createLocalStorageMock();
@@ -394,19 +472,26 @@ describe("passkey vault", () => {
     const signature = Uint8Array.from(atob(delegation.signature.sig), (value) =>
       value.charCodeAt(0),
     );
+    const signable = toDropDeviceDelegationSignable(delegation);
+    const signaturePayload = serializeDropDeviceDelegationForSignature(signable);
 
     await expect(
       crypto.subtle.verify(
         { name: "ECDSA", hash: "SHA-256" },
         unlocked.signingPublicKey,
         signature,
-        new TextEncoder().encode(
-          serializeDropDeviceDelegationForSignature(
-            toDropDeviceDelegationSignable(delegation),
-          ),
-        ),
+        new TextEncoder().encode(signaturePayload),
       ),
     ).resolves.toBe(true);
+    expect(delegation).not.toHaveProperty("schema");
+    expect(delegation).not.toHaveProperty("version");
+    expect(signaturePayload).toBe(
+      serializeCanonicalJson({
+        schema: DROP_DEVICE_DELEGATION_SCHEMA_V1,
+        version: DROP_DEVICE_DELEGATION_VERSION_V1,
+        ...signable,
+      }),
+    );
     expect(JSON.stringify(delegation)).not.toContain('"d"');
     await expect(
       vault.signDeviceDelegation({

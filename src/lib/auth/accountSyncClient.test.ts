@@ -6,6 +6,7 @@ import {
   getAccountSyncState,
 } from "./accountSyncClient";
 import { setActiveVaultUser } from "../void/vault/passkeyVault";
+import { decodeEncryptedAccountRecoveryPackage } from "../../../shared/auth/codecs/account-recovery-v1";
 
 const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
 
@@ -68,6 +69,9 @@ const localVaultRecord = (ownerUserId?: string) => ({
   updatedAt: 1,
 });
 
+const canonicalRecoveryPackage = decodeEncryptedAccountRecoveryPackage(recoveryPackage);
+if (!canonicalRecoveryPackage) throw new Error("Expected valid recovery package fixture.");
+
 describe("account sync browser state", () => {
   afterEach(() => {
     window.localStorage.clear();
@@ -105,7 +109,7 @@ describe("account sync browser state", () => {
       status: "restore",
       accountId: "account-1",
       localAccountId: null,
-      package: recoveryPackage,
+      package: canonicalRecoveryPackage,
     });
 
     window.localStorage.setItem(

@@ -12,18 +12,20 @@ import {
   setKvValues,
 } from "../../indexedDb";
 import {
-  ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
-  parseAccountRecoveryPayload,
-  type AccountRecoveryPayloadV1,
+  type AccountRecoveryPayload,
 } from "../../../../shared/auth/recovery";
+import {
+  decodeAccountRecoveryPayload,
+  encodeAccountRecoveryPayload,
+} from "../../../../shared/auth/codecs/account-recovery-v1";
 import { fromBase64, toBase64 } from "../crypto/base64";
 import {
-  DROP_DEVICE_DELEGATION_SCHEMA,
-  DROP_DEVICE_DELEGATION_VERSION,
-  isDropDelegateSigningPublicJwk,
-  serializeDropDeviceDelegationForSignature,
   type DropDeviceDelegation,
 } from "../../../../shared/drop/deviceDelegation";
+import {
+  isDropDelegateSigningPublicJwk,
+  serializeDropDeviceDelegationForSignature,
+} from "../../../../shared/drop/codecs/device-delegation-v1";
 
 const DEFAULT_VAULT_RECORD_KEY = "nulldown_account_vault_v1";
 const DEFAULT_UNLOCK_TTL_MS = 8 * 60 * 60 * 1000;
@@ -222,8 +224,6 @@ export class PasskeyVault {
     );
     const issuedAt = Date.now();
     const signable = {
-      schema: DROP_DEVICE_DELEGATION_SCHEMA,
-      version: DROP_DEVICE_DELEGATION_VERSION,
       accountId: unlockedRecord.accountId,
       credentialId: input.credentialId,
       delegateSigningPublicJwk: input.delegateSigningPublicJwk,
@@ -287,14 +287,12 @@ export class PasskeyVault {
   }
 
   /** Exports current V1 key material only after applying the existing local unlock gate. */
-  async exportRecoveryPayload(): Promise<AccountRecoveryPayloadV1> {
+  async exportRecoveryPayload(): Promise<AccountRecoveryPayload> {
     const record = await this.loadVaultRecord();
     if (!record) throw new Error("No local account is available to sync.");
     this.assertRecordOwner(record);
     const unlocked = await this.ensureVaultUnlocked(record);
     return {
-      schema: ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
-      version: 1,
       accountId: unlocked.accountId,
       encryptionKid: unlocked.encryptionKid,
       signingKid: unlocked.signingKid,
@@ -313,7 +311,9 @@ export class PasskeyVault {
     canInstall: () => boolean = () => true,
     indexedDbGuard?: { key: string; expectedValue: unknown },
   ): Promise<{ accountId: string; preservedAccountId: string | null }> {
-    const payload = parseAccountRecoveryPayload(value);
+    const payload = decodeAccountRecoveryPayload(
+      encodeAccountRecoveryPayload(value as AccountRecoveryPayload),
+    );
     if (!payload) throw new TypeError("Recovered account data is invalid.");
     await Promise.all([
       this.importRsaPublicKey(payload.encryptionPublicJwk),

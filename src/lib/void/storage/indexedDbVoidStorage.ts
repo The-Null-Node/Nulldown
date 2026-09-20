@@ -4,9 +4,10 @@ import {
   toShortDropId,
 } from "../../../../shared/drop/id";
 import {
-  isDropEnvelopeV1,
-  type DropEnvelopeV1,
-} from "../../../../shared/drop/types";
+  decodeDropEnvelope,
+  encodeDropEnvelope,
+} from "../../../../shared/drop/codecs/envelopeV1";
+import type { DropEnvelope } from "../../../../shared/drop/types";
 import {
   getKvItem,
   getOfflineDrop,
@@ -38,7 +39,7 @@ export class IndexedDbVoidStorage implements VoidStorage {
   readonly scope = "local" as const;
 
   async create(
-    envelope: DropEnvelopeV1,
+    envelope: DropEnvelope,
     options: VoidStorageCreateOptions = {},
   ): Promise<{ id: string; url: string }> {
     if (!isIndexedDbSupported()) {
@@ -80,7 +81,7 @@ export class IndexedDbVoidStorage implements VoidStorage {
       const record: IndexedDbDropRecord = {
         id,
         storageFormat: "sealed_v1",
-        sealedEnvelope: envelope,
+        sealedEnvelope: encodeDropEnvelope(envelope),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
@@ -118,14 +119,21 @@ export class IndexedDbVoidStorage implements VoidStorage {
       return null;
     }
 
-    if (record.sealedEnvelope && isDropEnvelopeV1(record.sealedEnvelope)) {
+    const envelope = record.sealedEnvelope
+      ? decodeDropEnvelope(record.sealedEnvelope)
+      : null;
+    if (envelope) {
       return {
         kind: "sealed",
         id: resolvedId,
-        envelope: record.sealedEnvelope,
+        envelope,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       };
+    }
+
+    if (record.sealedEnvelope) {
+      return null;
     }
 
     if (typeof record.content === "string") {
@@ -144,21 +152,23 @@ export class IndexedDbVoidStorage implements VoidStorage {
 
   async list(): Promise<DropCrudRecord[]> {
     const records = await listOfflineDrops();
-    return records
-      .filter(
-        (
-          record,
-        ): record is IndexedDbDropRecord & { sealedEnvelope: DropEnvelopeV1 } =>
-          Boolean(
-            record.sealedEnvelope && isDropEnvelopeV1(record.sealedEnvelope),
-          ),
-      )
-      .map((record) => ({
-        id: record.id,
-        envelope: record.sealedEnvelope,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-      }));
+    return records.flatMap((record) => {
+      const envelope = record.sealedEnvelope
+        ? decodeDropEnvelope(record.sealedEnvelope)
+        : null;
+      if (!envelope) {
+        return [];
+      }
+
+      return [
+        {
+          id: record.id,
+          envelope,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        },
+      ];
+    });
   }
 
   async delete(id: string): Promise<void> {

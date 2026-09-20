@@ -1,7 +1,5 @@
-import {
-  serializeDropEnvelopeForProviderSignature,
-  type DropEnvelopeV1,
-} from "../../../../../shared/drop/types";
+import { serializeDropEnvelopeForProviderSignature } from "../../../../../shared/drop/codecs/envelopeV1";
+import type { DropEnvelope } from "../../../../../shared/drop/types";
 import { serializeError, type RequestLogger } from "../../core/logging/logger";
 import { serverVoidCrypto } from "../void/serverVoidCrypto";
 
@@ -17,10 +15,10 @@ export interface ProviderSigningEnv {
  * available, but the error is logged for operational visibility.
  */
 export const signProviderEnvelope = async (
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
   env: ProviderSigningEnv,
   logger: RequestLogger,
-): Promise<DropEnvelopeV1> => {
+): Promise<DropEnvelope> => {
   const rawProviderKey = env.PROVIDER_SIGNING_PRIVATE_JWK;
   if (!rawProviderKey) {
     return envelope;

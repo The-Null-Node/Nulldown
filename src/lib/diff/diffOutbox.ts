@@ -5,7 +5,7 @@ import type {
   DropDiffOp,
 } from "../../../shared/drop/diff";
 import { isDropDiffAppendResponse } from "../../../shared/drop/diff";
-import { DropDiffEventSchema } from "../../../shared/drop/diffSchemas";
+import { DropDiffEventSchema } from "../../../shared/drop/codecs/diff-v1";
 import {
   acknowledgeDiffOutboxEvent,
   clearDiffOutboxBranchDraft,

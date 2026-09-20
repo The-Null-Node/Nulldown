@@ -1,13 +1,13 @@
 import {
-  ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
-  type AccountRecoveryPayloadV1,
-} from "../../../../../shared/auth/recovery";
+  encodeEncryptedAccountRecoveryPackage,
+} from "../../../../../shared/auth/codecs/account-recovery-v1";
+import type { AccountRecoveryPayload } from "../../../../../shared/auth/recovery";
 import {
   decryptAccountRecoveryPackage,
   encryptAccountRecoveryPayload,
 } from "./crypto";
 
-const createPayload = async (): Promise<AccountRecoveryPayloadV1> => {
+const createPayload = async (): Promise<AccountRecoveryPayload> => {
   const [rsa, ec] = (await Promise.all([
     crypto.subtle.generateKey(
       {
@@ -26,8 +26,6 @@ const createPayload = async (): Promise<AccountRecoveryPayloadV1> => {
     ),
   ])) as [CryptoKeyPair, CryptoKeyPair];
   return {
-    schema: ACCOUNT_RECOVERY_PAYLOAD_SCHEMA_V1,
-    version: 1,
     accountId: "account-01",
     encryptionKid: "enc_01",
     signingKid: "sig_01",
@@ -40,7 +38,7 @@ const createPayload = async (): Promise<AccountRecoveryPayloadV1> => {
 };
 
 describe("browser account recovery crypto", () => {
-  it("round-trips exact V1 account keys under a generated recovery code", async () => {
+  it("round-trips legacy V1 account keys through canonical recovery data", async () => {
     const payload = await createPayload();
     const encrypted = await encryptAccountRecoveryPayload({
       payload,
@@ -49,10 +47,18 @@ describe("browser account recovery crypto", () => {
     });
 
     await expect(
-      decryptAccountRecoveryPackage(encrypted.package, encrypted.recoveryCode),
+      decryptAccountRecoveryPackage(
+        encodeEncryptedAccountRecoveryPackage(encrypted.package),
+        encrypted.recoveryCode,
+      ),
     ).resolves.toEqual(payload);
     expect(JSON.stringify(encrypted.package)).not.toContain("PrivateJwk");
     expect(JSON.stringify(encrypted.package)).not.toContain('"d"');
+    expect(encrypted.package.metadata).not.toHaveProperty("schema");
+    expect(encodeEncryptedAccountRecoveryPackage(encrypted.package).metadata).toMatchObject({
+      schema: "nulldown.account-recovery-package.v1",
+      version: 1,
+    });
   });
 
   it("rejects the wrong recovery code and authenticated metadata tampering", async () => {
@@ -63,14 +69,17 @@ describe("browser account recovery crypto", () => {
     });
     const wrongCode = "A".repeat(43);
     await expect(
-      decryptAccountRecoveryPackage(encrypted.package, wrongCode),
+      decryptAccountRecoveryPackage(
+        encodeEncryptedAccountRecoveryPackage(encrypted.package),
+        wrongCode,
+      ),
     ).rejects.toThrow("Recovery code or package is invalid");
     await expect(
       decryptAccountRecoveryPackage(
-        {
+        encodeEncryptedAccountRecoveryPackage({
           ...encrypted.package,
           metadata: { ...encrypted.package.metadata, userId: "user_02" },
-        },
+        }),
         encrypted.recoveryCode,
       ),
     ).rejects.toThrow("Recovery code or package is invalid");

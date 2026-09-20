@@ -1,7 +1,7 @@
 import type {
   DropDraftDiffPolicy,
   DropDraftDiffOp,
-  DropDraftPackV1,
+  DropDraftPack,
   DropDraftSnapshot,
 } from "../../../shared/drop/types";
 import type Snapshotter from "../../../shared/nulledit/snapshotter";
@@ -63,7 +63,7 @@ const toDraftOps = (
 
 export const buildDraftPackFromSnapshot = (
   options: BuildDraftPackOptions,
-): DropDraftPackV1 | undefined => {
+): DropDraftPack | undefined => {
   if (!options.snapshotId) {
     return undefined;
   }
@@ -109,7 +109,6 @@ export const buildDraftPackFromSnapshot = (
   }
 
   return {
-    version: 1,
     policy: options.policy,
     source: options.source,
     createdAt: Date.now(),

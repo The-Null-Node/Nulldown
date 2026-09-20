@@ -1,22 +1,20 @@
 import {
-  DROP_ENVELOPE_SCHEMA_V1,
-  DROP_ENVELOPE_VERSION_V1,
-  serializeCanonicalJson,
   serializeDropEnvelopeForDeviceSignature,
+} from "./codecs/envelopeV1";
+import { isDropDeviceDelegation } from "./codecs/device-delegation-v1";
+import {
+  serializeCanonicalJson,
   type DropEnvelopeSignable,
-  type DropEnvelopeV1,
+  type DropEnvelope,
   type DropMetadata,
   type DropPayload,
   type DropUnlockPolicy,
   type DropVisibility,
 } from "./types";
-import {
-  isDropDeviceDelegation,
-  type DropDeviceDelegation,
-} from "./deviceDelegation";
+import type { DropDeviceDelegation } from "./deviceDelegation";
 
 /** Public account vault material used to wrap a newly generated content key. */
-export interface DropAccountEncryptionMaterial {
+export interface AccountEncryptionMaterial {
   accountId: string;
   encryptionKid: string;
   encryptionPublicJwk: JsonWebKey;
@@ -24,7 +22,7 @@ export interface DropAccountEncryptionMaterial {
 }
 
 /** Local signing material for the device that authors the envelope. */
-export interface DropDelegateSigningMaterial {
+export interface DelegateSigningMaterial {
   signingKid: string;
   signingPublicJwk: JsonWebKey;
   signingPrivateKey: CryptoKey;
@@ -32,7 +30,7 @@ export interface DropDelegateSigningMaterial {
 }
 
 /** Public provider key used only for provider-escrow unlock policy. */
-export interface DropProviderEncryptionMaterial {
+export interface ProviderEncryptionMaterial {
   kid: string;
   publicKey: CryptoKey;
 }
@@ -40,9 +38,9 @@ export interface DropProviderEncryptionMaterial {
 /** Inputs required to seal and device-sign an account-owned drop. */
 export interface SealDropForAuthoringInput {
   payload: DropPayload;
-  accountEncryption: DropAccountEncryptionMaterial;
-  delegateSigning: DropDelegateSigningMaterial;
-  providerEncryption?: DropProviderEncryptionMaterial;
+  accountEncryption: AccountEncryptionMaterial;
+  delegateSigning: DelegateSigningMaterial;
+  providerEncryption?: ProviderEncryptionMaterial;
   visibility: DropVisibility;
   unlockPolicy: DropUnlockPolicy;
   metadata?: DropMetadata;
@@ -64,8 +62,8 @@ const toBase64 = (value: ArrayBuffer | Uint8Array): string => {
 };
 
 const assertDelegationMatchesAuthoringMaterial = (
-  accountEncryption: DropAccountEncryptionMaterial,
-  delegateSigning: DropDelegateSigningMaterial,
+  accountEncryption: AccountEncryptionMaterial,
+  delegateSigning: DelegateSigningMaterial,
 ) => {
   const delegation = delegateSigning.deviceDelegation;
   if (!delegation) return;
@@ -87,11 +85,13 @@ const assertDelegationMatchesAuthoringMaterial = (
 /** Seals and signs a drop using only caller-supplied Web Crypto key material. */
 export const sealDropForAuthoring = async (
   input: SealDropForAuthoringInput,
-): Promise<DropEnvelopeV1> => {
+): Promise<DropEnvelope> => {
   const { payload, accountEncryption, delegateSigning } = input;
   assertDelegationMatchesAuthoringMaterial(accountEncryption, delegateSigning);
   if (input.unlockPolicy === "provider-escrow" && !input.providerEncryption) {
-    throw new Error("Provider unlock policy requires provider encryption material.");
+    throw new Error(
+      "Provider unlock policy requires provider encryption material.",
+    );
   }
   const contentKey = await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
@@ -128,7 +128,9 @@ export const sealDropForAuthoring = async (
   if (input.unlockPolicy === "provider-escrow") {
     const providerEncryption = input.providerEncryption;
     if (!providerEncryption) {
-      throw new Error("Provider unlock policy requires provider encryption material.");
+      throw new Error(
+        "Provider unlock policy requires provider encryption material.",
+      );
     }
     const escrowWrappedKey = await crypto.subtle.encrypt(
       { name: "RSA-OAEP" },
@@ -142,14 +144,16 @@ export const sealDropForAuthoring = async (
     };
   }
   const signable: DropEnvelopeSignable = {
-    schema: DROP_ENVELOPE_SCHEMA_V1,
-    version: DROP_ENVELOPE_VERSION_V1,
     createdAt: input.createdAt ?? Date.now(),
     accountId: accountEncryption.accountId,
     visibility: input.visibility,
     unlockPolicy: input.unlockPolicy,
     metadata: input.metadata,
-    cipher: { alg: "A256GCM", iv: toBase64(iv), ciphertext: toBase64(ciphertext) },
+    cipher: {
+      alg: "A256GCM",
+      iv: toBase64(iv),
+      ciphertext: toBase64(ciphertext),
+    },
     draftCipher,
     keyEnvelope: {
       mode: "account-vault-rsa-oaep",

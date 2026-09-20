@@ -1,11 +1,9 @@
-import type { DropVisibility } from "./types";
-import type { DropEnvelopeV1 } from "./types";
+import type { DropEnvelope, DropVisibility } from "./types";
 
 export type DropSyncOpKind = "publish";
 
 export type DropSyncConflictReason =
-  | "remote_state_mismatch"
-  | "remote_id_conflict";
+  "remote_state_mismatch" | "remote_id_conflict";
 
 export type DropSyncConflictStatus = "pending" | "resolved";
 
@@ -13,7 +11,7 @@ export type DropSyncConflictResolution = "accept-local" | "accept-remote";
 
 export interface DropSyncConflictSnapshot {
   id: string;
-  envelope: DropEnvelopeV1;
+  envelope: DropEnvelope;
   createdAt: number;
   updatedAt: number;
   revision?: string | null;
@@ -35,9 +33,7 @@ export interface DropSyncConflictRecord {
 }
 
 export type DropSyncPublishSource =
-  | "mode_transition"
-  | "create_online"
-  | "manual_sync";
+  "mode_transition" | "create_online" | "manual_sync";
 
 export interface DropSyncQueueEntry {
   version: 1;

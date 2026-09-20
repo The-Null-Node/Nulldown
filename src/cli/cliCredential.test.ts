@@ -9,14 +9,10 @@ import {
   writeCliCredential,
 } from "./cliCredential";
 import { generateCliDeviceKeyPair } from "./auth";
-import {
-  CLI_CREDENTIAL_KIND_V1,
-  type CliCredentialBundleV1,
-} from "../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
+import { encodeCliCredentialBundle } from "../../shared/auth/codecs/cli-device-v1";
 
-const createCredential = (overrides: Partial<CliCredentialBundleV1> = {}): CliCredentialBundleV1 => ({
-  kind: CLI_CREDENTIAL_KIND_V1,
-  version: 1,
+const createCredential = (overrides: Partial<CliCredentialBundle> = {}): CliCredentialBundle => ({
   baseUrl: "https://nulldown.test",
   userId: "user-1",
   accountId: "account-1",
@@ -52,10 +48,8 @@ describe("file CLI credential provider", () => {
     const keys = await generateCliDeviceKeyPair(true);
     const localAuthoring = {
       ...keys.authoring!,
-      deviceDelegation: {
-        schema: "nulldown.drop-device-delegation.v1" as const,
-        version: 1 as const,
-        accountId: "account-1",
+        deviceDelegation: {
+          accountId: "account-1",
         credentialId: "credential-1",
         delegateSigningPublicJwk: keys.authoring!.signingPublicJwk,
         encryptionKid: "enc-kid",
@@ -78,7 +72,7 @@ describe("file CLI credential provider", () => {
     const fetchImpl = jest.fn<typeof fetch>(async (url, init) => {
       expect(url).toBe("https://nulldown.test/api/auth/cli/refresh");
       expect(new Headers(init?.headers).get("Authorization")).toBeNull();
-      return Response.json(replacement);
+      return Response.json(encodeCliCredentialBundle(replacement));
     });
     const provider = createFileCliCredentialTokenProvider({
       filePath,
@@ -105,7 +99,7 @@ describe("file CLI credential provider", () => {
     });
     const fetchImpl = jest.fn<typeof fetch>(async () => {
       await pendingFetch;
-      return Response.json(replacement);
+      return Response.json(encodeCliCredentialBundle(replacement));
     });
     const provider = createFileCliCredentialTokenProvider({
       filePath,

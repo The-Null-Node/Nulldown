@@ -2,10 +2,8 @@ import {
   type DropBranchRecord,
   type DropSnapshotRecord,
 } from "../../../../../shared/drop/branch";
-import {
-  isDropEnvelopeV1,
-  isDropPayload,
-} from "../../../../../shared/drop/types";
+import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
 import type {
   VoidBlobStore,
   VoidSqlStore,
@@ -60,19 +58,20 @@ export const readRootDropState = async (
     };
   }
 
-  if (isDropEnvelopeV1(parsedJson)) {
+  const envelope = decodeDropEnvelope(parsedJson);
+  if (envelope) {
     if (!rawProviderPrivateKey) {
       return null;
     }
 
     try {
       const payload = await decryptProviderEscrowEnvelope(
-        parsedJson,
+        envelope,
         rawProviderPrivateKey,
       );
       return {
         rootDropId,
-        ownerAccountId: parsedJson.accountId,
+        ownerAccountId: envelope.accountId,
         baseContent: payload.content,
       };
     } catch {
@@ -115,8 +114,9 @@ export const getOwnerAccountIdForDrop = async (
     return null;
   }
 
-  if (isDropEnvelopeV1(parsed)) {
-    return parsed.accountId;
+  const envelope = decodeDropEnvelope(parsed);
+  if (envelope) {
+    return envelope.accountId;
   }
 
   if (

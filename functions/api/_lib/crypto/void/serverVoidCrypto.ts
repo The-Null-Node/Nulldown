@@ -1,7 +1,7 @@
+import { decodeDropDraftPack } from "../../../../../shared/drop/codecs/draft-pack-v1";
 import {
-  isDropDraftPackV1,
   type DropCipherRecord,
-  type DropDraftPackV1,
+  type DropDraftPack,
 } from "../../../../../shared/drop/types";
 
 const textEncoder = new TextEncoder();
@@ -294,7 +294,7 @@ export class ServerVoidCrypto {
   async decryptDraftPack(
     rawContentKey: BufferSource,
     cipher: DropCipherRecord | undefined,
-  ): Promise<DropDraftPackV1 | undefined> {
+  ): Promise<DropDraftPack | undefined> {
     if (!cipher) {
       return undefined;
     }
@@ -302,7 +302,7 @@ export class ServerVoidCrypto {
     try {
       const plaintext = await this.decryptCipherText(rawContentKey, cipher);
       const parsed = JSON.parse(plaintext) as unknown;
-      return isDropDraftPackV1(parsed) ? parsed : undefined;
+      return decodeDropDraftPack(parsed) ?? undefined;
     } catch {
       return undefined;
     }

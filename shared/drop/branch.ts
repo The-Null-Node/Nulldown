@@ -4,6 +4,11 @@ just API shapes: the same records are stored in R2 and replayed to rebuild branc
 content, so validation here protects both transport and storage integrity.
 */
 
+import {
+  isDropBranchRecordV1,
+  isDropSnapshotRecordV1,
+} from "./codecs/branch-v1";
+
 /** Account-id request header used by branch and memory APIs in account-scoped flows. */
 export const NULLDOWN_ACCOUNT_ID_HEADER = "x-nulldown-account-id";
 
@@ -151,87 +156,11 @@ export interface DropBranchPromoteRequest {
   idempotencyKey: string;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
-
-const isString = (value: unknown): value is string => typeof value === "string";
-
-const isNullableString = (value: unknown): value is string | null =>
-  value === null || typeof value === "string";
-
-const isNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
-
 /** Returns true when `value` is a valid persisted branch record. */
-export const isDropBranchRecord = (
-  value: unknown,
-): value is DropBranchRecord => {
-  if (!isRecord(value)) return false;
-  if (value.version !== 1) return false;
-  if (!isString(value.branchId)) return false;
-  if (!isString(value.rootDropId)) return false;
-  if (!isString(value.baseDropId)) return false;
-  if (value.mode !== "owner" && value.mode !== "clone") return false;
-  if (
-    value.status !== "active" &&
-    value.status !== "promoted" &&
-    value.status !== "archived"
-  ) {
-    return false;
-  }
-  if (!isNullableString(value.ownerAccountId)) return false;
-  if (!isNullableString(value.writerAccountId)) return false;
-  if (!isNullableString(value.writerClientId)) return false;
-  return (
-    isNumber(value.headSnapshotId) &&
-    (value.snapshotHeapVersion === undefined ||
-      isNumber(value.snapshotHeapVersion)) &&
-    (value.headEventSeq === undefined ||
-      value.headEventSeq === null ||
-      isNumber(value.headEventSeq)) &&
-    (value.checkpointInterval === undefined ||
-      isNumber(value.checkpointInterval)) &&
-    isNumber(value.createdAt) &&
-    isNumber(value.updatedAt)
-  );
-};
+export const isDropBranchRecord = (value: unknown): value is DropBranchRecord =>
+  isDropBranchRecordV1(value);
 
 /** Returns true when `value` is a valid persisted branch snapshot record. */
 export const isDropSnapshotRecord = (
   value: unknown,
-): value is DropSnapshotRecord => {
-  if (!isRecord(value)) return false;
-  if (value.version !== 1) return false;
-  if (!isNumber(value.snapshotId)) return false;
-  if (!isString(value.rootDropId)) return false;
-  if (!isString(value.branchId)) return false;
-  if (value.parentSnapshotId !== null && !isNumber(value.parentSnapshotId)) {
-    return false;
-  }
-  if (!isNumber(value.seq)) return false;
-  if (
-    !Array.isArray(value.eventIds) ||
-    !value.eventIds.every((entry) => isString(entry))
-  ) {
-    return false;
-  }
-  if (typeof value.checkpointed !== "boolean") return false;
-  if (
-    value.patchStartSeq !== undefined &&
-    value.patchStartSeq !== null &&
-    !isNumber(value.patchStartSeq)
-  ) {
-    return false;
-  }
-  if (
-    value.patchEndSeq !== undefined &&
-    value.patchEndSeq !== null &&
-    !isNumber(value.patchEndSeq)
-  ) {
-    return false;
-  }
-  if (value.checkpointKey !== undefined && !isString(value.checkpointKey)) {
-    return false;
-  }
-  return isNumber(value.textLength) && isNumber(value.createdAt);
-};
+): value is DropSnapshotRecord => isDropSnapshotRecordV1(value);

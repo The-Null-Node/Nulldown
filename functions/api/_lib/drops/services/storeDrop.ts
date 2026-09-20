@@ -12,10 +12,11 @@ import {
   toShortDropId,
 } from "../../../../../shared/drop/id";
 import {
-  isDropEnvelopeV1,
-  isDropPayload,
-  type DropEnvelopeV1,
-} from "../../../../../shared/drop/types";
+  decodeDropEnvelope,
+  encodeDropEnvelope,
+} from "../../../../../shared/drop/codecs/envelopeV1";
+import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
+import type { DropEnvelope } from "../../../../../shared/drop/types";
 import { signProviderEnvelope, type ProviderSigningEnv } from "../../crypto/envelopes/signing";
 import { syncPublicDropIndexForEnvelope } from "../index/repository";
 import { createDropIdentityRepository } from "../identity/id";
@@ -150,7 +151,7 @@ const upsertDropMetadata = async (input: {
   db?: VoidSqlStore;
   id: string;
   contentType: string;
-  envelope: DropEnvelopeV1 | null;
+  envelope: DropEnvelope | null;
   verifiedAccountId: string | null;
   updatedAt: number;
 }): Promise<void> => {
@@ -197,7 +198,7 @@ const indexDropForSearch = async (
   db: VoidSqlStore | undefined | null,
   id: string,
   content: string,
-  envelope: DropEnvelopeV1 | null,
+  envelope: DropEnvelope | null,
   updatedAt: number,
   logger: { warn: (msg: string, data?: Record<string, unknown>) => void },
 ): Promise<void> => {
@@ -249,7 +250,7 @@ export const storeDrop = async ({
     let expectedRevision: string | null = null;
     let payloadKind: "plain_text" | "drop_payload" | "drop_envelope" =
       "plain_text";
-    let storedEnvelope: DropEnvelopeV1 | null = null;
+    let storedEnvelope: DropEnvelope | null = null;
     let verifiedAccountId: string | null = null;
     let allocationAttempts = 0;
     let aliasConflictCount = 0;
@@ -284,11 +285,12 @@ export const storeDrop = async ({
       upsert = parsedRequest.upsert;
       expectedRevision = parsedRequest.expectedRevision;
 
-      if (isDropEnvelopeV1(parsedRequest.payload)) {
+      const envelope = decodeDropEnvelope(parsedRequest.payload);
+      if (envelope) {
         payloadKind = "drop_envelope";
         // Provider signatures are attached server-side so the server only attests to what it actually stored.
         const signedEnvelope = await signProviderEnvelope(
-          parsedRequest.payload,
+          envelope,
           env,
           logger,
         );
@@ -313,7 +315,7 @@ export const storeDrop = async ({
           throw error;
         }
         storedEnvelope = signedEnvelope;
-        storedPayload = JSON.stringify(signedEnvelope);
+        storedPayload = JSON.stringify(encodeDropEnvelope(signedEnvelope));
       } else if (isDropPayload(parsedRequest.payload)) {
         payloadKind = "drop_payload";
         parsedDropPayload = parsedRequest.payload;

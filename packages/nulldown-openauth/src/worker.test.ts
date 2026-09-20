@@ -2,6 +2,7 @@ import { createClient } from "@openauthjs/openauth/client";
 import { MemoryStorage } from "@openauthjs/openauth/storage/memory";
 import type { D1Database } from "@cloudflare/workers-types";
 
+import { createNulldownUserSubject } from "../../../shared/auth/codecs/user-subject-v1";
 import {
   createNulldownOpenAuthApplication,
   normalizeCodeAddress,
@@ -376,6 +377,10 @@ describe("Nulldown OpenAuth Worker foundation", () => {
 
   it("runs the actual authorization-code and PKCE exchange in process", async () => {
     const flow = await issueAuthorizationCode();
+    const canonicalSubject = createNulldownUserSubject("user_01");
+
+    expect(canonicalSubject).toEqual({ userId: "user_01" });
+    expect(canonicalSubject).not.toHaveProperty("version");
 
     expect(flow.callback.searchParams.get("state")).toBe(flow.authorization.challenge.state);
     const exchanged = await flow.client.exchange(
@@ -394,7 +399,7 @@ describe("Nulldown OpenAuth Worker foundation", () => {
     if ("err" in verified) throw verified.err;
     expect(verified.subject).toEqual({
       type: "nulldown-user",
-      properties: { version: 1, userId: "user_01" },
+      properties: { version: 1, ...canonicalSubject },
     });
   });
 

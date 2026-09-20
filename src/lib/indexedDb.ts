@@ -4,7 +4,7 @@ state. `kv` stores generic settings and caches, while `drops` stores offline env
 that must remain readable across page reloads and browser restarts.
 */
 
-import type { DropEnvelopeV1 } from "../../shared/drop/types";
+import type { encodeDropEnvelope } from "../../shared/drop/codecs/envelopeV1";
 
 const DB_NAME = "nulldown";
 const DB_VERSION = 2;
@@ -19,7 +19,7 @@ export interface IndexedDbDropRecord {
   content?: string;
   metadata?: Record<string, unknown>;
   storageFormat?: "legacy" | "sealed_v1";
-  sealedEnvelope?: DropEnvelopeV1;
+  sealedEnvelope?: ReturnType<typeof encodeDropEnvelope>;
   createdAt: number;
   updatedAt: number;
 }

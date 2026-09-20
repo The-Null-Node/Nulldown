@@ -5,16 +5,16 @@ need the provider key to rehydrate content or re-wrap the content key for anothe
 Treat every call site here as a trust boundary.
 */
 
-import {
-  isDropEnvelopeV1,
-  type DropEnvelopeV1,
-  type DropPayload,
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
+import type {
+  DropEnvelope,
+  DropPayload,
 } from "../../../../../shared/drop/types";
 import { serverVoidCrypto } from "../void/serverVoidCrypto";
 
 /** Opens a provider-escrowed drop envelope into plaintext payload material. */
 export const decryptProviderEscrowEnvelope = async (
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
   rawProviderPrivateKey: string,
 ): Promise<DropPayload> => {
   if (envelope.unlockPolicy !== "provider-escrow" || !envelope.providerEscrow) {
@@ -42,10 +42,9 @@ export const decryptProviderEscrowEnvelope = async (
 };
 
 /** Parses a stored drop envelope, returning null when the value is not JSON envelope data. */
-export const parseStoredEnvelope = (raw: string): DropEnvelopeV1 | null => {
+export const parseStoredEnvelope = (raw: string): DropEnvelope | null => {
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    return isDropEnvelopeV1(parsed) ? parsed : null;
+    return decodeDropEnvelope(JSON.parse(raw));
   } catch {
     return null;
   }

@@ -13,7 +13,7 @@ import {
 import {
   DIFF_TOKEN_MAX_LENGTH,
   DropDiffEnvelopeSchema,
-} from "../../../../../shared/drop/diffSchemas";
+} from "../../../../../shared/drop/codecs/diff-v1";
 import { sanitizeDiffAuthToken } from "../credentials/repository";
 import {
   verifyDiffRequestAuth,

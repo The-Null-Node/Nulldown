@@ -1,9 +1,7 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import {
-  isDropEnvelopeV1,
-  isDropPayload,
-  type DropPayload,
-} from "../../../../../shared/drop/types";
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
+import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
+import type { DropPayload } from "../../../../../shared/drop/types";
 import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
 import {
   createCloudflareBlobStore,
@@ -63,12 +61,13 @@ export const readProviderDropPayload = async (
   }
 
   if (isDropPayload(parsed)) return { dropId, payload: parsed };
-  if (isDropEnvelopeV1(parsed) && bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK) {
+  const envelope = decodeDropEnvelope(parsed);
+  if (envelope && bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK) {
     try {
       return {
         dropId,
         payload: await decryptProviderEscrowEnvelope(
-          parsed,
+          envelope,
           bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK,
         ),
       };

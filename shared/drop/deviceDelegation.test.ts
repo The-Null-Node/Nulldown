@@ -1,15 +1,13 @@
 import {
-  DROP_DEVICE_DELEGATION_SCHEMA,
-  DROP_DEVICE_DELEGATION_VERSION,
+  decodeDropDeviceDelegation,
+  encodeDropDeviceDelegation,
   isDropDeviceDelegation,
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-  type DropDeviceDelegation,
-} from "./deviceDelegation";
+} from "./codecs/device-delegation-v1";
+import type { DropDeviceDelegation } from "./deviceDelegation";
 
 const createDelegation = (): DropDeviceDelegation => ({
-  schema: DROP_DEVICE_DELEGATION_SCHEMA,
-  version: DROP_DEVICE_DELEGATION_VERSION,
   accountId: "account-1",
   credentialId: "credential-1",
   delegateSigningPublicJwk: {
@@ -22,10 +20,26 @@ const createDelegation = (): DropDeviceDelegation => ({
   encryptionPublicJwk: { kty: "RSA", n: "encryption-n", e: "AQAB" },
   issuedAt: 100,
   expiresAt: 200,
-  signature: { kid: "account-signing-key", alg: "ECDSA_P256_SHA256", sig: "root-signature" },
+  signature: {
+    kid: "account-signing-key",
+    alg: "ECDSA_P256_SHA256",
+    sig: "root-signature",
+  },
 });
 
 describe("drop device delegation", () => {
+  it("accepts the exact persisted v1 fixture without changing its representation", () => {
+    const raw =
+      '{"schema":"nulldown.drop-device-delegation.v1","version":1,"accountId":"account-1","credentialId":"credential-1","delegateSigningPublicJwk":{"kty":"EC","crv":"P-256","x":"delegate-x","y":"delegate-y"},"encryptionKid":"enc-1","encryptionPublicJwk":{"kty":"RSA","n":"encryption-n","e":"AQAB"},"issuedAt":100,"expiresAt":200,"signature":{"kid":"account-signing-key","alg":"ECDSA_P256_SHA256","sig":"root-signature"}}';
+    const parsed = JSON.parse(raw) as unknown;
+
+    const delegation = decodeDropDeviceDelegation(parsed);
+
+    expect(isDropDeviceDelegation(delegation)).toBe(true);
+    expect(delegation).toEqual(createDelegation());
+    expect(JSON.stringify(encodeDropDeviceDelegation(delegation!))).toBe(raw);
+  });
+
   it("serializes the certificate body without its root signature", () => {
     expect(
       serializeDropDeviceDelegationForSignature(
@@ -38,20 +52,36 @@ describe("drop device delegation", () => {
 
   it("rejects expiry, private JWK material, and unexpected fields", () => {
     const delegation = createDelegation();
+    const missingSignature = Object.fromEntries(
+      Object.entries(delegation).filter(([field]) => field !== "signature"),
+    );
+
     expect(isDropDeviceDelegation(delegation)).toBe(true);
-    expect(isDropDeviceDelegation({ ...delegation, expiresAt: 100 })).toBe(false);
+    expect(() => isDropDeviceDelegation(missingSignature)).not.toThrow();
+    expect(isDropDeviceDelegation(missingSignature)).toBe(false);
+    expect(isDropDeviceDelegation({ ...delegation, expiresAt: 100 })).toBe(
+      false,
+    );
     expect(
       isDropDeviceDelegation({
         ...delegation,
-        delegateSigningPublicJwk: { ...delegation.delegateSigningPublicJwk, d: "private" },
+        delegateSigningPublicJwk: {
+          ...delegation.delegateSigningPublicJwk,
+          d: "private",
+        },
       }),
     ).toBe(false);
     expect(
       isDropDeviceDelegation({
         ...delegation,
-        encryptionPublicJwk: { ...delegation.encryptionPublicJwk, d: "private" },
+        encryptionPublicJwk: {
+          ...delegation.encryptionPublicJwk,
+          d: "private",
+        },
       }),
     ).toBe(false);
-    expect(isDropDeviceDelegation({ ...delegation, unexpected: true })).toBe(false);
+    expect(isDropDeviceDelegation({ ...delegation, unexpected: true })).toBe(
+      false,
+    );
   });
 });

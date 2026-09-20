@@ -1,26 +1,28 @@
 import { webcrypto } from "node:crypto";
 import {
   sealDropForAuthoring,
-  type DropAccountEncryptionMaterial,
-  type DropDelegateSigningMaterial,
+  type AccountEncryptionMaterial,
+  type DelegateSigningMaterial,
 } from "./authoringCrypto";
 import {
-  DROP_DEVICE_DELEGATION_SCHEMA,
-  DROP_DEVICE_DELEGATION_VERSION,
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-  type DropDeviceDelegation,
-} from "./deviceDelegation";
+} from "./codecs/device-delegation-v1";
+import type { DropDeviceDelegation } from "./deviceDelegation";
 import {
   serializeDropEnvelopeForDeviceSignature,
   toDropEnvelopeSignable,
-} from "./types";
+} from "./codecs/envelopeV1";
 
-const toBase64 = (value: ArrayBuffer): string => Buffer.from(value).toString("base64");
+const toBase64 = (value: ArrayBuffer): string =>
+  Buffer.from(value).toString("base64");
 
 describe("authoring crypto", () => {
   beforeAll(() => {
-    Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
+    Object.defineProperty(globalThis, "crypto", {
+      value: webcrypto,
+      configurable: true,
+    });
   });
 
   it("seals a delegated envelope that verifies with the account and device keys", async () => {
@@ -36,16 +38,22 @@ describe("authoring crypto", () => {
           true,
           ["encrypt", "decrypt"],
         ),
-        crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]),
-        crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]),
+        crypto.subtle.generateKey(
+          { name: "ECDSA", namedCurve: "P-256" },
+          true,
+          ["sign", "verify"],
+        ),
+        crypto.subtle.generateKey(
+          { name: "ECDSA", namedCurve: "P-256" },
+          true,
+          ["sign", "verify"],
+        ),
       ])) as [CryptoKeyPair, CryptoKeyPair, CryptoKeyPair];
     const [encryptionPublicJwk, delegateSigningPublicJwk] = await Promise.all([
       crypto.subtle.exportKey("jwk", accountEncryptionPair.publicKey),
       crypto.subtle.exportKey("jwk", delegateSigningPair.publicKey),
     ]);
     const unsignedDelegation = {
-      schema: DROP_DEVICE_DELEGATION_SCHEMA,
-      version: DROP_DEVICE_DELEGATION_VERSION,
       accountId: "account-1",
       credentialId: "credential-1",
       delegateSigningPublicJwk,
@@ -57,19 +65,25 @@ describe("authoring crypto", () => {
     const rootSignature = await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" },
       accountSigningPair.privateKey,
-      new TextEncoder().encode(serializeDropDeviceDelegationForSignature(unsignedDelegation)),
+      new TextEncoder().encode(
+        serializeDropDeviceDelegationForSignature(unsignedDelegation),
+      ),
     );
     const deviceDelegation: DropDeviceDelegation = {
       ...unsignedDelegation,
-      signature: { kid: "account-signing-key", alg: "ECDSA_P256_SHA256", sig: toBase64(rootSignature) },
+      signature: {
+        kid: "account-signing-key",
+        alg: "ECDSA_P256_SHA256",
+        sig: toBase64(rootSignature),
+      },
     };
-    const accountEncryption: DropAccountEncryptionMaterial = {
+    const accountEncryption: AccountEncryptionMaterial = {
       accountId: "account-1",
       encryptionKid: "enc-1",
       encryptionPublicJwk,
       encryptionPublicKey: accountEncryptionPair.publicKey,
     };
-    const delegateSigning: DropDelegateSigningMaterial = {
+    const delegateSigning: DelegateSigningMaterial = {
       signingKid: "delegate-signing-key",
       signingPublicJwk: delegateSigningPublicJwk,
       signingPrivateKey: delegateSigningPair.privateKey,
@@ -99,7 +113,9 @@ describe("authoring crypto", () => {
       delegateSigningPair.publicKey,
       Buffer.from(envelope.signatures.device.sig, "base64"),
       new TextEncoder().encode(
-        serializeDropEnvelopeForDeviceSignature(toDropEnvelopeSignable(envelope)),
+        serializeDropEnvelopeForDeviceSignature(
+          toDropEnvelopeSignable(envelope),
+        ),
       ),
     );
 
@@ -109,13 +125,13 @@ describe("authoring crypto", () => {
     expect(
       serializeDropEnvelopeForDeviceSignature(toDropEnvelopeSignable(envelope)),
     ).toContain('"deviceDelegation"');
-    expect(envelope.deviceDelegation?.delegateSigningPublicJwk).not.toHaveProperty("d");
+    expect(
+      envelope.deviceDelegation?.delegateSigningPublicJwk,
+    ).not.toHaveProperty("d");
   });
 
   it("rejects a certificate that is not bound to the account encryption material", async () => {
     const delegation: DropDeviceDelegation = {
-      schema: DROP_DEVICE_DELEGATION_SCHEMA,
-      version: DROP_DEVICE_DELEGATION_VERSION,
       accountId: "other-account",
       credentialId: "credential-1",
       delegateSigningPublicJwk: { kty: "EC", crv: "P-256", x: "x", y: "y" },
@@ -144,6 +160,8 @@ describe("authoring crypto", () => {
         visibility: "private",
         unlockPolicy: "vault-only",
       }),
-    ).rejects.toThrow("Device delegation does not match the authoring material.");
+    ).rejects.toThrow(
+      "Device delegation does not match the authoring material.",
+    );
   });
 });

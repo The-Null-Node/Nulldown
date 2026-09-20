@@ -1,10 +1,11 @@
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
 import {
-  isCliCredentialBundle,
-  type CliCredentialBundleV1,
-} from "../../shared/auth/cliDevice";
+  decodeCliCredentialBundle,
+  encodeCliCredentialBundle,
+} from "../../shared/auth/codecs/cli-device-v1";
 
 const REFRESH_WINDOW_MS = 30_000;
 
@@ -48,11 +49,13 @@ export const normalizeCliCredentialBaseUrl = (value: string): string => {
 /** Reads a persisted CLI credential, returning null for missing or malformed data. */
 export const readCliCredential = async (
   filePath: string,
-): Promise<CliCredentialBundleV1 | null> => {
+): Promise<CliCredentialBundle | null> => {
   try {
     const parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
-    if (!isCliCredentialBundle(parsed)) return null;
-    return { ...parsed, baseUrl: normalizeCliCredentialBaseUrl(parsed.baseUrl) };
+    const credential = decodeCliCredentialBundle(parsed);
+    return credential
+      ? { ...credential, baseUrl: normalizeCliCredentialBaseUrl(credential.baseUrl) }
+      : null;
   } catch {
     return null;
   }
@@ -61,9 +64,10 @@ export const readCliCredential = async (
 /** Writes a CLI credential with private directory/file permissions and atomic replacement. */
 export const writeCliCredential = async (
   filePath: string,
-  credential: CliCredentialBundleV1,
+  credential: CliCredentialBundle,
 ): Promise<void> => {
-  if (!isCliCredentialBundle(credential)) {
+  const encodedCredential = encodeCliCredentialBundle(credential);
+  if (!decodeCliCredentialBundle(encodedCredential)) {
     throw new Error("Cannot persist an invalid CLI credential.");
   }
   const directory = dirname(filePath);
@@ -71,7 +75,7 @@ export const writeCliCredential = async (
   await chmod(directory, 0o700);
   const temporaryPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
-    await writeFile(temporaryPath, `${JSON.stringify(credential)}\n`, {
+    await writeFile(temporaryPath, `${JSON.stringify(encodedCredential)}\n`, {
       encoding: "utf8",
       mode: 0o600,
     });
@@ -90,9 +94,9 @@ export const clearCliCredential = async (filePath: string): Promise<void> => {
 
 /** Returns whether a credential belongs to the selected API origin. */
 export const isCliCredentialForBaseUrl = (
-  credential: CliCredentialBundleV1 | null,
+  credential: CliCredentialBundle | null,
   baseUrl: string,
-): boolean => {
+): credential is CliCredentialBundle => {
   if (!credential) return false;
   try {
     return credential.baseUrl === normalizeCliCredentialBaseUrl(baseUrl);
@@ -103,9 +107,9 @@ export const isCliCredentialForBaseUrl = (
 
 /** Preserves local-only authoring material while replacing server-issued bearer fields. */
 export const mergeCliCredentialAuthoring = (
-  current: CliCredentialBundleV1,
-  replacement: CliCredentialBundleV1,
-): CliCredentialBundleV1 => {
+  current: CliCredentialBundle,
+  replacement: CliCredentialBundle,
+): CliCredentialBundle => {
   if (!current.authoring) return replacement;
   if (
     current.accountId !== replacement.accountId ||
@@ -124,9 +128,9 @@ export const createFileCliCredentialTokenProvider = ({
   onRefresh,
 }: FileCliCredentialTokenProviderOptions) => {
   const canonicalBaseUrl = normalizeCliCredentialBaseUrl(baseUrl);
-  let refreshPromise: Promise<CliCredentialBundleV1> | null = null;
+  let refreshPromise: Promise<CliCredentialBundle> | null = null;
 
-  const readCurrent = async (): Promise<CliCredentialBundleV1> => {
+  const readCurrent = async (): Promise<CliCredentialBundle> => {
     const credential = await readCliCredential(filePath);
     if (!isCliCredentialForBaseUrl(credential, canonicalBaseUrl)) {
       throw new Error("Nulldown credential is unavailable.");
@@ -137,7 +141,7 @@ export const createFileCliCredentialTokenProvider = ({
     return credential;
   };
 
-  const refresh = async (rejectedToken?: string | null): Promise<CliCredentialBundleV1> => {
+  const refresh = async (rejectedToken?: string | null): Promise<CliCredentialBundle> => {
     if (refreshPromise) return await refreshPromise;
 
     refreshPromise = (async () => {
@@ -157,10 +161,10 @@ export const createFileCliCredentialTokenProvider = ({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ refreshToken: current.refreshToken }),
         });
-        const body = await response.json().catch(() => null);
+        let body = await response.json().catch(() => null);
         if (
           !response.ok ||
-          !isCliCredentialBundle(body) ||
+          !(body = decodeCliCredentialBundle(body)) ||
           !isCliCredentialForBaseUrl(body, canonicalBaseUrl)
         ) {
           throw new Error("Nulldown credential refresh failed.");

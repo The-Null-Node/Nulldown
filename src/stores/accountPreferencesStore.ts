@@ -1,15 +1,17 @@
 import { create } from "zustand";
 import {
   ACCOUNT_PREFERENCE_FIELDS,
-  ACCOUNT_PREFERENCE_MUTATION_SCHEMA_V1,
-  createDefaultAccountPreferences,
-  isAccountPreferences,
   type AccountPreferenceField,
-  type AccountPreferenceMutation,
   type AccountPreferenceValues,
   type AccountPreferences,
   type VersionedAccountPreference,
 } from "../../shared/auth/accountPreferences";
+import {
+  createAccountPreferenceMutation,
+  createDefaultAccountPreferences,
+  decodeAccountPreferences,
+  encodeAccountPreferences,
+} from "../../shared/auth/codecs/account-preferences-v1";
 import {
   AccountPreferenceConflictError,
   fetchAccountPreferences,
@@ -48,7 +50,17 @@ const isCachedAccountPreferences = (value: unknown): value is CachedAccountPrefe
     value &&
       typeof value === "object" &&
       typeof (value as { userId?: unknown }).userId === "string" &&
-      isAccountPreferences((value as { snapshot?: unknown }).snapshot),
+      isCanonicalAccountPreferences((value as { snapshot?: unknown }).snapshot),
+  );
+
+const isCanonicalAccountPreferences = (value: unknown): value is AccountPreferences =>
+  Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 1 &&
+      Object.prototype.hasOwnProperty.call(value, "fields") &&
+      decodeAccountPreferences(encodeAccountPreferences(value as AccountPreferences)),
   );
 
 const setStatus = (
@@ -181,13 +193,13 @@ export const useAccountPreferencesStore = create<AccountPreferencesState>((set, 
     if (get().status[field] === "pending") return;
     setStatus(set, get, field, "pending", null);
     try {
-      const { current } = await updateAccountPreference({
-        schema: ACCOUNT_PREFERENCE_MUTATION_SCHEMA_V1,
-        version: 1,
-        field,
-        value,
-        expectedRevision: snapshot.fields[field].revision,
-      } as AccountPreferenceMutation);
+      const { current } = await updateAccountPreference(
+        createAccountPreferenceMutation(
+          field,
+          value,
+          snapshot.fields[field].revision,
+        ),
+      );
       if (get().userId !== userId) return;
       const next = withUpdatedField(snapshot, field, current);
       await applyLocalPreference(field, current.value);

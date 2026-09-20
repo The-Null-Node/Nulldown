@@ -1,11 +1,14 @@
 /** @jest-environment jsdom */
 
 import { jest } from "@jest/globals";
-import {
-  createDefaultAccountPreferences,
-  type AccountPreferenceMutation,
-  type AccountPreferences,
+import type {
+  AccountPreferenceMutation,
+  AccountPreferences,
 } from "../../shared/auth/accountPreferences";
+import {
+  createAccountPreferenceMutation,
+  createDefaultAccountPreferences,
+} from "../../shared/auth/codecs/account-preferences-v1";
 
 const fetchAccountPreferences = jest.fn<() => Promise<AccountPreferences>>();
 const updateAccountPreference = jest.fn<
@@ -87,6 +90,9 @@ describe("account preferences store", () => {
 
     await useAccountPreferencesStore.getState().setPreference("syntaxMode", "source");
 
+    expect(updateAccountPreference).toHaveBeenCalledWith(
+      createAccountPreferenceMutation("syntaxMode", "source", 3),
+    );
     expect(dropState.setSyntaxMode).toHaveBeenCalledWith("rendered");
     expect(useAccountPreferencesStore.getState().snapshot?.fields.syntaxMode).toEqual({
       value: "rendered",
@@ -99,6 +105,34 @@ describe("account preferences store", () => {
     expect(useAccountPreferencesStore.getState().status.syntaxMode).toBe("conflict");
   });
 
+  it("persists only the canonical snapshot after a successful account mutation", async () => {
+    const snapshot = createDefaultAccountPreferences();
+    updateAccountPreference.mockResolvedValue({
+      field: "syntaxMode",
+      current: { value: "source", revision: 1, updatedAt: 8 },
+    });
+    useAccountPreferencesStore.setState({ userId: "user-a", snapshot });
+
+    await useAccountPreferencesStore.getState().setPreference("syntaxMode", "source");
+
+    expect(updateAccountPreference).toHaveBeenCalledWith(
+      createAccountPreferenceMutation("syntaxMode", "source", 0),
+    );
+    expect(writePersistedValue).toHaveBeenCalledWith(
+      "nulldown_account_preferences_v1:user-a",
+      expect.objectContaining({ userId: "user-a" }),
+    );
+    const cached = writePersistedValue.mock.calls[0]?.[1] as { snapshot: object };
+    expect(cached.snapshot).not.toHaveProperty("schema");
+    expect(cached.snapshot).not.toHaveProperty("version");
+    expect(cached.snapshot).toEqual({
+      fields: {
+        ...snapshot.fields,
+        syntaxMode: { value: "source", revision: 1, updatedAt: 8 },
+      },
+    });
+  });
+
   it("hydrates cached preferences before attempting a signed-in refresh", async () => {
     const cached = createDefaultAccountPreferences();
     cached.fields.typeface = { value: "geist-sans", revision: 2, updatedAt: 9 };
@@ -109,6 +143,9 @@ describe("account preferences store", () => {
 
     expect(themeState.setTypefaceId).toHaveBeenCalledWith("geist-sans");
     expect(useAccountPreferencesStore.getState().snapshot).toEqual(cached);
+    expect(writePersistedValue).not.toHaveBeenCalled();
+    expect(useAccountPreferencesStore.getState().snapshot).not.toHaveProperty("schema");
+    expect(useAccountPreferencesStore.getState().snapshot).not.toHaveProperty("version");
     expect(useAccountPreferencesStore.getState().message).toContain("local preferences");
   });
 });

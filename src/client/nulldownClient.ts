@@ -8,7 +8,11 @@ import {
   buildDiffSigningPayload,
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
-import type { DropEnvelopeV1, DropMetadata } from "../../shared/drop/types";
+import {
+  decodeDropEnvelope,
+  encodeDropEnvelope,
+} from "../../shared/drop/codecs/envelopeV1";
+import type { DropEnvelope, DropMetadata } from "../../shared/drop/types";
 import type {
   DropDiffAppendResponse,
   DropDiffEnvelope,
@@ -16,7 +20,7 @@ import type {
   DropDiffOp,
 } from "../../shared/drop/diff";
 import { isDropDiffAppendResponse } from "../../shared/drop/diff";
-import { DropDiffEventIdSchema } from "../../shared/drop/diffSchemas";
+import { DropDiffEventIdSchema } from "../../shared/drop/codecs/diff-v1";
 import type {
   NullplugInvokeRequest,
   NullplugInvokeResponse,
@@ -61,7 +65,7 @@ export interface NulldownEnvelopeProvider {
   seal(input: {
     content: string;
     metadata: DropMetadata;
-  }): Promise<DropEnvelopeV1>;
+  }): Promise<DropEnvelope>;
 }
 
 /** Configuration used to call a Nulldown API. */
@@ -361,6 +365,24 @@ const parseJsonLoose = (text: string): unknown | null => {
   }
 };
 
+const looksLikeSealedEnvelope = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  ("schema" in value ||
+    "version" in value ||
+    "cipher" in value ||
+    "keyEnvelope" in value ||
+    "signatures" in value);
+
+const decodeDropReadBody = (body: unknown): unknown => {
+  const envelope = decodeDropEnvelope(body);
+  if (envelope) return envelope;
+  if (looksLikeSealedEnvelope(body)) {
+    throw new NulldownClientError("Drop response contains an invalid sealed envelope.");
+  }
+  return body;
+};
+
 const DIFF_AUTH_TOKEN_PREFIX = "ndauth.v1.";
 
 const base64UrlDecode = (value: string): string => {
@@ -531,7 +553,7 @@ export class NulldownClient {
     const response = await this.request(`/api/get/${encodeURIComponent(id)}`);
     const contentType = response.headers.get("Content-Type") || "";
     const body = contentType.includes("application/json")
-      ? response.data
+      ? decodeDropReadBody(response.data)
       : response.text;
 
     return {
@@ -558,7 +580,7 @@ export class NulldownClient {
       body: JSON.stringify({
         ...(envelope
           ? {
-              envelope,
+              envelope: encodeDropEnvelope(envelope),
               id: request.id,
               upsert: request.upsert,
               expectedRevision: request.expectedRevision,

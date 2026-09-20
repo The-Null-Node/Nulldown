@@ -33,7 +33,7 @@ import {
   normalizeNetworkAllowlist,
   parseNetworkAllowlistInput,
 } from "../../../lib/networkAllowlist";
-import { isAccountPreferenceValue } from "../../../../shared/auth/accountPreferences";
+import { isAccountPreferenceValue } from "../../../../shared/auth/codecs/account-preferences-v1";
 import { useAccountPreferencesStore } from "../../../stores/accountPreferencesStore";
 interface SettingsModalProps {
   open: boolean;

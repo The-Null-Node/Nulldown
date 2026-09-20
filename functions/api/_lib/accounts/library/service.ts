@@ -1,4 +1,4 @@
-import type { DropEnvelopeV1, DropVisibility } from "../../../../../shared/drop/types";
+import type { DropEnvelope, DropVisibility } from "../../../../../shared/drop/types";
 import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
 import {
   readAccountRecord,
@@ -108,7 +108,7 @@ const isVisibility = (value: string | undefined): value is DropVisibility =>
 /** Validates direct or delegated envelope ownership before its metadata is projected. */
 export const verifyAccountLibraryEnvelopeOwnership = async (
   env: AccountLibraryProjectionEnv,
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
   authenticatedAccountId: string | null,
   authenticatedCredentialId: string | null,
 ): Promise<AccountLibraryVerification> => {
@@ -181,7 +181,7 @@ export const verifyAccountLibraryEnvelopeOwnership = async (
 export const verifyAccountLibraryEnvelope = async (
   request: AccountAuthRequest,
   env: AccountLibraryProjectionEnv,
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
 ): Promise<string | null> => {
   const authenticated = await resolveAuthenticatedAccountClaims(request, env);
   const requiresAccount = hasBearer(request) || envelope.visibility === "private";
@@ -213,7 +213,7 @@ export const projectAccountLibraryEnvelope = async (
   db: VoidSqlStore,
   dropId: string,
   accountId: string | null,
-  envelope: DropEnvelopeV1 | null,
+  envelope: DropEnvelope | null,
   updatedAt: number,
 ): Promise<void> => {
   if (!accountId || !envelope) return;

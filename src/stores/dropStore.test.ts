@@ -1,6 +1,6 @@
 import { jest } from "@jest/globals";
 import type {
-  DropEnvelopeV1,
+  DropEnvelope,
   DropGraph,
   DropPayload,
 } from "../../shared/drop/types";
@@ -36,7 +36,7 @@ interface LoadedDropStore {
       id: string,
     ) => Promise<{
       id: string;
-      envelope: DropEnvelopeV1;
+      envelope: DropEnvelope;
       createdAt: number;
       updatedAt: number;
       revision?: string | null;
@@ -47,7 +47,7 @@ interface LoadedDropStore {
       id: string,
     ) => Promise<{
       id: string;
-      envelope: DropEnvelopeV1;
+      envelope: DropEnvelope;
       createdAt: number;
       updatedAt: number;
       revision?: string | null;
@@ -57,7 +57,7 @@ interface LoadedDropStore {
     (
       record: {
         id: string;
-        envelope: DropEnvelopeV1;
+        envelope: DropEnvelope;
         createdAt: number;
         updatedAt: number;
         revision?: string | null;
@@ -69,7 +69,7 @@ interface LoadedDropStore {
     (
       record: {
         id: string;
-        envelope: DropEnvelopeV1;
+        envelope: DropEnvelope;
         createdAt: number;
         updatedAt: number;
         revision?: string | null;
@@ -89,9 +89,7 @@ const createGraph = (id: string): DropGraph => ({
   builtAt: Date.now(),
 });
 
-const createEnvelope = (accountId = "account-1"): DropEnvelopeV1 => ({
-  schema: "nmdn.drop.v1",
-  version: 1,
+const createEnvelope = (accountId = "account-1"): DropEnvelope => ({
   createdAt: Date.now(),
   accountId,
   visibility: "unlisted",
