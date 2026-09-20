@@ -14,7 +14,7 @@ nulldown-mcp
 From this repository checkout:
 
 ```bash
-bun run bin/nulldown-mcp.ts
+bun run --silent mcp
 ```
 
 The package also exposes the `nd-mcp` binary.
@@ -44,7 +44,7 @@ Create the dedicated credential while the MCP server is stopped:
 env -u ND_TOKEN nd --auth-file /absolute/path/to/opencode-mcp-auth.json auth login --name opencode-nulldown-mcp
 ```
 
-The credential directory is private (`0700`) and the credential file is private (`0600`). One MCP process must own each credential file because refresh-token rotation is single-use. `ND_TOKEN` remains an authentication-only compatibility option; it cannot create an account-owned sealed drop. `ND_ACCOUNT_ID` is only for local or development APIs that explicitly enable the insecure account header. `ND_MCP_LOG_LEVEL` accepts `silent`, `error`, `warn`, `info`, or `debug`; stdio reserves stdout for JSON-RPC and diagnostics use stderr only.
+The credential directory is private (`0700`) and the credential file is private (`0600`). One MCP process must own each credential file because refresh-token rotation is single-use. `ND_TOKEN` remains an authentication-only compatibility option; it cannot create an account-owned sealed drop. `ND_ACCOUNT_ID` is only for local or development APIs that explicitly set `ALLOW_INSECURE_ACCOUNT_HEADER=1`; an invalid bearer credential does not fall back to it. `ND_MCP_LOG_LEVEL` accepts `silent`, `error`, `warn`, `info`, or `debug`; stdio reserves stdout for JSON-RPC and diagnostics use stderr only.
 
 ## Account-Owned Creation
 
@@ -58,24 +58,30 @@ network I/O and treats a missing or mismatched acknowledgement as unconfirmed.
 
 ## Tool Groups
 
-| Group | Purpose |
-| --- | --- |
-| Drop tools | Read and inspect persisted Nulldown documents. |
-| Branch tools | Resolve a branch, fetch exact branch content, query resolved structure, and apply diff events. |
-| Memory tools | Query freshness-aware NullMem facts and procedures, then record reusable verified knowledge. |
-| Strategy tools | Read Nulldown-hosted strategy and documentation drops. |
+| Group          | Purpose                                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| Drop tools     | Read and inspect persisted Nulldown documents.                                                 |
+| Branch tools   | Resolve a branch, fetch exact branch content, query resolved structure, and apply diff events. |
+| Memory tools   | Query freshness-aware NullMem facts and procedures, then record reusable verified knowledge.   |
+| Strategy tools | Read Nulldown-hosted strategy and documentation drops.                                         |
 
 Use `branch_query` before `branch_content` whenever possible. Queries return structural nodes with source ranges and ranking context; fetch exact content only when an edit, claim, or decision requires it.
+
+Public and unlisted document queries can be read by identifier without credentials.
+Runtime-resolver and non-document snapshotter queries require a trusted canonical
+owner or exact branch-writer credential. NullMem queries without that authority are
+limited to `public-memory` records on public, unlisted, and legacy-readable roots and
+cannot enumerate remote capability catalogs; unauthorized private roots return `404`.
 
 ## Response Discipline
 
 Read/query tools use compact responses by default and accept response controls where supported:
 
-| Input | Meaning |
-| --- | --- |
-| `preview` | Request compact preview behavior. |
-| `maxTokens` | Set an approximate response budget. |
-| `format` | Choose `compact` or `full` serialization. |
+| Input       | Meaning                                   |
+| ----------- | ----------------------------------------- |
+| `preview`   | Request compact preview behavior.         |
+| `maxTokens` | Set an approximate response budget.       |
+| `format`    | Choose `compact` or `full` serialization. |
 
 Compactness is a transport guard, not a substitute for correct retrieval. Agents should query the relevant branch/heap first, check freshness for memory used as current-work guidance, and expand exact sources only when needed.
 

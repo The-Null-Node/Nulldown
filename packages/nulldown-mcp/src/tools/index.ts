@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerBranchTools } from "./branchTools";
-import { registerDropTools } from "./dropTools";
-import { registerMemoryTools } from "./memoryTools";
-import { registerStrategyTools } from "./strategyTools";
+import { registerBranchTools } from "./branch-tools";
+import { registerDropTools } from "./drop-tools";
+import { registerMemoryTools } from "./memory-tools";
+import { registerStrategyTools } from "./strategy-tools";
 
 /** Registers all Nulldown MCP tool groups on the server. */
 export const registerNulldownTools = (server: McpServer): void => {

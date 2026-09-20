@@ -23,7 +23,10 @@ export const registerDropTools = (server: McpServer): void => {
       },
     },
     async (args) =>
-      asCompact(await createClient(args).getDrop(args.id), extractMcpResponseArgs(args)),
+      asCompact(
+        await createClient(args).getDrop(args.id),
+        extractMcpResponseArgs(args),
+      ),
   );
 
   server.registerTool(
@@ -36,10 +39,19 @@ export const registerDropTools = (server: McpServer): void => {
         ...clientArgsSchema,
         content: z.string().describe("Markdown content to store."),
         metadata: jsonRecordSchema.optional(),
-        visibility: z.enum(["private", "unlisted", "public"]).optional().default("unlisted")
-          .describe("Envelope visibility. Defaults to unlisted when ND_AUTH_FILE is used."),
-        legacyPlaintext: z.boolean().optional()
-          .describe("Explicitly store plaintext for legacy compatibility. Authenticated plaintext drops are not added to Remote Library."),
+        visibility: z
+          .enum(["private", "unlisted", "public"])
+          .optional()
+          .default("unlisted")
+          .describe(
+            "Envelope visibility. Defaults to unlisted when ND_AUTH_FILE is used.",
+          ),
+        legacyPlaintext: z
+          .boolean()
+          .optional()
+          .describe(
+            "Explicitly store plaintext for legacy compatibility. Authenticated plaintext drops are not added to Remote Library.",
+          ),
         id: z.string().optional(),
         upsert: z.boolean().optional(),
         expectedRevision: z.string().optional(),

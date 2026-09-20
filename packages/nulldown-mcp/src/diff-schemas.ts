@@ -111,7 +111,8 @@ export const DropDiffOpSchema = z
     if (!hasLegacy && !value.native) {
       context.addIssue({
         code: "custom",
-        message: "Diff op must include either a complete legacy op or native op.",
+        message:
+          "Diff op must include either a complete legacy op or native op.",
       });
     }
   }) satisfies z.ZodType<DropDiffOp>;

@@ -86,7 +86,12 @@ const files = new Set(entry.files.map((file) => file.path));
 const forbiddenFiles = [...files].filter(
   (file) => file === "bin/nulldown-mcp.ts" || file.startsWith("src/mcp/"),
 );
-const requiredFiles = ["bin/nulldown", "bin/nulldown.ts", "src/cli/index.ts"];
+const requiredFiles = [
+  "bin/nulldown",
+  "bin/nulldown.ts",
+  "src/cli/index.ts",
+  "src/server/runtime.ts",
+];
 const missingFiles = requiredFiles.filter((file) => !files.has(file));
 
 if (
