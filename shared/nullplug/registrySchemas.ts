@@ -9,15 +9,16 @@ import { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
 
 const finiteNumberSchema = z.number().finite();
 
-export const NullplugRegistryJsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.boolean(),
-    finiteNumberSchema,
-    z.string(),
-    z.array(NullplugRegistryJsonValueSchema),
-    z.record(z.string(), NullplugRegistryJsonValueSchema),
-  ]),
+export const NullplugRegistryJsonValueSchema: z.ZodType<JsonValue> = z.lazy(
+  () =>
+    z.union([
+      z.null(),
+      z.boolean(),
+      finiteNumberSchema,
+      z.string(),
+      z.array(NullplugRegistryJsonValueSchema),
+      z.record(z.string(), NullplugRegistryJsonValueSchema),
+    ]),
 );
 
 export const NullplugRegistryJsonRecordSchema = z.record(

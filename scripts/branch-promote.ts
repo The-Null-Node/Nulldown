@@ -6,7 +6,13 @@ const main = async () => {
   const branchId = getArgValue("branch");
   const expectedSnapshotId = Number(getArgValue("expected-snapshot"));
   const idempotencyKey = getArgValue("idempotency-key");
-  if (!dropId || !branchId || !Number.isSafeInteger(expectedSnapshotId) || expectedSnapshotId < 0 || !idempotencyKey) {
+  if (
+    !dropId ||
+    !branchId ||
+    !Number.isSafeInteger(expectedSnapshotId) ||
+    expectedSnapshotId < 0 ||
+    !idempotencyKey
+  ) {
     throw new Error(
       "Missing required args. Use --drop <dropId> --branch <branchId> --expected-snapshot <n> --idempotency-key <key>.",
     );

@@ -52,7 +52,7 @@ import {
 } from "../lib/search/searchable";
 import { toShortDropId } from "../../shared/drop/id";
 import { toUserFacingDropError } from "../lib/drop/userErrors";
-import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
+import { getUnlockedVault } from "../lib/auth/vault/passkey-vault";
 import { createBranchApiClient } from "../../shared/drop/branchApi";
 import { getAccountSessionToken } from "../lib/auth/accountSession";
 import { fetchAccountLibrary } from "../lib/auth/accountLibraryClient";
@@ -67,7 +67,10 @@ import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
 } from "../../shared/nullplug/ui";
-import { getDefaultRemoteNullplugRuntime } from "../lib/nullplug/providerRuntime";
+import {
+  createBrowserNullplugClient,
+  type BrowserNullplugClient,
+} from "../lib/nullplug/browser-client";
 import { resolveRootRuntimePolicy } from "../../shared/nullplug/policy";
 import { useAccountPreferencesStore } from "../stores/accountPreferencesStore";
 
@@ -116,10 +119,15 @@ const formatTimestamp = (timestamp: number) => {
 };
 
 const EditorPage: React.FC = () => {
+  const nullplugClientRef = useRef<BrowserNullplugClient | null>(null);
+  if (!nullplugClientRef.current) {
+    nullplugClientRef.current = createBrowserNullplugClient();
+  }
+  const nullplugClient = nullplugClientRef.current;
   const editorRef = useRef<ReturnType<typeof createEditor> | null>(null);
   if (!editorRef.current) {
     editorRef.current = createEditor({
-      nullplugRuntime: getDefaultRemoteNullplugRuntime(),
+      nullplugRuntime: nullplugClient,
     });
   }
   const editor = editorRef.current;
@@ -1230,15 +1238,17 @@ const EditorPage: React.FC = () => {
         );
       }
 
-      const branchClient = createBranchApiClient({
-        baseUrl: "",
-        accountId: activeBranchSession.accountId,
-        clientId: activeBranchSession.clientId,
-        authTokenProvider,
-      });
-      await branchClient.submitNullplugResponse(fact);
+      await nullplugClient.submitResponse(
+        {
+          rootDropId: activeBranchSession.rootDropId,
+          branchId: activeBranchSession.branchId,
+          accountId: activeBranchSession.accountId,
+          clientId: activeBranchSession.clientId,
+        },
+        fact,
+      );
     },
-    [activeBranchSession, authTokenProvider],
+    [activeBranchSession, nullplugClient],
   );
 
   const handleSubmitNullplugState = useCallback(
@@ -1253,15 +1263,17 @@ const EditorPage: React.FC = () => {
         throw new Error("The UI state does not match the active branch.");
       }
 
-      const branchClient = createBranchApiClient({
-        baseUrl: "",
-        accountId: activeBranchSession.accountId,
-        clientId: activeBranchSession.clientId,
-        authTokenProvider,
-      });
-      await branchClient.submitNullplugState(fact);
+      await nullplugClient.submitState(
+        {
+          rootDropId: activeBranchSession.rootDropId,
+          branchId: activeBranchSession.branchId,
+          accountId: activeBranchSession.accountId,
+          clientId: activeBranchSession.clientId,
+        },
+        fact,
+      );
     },
-    [activeBranchSession, authTokenProvider],
+    [activeBranchSession, nullplugClient],
   );
 
   if (successUrl) {

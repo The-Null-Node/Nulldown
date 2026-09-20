@@ -47,12 +47,22 @@ Choose the surface that fits your work:
 | Retrieval and memory | Structural document/runtime queries, source references, priority overlays, and optional NullMem facts, procedures, capabilities, and freshness signals. |
 | Interfaces           | Native Nulldown composition, nullplug runtime contracts, runtime facts, and policy-controlled proposed mutations.                                       |
 | Trust                | Public plaintext, client-sealed, provider-assisted, and self-hosted workflows with different explicit trust properties.                                 |
-| Account continuity   | OpenAuth can bind a current V1 account and store a browser-encrypted key package for recovery of known private links on another signed-in browser.       |
+| Account continuity   | OpenAuth can bind a current V1 account and store a browser-encrypted key package for recovery of known private links on another signed-in browser.      |
 | Deployment           | Cloudflare Pages/R2/D1 plus a self-hostable Bun API backend using filesystem blobs and SQLite metadata.                                                 |
+
+## Drop Providers and Nullplug
+
+Browser drop storage and Nullplug invocation use separate capabilities. `DropProviderPortRegistry` routes local and remote drop operations, while `BrowserNullplugClient` owns editor-session invocation and branch fact submission. Backend composition is exposed independently through `NulldownServerRuntime` from `@thenullnode/nulldown/server/runtime`.
+
+Remote manifests declare the versioned invocation media type `application/vnd.nulldown.nullplug.invoke+json;version=1`. Provider invocation rechecks the endpoint allowlist, narrows capabilities to the manifest permissions, enforces a timeout and response-size limit, and rejects non-conforming responses. It never imports code from manifest URLs.
 
 ## Authenticated Branch Workflow
 
 Creating and reading plaintext drops does not require an account session. Resolving branches, promoting changes, and protected diff writes do. Set `ND_TOKEN` to an account session token before using those operations. `ND_ACCOUNT_ID` is only for local development against a server that explicitly enables its insecure account header.
+
+## Quick Start
+
+Install the CLI:
 
 ```bash
 export ND_TOKEN='<account-session-token>'
@@ -86,9 +96,9 @@ MCP integrations can seal account-owned drops through the stable root export:
 ```ts
 import {
   sealDropForAuthoring,
-  type DropAccountEncryptionMaterial,
-  type DropDelegateSigningMaterial,
-  type DropProviderEncryptionMaterial,
+  type AccountEncryptionMaterial,
+  type DelegateSigningMaterial,
+  type ProviderEncryptionMaterial,
   type SealDropForAuthoringInput,
 } from "@thenullnode/nulldown/drop/authoring";
 ```
@@ -128,7 +138,7 @@ Use the separate MCP package to let agents retrieve structure, manage branch dif
 bun install -g @thenullnode/nulldown-mcp
 ```
 
-`nulldown-mcp` is a stdio server configured by an MCP client, not an interactive terminal program. Configure `ND_BASE_URL` for a non-production target and `ND_TOKEN` for authenticated operations. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
+`nulldown-mcp` is a stdio server configured by an MCP client, not an interactive terminal program. Configure `ND_BASE_URL`, `ND_TOKEN`, and `ND_CLIENT_ID` in the MCP client environment as needed. `ND_ACCOUNT_ID` is a development-only alternative accepted only when the target API explicitly enables its insecure account header; an invalid bearer credential never falls back to it. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
 
 ## Documentation
 
@@ -144,12 +154,6 @@ The canonical conceptual documentation lives in Nulldown:
 - [Status and direction](https://nulldown.app/d/OXIC7z)
 
 The local [`docs/`](docs/README.md) directory contains source-coupled API and operational references.
-
-## Nullplug Providers
-
-`VoidProvider.nullplug` is the common invocation boundary for trusted built-ins and registered remote HTTP nullplugs. The runtime resolves a plugin, normalizes its return into `NullplugInvokeResponse`, applies the configured policy validator, and preserves structured results for editor and public render surfaces.
-
-Remote manifests declare the versioned invocation media type `application/vnd.nulldown.nullplug.invoke+json;version=1`. Provider invocation rechecks the endpoint allowlist, narrows capabilities to the manifest permissions, enforces a timeout and response-size limit, and rejects non-conforming responses. It never imports code from manifest URLs.
 
 `strategy_get` (SDK: `client.readStrategy`) uses an explicit `branchId` without
 reading the root. Otherwise it reads the root once and follows plaintext payload
@@ -251,6 +255,21 @@ bun run cli:build
 bun run package:check-cli
 bun run package:check-mcp
 ```
+
+### Quality checks
+
+Run the local checks before submitting changes:
+
+```bash
+bun run format:check
+bun run lint
+bun run typecheck
+bun run test --runInBand
+```
+
+`bun run typecheck` checks the web app, Functions, tooling, MCP, shared code,
+configuration, OpenAuth, and tests as separate TypeScript surfaces. Run the
+individual `typecheck:<surface>` scripts when you need diagnostics for one area.
 
 ## Contributing
 

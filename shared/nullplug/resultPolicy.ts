@@ -241,7 +241,8 @@ export const filterNullplugInvokeResponse = (
     maxGrants,
   );
   delete result.diffs;
-  if (normalizedMutations.mutations) result.mutations = normalizedMutations.mutations;
+  if (normalizedMutations.mutations)
+    result.mutations = normalizedMutations.mutations;
   else delete result.mutations;
   diagnostics.push(...normalizedMutations.diagnostics);
 

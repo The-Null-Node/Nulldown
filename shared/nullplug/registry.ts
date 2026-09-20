@@ -4,7 +4,7 @@ import {
   RemoteNullplugManifestSchema,
   RemoteNullplugRegistryRecordSchema,
 } from "./registrySchemas";
-import { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
+import type { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
 
 export { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
 
@@ -109,7 +109,8 @@ export const isRemoteNullplugManifestAllowed = (
 export const serializeRemoteNullplugManifestForSignature = (
   manifest: RemoteNullplugManifest,
 ): string => {
-  const { signature: _signature, ...signable } = manifest;
+  const signable = { ...manifest };
+  delete signable.signature;
   return serializeCanonicalJson(signable);
 };
 

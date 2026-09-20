@@ -1,4 +1,5 @@
 import { jest } from "@jest/globals";
+import { readFileSync } from "node:fs";
 import type {
   DropEnvelope,
   DropGraph,
@@ -202,21 +203,27 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     }),
   }));
 
-  jest.unstable_mockModule("../lib/void/vault/passkeyVault", () => ({
+  jest.unstable_mockModule("../lib/auth/vault/passkey-vault", () => ({
     PASSKEY_PROTECTION_STORAGE_KEY: "nulldown_passkey_protection",
     getUnlockedVault: jest.fn(async () => ({
       accountId: "account-1",
     })),
   }));
 
-  jest.unstable_mockModule("../lib/void/provider", () => ({
-    getDefaultVoidProviderRegistry: () => ({
+  jest.unstable_mockModule("../lib/auth/accountSession", () => ({
+    getAccountAuthHeaders: jest.fn(async () => ({
+      Authorization: "Bearer projected-private-owner-token",
+    })),
+  }));
+
+  jest.unstable_mockModule("../lib/drop/provider", () => ({
+    getDefaultDropProviderPortRegistry: () => ({
       local: localProvider,
       remote: remoteProvider,
       forDropId: (id: string) =>
         id.startsWith("offline_") ? localProvider : remoteProvider,
     }),
-    isVoidProviderHttpError: (value: unknown) =>
+    isDropProviderHttpError: (value: unknown) =>
       typeof value === "object" && value !== null && "status" in value,
     isOfflineDropId: (id: string) => id.startsWith("offline_"),
     OFFLINE_DROP_PREFIX: "offline_",
@@ -238,6 +245,26 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     remoteResolveGraph,
   };
 };
+
+const dropStoreSource = readFileSync(
+  new URL("./dropStore.ts", import.meta.url),
+  "utf8",
+);
+
+describe("dropStore provider-port boundary", () => {
+  it("obtains drop capabilities through one stable registry", () => {
+    expect(dropStoreSource).toContain(
+      "const dropProviders = getDefaultDropProviderPortRegistry();",
+    );
+    expect(
+      dropStoreSource.match(/getDefaultDropProviderPortRegistry\(\)/g),
+    ).toHaveLength(1);
+    expect(dropStoreSource).toContain("dropProviders.local");
+    expect(dropStoreSource).toContain("dropProviders.remote");
+    expect(dropStoreSource).not.toContain("getDefaultVoidProvider");
+    expect(dropStoreSource).not.toContain("DropEnvelopeV1");
+  });
+});
 
 describe("dropStore resolution", () => {
   let consoleErrorSpy: jest.SpiedFunction<typeof console.error>;
@@ -434,6 +461,14 @@ describe("dropStore resolution", () => {
         id: "promoted_drop_123456",
         ownedByCurrentAccount: true,
       });
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/get/promoted_drop_123456",
+        {
+          headers: {
+            Authorization: "Bearer projected-private-owner-token",
+          },
+        },
+      );
     } finally {
       global.fetch = originalFetch;
     }
@@ -540,6 +575,8 @@ describe("dropStore resolution", () => {
       status: "pending",
       reason: "remote_state_mismatch",
     });
+    expect(conflicts[0]?.local.envelope).not.toHaveProperty("schema");
+    expect(conflicts[0]?.local.envelope).not.toHaveProperty("version");
   });
 
   it("resolves conflicts by accepting local state", async () => {

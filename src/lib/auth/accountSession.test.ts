@@ -13,7 +13,7 @@ const getUnlockedVault = jest.fn();
 const getLocalAccountSummary = jest.fn();
 const getActiveVaultUser = jest.fn();
 
-jest.unstable_mockModule("../void/vault/passkeyVault", () => ({
+jest.unstable_mockModule("./vault/passkey-vault", () => ({
   getUnlockedVault,
   getLocalAccountSummary,
   getActiveVaultUser,
@@ -38,7 +38,7 @@ const createStorageMock = (): StorageMock => {
 
 const vault = {
   accountId: "account-1",
-  signingPrivateKey: { kind: "signing-private-key" } as CryptoKey,
+  signingPrivateKey: { kind: "signing-private-key" } as unknown as CryptoKey,
   signingPublicJwk: { kty: "EC", crv: "P-256", x: "x", y: "y" },
   encryptionKid: "enc_test",
   encryptionPublicJwk: { kty: "RSA", n: "n".repeat(342), e: "AQAB" },
@@ -135,7 +135,9 @@ describe("account session", () => {
     installWindow(sessionStorage);
     getUnlockedVault.mockResolvedValue(vault);
     Object.defineProperty(globalThis, "crypto", {
-      value: { subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) } },
+      value: {
+        subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) },
+      },
       configurable: true,
     });
     Object.defineProperty(globalThis, "fetch", {
@@ -164,12 +166,15 @@ describe("account session", () => {
     installWindow(sessionStorage);
     let resolveVault: (value: typeof vault) => void = () => undefined;
     getUnlockedVault.mockImplementation(
-      () => new Promise<typeof vault>((resolve) => {
-        resolveVault = resolve;
-      }),
+      () =>
+        new Promise<typeof vault>((resolve) => {
+          resolveVault = resolve;
+        }),
     );
     Object.defineProperty(globalThis, "crypto", {
-      value: { subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) } },
+      value: {
+        subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) },
+      },
       configurable: true,
     });
     Object.defineProperty(globalThis, "fetch", {
@@ -204,7 +209,9 @@ describe("account session", () => {
     installWindow(sessionStorage);
     getUnlockedVault.mockResolvedValue(vault);
     Object.defineProperty(globalThis, "crypto", {
-      value: { subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) } },
+      value: {
+        subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) },
+      },
       configurable: true,
     });
     let completeFetch: ((value: unknown) => void) | undefined;
@@ -218,7 +225,8 @@ describe("account session", () => {
       configurable: true,
     });
 
-    const { clearAccountSession, getAccountSessionToken } = await loadAccountSession();
+    const { clearAccountSession, getAccountSessionToken } =
+      await loadAccountSession();
     const pending = getAccountSessionToken();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(completeFetch).toBeDefined();
@@ -299,7 +307,9 @@ describe("account session", () => {
     );
     getUnlockedVault.mockResolvedValue(vault);
     Object.defineProperty(globalThis, "crypto", {
-      value: { subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) } },
+      value: {
+        subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) },
+      },
       configurable: true,
     });
     const fetch = jest.fn().mockResolvedValue({
@@ -320,10 +330,13 @@ describe("account session", () => {
     await expect(getAccountSessionToken({ forceRefresh: true })).resolves.toBe(
       "refreshed-token",
     );
-    expect(JSON.parse(fetch.mock.calls[0]?.[1].body as string)).toMatchObject({
+    const refreshRequest = fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(JSON.parse(String(refreshRequest?.body))).toMatchObject({
       accountId: vault.accountId,
     });
-    expect(JSON.parse(sessionStorage.getItem(ACCOUNT_SESSION_STORAGE_KEY) as string)).toMatchObject({
+    expect(
+      JSON.parse(sessionStorage.getItem(ACCOUNT_SESSION_STORAGE_KEY) as string),
+    ).toMatchObject({
       accountId: vault.accountId,
       token: "refreshed-token",
     });
@@ -334,7 +347,9 @@ describe("account session", () => {
     installWindow(sessionStorage);
     getUnlockedVault.mockResolvedValue(vault);
     Object.defineProperty(globalThis, "crypto", {
-      value: { subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) } },
+      value: {
+        subtle: { sign: jest.fn().mockResolvedValue(new Uint8Array([1])) },
+      },
       configurable: true,
     });
     Object.defineProperty(globalThis, "fetch", {

@@ -43,7 +43,9 @@ const DATA_LOCK_STALE_MS = 20_000;
 const encodeKeySegment = (value: string): string => encodeURIComponent(value);
 
 const scopeEntries = (scope: VoidDataScope | undefined) =>
-  Object.entries(scope ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  Object.entries(scope ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
 
 const scopeSegment = (entry: [string, VoidDataPrimitive]): string => {
   const [key, value] = entry;
@@ -79,7 +81,9 @@ const readText = async (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const parseEnvelope = <T>(value: string | null): CloudflareVoidDataEnvelope<T> | null => {
+const parseEnvelope = <T>(
+  value: string | null,
+): CloudflareVoidDataEnvelope<T> | null => {
   if (value === null) return null;
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -90,7 +94,7 @@ const parseEnvelope = <T>(value: string | null): CloudflareVoidDataEnvelope<T> |
     if (typeof key.namespace !== "string" || typeof key.id !== "string") {
       return null;
     }
-    return parsed as CloudflareVoidDataEnvelope<T>;
+    return parsed as unknown as CloudflareVoidDataEnvelope<T>;
   } catch {
     return null;
   }
@@ -108,7 +112,9 @@ const envelopeToListItem = <T>(
 const parseRecordRow = <T>(
   row: VoidDataRecordRow | null | undefined,
 ): CloudflareVoidDataEnvelope<T> | null =>
-  parseEnvelope<T>(typeof row?.record_json === "string" ? row.record_json : null);
+  parseEnvelope<T>(
+    typeof row?.record_json === "string" ? row.record_json : null,
+  );
 
 const indexValueMatches = (
   actual: VoidDataIndexEntry["value"],
@@ -116,7 +122,9 @@ const indexValueMatches = (
 ): boolean => {
   const actualValues = Array.isArray(actual) ? actual : [actual];
   const expectedValues = Array.isArray(expected) ? expected : [expected];
-  return expectedValues.some((expectedValue) => actualValues.includes(expectedValue));
+  return expectedValues.some((expectedValue) =>
+    actualValues.includes(expectedValue),
+  );
 };
 
 const matchesIndexFilter = (
@@ -127,7 +135,8 @@ const matchesIndexFilter = (
   if (!matches.length) return false;
 
   if (filter.value !== undefined) {
-    return matches.some((entry) => indexValueMatches(entry.value, filter.value));
+    const expected = filter.value;
+    return matches.some((entry) => indexValueMatches(entry.value, expected));
   }
 
   if (filter.values !== undefined) {
@@ -158,7 +167,10 @@ const matchesListQuery = <T>(
   query: VoidDataListQuery,
 ): boolean => {
   if (item.key.namespace !== query.namespace) return false;
-  if (query.collection !== undefined && item.key.collection !== query.collection) {
+  if (
+    query.collection !== undefined &&
+    item.key.collection !== query.collection
+  ) {
     return false;
   }
   if (query.idPrefix && !item.key.id.startsWith(query.idPrefix)) return false;
@@ -190,9 +202,15 @@ const randomJitter = (): number => {
   return bytes[0] % 10;
 };
 
-const parseLockPayload = (value: string | null): { token: string; createdAt: number } | null => {
-  const parsed = parseEnvelope<{ token: string; createdAt: number }>(value)?.value;
-  return parsed && typeof parsed.token === "string" && typeof parsed.createdAt === "number"
+const parseLockPayload = (
+  value: string | null,
+): { token: string; createdAt: number } | null => {
+  const parsed = parseEnvelope<{ token: string; createdAt: number }>(
+    value,
+  )?.value;
+  return parsed &&
+    typeof parsed.token === "string" &&
+    typeof parsed.createdAt === "number"
     ? parsed
     : null;
 };
@@ -205,6 +223,20 @@ export const createCloudflareBlobStore = (bucket: R2Bucket): VoidBlobStore =>
 export const createCloudflareSqlStore = (
   db: D1Database | undefined,
 ): VoidSqlStore | undefined => db as unknown as VoidSqlStore | undefined;
+
+/** Converts Cloudflare storage bindings into portable service ports. */
+export const createCloudflareStorageServiceEnv = <
+  TBindings extends { R2_BUCKET: R2Bucket; DB?: D1Database },
+>(
+  bindings: TBindings,
+): Omit<TBindings, "R2_BUCKET" | "DB"> & {
+  R2_BUCKET: VoidBlobStore;
+  DB?: VoidSqlStore;
+} => ({
+  ...bindings,
+  R2_BUCKET: createCloudflareBlobStore(bindings.R2_BUCKET),
+  DB: createCloudflareSqlStore(bindings.DB),
+});
 
 const readEnvelopeFromD1 = async <T>(
   db: D1Database,
@@ -242,7 +274,9 @@ const listEnvelopesFromD1 = async <T>(
   }
 
   const normalizedLimit = Math.max(1, Math.min(1000, query.limit ?? 1000));
-  const offset = query.cursor ? Math.max(0, Number.parseInt(query.cursor, 10) || 0) : 0;
+  const offset = query.cursor
+    ? Math.max(0, Number.parseInt(query.cursor, 10) || 0)
+    : 0;
   params.push(normalizedLimit + 1, offset);
 
   const rows = await db
@@ -265,10 +299,13 @@ const listEnvelopesFromD1 = async <T>(
   return {
     items: parsed.slice(0, normalizedLimit),
     cursor:
-      parsed.length > normalizedLimit || (rows.results ?? []).length > normalizedLimit
+      parsed.length > normalizedLimit ||
+      (rows.results ?? []).length > normalizedLimit
         ? String(offset + normalizedLimit)
         : null,
-    truncated: parsed.length > normalizedLimit || (rows.results ?? []).length > normalizedLimit,
+    truncated:
+      parsed.length > normalizedLimit ||
+      (rows.results ?? []).length > normalizedLimit,
   };
 };
 
@@ -381,7 +418,9 @@ const createPutStatements = <T>(
              VALUES (?, ?, ?, ?, ?)`,
           )
           .bind(
-            d1ScalarValues(index).map((value) => String(value ?? "")).join("\n"),
+            d1ScalarValues(index)
+              .map((value) => String(value ?? ""))
+              .join("\n"),
             key.namespace,
             collection,
             scopeKey,
@@ -504,7 +543,10 @@ export const createCloudflareVoidDataStore = ({
             key,
             value: { token, createdAt: Date.now() },
             updatedAt: Date.now(),
-          } satisfies CloudflareVoidDataEnvelope<{ token: string; createdAt: number }>),
+          } satisfies CloudflareVoidDataEnvelope<{
+            token: string;
+            createdAt: number;
+          }>),
           {
             httpMetadata: { contentType: "application/json" },
             onlyIf: { etagDoesNotMatch: "*" },
@@ -531,7 +573,9 @@ export const createCloudflareVoidDataStore = ({
         }
 
         const backoff =
-          DATA_LOCK_BASE_BACKOFF_MS + Math.min(attempt, 15) * 3 + randomJitter();
+          DATA_LOCK_BASE_BACKOFF_MS +
+          Math.min(attempt, 15) * 3 +
+          randomJitter();
         await sleep(backoff);
       }
 

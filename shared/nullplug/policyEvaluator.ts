@@ -52,7 +52,8 @@ const policyDecisionFromResult = (
   result: NullplugResult,
 ): PolicyDecisionValue | null => {
   const yieldValue = result.yields?.find(
-    (entry) => entry.kind === "policy.decision" && isPolicyDecisionValue(entry.value),
+    (entry) =>
+      entry.kind === "policy.decision" && isPolicyDecisionValue(entry.value),
   )?.value;
 
   return isPolicyDecisionValue(yieldValue) ? yieldValue : null;
@@ -143,7 +144,10 @@ export const evaluateConditionalGrant = async (
   const normalized = normalizePolicyEvaluatorReturn(returned);
   if (!normalized.decision) {
     return {
-      decision: fallbackDecision(grant, "Policy evaluator did not return a decision."),
+      decision: fallbackDecision(
+        grant,
+        "Policy evaluator did not return a decision.",
+      ),
       diagnostics: [
         ...normalized.diagnostics,
         diagnostic("warn", "Policy evaluator did not return a decision."),

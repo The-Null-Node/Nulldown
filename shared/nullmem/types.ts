@@ -158,9 +158,7 @@ export interface NullMemFactRecord {
 
 /** Any persisted or built-in NullMem record. */
 export type NullMemRecord =
-  | NullMemCapabilityRecord
-  | NullMemProcedureRecord
-  | NullMemFactRecord;
+  NullMemCapabilityRecord | NullMemProcedureRecord | NullMemFactRecord;
 
 /** Query shape for retrieving mixed NullMem capsules. */
 export interface NullMemQuery {

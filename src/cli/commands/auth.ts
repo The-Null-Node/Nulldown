@@ -7,7 +7,7 @@ import {
   isCliCredentialForBaseUrl,
   type CliDeviceKeyPair,
 } from "../auth";
-import { mergeCliCredentialAuthoring } from "../cliCredential";
+import { mergeCliCredentialAuthoring } from "../cli-credential";
 import type { CliCredentialBundle } from "../../../shared/auth/cliDevice";
 import type { NulldownRuntime } from "../runtime/types";
 

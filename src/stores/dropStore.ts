@@ -8,15 +8,16 @@ share one code path.
 import { create } from "zustand";
 import { toShortDropId } from "../../shared/drop/id";
 import {
-  getDefaultVoidProviderRegistry,
-  isVoidProviderHttpError,
+  getDefaultDropProviderPortRegistry,
+  isDropProviderHttpError,
   isOfflineDropId,
   OFFLINE_DROP_PREFIX,
-  type VoidCreateOptions,
-  type VoidProviderScope,
-  type VoidSyncProgress,
-} from "../lib/void/provider";
-import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
+  type DropProviderCreateOptions,
+  type DropProviderPortScope,
+  type DropProviderSyncProgress,
+} from "../lib/drop/provider";
+import { getUnlockedVault } from "../lib/auth/vault/passkey-vault";
+import { getAccountAuthHeaders } from "../lib/auth/accountSession";
 import type {
   DropEnvelope,
   DropDraftDiffPolicy,
@@ -76,7 +77,7 @@ const SYNC_TARGET_PROVIDER_KEY = "nulldown_sync_target_provider";
 const SYNC_CONFLICTS_KEY = "nulldown_sync_conflicts_v1";
 const SYNC_QUEUE_KEY = "nulldown_sync_queue_v1";
 
-const voidProviderRegistry = getDefaultVoidProviderRegistry();
+const dropProviders = getDefaultDropProviderPortRegistry();
 
 export interface OwnedDropRecord {
   id: string;
@@ -89,7 +90,7 @@ export type { DropMode, DropSettingsState, EditorSyntaxMode } from "./drop/setti
 
 export interface ModeTransitionOptions {
   activeDropId?: string | null;
-  onProgress?: (progress: VoidSyncProgress) => void;
+  onProgress?: (progress: DropProviderSyncProgress) => void;
 }
 
 export interface ModeTransitionResult {
@@ -111,7 +112,7 @@ interface PublishSyncIntent {
     waiters: Array<{
       resolve: (value: ModeTransitionResult["publishedDrop"] | undefined) => void;
       reject: (error: unknown) => void;
-      onProgress?: (progress: VoidSyncProgress) => void;
+      onProgress?: (progress: DropProviderSyncProgress) => void;
     }>;
   }
 
@@ -119,7 +120,7 @@ interface DropStoreState {
   mode: DropMode;
   settings: DropSettingsState;
   offlineMode: boolean;
-  syncTargetProvider: VoidProviderScope;
+  syncTargetProvider: DropProviderPortScope;
   shareVisibility: DropVisibility;
   unlockPolicy: DropUnlockPolicy;
   draftDiffPolicy: DropDraftDiffPolicy;
@@ -141,7 +142,7 @@ interface DropStoreState {
     enabled: boolean,
     options?: ModeTransitionOptions,
   ) => Promise<ModeTransitionResult>;
-  setSyncTargetProvider: (scope: VoidProviderScope) => Promise<void>;
+  setSyncTargetProvider: (scope: DropProviderPortScope) => Promise<void>;
   setShareVisibility: (visibility: DropVisibility) => Promise<void>;
   setUnlockPolicy: (policy: DropUnlockPolicy) => Promise<void>;
   setDraftDiffPolicy: (policy: DropDraftDiffPolicy) => Promise<void>;
@@ -150,11 +151,11 @@ interface DropStoreState {
   setAllowedUrls: (urls: readonly string[]) => Promise<void>;
   createDrop: (
     payload: DropPayload,
-    options?: Partial<VoidCreateOptions>,
-  ) => Promise<{ id: string; url: string; scope: VoidProviderScope }>;
+    options?: Partial<DropProviderCreateOptions>,
+  ) => Promise<{ id: string; url: string; scope: DropProviderPortScope }>;
   syncDropToRemote: (
     id: string,
-    onProgress?: (progress: VoidSyncProgress) => void,
+    onProgress?: (progress: DropProviderSyncProgress) => void,
   ) => Promise<void>;
   listSyncConflicts: () => DropSyncConflictRecord[];
   resolveSyncConflict: (
@@ -197,7 +198,7 @@ const buildResolutionError = (
 
 const logProviderFailure = (
   operation: "getDrop" | "resolveDropGraph" | "resolveDropOwnership",
-  provider: VoidProviderScope,
+  provider: DropProviderPortScope,
   id: string,
   error: unknown,
 ) => {
@@ -218,7 +219,7 @@ const buildDropUrlFromId = (id: string): string => {
 };
 
 const isConflictError = (error: unknown): boolean => {
-  if (isVoidProviderHttpError(error)) {
+  if (isDropProviderHttpError(error)) {
     return error.status === 409 || error.status === 412;
   }
 
@@ -237,7 +238,7 @@ const isConflictError = (error: unknown): boolean => {
 const getConflictReasonFromError = (
   error: unknown,
 ): DropSyncConflictRecord["reason"] => {
-  if (isVoidProviderHttpError(error)) {
+  if (isDropProviderHttpError(error)) {
     if (
       error.status === 412 ||
       error.code === "revision_precondition_failed"
@@ -259,7 +260,7 @@ const getConflictReasonFromError = (
 };
 
 const getConflictCodeFromError = (error: unknown): string | null => {
-  if (isVoidProviderHttpError(error)) {
+  if (isDropProviderHttpError(error)) {
     if (error.code) {
       return error.code;
     }
@@ -299,10 +300,10 @@ const resolveDropOwnershipRecord = async (
   const { accountId } = await getUnlockedVault();
 
   const resolveLegacyOwnership = async (
-    scope: VoidProviderScope,
+    scope: DropProviderPortScope,
   ): Promise<{ id: string; ownedByCurrentAccount: boolean } | null> => {
     if (scope === "local") {
-      const payload = await voidProviderRegistry.local.get(id);
+      const payload = await dropProviders.local.get(id);
       const ownerAccountId =
         typeof payload?.metadata?.ownerAccountId === "string"
           ? payload.metadata.ownerAccountId
@@ -318,7 +319,9 @@ const resolveDropOwnershipRecord = async (
       };
     }
 
-    const response = await fetch(`/api/get/${encodeURIComponent(id)}`);
+    const response = await fetch(`/api/get/${encodeURIComponent(id)}`, {
+      headers: await getAccountAuthHeaders(),
+    });
     if (!response.ok) {
       if (response.status === 404) {
         return null;
@@ -356,7 +359,7 @@ const resolveDropOwnershipRecord = async (
   let localError: unknown = null;
 
   try {
-    const localRecord = await voidProviderRegistry.local.crud.drops.get(id);
+    const localRecord = await dropProviders.local.crud.drops.get(id);
     if (localRecord) {
       return {
         id: localRecord.id,
@@ -376,7 +379,7 @@ const resolveDropOwnershipRecord = async (
   let remoteError: unknown = null;
 
   try {
-    const remoteRecord = await voidProviderRegistry.remote.crud.drops.get(id);
+    const remoteRecord = await dropProviders.remote.crud.drops.get(id);
     if (remoteRecord) {
       return {
         id: remoteRecord.id,
@@ -548,7 +551,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
   const emitIntentProgress = (
     intent: PublishSyncIntent,
-    progress: VoidSyncProgress,
+    progress: DropProviderSyncProgress,
   ): void => {
     intent.waiters.forEach((waiter) => {
       waiter.onProgress?.(progress);
@@ -561,7 +564,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
   const runPublishIntent = async (
     intent: PublishSyncIntent,
   ): Promise<ModeTransitionResult["publishedDrop"] | undefined> => {
-    const localRecord = await voidProviderRegistry.local.crud.drops.get(intent.dropId);
+    const localRecord = await dropProviders.local.crud.drops.get(intent.dropId);
     if (!localRecord) {
       return undefined;
     }
@@ -573,7 +576,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
       dropId: localRecord.id,
     });
 
-    const remoteRecord = await voidProviderRegistry.remote.crud.drops.get(localRecord.id);
+    const remoteRecord = await dropProviders.remote.crud.drops.get(localRecord.id);
     if (remoteRecord) {
       const localHash = serializeCanonicalJson(localRecord.envelope);
       const remoteHash = serializeCanonicalJson(remoteRecord.envelope);
@@ -625,7 +628,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
       };
     }
 
-    const payload = await voidProviderRegistry.local.get(localRecord.id);
+    const payload = await dropProviders.local.get(localRecord.id);
     if (!payload) {
       return undefined;
     }
@@ -633,7 +636,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     const unlockPolicy = deriveUnlockPolicy("online", intent.visibility);
 
     try {
-      const created = await voidProviderRegistry.remote.create(payload, {
+      const created = await dropProviders.remote.create(payload, {
         id: localRecord.id,
         visibility: intent.visibility,
         unlockPolicy,
@@ -664,7 +667,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
       const conflictReason = getConflictReasonFromError(error);
       const conflictCode = getConflictCodeFromError(error);
-      const competing = await voidProviderRegistry.remote.crud.drops.get(localRecord.id);
+      const competing = await dropProviders.remote.crud.drops.get(localRecord.id);
       if (competing) {
         await createConflictRecord({
           dropId: localRecord.id,
@@ -739,7 +742,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     dropId: string;
     visibility: DropVisibility;
     source: PublishSyncSource;
-    onProgress?: (progress: VoidSyncProgress) => void;
+    onProgress?: (progress: DropProviderSyncProgress) => void;
   }): Promise<ModeTransitionResult["publishedDrop"] | undefined> => {
     await hydrateSyncConflicts();
     await hydrateSyncQueue();
@@ -795,7 +798,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
     if (resolution === "accept-local") {
       const latestRemote = target.remote
-        ? await voidProviderRegistry.remote.crud.drops.get(target.dropId)
+        ? await dropProviders.remote.crud.drops.get(target.dropId)
         : null;
 
       if (target.remote) {
@@ -823,7 +826,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
       }
 
       const localRecord =
-        (await voidProviderRegistry.local.crud.drops.get(target.dropId)) ?? {
+        (await dropProviders.local.crud.drops.get(target.dropId)) ?? {
           id: target.local.id,
           envelope: target.local.envelope,
           createdAt: target.local.createdAt,
@@ -832,7 +835,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
         };
 
       try {
-        await voidProviderRegistry.remote.crud.drops.create(localRecord, {
+        await dropProviders.remote.crud.drops.create(localRecord, {
           upsert: true,
           expectedRevision:
             latestRemote?.revision ?? target.remote?.revision ?? undefined,
@@ -842,7 +845,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
           throw error;
         }
 
-        const refreshedRemote = await voidProviderRegistry.remote.crud.drops.get(
+        const refreshedRemote = await dropProviders.remote.crud.drops.get(
           target.dropId,
         );
         if (refreshedRemote) {
@@ -865,7 +868,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
         );
       }
     } else {
-      const latestLocal = await voidProviderRegistry.local.crud.drops.get(
+      const latestLocal = await dropProviders.local.crud.drops.get(
         target.dropId,
       );
       if (
@@ -896,7 +899,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
         );
       }
 
-      await voidProviderRegistry.local.crud.drops.create(
+      await dropProviders.local.crud.drops.create(
         {
           id: target.remote.id,
           envelope: target.remote.envelope,
@@ -1099,7 +1102,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     return get().setMode(enabled ? "offline" : "online", options);
   },
 
-  setSyncTargetProvider: async (scope: VoidProviderScope) => {
+  setSyncTargetProvider: async (scope: DropProviderPortScope) => {
     await get().setMode(scope === "local" ? "offline" : "online");
   },
 
@@ -1134,7 +1137,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     await get().applySettings({ allowedUrls: urls });
   },
 
-  createDrop: async (payload: DropPayload, options: Partial<VoidCreateOptions> = {}) => {
+  createDrop: async (payload: DropPayload, options: Partial<DropProviderCreateOptions> = {}) => {
     if (!get().hydrated) {
       await Promise.all([
         get().hydrateOfflineMode(),
@@ -1149,7 +1152,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     );
     const unlockPolicy = deriveUnlockPolicy(mode, visibility);
 
-    const localCreated = await voidProviderRegistry.local.create(payload, {
+    const localCreated = await dropProviders.local.create(payload, {
       visibility,
       unlockPolicy,
       id: options.id,
@@ -1180,7 +1183,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
   syncDropToRemote: async (
     id: string,
-    onProgress?: (progress: VoidSyncProgress) => void,
+    onProgress?: (progress: DropProviderSyncProgress) => void,
   ) => {
     const published = await enqueuePublishIntent({
       dropId: id,
@@ -1209,7 +1212,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     let localError: unknown = null;
 
     try {
-      const local = await voidProviderRegistry.local.get(id);
+      const local = await dropProviders.local.get(id);
       if (local) {
         return local;
       }
@@ -1221,7 +1224,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
     let remoteError: unknown = null;
 
     try {
-      const remote = await voidProviderRegistry.remote.get(id);
+      const remote = await dropProviders.remote.get(id);
       if (remote) {
         return remote;
       }
@@ -1251,14 +1254,14 @@ const useDropStore = create<DropStoreState>((set, get) => {
     let localError: unknown = null;
 
     try {
-      return await voidProviderRegistry.local.resolveGraph(id);
+      return await dropProviders.local.resolveGraph(id);
     } catch (error) {
       localError = error;
       logProviderFailure("resolveDropGraph", "local", id, error);
     }
 
     try {
-      return await voidProviderRegistry.remote.resolveGraph(id);
+      return await dropProviders.remote.resolveGraph(id);
     } catch (remoteError) {
       logProviderFailure("resolveDropGraph", "remote", id, remoteError);
       const resolutionError = buildResolutionError(
@@ -1274,11 +1277,11 @@ const useDropStore = create<DropStoreState>((set, get) => {
 
   listOwnedDrops: async () => {
     let records: Awaited<
-      ReturnType<typeof voidProviderRegistry.local.crud.drops.list>
+      ReturnType<typeof dropProviders.local.crud.drops.list>
     >;
 
     try {
-      records = await voidProviderRegistry.local.crud.drops.list();
+      records = await dropProviders.local.crud.drops.list();
     } catch (error) {
       console.error("Failed to list locally-owned drops:", error);
       return [];
@@ -1295,7 +1298,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
   },
 
   createOfflineDrop: async (payload: DropPayload) => {
-    const result = await voidProviderRegistry.local.create(payload, {
+    const result = await dropProviders.local.create(payload, {
       visibility: "private",
       unlockPolicy: "vault-only",
     });
@@ -1307,7 +1310,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
   },
 
   getOfflineDrop: async (id: string) => {
-    return voidProviderRegistry.local.get(id);
+    return dropProviders.local.get(id);
   },
   };
 });

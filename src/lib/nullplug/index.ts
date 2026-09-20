@@ -23,13 +23,13 @@ export {
   isNullplugRuntimeError,
   NullplugRuntimeError,
   type NullplugRuntimeResolver,
-  type VoidNullplugRuntime,
+  type NullplugRuntime,
 } from "../../../shared/nullplug/runtime";
 export {
   createRemoteNullplugRuntime,
   getDefaultRemoteNullplugRuntime,
   type CreateRemoteNullplugRuntimeOptions,
-} from "./providerRuntime";
+} from "./remote-runtime";
 export type {
   NullplugContext,
   NullplugCall,

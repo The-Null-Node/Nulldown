@@ -1,11 +1,11 @@
 import { jest } from "@jest/globals";
 import type { RootRuntimePolicy } from "../../../shared/nullplug/policy";
+import type { NullplugInvokeRequest } from "../../../shared/nullplug/types";
 import {
   applyRenderableDiffs,
   NullplugRuntimeError,
   createRemoteNullplugRuntime,
   nullplug,
-  parseNullplugArguments,
   parseNullplugBlocks,
   parsePluginId,
   parsePluginInvocation,
@@ -18,9 +18,9 @@ describe("nullplug render pipeline", () => {
     expect(parsePluginId('plugin("embed")')).toBe("embed");
     expect(parsePluginId("plugin('EMBED')")).toBe("embed");
     expect(parsePluginId("embed")).toBe("embed");
-    expect(parsePluginId("embed(src='https://www.youtube.com/embed/demo')")).toBe(
-      "embed",
-    );
+    expect(
+      parsePluginId("embed(src='https://www.youtube.com/embed/demo')"),
+    ).toBe("embed");
     expect(parsePluginId("embed(")).toBeNull();
   });
 
@@ -61,13 +61,17 @@ describe("nullplug render pipeline", () => {
     expect(blocks[0]?.id).toBe("embed");
     expect(blocks[0]?.args).toBeNull();
     expect(blocks[0]?.invocationForm).toBe("bare");
-    expect(blocks[0]?.content.trim()).toBe("https://www.youtube.com/embed/demo");
+    expect(blocks[0]?.content.trim()).toBe(
+      "https://www.youtube.com/embed/demo",
+    );
   });
 
   it("captures keyword arguments in parsed blocks", () => {
-    const markdown = ["```embed(src='https://example.com')", "body", "```"].join(
-      "\n",
-    );
+    const markdown = [
+      "```embed(src='https://example.com')",
+      "body",
+      "```",
+    ].join("\n");
 
     const blocks = parseNullplugBlocks(markdown);
     expect(blocks).toHaveLength(1);
@@ -91,24 +95,29 @@ describe("nullplug render pipeline", () => {
       allowedUrls: ["www.youtube.com"],
     });
 
-    expect(rendered).toContain('<iframe src="https://www.youtube.com/embed/demo"');
+    expect(rendered).toContain(
+      '<iframe src="https://www.youtube.com/embed/demo"',
+    );
     expect(rendered).not.toContain("```embed");
   });
 
   it("renders embed blocks from invocation arguments", async () => {
-    const markdown = ["```embed(src='https://www.youtube.com/embed/demo')", "```"].join(
-      "\n",
-    );
+    const markdown = [
+      "```embed(src='https://www.youtube.com/embed/demo')",
+      "```",
+    ].join("\n");
 
     const rendered = await renderMarkdownWithNullplug(markdown, {
       allowedUrls: ["www.youtube.com"],
     });
 
-    expect(rendered).toContain('<iframe src="https://www.youtube.com/embed/demo"');
+    expect(rendered).toContain(
+      '<iframe src="https://www.youtube.com/embed/demo"',
+    );
   });
 
   it("renders nd plugin blocks into drop cards", async () => {
-    const markdown = ["```nd(id=\"abc123def456\")", "```"].join("\n");
+    const markdown = ['```nd(id="abc123def456")', "```"].join("\n");
 
     const rendered = await renderMarkdownWithNullplug(markdown, {
       resolveDrop: async (id) => ({
@@ -123,7 +132,7 @@ describe("nullplug render pipeline", () => {
     expect(rendered).toContain('class="nd-card');
     expect(rendered).toContain("Linked Drop abc123def456");
     expect(rendered).toContain("This is the card preview body.");
-    expect(rendered).toContain('/d/abc123');
+    expect(rendered).toContain("/d/abc123");
     expect(rendered).not.toContain("```nd");
   });
 
@@ -137,7 +146,7 @@ describe("nullplug render pipeline", () => {
     });
 
     expect(rendered).toContain("Body Syntax");
-    expect(rendered).toContain('/d/body12');
+    expect(rendered).toContain("/d/body12");
   });
 
   it("renders normalized NullplugResult content", async () => {
@@ -312,9 +321,12 @@ describe("nullplug render pipeline", () => {
     nullplug("local-provenance-test", () => ({}));
 
     const result = await renderMarkdownWithNullplugState(
-      ["```local-provenance-test", "```", "```remote-provenance-test", "```"].join(
-        "\n",
-      ),
+      [
+        "```local-provenance-test",
+        "```",
+        "```remote-provenance-test",
+        "```",
+      ].join("\n"),
       {
         nullplugRuntime: {
           supports: async (request) =>
@@ -411,11 +423,7 @@ describe("nullplug render pipeline", () => {
   });
 
   it("keeps unknown plugin blocks intact", async () => {
-    const markdown = [
-      "```unknown",
-      "hello",
-      "```",
-    ].join("\n");
+    const markdown = ["```unknown", "hello", "```"].join("\n");
 
     const rendered = await renderMarkdownWithNullplug(markdown);
     expect(rendered).toContain("```unknown");
@@ -461,7 +469,7 @@ describe("nullplug render pipeline", () => {
 
   it("lets a root-configured registered remote plugin claim a bare language slug", async () => {
     const supports = jest.fn(async () => true);
-    const invoke = jest.fn(async (request) => ({
+    const invoke = jest.fn(async (request: NullplugInvokeRequest) => ({
       result: { content: "Rendered by Python runtime" },
       resolution: {
         pluginId: request.call.pluginId,
@@ -527,7 +535,9 @@ describe("nullplug render pipeline", () => {
 
   it("treats call syntax as explicit without probing ownership", async () => {
     const supports = jest.fn(async () => false);
-    const invoke = jest.fn(async () => ({ result: { content: "Explicit result" } }));
+    const invoke = jest.fn(async () => ({
+      result: { content: "Explicit result" },
+    }));
 
     const result = await renderMarkdownWithNullplugState(
       ["```python()", "print('hello')", "```"].join("\n"),
@@ -581,7 +591,9 @@ describe("nullplug render pipeline", () => {
   it("keeps local registration ahead of matching remote ownership", async () => {
     nullplug("language-collision-test", () => "Local result");
     const supports = jest.fn(async () => true);
-    const invoke = jest.fn(async () => ({ result: { content: "Remote result" } }));
+    const invoke = jest.fn(async () => ({
+      result: { content: "Remote result" },
+    }));
 
     const result = await renderMarkdownWithNullplugState(
       ["```language-collision-test", "body", "```"].join("\n"),

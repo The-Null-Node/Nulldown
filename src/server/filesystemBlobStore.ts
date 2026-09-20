@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import type {
   VoidBlobBody,
@@ -30,7 +38,9 @@ const assertSafeKey = (key: string): void => {
     throw new Error("void_blob_invalid_key");
   }
   const segments = key.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+  if (
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
     throw new Error("void_blob_invalid_key");
   }
 };
@@ -40,7 +50,8 @@ const filePathForKey = (rootDir: string, key: string): string => {
   return join(rootDir, ...key.split("/"));
 };
 
-const metadataPathForFile = (filePath: string): string => `${filePath}${METADATA_SUFFIX}`;
+const metadataPathForFile = (filePath: string): string =>
+  `${filePath}${METADATA_SUFFIX}`;
 
 const toUint8Array = async (body: VoidBlobBody): Promise<Uint8Array> => {
   if (body === null) return new Uint8Array();
@@ -56,12 +67,18 @@ const toUint8Array = async (body: VoidBlobBody): Promise<Uint8Array> => {
 const etagForBytes = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
 
-const readSidecar = async (filePath: string): Promise<FilesystemBlobSidecar | null> => {
+const readSidecar = async (
+  filePath: string,
+): Promise<FilesystemBlobSidecar | null> => {
   try {
-    const parsed = JSON.parse(await readFile(metadataPathForFile(filePath), "utf8")) as unknown;
+    const parsed = JSON.parse(
+      await readFile(metadataPathForFile(filePath), "utf8"),
+    ) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
     const sidecar = parsed as Partial<FilesystemBlobSidecar>;
-    return typeof sidecar.uploaded === "string" ? sidecar as FilesystemBlobSidecar : null;
+    return typeof sidecar.uploaded === "string"
+      ? (sidecar as FilesystemBlobSidecar)
+      : null;
   } catch {
     return null;
   }
@@ -118,7 +135,11 @@ const writeSidecar = async (
     uploaded: new Date().toISOString(),
     ...(options?.httpMetadata ? { httpMetadata: options.httpMetadata } : {}),
   };
-  await writeFile(metadataPathForFile(filePath), JSON.stringify(sidecar), "utf8");
+  await writeFile(
+    metadataPathForFile(filePath),
+    JSON.stringify(sidecar),
+    "utf8",
+  );
 };
 
 const conditionAllowsWrite = async (
@@ -130,7 +151,8 @@ const conditionAllowsWrite = async (
   if (!condition) return true;
   const existing = await objectMetadata(key, filePath);
   if (condition.etagDoesNotMatch === "*" && existing) return false;
-  if (condition.etagMatches && existing?.etag !== condition.etagMatches) return false;
+  if (condition.etagMatches && existing?.etag !== condition.etagMatches)
+    return false;
   if (
     condition.etagDoesNotMatch &&
     condition.etagDoesNotMatch !== "*" &&
@@ -141,8 +163,11 @@ const conditionAllowsWrite = async (
   return true;
 };
 
-const walkKeys = async (rootDir: string, currentDir = rootDir): Promise<string[]> => {
-  let entries: Awaited<ReturnType<typeof readdir>>;
+const walkKeys = async (
+  rootDir: string,
+  currentDir = rootDir,
+): Promise<string[]> => {
+  let entries: Dirent<string>[];
   try {
     entries = await readdir(currentDir, { withFileTypes: true });
   } catch {
@@ -153,7 +178,7 @@ const walkKeys = async (rootDir: string, currentDir = rootDir): Promise<string[]
   for (const entry of entries) {
     const entryPath = join(currentDir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...await walkKeys(rootDir, entryPath));
+      out.push(...(await walkKeys(rootDir, entryPath)));
       continue;
     }
     if (entry.name.endsWith(METADATA_SUFFIX)) continue;
@@ -203,9 +228,7 @@ export const createFilesystemBlobStore = ({
         await writeSidecar(filePath, options);
         return objectMetadata(key, filePath);
       };
-      return options?.onlyIf
-        ? withConditionalWriteLock(key, write)
-        : write();
+      return options?.onlyIf ? withConditionalWriteLock(key, write) : write();
     },
     delete: async (keys) => {
       await Promise.all(
@@ -220,7 +243,9 @@ export const createFilesystemBlobStore = ({
         ),
       );
     },
-    list: async (options?: VoidBlobListOptions): Promise<VoidBlobListResult> => {
+    list: async (
+      options?: VoidBlobListOptions,
+    ): Promise<VoidBlobListResult> => {
       const limit = Math.max(1, Math.min(options?.limit ?? 1000, 1000));
       const offset = options?.cursor
         ? Math.max(0, Number.parseInt(options.cursor, 10) || 0)

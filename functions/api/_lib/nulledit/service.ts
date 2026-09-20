@@ -10,10 +10,6 @@ import { serializeCanonicalJson } from "../../../../shared/drop/types";
 import { hashNulldownSourceContent } from "../../../../shared/drop/resolved/hash";
 import type {
   VoidBlobStore,
-  VoidDataKey,
-  VoidDataListQuery,
-  VoidDataPutOptions,
-  VoidDataQuery,
   VoidDataStore,
   VoidSqlStore,
 } from "../../../../src/server/ports";
@@ -69,22 +65,14 @@ const unavailableDataStore = (): VoidDataStore => {
     throw new Error("void_data_store_required");
   };
   return {
-    get: async <T = unknown>(_key: VoidDataKey): Promise<T | null> => fail(),
-    put: async <T = unknown>(
-      _key: VoidDataKey,
-      _value: T,
-      _options?: VoidDataPutOptions,
-    ): Promise<void> => fail(),
+    get: async <T = unknown>(): Promise<T | null> => fail(),
+    put: async (): Promise<void> => fail(),
     putMany: async (): Promise<void> => fail(),
-    delete: async (_key: VoidDataKey): Promise<void> => fail(),
-    list: async (_query: VoidDataListQuery) => fail(),
-    query: async <T = unknown>(_query: VoidDataQuery): Promise<T[]> => fail(),
-    tx: async <T>(_work: (data: VoidDataStore) => Promise<T>): Promise<T> =>
-      fail(),
-    lock: async <T>(
-      _key: VoidDataKey,
-      _work: (data: VoidDataStore) => Promise<T>,
-    ): Promise<T> => fail(),
+    delete: async (): Promise<void> => fail(),
+    list: async () => fail(),
+    query: async <T = unknown>(): Promise<T[]> => fail(),
+    tx: async <T>(): Promise<T> => fail(),
+    lock: async <T>(): Promise<T> => fail(),
   };
 };
 
@@ -312,6 +300,16 @@ export const appendEventsToBranch = async (
           ? upgradedBranch.headEventSeq
           : -1;
 
+      if (
+        !Number.isSafeInteger(headSeq) ||
+        headSeq < -1 ||
+        headSeq >= Number.MAX_SAFE_INTEGER ||
+        !Number.isSafeInteger(upgradedBranch.headSnapshotId) ||
+        upgradedBranch.headSnapshotId < 0
+      ) {
+        throw new Error("diff_sequence_exhausted");
+      }
+
       for (const event of events) {
         const priorInput = seenEvents.get(event.eventId);
         if (priorInput) {
@@ -406,6 +404,14 @@ export const appendEventsToBranch = async (
               Boolean(acknowledgement),
           );
       };
+
+      if (
+        acceptedInput.length > 0 &&
+        (upgradedBranch.headSnapshotId >= Number.MAX_SAFE_INTEGER ||
+          !Number.isSafeInteger(headSeq + acceptedInput.length + 1))
+      ) {
+        throw new Error("diff_sequence_exhausted");
+      }
 
       if (acceptedInput.length === 0) {
         const headSeq =

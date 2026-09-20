@@ -16,12 +16,6 @@ import type {
   DiffChannelBatch,
   DiffChannelListener,
 } from "../../../lib/diff/diffChannel";
-import {
-  acquireDiffOutboxWriterLease,
-  hasDiffOutboxWriterLease,
-  listDiffOutboxEvents,
-  readDiffOutboxBranchDraft,
-} from "../../../lib/diff/diffOutboxStore";
 import { resetNulldownDatabaseForTests } from "../../../lib/indexedDb";
 import type { DiffSyncState, UseDiffChannelOptions } from "./useDiffChannel";
 
@@ -34,6 +28,13 @@ Object.assign(globalThis, {
   TextEncoder,
   structuredClone: cloneForTest,
 });
+
+const {
+  acquireDiffOutboxWriterLease,
+  hasDiffOutboxWriterLease,
+  listDiffOutboxEvents,
+  readDiffOutboxBranchDraft,
+} = await import("../../../lib/diff/diffOutboxStore");
 
 const acknowledgement = (
   eventId: string,

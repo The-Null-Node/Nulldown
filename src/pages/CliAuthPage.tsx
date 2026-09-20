@@ -8,7 +8,7 @@ import {
   type OpenAuthSessionState,
 } from "@/lib/auth/openAuthClient";
 import { getAccountSyncState } from "@/lib/auth/accountSyncClient";
-import { signLocalDeviceDelegation } from "@/lib/void/vault/passkeyVault";
+import { signLocalDeviceDelegation } from "@/lib/auth/vault/passkey-vault";
 import {
   formatCliUserCode,
   normalizeCliUserCode,

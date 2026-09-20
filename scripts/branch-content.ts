@@ -5,7 +5,9 @@ const main = async () => {
   const dropId = getArgValue("drop") || getArgValue("id");
   const branchId = getArgValue("branch");
   if (!dropId || !branchId) {
-    throw new Error("Missing required args. Use --drop <dropId> --branch <branchId>.");
+    throw new Error(
+      "Missing required args. Use --drop <dropId> --branch <branchId>.",
+    );
   }
 
   const client = createBranchApiClient({

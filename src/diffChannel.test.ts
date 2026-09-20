@@ -156,6 +156,25 @@ describe("remote diff channel", () => {
     }
   });
 
+  it("rejects an unsafe retry timestamp before posting", async () => {
+    const channel = createRemoteDiffChannel({
+      dropId: "root-1",
+      branchId: "branch-1",
+      clientId: "client-1",
+    });
+
+    await expect(
+      channel.publish(
+        [{ type: "insert", start: 0, end: 0, text: "hello" }],
+        {
+          eventId: "stable-event-1",
+          createdAt: Number.MAX_SAFE_INTEGER + 1,
+        },
+      ),
+    ).rejects.toThrow("Invalid immutable diff event for this channel.");
+    channel.stop();
+  });
+
   it("refreshes account auth once without changing the event envelope", async () => {
     const requestBodies: string[] = [];
     const authorizationHeaders: string[] = [];

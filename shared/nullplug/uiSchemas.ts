@@ -99,17 +99,17 @@ export const NullplugUiPrimitiveSchema = z.discriminatedUnion("kind", [
 ]) satisfies z.ZodType<NullplugUiPrimitive>;
 
 export const NullplugUiStatePatchOperationSchema = z.discriminatedUnion("op", [
-    z.object({
-      op: z.literal("set"),
-      path: z.array(z.string().trim().min(1)).min(1),
-      value: NullplugUiJsonValueSchema,
-    }),
-    z.object({
-      op: z.literal("delete"),
-      path: z.array(z.string().trim().min(1)).min(1),
-      value: z.undefined().optional(),
-    }),
-  ]) satisfies z.ZodType<NullplugUiStatePatchOperation>;
+  z.object({
+    op: z.literal("set"),
+    path: z.array(z.string().trim().min(1)).min(1),
+    value: NullplugUiJsonValueSchema,
+  }),
+  z.object({
+    op: z.literal("delete"),
+    path: z.array(z.string().trim().min(1)).min(1),
+    value: z.undefined().optional(),
+  }),
+]) satisfies z.ZodType<NullplugUiStatePatchOperation>;
 
 export const NullplugUiResponseFactSchema = z.object({
   version: z.literal(1),

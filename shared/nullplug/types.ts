@@ -8,9 +8,7 @@ import {
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
-  | JsonPrimitive
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface NullplugCaller {
   dropId?: string;
@@ -48,10 +46,7 @@ export type NullplugMutation =
   | { kind: "sidecar.write"; target: string; value: JsonValue };
 
 export type NullplugYieldKind =
-  | "ui.response"
-  | "policy.decision"
-  | "stream.event"
-  | "agent.note";
+  "ui.response" | "policy.decision" | "stream.event" | "agent.note";
 
 export interface NullplugYield {
   id?: string;

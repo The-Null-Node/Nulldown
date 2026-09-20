@@ -394,6 +394,7 @@ describe("functions api nullplug submit contracts", () => {
     const unauthorizedQuery = await onResolvedQueryRequest({
       request: new Request(
         `https://nulldown.test/api/branches/${rootDropId}/${branchId}/resolved/query?resolverId=${RESOLVED_RUNTIME_REFS_RESOLVER_ID}&kind=ui.response&primitiveId=approval-form&q=approved%20true`,
+        { headers: { "x-nulldown-account-id": accountId } },
       ),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,

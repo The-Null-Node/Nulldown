@@ -75,27 +75,28 @@ describe("policy evaluator adapter", () => {
 
   it("denies by default when evaluator returns no decision", async () => {
     await expect(
-      evaluateConditionalGrant(grant, request, () => ({ result: { content: "no" } })),
+      evaluateConditionalGrant(grant, request, () => ({
+        result: { content: "no" },
+      })),
     ).resolves.toEqual({
       decision: {
         decision: "deny",
         reason: "Policy evaluator did not return a decision.",
       },
       diagnostics: [
-        { level: "warn", message: "Policy evaluator did not return a decision." },
+        {
+          level: "warn",
+          message: "Policy evaluator did not return a decision.",
+        },
       ],
     });
   });
 
   it("defers on evaluator failure when grant is configured to defer", async () => {
     await expect(
-      evaluateConditionalGrant(
-        { ...grant, onError: "defer" },
-        request,
-        () => {
-          throw new Error("network timeout");
-        },
-      ),
+      evaluateConditionalGrant({ ...grant, onError: "defer" }, request, () => {
+        throw new Error("network timeout");
+      }),
     ).resolves.toEqual({
       decision: {
         decision: "defer",

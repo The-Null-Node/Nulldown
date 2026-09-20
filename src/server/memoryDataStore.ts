@@ -74,9 +74,8 @@ const matchesIndexFilter = (
   const matches = indexes?.filter((entry) => entry.name === filter.name) ?? [];
   if (!matches.length) return false;
   if (filter.value !== undefined) {
-    return matches.some((entry) =>
-      indexValueMatches(entry.value, filter.value),
-    );
+    const expected = filter.value;
+    return matches.some((entry) => indexValueMatches(entry.value, expected));
   }
   if (filter.values !== undefined) {
     return matches.some((entry) =>

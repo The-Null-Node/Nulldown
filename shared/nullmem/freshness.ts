@@ -59,7 +59,12 @@ export const evaluateNullMemFreshness = (
           typeof ref.snapshotId === "number" &&
           ref.snapshotId === sid,
       ) as
-        | { kind: "snapshot" | "heap"; rootDropId: string; branchId: string; snapshotId: number }
+        | {
+            kind: "snapshot" | "heap";
+            rootDropId: string;
+            branchId: string;
+            snapshotId: number;
+          }
         | undefined;
       if (matchingRef) {
         const key = `${matchingRef.rootDropId}:${matchingRef.branchId}`;
@@ -83,7 +88,10 @@ export const evaluateNullMemFreshness = (
   if (hasStale) {
     status = "explicit-stale";
     reason = "Record carries an explicit stale-memory label.";
-  } else if (superseded.length > 0 || superseded.some((id) => knownSupersedes.has(id))) {
+  } else if (
+    superseded.length > 0 ||
+    superseded.some((id) => knownSupersedes.has(id))
+  ) {
     status = "superseded";
     reason = `Record is superseded by ${superseded.join(", ") || "a later record"}.`;
   } else if (outdated.length > 0) {
@@ -91,10 +99,12 @@ export const evaluateNullMemFreshness = (
     reason = `Record cites snapshot(s) ${outdated.join(", ")} older than current head ${current ?? "?"}.`;
   } else if (!hasAnySource) {
     status = "source-missing";
-    reason = "Record has no source refs or target identifiers to evaluate against.";
+    reason =
+      "Record has no source refs or target identifiers to evaluate against.";
   } else if (typeof current !== "number" && Object.keys(heads).length === 0) {
     status = "unverifiable";
-    reason = "No current snapshot head was provided; freshness cannot be verified.";
+    reason =
+      "No current snapshot head was provided; freshness cannot be verified.";
   } else {
     status = "fresh";
     reason = "Record sources are at or ahead of the current snapshot heads.";
@@ -151,8 +161,7 @@ export const filterStaleRecords = (
 /** Converts a freshness report into a compact human summary. */
 export const formatNullMemFreshnessSummary = (
   report: NullMemFreshnessReport,
-): string =>
-  `${report.recordId} [${report.status}] ${report.reason}`;
+): string => `${report.recordId} [${report.status}] ${report.reason}`;
 
 /** Converts a freshness query result into a CLI-friendly object. */
 export const nullMemFreshnessToCli = (result: NullMemFreshnessQueryResult) => ({

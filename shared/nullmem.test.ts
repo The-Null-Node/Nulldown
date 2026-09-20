@@ -11,7 +11,6 @@ import {
   isNullMemProcedureRecord,
   nullMemRecordText,
   nullMemRecordToCapsule,
-  evaluateNullMemFreshness,
   evaluateNullMemFreshnessBatch,
   hasStaleMemoryLabel,
   extractSupersedesFromLabels,
@@ -132,7 +131,9 @@ describe("NullMem contracts", () => {
       ]),
     );
 
-    expect(createBuiltInMcpCapabilityRecords(100)).toEqual(
+    const mcpCapabilities = createBuiltInMcpCapabilityRecords(100);
+    expect(mcpCapabilities).toHaveLength(12);
+    expect(mcpCapabilities).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           recordId: "capability:mcp:nulldown:branch_query",
@@ -140,6 +141,25 @@ describe("NullMem contracts", () => {
           capabilityId: "nulldown.branch_query",
           labels: expect.arrayContaining(["mcp-catalog", "semantic-query"]),
           sourceRefs: [{ kind: "mcp", toolId: "nulldown/branch_query" }],
+        }),
+        expect.objectContaining({
+          recordId: "capability:mcp:nulldown:memory_stale_check",
+          capabilityId: "nulldown.memory_stale_check",
+          description: expect.stringContaining("freshness enabled"),
+          labels: expect.arrayContaining(["stale-memory", "freshness"]),
+          whenToUse: expect.arrayContaining([
+            expect.stringContaining("before trusting current-work"),
+          ]),
+        }),
+        expect.objectContaining({
+          recordId: "capability:mcp:nulldown:drop_create",
+          description: expect.stringContaining("account-owned sealed"),
+          whenToUse: expect.arrayContaining([
+            expect.stringContaining("legacyPlaintext"),
+          ]),
+          whenNotToUse: expect.arrayContaining([
+            expect.stringContaining("authentication-only credentials"),
+          ]),
         }),
         expect.objectContaining({
           recordId: "capability:mcp:nulldown:memory_procedure",

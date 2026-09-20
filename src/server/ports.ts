@@ -1,11 +1,6 @@
 /** Bindable scalar values accepted by the portable SQL metadata port. */
 export type VoidSqlBindableValue =
-  | string
-  | number
-  | boolean
-  | null
-  | ArrayBuffer
-  | Uint8Array;
+  string | number | boolean | null | ArrayBuffer | Uint8Array;
 
 /** Result shape returned by SQL `all` queries. */
 export interface VoidSqlRows<T = Record<string, unknown>> {
@@ -34,12 +29,7 @@ export interface VoidSqlStore {
 
 /** Opaque object body accepted by the portable blob store. */
 export type VoidBlobBody =
-  | string
-  | ArrayBuffer
-  | ArrayBufferView
-  | Blob
-  | ReadableStream
-  | null;
+  string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null;
 
 /** Conditional write options shared by R2 and local blob-store adapters. */
 export interface VoidBlobWriteCondition {
@@ -49,7 +39,14 @@ export interface VoidBlobWriteCondition {
 
 /** Write options for opaque blob objects. */
 export interface VoidBlobPutOptions {
-  httpMetadata?: { contentType?: string };
+  httpMetadata?: {
+    contentType?: string;
+    contentLanguage?: string;
+    contentDisposition?: string;
+    contentEncoding?: string;
+    cacheControl?: string;
+    cacheExpiry?: Date;
+  };
   onlyIf?: VoidBlobWriteCondition;
 }
 
@@ -60,7 +57,14 @@ export interface VoidBlobObjectMetadata {
   httpEtag?: string;
   uploaded?: Date;
   size?: number;
-  httpMetadata?: { contentType?: string };
+  httpMetadata?: {
+    contentType?: string;
+    contentLanguage?: string;
+    contentDisposition?: string;
+    contentEncoding?: string;
+    cacheControl?: string;
+    cacheExpiry?: Date;
+  };
 }
 
 /** Full blob object returned by reads from the portable blob store. */

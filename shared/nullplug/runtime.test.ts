@@ -25,12 +25,16 @@ describe("nullplug runtime wrapper", () => {
     const matched: NullplugRuntimeResolver = {
       resolve: () => () => "rendered",
     };
-    const runtime = createNullplugRuntime({ resolvers: [skipped, matched] });
+    const trailing = jest.fn(() => () => "unexpected");
+    const runtime = createNullplugRuntime({
+      resolvers: [skipped, matched, { resolve: trailing }],
+    });
 
     await expect(runtime.supports?.(request)).resolves.toBe(true);
     await expect(runtime.invoke(request)).resolves.toEqual({
       result: { content: "rendered" },
     });
+    expect(trailing).not.toHaveBeenCalled();
   });
 
   it("prepares before resolution and validates after normalization", async () => {
@@ -59,11 +63,14 @@ describe("nullplug runtime wrapper", () => {
       diagnostics: [{ level: "warn", message: "Denied summary: unsafe" }],
     });
     expect(resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ context: expect.objectContaining({ capabilities: ["safe"] }) }),
+      expect.objectContaining({
+        context: expect.objectContaining({ capabilities: ["safe"] }),
+      }),
     );
   });
 
   it("preserves invoker resolution metadata through policy validation", async () => {
+    const trailing = jest.fn(() => () => "unexpected");
     const runtime = createNullplugRuntime({
       resolvers: [
         {
@@ -86,6 +93,7 @@ describe("nullplug runtime wrapper", () => {
             },
           }),
         },
+        { resolve: trailing },
       ],
       policy: {
         prepare: (invokeRequest) => invokeRequest,
@@ -101,6 +109,7 @@ describe("nullplug runtime wrapper", () => {
         scope: "remote",
       },
     });
+    expect(trailing).not.toHaveBeenCalled();
   });
 
   it("uses resolver identity for invocation failures", async () => {
@@ -142,7 +151,10 @@ describe("nullplug runtime wrapper", () => {
       resolvers: [{ resolve }],
       policy: {
         prepare: () => {
-          throw new NullplugRuntimeError("policy_denied", "Denied by root policy.");
+          throw new NullplugRuntimeError(
+            "policy_denied",
+            "Denied by root policy.",
+          );
         },
         validate: (response) => response,
       },
@@ -158,6 +170,14 @@ describe("nullplug runtime wrapper", () => {
     const unsupported = createNullplugRuntime({ resolvers: [] });
     await expect(unsupported.supports?.(request)).resolves.toBe(false);
     await expect(unsupported.invoke(request)).rejects.toMatchObject({
+      code: "unsupported_plugin",
+    });
+
+    const allNull = createNullplugRuntime({
+      resolvers: [{ resolve: () => null }, { resolve: async () => null }],
+    });
+    await expect(allNull.supports?.(request)).resolves.toBe(false);
+    await expect(allNull.invoke(request)).rejects.toMatchObject({
       code: "unsupported_plugin",
     });
 

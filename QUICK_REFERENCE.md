@@ -130,8 +130,12 @@ Response: { "id": "abc123", "url": "https://...//d/abc123" }
 ```bash
 GET /api/get/:id
 
-Response: <markdown content as plain text>
+Response: <stored plaintext payload or sealed envelope>
 ```
+
+Public, unlisted, and legacy projection-absent roots are readable by identifier.
+Projected private roots require the canonical owner; denied roots return
+`404 Drop not found.` before object access.
 
 ---
 

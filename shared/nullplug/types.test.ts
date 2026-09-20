@@ -28,7 +28,11 @@ describe("nullplug shared DTOs", () => {
             kind: "action",
             id: "approve",
             label: "Approve",
-            source: { rootDropId: "root", branchId: "branch", callId: "call-1" },
+            source: {
+              rootDropId: "root",
+              branchId: "branch",
+              callId: "call-1",
+            },
           },
         ],
         uiState: { expanded: true },

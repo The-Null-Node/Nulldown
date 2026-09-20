@@ -16,7 +16,7 @@ import type {
   DiffAuthRegisterRequest,
   DiffAuthRegisterResponse,
 } from "../../../../shared/drop/diffAuth";
-import { serverVoidCrypto } from "../../_lib/crypto/void/serverVoidCrypto";
+import { providerCrypto } from "../../_lib/crypto/provider-crypto";
 
 interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
@@ -136,7 +136,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     const secret = generateDiffSecret();
 
     try {
-      wrappedSecret = await serverVoidCrypto.wrapTextForRequester(
+      wrappedSecret = await providerCrypto.wrapTextForRequester(
         body.requesterPublicJwk,
         secret,
       );

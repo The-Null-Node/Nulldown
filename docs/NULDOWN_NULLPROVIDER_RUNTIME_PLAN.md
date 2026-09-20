@@ -4,11 +4,15 @@ Parent tracker: [Original tracker](https://nulldown.app/d/Nr3hhv)
 
 Checklist: [Runtime checklist](https://nulldown.app/d/aN8B4B)
 
+> Historical plan: the universal `VoidProvider`/`NullProvider` hierarchy below
+> is superseded. Current code uses domain-scoped browser drop ports, a browser
+> Nullplug client, and a separately composed backend server runtime.
+
 Status: The first provider nullplug boundary is implemented as `POST /api/nullplug/resolve`, supporting the trusted built-in `nd` resolver only. It accepts shared invoke DTOs, returns normalized `NullplugInvokeResponse` results, and rejects unsupported plugin ids instead of loading remote code. Atomic UI response facts can now be submitted through `POST /api/nullplug/submit` and stored immutably.
 
 ## Core Split
 
-`VoidProvider` remains the app-facing drop runtime. `DropProviderPort` stays narrow as a child local, remote, or server capability port:
+`DropProviderPort` was originally planned as a child of a universal facade:
 
 ```text
 DropProviderPort

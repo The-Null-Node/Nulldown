@@ -29,7 +29,7 @@ import {
 import {
   LOCAL_ACCOUNT_VAULT_CHANGED_EVENT,
   setActiveVaultUser,
-} from "@/lib/void/vault/passkeyVault";
+} from "@/lib/auth/vault/passkey-vault";
 
 const controlClassName = "border-border text-muted hover:text-foreground";
 

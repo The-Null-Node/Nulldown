@@ -15,9 +15,9 @@
     "nulldown": "bin/nulldown"
   },
   "exports": {
-    "./client": "./src/client/nulldownClient.ts",
+    "./client": "./src/client/nulldown-client.ts",
     "./server/http": "./src/server/http.ts",
-    "./server/provider": "./src/server/provider.ts",
+    "./server/runtime": "./src/server/runtime.ts",
     "./server/ports": "./src/server/ports.ts",
     "./server/nulledit": "./src/server/nulledit.ts",
     "./server/local": "./src/server/local.ts",
@@ -30,7 +30,7 @@
     "./drop/authoring": "./shared/drop/authoringCrypto.ts",
     "./drop/resolved": "./shared/drop/resolved.ts",
     "./auth/cliDevice": "./shared/auth/cliDevice.ts",
-    "./auth/cliCredential": "./src/cli/cliCredential.ts",
+    "./auth/cliCredential": "./src/cli/cli-credential.ts",
     "./nullmem": "./shared/nullmem.ts",
     "./nullplug/types": "./shared/nullplug/types.ts",
     "./nullplug/ui": "./shared/nullplug/ui.ts",
@@ -129,6 +129,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.797.0",
     "@openauthjs/openauth": "0.4.3",
+    "minisearch": "^7.2.0",
     "nanoid": "^5.0.0",
     "zod": "^4.4.3"
   },

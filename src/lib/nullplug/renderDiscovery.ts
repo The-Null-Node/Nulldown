@@ -1,5 +1,5 @@
 import type { RootRuntimePolicy } from "../../../shared/nullplug/policy";
-import type { VoidNullplugRuntime } from "../../../shared/nullplug/runtime";
+import type { NullplugRuntime } from "../../../shared/nullplug/runtime";
 import type { NullplugInvokeRequest } from "../../../shared/nullplug/types";
 import { parseNullplugArguments, parseNullplugBlocks } from "./parser";
 import { resolveNullplug } from "./registry";
@@ -13,7 +13,7 @@ import type {
 export interface RenderInvocationOptions {
   caller?: NullplugCaller;
   runtimePolicy?: RootRuntimePolicy | null;
-  nullplugRuntime?: VoidNullplugRuntime;
+  nullplugRuntime?: NullplugRuntime;
   providerId?: string;
   providerBaseUrl?: string;
   capabilities?: readonly string[];

@@ -5,7 +5,7 @@ import {
   confirmAccountSyncRecoveryCode,
   getAccountSyncState,
 } from "./accountSyncClient";
-import { setActiveVaultUser } from "../void/vault/passkeyVault";
+import { setActiveVaultUser } from "./vault/passkey-vault";
 import { decodeEncryptedAccountRecoveryPackage } from "../../../shared/auth/codecs/account-recovery-v1";
 
 const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");

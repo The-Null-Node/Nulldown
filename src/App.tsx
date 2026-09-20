@@ -14,7 +14,7 @@ import {
   getAccountSyncState,
 } from "./lib/auth/accountSyncClient";
 import { clearAccountSession } from "./lib/auth/accountSession";
-import { setActiveVaultUser } from "./lib/void/vault/passkeyVault";
+import { setActiveVaultUser } from "./lib/auth/vault/passkey-vault";
 import OpenAuthAccountControl from "./pages/editor/components/OpenAuthAccountControl";
 import { useAccountPreferencesSync } from "./lib/auth/useAccountPreferencesSync";
 

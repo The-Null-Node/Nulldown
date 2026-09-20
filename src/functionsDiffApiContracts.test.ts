@@ -3,9 +3,10 @@ import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/diff/[id]";
 import { postDiffEvents } from "../functions/api/_lib/diffs/transport/service";
+import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutationLock";
 import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
-import { createCloudflareVoidProvider } from "../functions/api/_lib/core/platform/cloudflareProvider";
+import { createCloudflareNulldownServerRuntime } from "../functions/api/_lib/core/platform/cloudflare-server-runtime";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
 import {
@@ -62,6 +63,13 @@ interface StoredObject {
 
 class MemoryR2Bucket {
   private readonly objects = new Map<string, StoredObject>();
+  readonly getCalls: string[] = [];
+  readonly listCalls: string[] = [];
+
+  clearReadMetrics(): void {
+    this.getCalls.length = 0;
+    this.listCalls.length = 0;
+  }
 
   seed(key: string, value: string, contentType = "application/json"): string {
     const now = Date.now();
@@ -76,6 +84,7 @@ class MemoryR2Bucket {
   }
 
   async get(key: string): Promise<any> {
+    this.getCalls.push(key);
     const existing = this.objects.get(key);
     if (!existing) {
       return null;
@@ -136,12 +145,7 @@ class MemoryR2Bucket {
   async put(
     key: string,
     value:
-      | string
-      | ArrayBuffer
-      | ArrayBufferView
-      | Blob
-      | ReadableStream
-      | null,
+      string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null,
     options?: any,
   ): Promise<any> {
     const existing = this.objects.get(key);
@@ -212,9 +216,12 @@ class MemoryR2Bucket {
     startAfter?: string;
   }): Promise<any> {
     const prefix = options?.prefix ?? "";
+    this.listCalls.push(prefix);
     const limit = Math.max(1, Math.min(1000, options?.limit ?? 1000));
     const startAfter = options?.startAfter ?? "";
-    const startIndex = options?.cursor ? Number.parseInt(options.cursor, 10) : 0;
+    const startIndex = options?.cursor
+      ? Number.parseInt(options.cursor, 10)
+      : 0;
 
     const matching = [...this.objects.entries()]
       .map(([key, value]) => ({ key, value }))
@@ -259,12 +266,7 @@ class MemoryR2Bucket {
 
   private async toText(
     value:
-      | string
-      | ArrayBuffer
-      | ArrayBufferView
-      | Blob
-      | ReadableStream
-      | null,
+      string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null,
   ): Promise<string> {
     if (typeof value === "string") {
       return value;
@@ -317,11 +319,40 @@ class MemoryD1Database {
   private readonly records = new Map<string, VoidDataRecordRow>();
   private readonly branchEvents = new Map<
     string,
-    { rootDropId: string; branchId: string; seq: number; eventId: string; eventJson: string }
+    {
+      rootDropId: string;
+      branchId: string;
+      seq: number;
+      eventId: string;
+      eventJson: string;
+    }
+  >();
+  private readonly branchRuntimeFacts = new Map<
+    string,
+    {
+      rootDropId: string;
+      branchId: string;
+      seq: number;
+      factId: string;
+      factJson: string;
+    }
   >();
   readonly priorityFacts = new Map<string, string>();
   readonly nullmemRecords = new Map<string, string>();
   readonly batchCalls: number[] = [];
+  runCalls = 0;
+  readonly accountLibraryEntries = new Map<
+    string,
+    {
+      entry_seq: number;
+      drop_id: string;
+      account_id: string;
+      visibility: unknown;
+      created_at: number;
+      updated_at: number;
+      deleted_at: number | null;
+    }
+  >();
 
   prepare(sql: string) {
     return new MemoryD1Statement(this, sql);
@@ -332,11 +363,20 @@ class MemoryD1Database {
     return Promise.all(statements.map((statement) => statement.run()));
   }
 
-  private recordKey(namespace: unknown, collection: unknown, scopeKey: unknown, id: unknown): string {
+  private recordKey(
+    namespace: unknown,
+    collection: unknown,
+    scopeKey: unknown,
+    id: unknown,
+  ): string {
     return `${String(namespace)}/${String(collection)}/${String(scopeKey)}/${String(id)}`;
   }
 
-  private branchEventKey(rootDropId: unknown, branchId: unknown, seq: unknown): string {
+  private branchEventKey(
+    rootDropId: unknown,
+    branchId: unknown,
+    seq: unknown,
+  ): string {
     return `${String(rootDropId)}/${String(branchId)}/${String(seq)}`;
   }
 
@@ -345,7 +385,9 @@ class MemoryD1Database {
     branchId: string,
     seq: number,
   ): DropDiffEvent | null {
-    const event = this.branchEvents.get(this.branchEventKey(rootDropId, branchId, seq));
+    const event = this.branchEvents.get(
+      this.branchEventKey(rootDropId, branchId, seq),
+    );
     return event ? (JSON.parse(event.eventJson) as DropDiffEvent) : null;
   }
 
@@ -354,16 +396,20 @@ class MemoryD1Database {
     branchId: string,
     event: DropDiffEvent,
   ): void {
-    this.branchEvents.set(this.branchEventKey(rootDropId, branchId, event.seq), {
-      rootDropId,
-      branchId,
-      seq: event.seq,
-      eventId: event.eventId,
-      eventJson: JSON.stringify(event),
-    });
+    this.branchEvents.set(
+      this.branchEventKey(rootDropId, branchId, event.seq),
+      {
+        rootDropId,
+        branchId,
+        seq: event.seq,
+        eventId: event.eventId,
+        eventJson: JSON.stringify(event),
+      },
+    );
   }
 
   run(sql: string, params: unknown[]): void {
+    this.runCalls += 1;
     if (sql.includes("UPDATE branch_events")) {
       const key = this.branchEventKey(params[2], params[3], params[4]);
       const existing = this.branchEvents.get(key);
@@ -396,14 +442,31 @@ class MemoryD1Database {
       return;
     }
 
+    if (sql.includes("INSERT OR IGNORE INTO branch_runtime_facts")) {
+      const key = this.branchEventKey(params[0], params[1], params[2]);
+      if (!this.branchRuntimeFacts.has(key)) {
+        this.branchRuntimeFacts.set(key, {
+          rootDropId: String(params[0]),
+          branchId: String(params[1]),
+          seq: Number(params[2]),
+          factId: String(params[3]),
+          factJson: String(params[5]),
+        });
+      }
+      return;
+    }
+
     if (sql.includes("INSERT INTO void_data_records")) {
-      this.records.set(this.recordKey(params[0], params[1], params[2], params[3]), {
-        namespace: String(params[0]),
-        collection: String(params[1]),
-        scope_key: String(params[2]),
-        id: String(params[3]),
-        record_json: String(params[5]),
-      });
+      this.records.set(
+        this.recordKey(params[0], params[1], params[2], params[3]),
+        {
+          namespace: String(params[0]),
+          collection: String(params[1]),
+          scope_key: String(params[2]),
+          id: String(params[3]),
+          record_json: String(params[5]),
+        },
+      );
       return;
     }
 
@@ -421,14 +484,21 @@ class MemoryD1Database {
     }
 
     if (sql.includes("DELETE FROM void_data_records")) {
-      this.records.delete(this.recordKey(params[0], params[1], params[2], params[3]));
+      this.records.delete(
+        this.recordKey(params[0], params[1], params[2], params[3]),
+      );
     }
   }
 
   first(sql: string, params: unknown[]): Record<string, unknown> | null {
+    if (sql.includes("FROM account_library_entries")) {
+      return this.accountLibraryEntries.get(String(params[0])) ?? null;
+    }
     if (sql.includes("FROM branch_events")) {
       if (sql.includes("seq = ?")) {
-        const event = this.branchEvents.get(this.branchEventKey(params[0], params[1], params[2]));
+        const event = this.branchEvents.get(
+          this.branchEventKey(params[0], params[1], params[2]),
+        );
         return event ? { event_json: event.eventJson } : null;
       }
       if (sql.includes("event_id = ?")) {
@@ -441,8 +511,28 @@ class MemoryD1Database {
         return event ? { event_json: event.eventJson } : null;
       }
     }
+    if (sql.includes("FROM branch_runtime_facts")) {
+      const facts = [...this.branchRuntimeFacts.values()].filter(
+        (fact) => fact.rootDropId === params[0] && fact.branchId === params[1],
+      );
+      if (sql.includes("fact_id = ?")) {
+        const fact = facts.find((entry) => entry.factId === params[2]);
+        return fact ? { fact_json: fact.factJson } : null;
+      }
+      if (sql.includes("MAX(seq)")) {
+        return {
+          max_seq: facts.length
+            ? Math.max(...facts.map((fact) => fact.seq))
+            : null,
+        };
+      }
+    }
     if (sql.includes("FROM void_data_records")) {
-      return this.records.get(this.recordKey(params[0], params[1], params[2], params[3])) ?? null;
+      return (
+        (this.records.get(
+          this.recordKey(params[0], params[1], params[2], params[3]),
+        ) as unknown as Record<string, unknown> | undefined) ?? null
+      );
     }
     return null;
   }
@@ -451,14 +541,29 @@ class MemoryD1Database {
     if (sql.includes("FROM branch_events")) {
       return [...this.branchEvents.values()]
         .filter(
-          (event) => event.rootDropId === params[0] && event.branchId === params[1],
+          (event) =>
+            event.rootDropId === params[0] && event.branchId === params[1],
         )
         .sort((left, right) => left.seq - right.seq)
         .map((event) => ({ event_json: event.eventJson }));
     }
+    if (sql.includes("FROM branch_runtime_facts")) {
+      return [...this.branchRuntimeFacts.values()]
+        .filter(
+          (fact) =>
+            fact.rootDropId === params[0] &&
+            fact.branchId === params[1] &&
+            fact.seq > Number(params[2]),
+        )
+        .sort((left, right) => left.seq - right.seq)
+        .slice(0, Number(params[3]))
+        .map((fact) => ({ fact_json: fact.factJson }));
+    }
     if (!sql.includes("FROM void_data_records")) return [];
     const namespace = String(params[0]);
-    const collection = sql.includes("collection = ?") ? String(params[1]) : null;
+    const collection = sql.includes("collection = ?")
+      ? String(params[1])
+      : null;
     const idPrefixParam = sql.includes("id LIKE ?")
       ? String(params[collection === null ? 1 : 2]).replace(/%$/, "")
       : null;
@@ -467,8 +572,12 @@ class MemoryD1Database {
 
     return [...this.records.values()]
       .filter((row) => row.namespace === namespace)
-      .filter((row) => (collection === null ? true : row.collection === collection))
-      .filter((row) => (idPrefixParam === null ? true : row.id.startsWith(idPrefixParam)))
+      .filter((row) =>
+        collection === null ? true : row.collection === collection,
+      )
+      .filter((row) =>
+        idPrefixParam === null ? true : row.id.startsWith(idPrefixParam),
+      )
       .sort((left, right) =>
         `${left.namespace}/${left.collection}/${left.scope_key}/${left.id}`.localeCompare(
           `${right.namespace}/${right.collection}/${right.scope_key}/${right.id}`,
@@ -551,8 +660,8 @@ const makeEvent = (input: {
   sourceClientId: string;
   text: string;
   createdAt: number;
-  metadata?: unknown;
-}) => ({
+  metadata?: DropDiffEvent["metadata"];
+}): DropDiffEvent => ({
   eventId: input.eventId,
   seq: 0,
   dropId: rootDropId,
@@ -587,6 +696,25 @@ describe("functions api diff contracts", () => {
     warnSpy.mockRestore();
     errorSpy.mockRestore();
     debugSpy.mockRestore();
+  });
+
+  it("rejects unsafe append timestamps before resolving a branch", async () => {
+    const bucket = createSeededBucket();
+    const response = await onRequest({
+      request: createPostRequest([
+        makeEvent({
+          eventId: "unsafe-timestamp",
+          sourceClientId: "writer-a",
+          text: "hello",
+          createdAt: Number.MAX_SAFE_INTEGER + 1,
+        }),
+      ]),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain("Invalid diff envelope.");
   });
 
   const createSeededBucket = (): MemoryR2Bucket => {
@@ -662,7 +790,8 @@ describe("functions api diff contracts", () => {
             summary: "Apply the verified branch update.",
             procedureCandidate: {
               goal: "Apply a verified branch update",
-              summary: "Persist the marked update and retain its diff evidence.",
+              summary:
+                "Persist the marked update and retain its diff evidence.",
               completed: true,
               reusableAs: "accepted-diff projection",
             },
@@ -682,7 +811,12 @@ describe("functions api diff contracts", () => {
         createdAt: 117,
         metadata: {
           labels: ["nullmem/procedure-candidate"],
-          args: { procedureCandidate: { goal: "Missing completion", summary: "Ignore me" } },
+          args: {
+            procedureCandidate: {
+              goal: "Missing completion",
+              summary: "Ignore me",
+            },
+          },
         },
       }),
       seq: 9,
@@ -719,10 +853,19 @@ describe("functions api diff contracts", () => {
         recordId: `memproc:auto-accepted-diff:${rootDropId}:branch-procedure-candidate:evt-procedure-candidate`,
         goal: "Apply a verified branch update",
         outcome: "success",
-        labels: ["procedure-memory", "auto-extracted", "needs-review", "accepted-diff"],
+        labels: [
+          "procedure-memory",
+          "auto-extracted",
+          "needs-review",
+          "accepted-diff",
+        ],
         confidence: 0.5,
         sourceRefs: [
-          { kind: "branch", rootDropId, branchId: "branch-procedure-candidate" },
+          {
+            kind: "branch",
+            rootDropId,
+            branchId: "branch-procedure-candidate",
+          },
           {
             kind: "diff",
             rootDropId,
@@ -858,6 +1001,45 @@ describe("functions api diff contracts", () => {
     expect(reused.status).toBe(409);
   });
 
+  it("refuses an append before branch counters produce an unsafe receipt", async () => {
+    const bucket = createSeededBucket();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    bucket.seed(
+      createBranchKey(rootDropId, branch.branchId),
+      JSON.stringify({
+        ...branch,
+        headEventSeq: Number.MAX_SAFE_INTEGER - 1,
+      }),
+    );
+
+    const response = await onRequest({
+      request: createPostRequestForBranch(
+        [
+          makeEvent({
+            eventId: "sequence-capacity",
+            sourceClientId: "writer-a",
+            text: "hello",
+            createdAt: 100,
+          }),
+        ],
+        branch.branchId,
+        accountId,
+      ),
+      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "diff_sequence_exhausted",
+    });
+  });
+
   it("keeps distinct event ids isolated when legacy marker keys collide", async () => {
     const bucket = createSeededBucket();
     const firstEventId = "evt/a";
@@ -871,7 +1053,9 @@ describe("functions api diff contracts", () => {
 
     expect(
       createBranchDiffEventIdKey(rootDropId, branch.branchId, firstEventId),
-    ).toBe(createBranchDiffEventIdKey(rootDropId, branch.branchId, secondEventId));
+    ).toBe(
+      createBranchDiffEventIdKey(rootDropId, branch.branchId, secondEventId),
+    );
     expect(
       createBranchDiffEventIdMarkerV2Key(
         rootDropId,
@@ -938,7 +1122,7 @@ describe("functions api diff contracts", () => {
     const { branch } = await resolveBranchForActor(
       bucket as never,
       rootDropId,
-      accountId,
+      null,
       null,
     );
     const markerKey = createBranchDiffEventIdMarkerV2Key(
@@ -963,7 +1147,7 @@ describe("functions api diff contracts", () => {
     const { branch } = await resolveBranchForActor(
       bucket as never,
       rootDropId,
-      accountId,
+      null,
       null,
     );
     const first = makeEvent({
@@ -980,7 +1164,10 @@ describe("functions api diff contracts", () => {
     });
     bucket.seed(
       createBranchDiffLogKey(rootDropId, branch.branchId),
-      JSON.stringify([{ ...first, seq: 0 }, { ...second, seq: 1 }]),
+      JSON.stringify([
+        { ...first, seq: 0 },
+        { ...second, seq: 1 },
+      ]),
     );
     bucket.seed(
       createBranchDiffEventKey(rootDropId, branch.branchId, 0),
@@ -996,7 +1183,9 @@ describe("functions api diff contracts", () => {
     );
 
     const response = await onRequest({
-      request: createGetRequest(`?branchId=${encodeURIComponent(branch.branchId)}&cursor=-1`),
+      request: createGetRequest(
+        `?branchId=${encodeURIComponent(branch.branchId)}&cursor=-1`,
+      ),
       env: { R2_BUCKET: bucket as unknown as R2Bucket },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
@@ -1057,7 +1246,9 @@ describe("functions api diff contracts", () => {
     );
 
     await expect(
-      (await bucket.get(createBranchDiffEventKey(rootDropId, branch.branchId, 0)))!.json(),
+      (await bucket.get(
+        createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      ))!.json(),
     ).resolves.toEqual(legacyOnlyEvent);
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1069,7 +1260,12 @@ describe("functions api diff contracts", () => {
       expect(retry.status).toBe(200);
       await expect(retry.json()).resolves.toMatchObject({
         acknowledgements: [
-          { eventId: event.eventId, seq: 0, snapshotId: 1, status: "duplicate" },
+          {
+            eventId: event.eventId,
+            seq: 0,
+            snapshotId: 1,
+            status: "duplicate",
+          },
         ],
       });
     }
@@ -1094,7 +1290,7 @@ describe("functions api diff contracts", () => {
     const { branch } = await resolveBranchForActor(
       bucket as never,
       rootDropId,
-      accountId,
+      null,
       null,
     );
     const legacyEvent = { ...event, seq: 0 };
@@ -1123,7 +1319,12 @@ describe("functions api diff contracts", () => {
       expect(retry.status).toBe(200);
       await expect(retry.json()).resolves.toMatchObject({
         acknowledgements: [
-          { eventId: event.eventId, seq: 0, snapshotId: 1, status: "duplicate" },
+          {
+            eventId: event.eventId,
+            seq: 0,
+            snapshotId: 1,
+            status: "duplicate",
+          },
         ],
       });
     }
@@ -1152,7 +1353,7 @@ describe("functions api diff contracts", () => {
     const { branch } = await resolveBranchForActor(
       bucket as never,
       rootDropId,
-      accountId,
+      null,
       null,
     );
     const legacyEvent = { ...event, seq: 0 };
@@ -1216,7 +1417,7 @@ describe("functions api diff contracts", () => {
     const { branch } = await resolveBranchForActor(
       bucket as never,
       rootDropId,
-      accountId,
+      null,
       null,
     );
     const event = makeEvent({
@@ -1287,7 +1488,12 @@ describe("functions api diff contracts", () => {
     await expect(retry.json()).resolves.toMatchObject({
       accepted: 1,
       acknowledgements: [
-        { eventId: "evt-resume-orphan", seq: 0, snapshotId: 1, status: "accepted" },
+        {
+          eventId: "evt-resume-orphan",
+          seq: 0,
+          snapshotId: 1,
+          status: "accepted",
+        },
       ],
     });
   });
@@ -1320,7 +1526,10 @@ describe("functions api diff contracts", () => {
           createdAt: 101,
         }),
       ]),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
 
@@ -1328,12 +1537,15 @@ describe("functions api diff contracts", () => {
     await expect(response.json()).resolves.toMatchObject({
       code: "diff_predecessor_mismatch",
     });
-    await expect(bucket.get(createBranchDiffEventKey(rootDropId, branch.branchId, 0))).resolves
-      .toMatchObject({ key: createBranchDiffEventKey(rootDropId, branch.branchId, 0) });
     await expect(
-      (
-        await bucket.get(createBranchDiffEventKey(rootDropId, branch.branchId, 0))
-      )!.json(),
+      bucket.get(createBranchDiffEventKey(rootDropId, branch.branchId, 0)),
+    ).resolves.toMatchObject({
+      key: createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+    });
+    await expect(
+      (await bucket.get(
+        createBranchDiffEventKey(rootDropId, branch.branchId, 0),
+      ))!.json(),
     ).resolves.toEqual({ ...orphan, seq: 0, snapshotId: 1 });
   });
 
@@ -1355,7 +1567,7 @@ describe("functions api diff contracts", () => {
     const { branch } = await resolveBranchForActor(
       bucket as never,
       rootDropId,
-      accountId,
+      null,
       null,
     );
     bucket.seed(
@@ -1414,7 +1626,7 @@ describe("functions api diff contracts", () => {
           }),
         ]),
         {
-          voidProvider: {
+          serverRuntime: {
             nulledit: {
               appendDiffEvents: async () => {
                 throw new BranchMutationLockError({ code, outcome });
@@ -1478,7 +1690,10 @@ describe("functions api diff contracts", () => {
     });
     const first = await onRequest({
       request: createPostRequest([winner]),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
     expect(first.status).toBe(200);
@@ -1493,7 +1708,10 @@ describe("functions api diff contracts", () => {
           metadata: { followsSeq: -1 },
         }),
       ]),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
 
@@ -1512,7 +1730,9 @@ describe("functions api diff contracts", () => {
     expect(branch).toEqual(
       expect.objectContaining({ headSnapshotId: 1, headEventSeq: 0 }),
     );
-    await expect(readSnapshot(bucket as never, rootDropId, branch.branchId, 2)).resolves.toBeNull();
+    await expect(
+      readSnapshot(bucket as never, rootDropId, branch.branchId, 2),
+    ).resolves.toBeNull();
   });
 
   it("rejects conflicting event IDs within one envelope", async () => {
@@ -1565,14 +1785,20 @@ describe("functions api diff contracts", () => {
 
     const post = await onRequest({
       request: createPostRequest([eventA, eventB]),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
     expect(post.status).toBe(200);
 
     const latest = await onRequest({
       request: createGetRequest("?cursor=__latest__"),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
 
@@ -1586,7 +1812,10 @@ describe("functions api diff contracts", () => {
 
     const poll = await onRequest({
       request: createGetRequest("?cursor=-1&excludeClient=writer-a&limit=10"),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
 
@@ -1601,6 +1830,398 @@ describe("functions api diff contracts", () => {
     expect(pollBody.events[0].eventId).toBe("evt-b");
     expect(pollBody.cursor).toBe("1");
   });
+
+  it("enforces projected root reads before diff and fact repository access", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const { branch: resolvedOwner } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const ownerBranch = { ...resolvedOwner, headEventSeq: 0 };
+    bucket.seed(
+      createBranchKey(rootDropId, ownerBranch.branchId),
+      JSON.stringify(ownerBranch),
+    );
+    db.seedBranchEvent(rootDropId, ownerBranch.branchId, {
+      ...makeEvent({
+        eventId: "evt-private-owner",
+        sourceClientId: "writer-owner",
+        text: "owner",
+        createdAt: 201,
+      }),
+      snapshotId: 1,
+    });
+    const setProjection = (
+      visibility: unknown,
+      deletedAt: number | null = null,
+    ) => {
+      db.accountLibraryEntries.set(rootDropId, {
+        entry_seq: 1,
+        drop_id: rootDropId,
+        account_id: accountId,
+        visibility,
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: deletedAt,
+      });
+    };
+    const call = async (
+      query: string,
+      requestAccountId?: string,
+      includeDevelopmentAuth = false,
+    ) => {
+      const headers = new Headers();
+      if (requestAccountId) {
+        headers.set("x-nulldown-account-id", requestAccountId);
+      }
+      return onRequest({
+        request: new Request(
+          `https://nulldown.test/api/diff/${rootDropId}${query}`,
+          { headers },
+        ),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+          ACCOUNT_AUTH_SECRET: "test-secret",
+          ...(includeDevelopmentAuth
+            ? { ALLOW_INSECURE_ACCOUNT_HEADER: "1" }
+            : {}),
+        },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+    };
+    const expectNoDiffOrFactReads = () => {
+      expect(bucket.listCalls).toEqual([]);
+      expect(
+        bucket.getCalls.filter(
+          (key) =>
+            key.startsWith("__drop_branch_diffs__/") ||
+            key.startsWith("__drop_branch_diff_events__/") ||
+            key.startsWith("__drop_branch_runtime_fact_events__/"),
+        ),
+      ).toEqual([]);
+    };
+
+    setProjection("private");
+    for (const [query, requestAccountId, developmentAuth] of [
+      ["?cursor=__latest__", undefined, false],
+      [
+        `?cursor=-1&branchId=${encodeURIComponent(ownerBranch.branchId)}`,
+        "account-unrelated",
+        true,
+      ],
+      [
+        `?cursor=-1&factCursor=-1&branchId=${encodeURIComponent(ownerBranch.branchId)}`,
+        undefined,
+        false,
+      ],
+    ] as const) {
+      bucket.clearReadMetrics();
+      const response = await call(query, requestAccountId, developmentAuth);
+      expect(response.status).toBe(404);
+      await expect(response.text()).resolves.toBe("Branch not found.");
+      expectNoDiffOrFactReads();
+    }
+
+    for (const [visibility, deletedAt] of [
+      ["unknown", null],
+      ["public", 2],
+      ["unlisted", 2],
+      ["private", 2],
+    ] as const) {
+      setProjection(visibility, deletedAt);
+      bucket.clearReadMetrics();
+      const response = await call(
+        `?cursor=__latest__&branchId=${encodeURIComponent(ownerBranch.branchId)}`,
+        accountId,
+        true,
+      );
+      expect(response.status).toBe(404);
+      await expect(response.text()).resolves.toBe("Branch not found.");
+      expectNoDiffOrFactReads();
+      expect(
+        bucket.getCalls.filter((key) => key.startsWith("__drop_branch__/")),
+      ).toEqual([]);
+    }
+  });
+
+  it.each([
+    ["private", "DfPr01", "private", null, undefined],
+    ["tombstoned", "DfDe01", "public", 2, accountId],
+    ["malformed", "DfBa01", "unknown", null, accountId],
+  ] as const)(
+    "hides malformed poll validation for an R2-only alias to a denied %s root",
+    async (_label, shortId, visibility, deletedAt, requestAccountId) => {
+      const bucket = createSeededBucket();
+      const db = new MemoryD1Database();
+      const { branch } = await resolveBranchForActor(
+        bucket as never,
+        rootDropId,
+        accountId,
+        null,
+      );
+      bucket.seed(createRemoteAliasKey(shortId), rootDropId, "text/plain");
+      db.accountLibraryEntries.set(rootDropId, {
+        entry_seq: 1,
+        drop_id: rootDropId,
+        account_id: accountId,
+        visibility,
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: deletedAt,
+      });
+      bucket.clearReadMetrics();
+      db.runCalls = 0;
+      const headers = requestAccountId
+        ? { "x-nulldown-account-id": requestAccountId }
+        : undefined;
+
+      const response = await onRequest({
+        request: new Request(
+          `https://nulldown.test/api/diff/${shortId}?cursor=invalid&limit=0&factCursor=invalid&factLimit=0&branchId=${encodeURIComponent(branch.branchId)}`,
+          { headers },
+        ),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+          ACCOUNT_AUTH_SECRET: "test-secret",
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        },
+        params: { id: shortId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+
+      expect(response.status).toBe(404);
+      await expect(response.text()).resolves.toBe("Branch not found.");
+      expect(db.runCalls).toBe(0);
+      expect(
+        bucket.getCalls.filter(
+          (key) =>
+            key.startsWith("__drop_branch__/") ||
+            key.startsWith("__drop_branch_diffs__/") ||
+            key.startsWith("__drop_branch_diff_events__/") ||
+            key.startsWith("__drop_branch_runtime_fact_events__/"),
+        ),
+      ).toEqual([]);
+      expect(bucket.listCalls).toEqual([]);
+    },
+  );
+
+  it("preserves poll validation errors for an allowed projected public root", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    db.accountLibraryEntries.set(rootDropId, {
+      entry_seq: 1,
+      drop_id: rootDropId,
+      account_id: accountId,
+      visibility: "public",
+      created_at: 1,
+      updated_at: 1,
+      deleted_at: null,
+    });
+
+    const response = await onRequest({
+      request: new Request(
+        `https://nulldown.test/api/diff/${rootDropId}?cursor=invalid&limit=0&factCursor=invalid&factLimit=0`,
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ACCOUNT_AUTH_SECRET: "test-secret",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Invalid diff poll query.",
+      code: "validation_failed",
+    });
+    expect(
+      bucket.getCalls.filter((key) => key.startsWith("__drop_branch__/")),
+    ).toEqual([]);
+    expect(db.runCalls).toBe(0);
+  });
+
+  it("resolves an allowed R2-only short alias for diff polling", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const { branch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    bucket.seed(createRemoteAliasKey("DfPu01"), rootDropId, "text/plain");
+    db.accountLibraryEntries.set(rootDropId, {
+      entry_seq: 1,
+      drop_id: rootDropId,
+      account_id: accountId,
+      visibility: "public",
+      created_at: 1,
+      updated_at: 1,
+      deleted_at: null,
+    });
+    db.runCalls = 0;
+
+    const response = await onRequest({
+      request: new Request(
+        `https://nulldown.test/api/diff/DfPu01?cursor=__latest__&branchId=${encodeURIComponent(branch.branchId)}`,
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ACCOUNT_AUTH_SECRET: "test-secret",
+      },
+      params: { id: "DfPu01" },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(200);
+    expect(db.runCalls).toBe(0);
+  });
+
+  it("allows projected private owner and explicit writer event polls but hides siblings", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const { branch: resolvedOwner } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      accountId,
+      null,
+    );
+    const ownerBranch = { ...resolvedOwner, headEventSeq: 0 };
+    const writerBranch = {
+      ...ownerBranch,
+      branchId: "writer-branch",
+      mode: "clone" as const,
+      ownerAccountId: "forged-owner",
+      writerAccountId: "account-writer",
+    };
+    const siblingBranch = {
+      ...writerBranch,
+      branchId: "sibling-branch",
+      writerAccountId: "account-sibling",
+    };
+    for (const branch of [ownerBranch, writerBranch, siblingBranch]) {
+      bucket.seed(
+        createBranchKey(rootDropId, branch.branchId),
+        JSON.stringify(branch),
+      );
+      db.seedBranchEvent(rootDropId, branch.branchId, {
+        ...makeEvent({
+          eventId: `evt-${branch.branchId}`,
+          sourceClientId: branch.branchId,
+          text: branch.branchId,
+          createdAt: 202,
+        }),
+        snapshotId: 1,
+      });
+    }
+    db.accountLibraryEntries.set(rootDropId, {
+      entry_seq: 1,
+      drop_id: rootDropId,
+      account_id: accountId,
+      visibility: "private",
+      created_at: 1,
+      updated_at: 1,
+      deleted_at: null,
+    });
+    const call = (branchId: string, cursor: string, requestAccountId: string) =>
+      onRequest({
+        request: new Request(
+          `https://nulldown.test/api/diff/${rootDropId}?cursor=${cursor}&branchId=${encodeURIComponent(branchId)}`,
+          { headers: { "x-nulldown-account-id": requestAccountId } },
+        ),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+          ACCOUNT_AUTH_SECRET: "test-secret",
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+
+    const ownerLatest = await call(
+      ownerBranch.branchId,
+      "__latest__",
+      accountId,
+    );
+    expect(ownerLatest.status).toBe(200);
+    await expect(ownerLatest.json()).resolves.toEqual({
+      events: [],
+      cursor: "0",
+    });
+
+    const writerPage = await call(
+      writerBranch.branchId,
+      "-1",
+      "account-writer",
+    );
+    expect(writerPage.status).toBe(200);
+    await expect(writerPage.json()).resolves.toMatchObject({
+      cursor: "0",
+      events: [{ eventId: "evt-writer-branch", seq: 0 }],
+    });
+
+    const sibling = await call(siblingBranch.branchId, "-1", "account-writer");
+    expect(sibling.status).toBe(404);
+    await expect(sibling.text()).resolves.toBe("Branch not found.");
+  });
+
+  it.each(["public", "unlisted"] as const)(
+    "keeps projected %s ordinary event polling anonymously readable",
+    async (visibility) => {
+      const bucket = createSeededBucket();
+      const db = new MemoryD1Database();
+      const { branch } = await resolveBranchForActor(
+        bucket as never,
+        rootDropId,
+        null,
+        null,
+      );
+      bucket.seed(
+        createBranchKey(rootDropId, branch.branchId),
+        JSON.stringify({ ...branch, headEventSeq: 0 }),
+      );
+      db.accountLibraryEntries.set(rootDropId, {
+        entry_seq: 1,
+        drop_id: rootDropId,
+        account_id: accountId,
+        visibility,
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      });
+      db.seedBranchEvent(rootDropId, branch.branchId, {
+        ...makeEvent({
+          eventId: `evt-${visibility}`,
+          sourceClientId: "anonymous-source",
+          text: visibility,
+          createdAt: 203,
+        }),
+        snapshotId: 1,
+      });
+
+      const response = await onRequest({
+        request: new Request(
+          `https://nulldown.test/api/diff/${rootDropId}?cursor=-1&branchId=${encodeURIComponent(branch.branchId)}`,
+        ),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+          ACCOUNT_AUTH_SECRET: "test-secret",
+        },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        events: [{ eventId: `evt-${visibility}` }],
+      });
+    },
+  );
 
   it("returns authenticated runtime fact pages with an independent cursor", async () => {
     const bucket = createSeededBucket();
@@ -1632,7 +2253,10 @@ describe("functions api diff contracts", () => {
       request: createGetRequest(
         `?cursor=-1&factCursor=-1&branchId=${encodeURIComponent(branch.branchId)}`,
       ),
-      env: { R2_BUCKET: bucket as unknown as R2Bucket },
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
     const body = (await response.json()) as {
@@ -1654,20 +2278,224 @@ describe("functions api diff contracts", () => {
     ]);
   });
 
-  it("requires branch-writer access when requesting runtime facts", async () => {
+  it.each([
+    ["public", "-1", 1],
+    ["public", "__latest__", 0],
+    ["unlisted", "-1", 1],
+    ["unlisted", "__latest__", 0],
+  ] as const)(
+    "allows the projected canonical owner to read %s runtime facts from cursor %s despite forged branch ownership",
+    async (visibility, factCursor, expectedFactCount) => {
+      const bucket = createSeededBucket();
+      const db = new MemoryD1Database();
+      const { branch: resolvedBranch } = await resolveBranchForActor(
+        bucket as never,
+        rootDropId,
+        null,
+        null,
+      );
+      const branch = {
+        ...resolvedBranch,
+        ownerAccountId: "forged-owner",
+        writerAccountId: "account-writer",
+      };
+      bucket.seed(
+        createBranchKey(rootDropId, branch.branchId),
+        JSON.stringify(branch),
+      );
+      db.accountLibraryEntries.set(rootDropId, {
+        entry_seq: 1,
+        drop_id: rootDropId,
+        account_id: accountId,
+        visibility,
+        created_at: 1,
+        updated_at: 1,
+        deleted_at: null,
+      });
+      const facts = createBranchRuntimeFactLogRepository({
+        blobs: bucket as never,
+        sql: db as never,
+      });
+      await facts.appendBranchRuntimeFact(rootDropId, branch.branchId, {
+        version: 1,
+        kind: "ui.state.patch",
+        id: `patch-owner-${visibility}-${factCursor}`,
+        callId: "call-owner",
+        createdAt: 1,
+        source: {
+          rootDropId,
+          branchId: branch.branchId,
+          snapshotId: branch.headSnapshotId,
+          callId: "call-owner",
+        },
+        patch: [{ op: "set", path: ["approved"], value: true }],
+      });
+
+      const response = await onRequest({
+        request: new Request(
+          `https://nulldown.test/api/diff/${rootDropId}?cursor=-1&factCursor=${factCursor}&branchId=${encodeURIComponent(branch.branchId)}`,
+          { headers: { "x-nulldown-account-id": accountId } },
+        ),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+          ACCOUNT_AUTH_SECRET: "test-secret",
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+      const body = (await response.json()) as {
+        facts?: unknown[];
+        factCursor?: string | null;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.facts).toHaveLength(expectedFactCount);
+      expect(body.factCursor).toBe("0");
+    },
+  );
+
+  it("uses only projected canonical ownership or the exact branch writer for public runtime facts", async () => {
     const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const { branch: resolvedBranch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      null,
+      null,
+    );
+    const branch = {
+      ...resolvedBranch,
+      ownerAccountId: "forged-owner",
+      writerAccountId: "account-writer",
+    };
+    const siblingBranch = {
+      ...branch,
+      branchId: "fact-sibling",
+      ownerAccountId: "account-writer",
+      writerAccountId: "account-sibling",
+    };
+    for (const record of [branch, siblingBranch]) {
+      bucket.seed(
+        createBranchKey(rootDropId, record.branchId),
+        JSON.stringify(record),
+      );
+    }
+    db.accountLibraryEntries.set(rootDropId, {
+      entry_seq: 1,
+      drop_id: rootDropId,
+      account_id: accountId,
+      visibility: "public",
+      created_at: 1,
+      updated_at: 1,
+      deleted_at: null,
+    });
+    const call = (branchId: string, requestAccountId?: string) => {
+      const headers = new Headers();
+      if (requestAccountId) {
+        headers.set("x-nulldown-account-id", requestAccountId);
+      }
+      return onRequest({
+        request: new Request(
+          `https://nulldown.test/api/diff/${rootDropId}?cursor=-1&factCursor=-1&branchId=${encodeURIComponent(branchId)}`,
+          { headers },
+        ),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: db as unknown as D1Database,
+          ACCOUNT_AUTH_SECRET: "test-secret",
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+        },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+    };
+
+    await expect(
+      call(branch.branchId, "account-writer"),
+    ).resolves.toMatchObject({
+      status: 200,
+    });
+    for (const response of [
+      await call(branch.branchId, "forged-owner"),
+      await call(siblingBranch.branchId, "account-writer"),
+      await call(branch.branchId, "account-unrelated"),
+      await call(branch.branchId),
+    ]) {
+      expect(response.status).toBe(403);
+      await expect(response.text()).resolves.toBe(
+        "You are not allowed to read runtime facts for this branch.",
+      );
+    }
+  });
+
+  it("preserves legacy projection-absent runtime fact reads for the exact writer", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    const { branch: resolvedBranch } = await resolveBranchForActor(
+      bucket as never,
+      rootDropId,
+      null,
+      null,
+    );
+    const branch = {
+      ...resolvedBranch,
+      ownerAccountId: "forged-owner",
+      writerAccountId: "legacy-writer",
+    };
+    bucket.seed(
+      createBranchKey(rootDropId, branch.branchId),
+      JSON.stringify(branch),
+    );
+
+    const response = await onRequest({
+      request: new Request(
+        `https://nulldown.test/api/diff/${rootDropId}?cursor=-1&factCursor=__latest__&branchId=${encodeURIComponent(branch.branchId)}`,
+        { headers: { "x-nulldown-account-id": "legacy-writer" } },
+      ),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        ACCOUNT_AUTH_SECRET: "test-secret",
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+      },
+      params: { id: rootDropId },
+    } as unknown as Parameters<typeof onRequest>[0]);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      facts: [],
+      factCursor: "-1",
+    });
+  });
+
+  it("requires branch-writer access for runtime facts on a projected public root", async () => {
+    const bucket = createSeededBucket();
+    const db = new MemoryD1Database();
+    db.accountLibraryEntries.set(rootDropId, {
+      entry_seq: 1,
+      drop_id: rootDropId,
+      account_id: accountId,
+      visibility: "public",
+      created_at: 1,
+      updated_at: 1,
+      deleted_at: null,
+    });
     const response = await onRequest({
       request: new Request(
         `https://nulldown.test/api/diff/${rootDropId}?cursor=-1&factCursor=-1`,
       ),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
         ACCOUNT_AUTH_SECRET: "production-secret",
       },
       params: { id: rootDropId },
     } as unknown as Parameters<typeof onRequest>[0]);
 
     expect(response.status).toBe(403);
+    await expect(response.text()).resolves.toBe(
+      "You are not allowed to read runtime facts for this branch.",
+    );
   });
 
   it("preserves event metadata through append and poll", async () => {
@@ -1745,7 +2573,10 @@ describe("functions api diff contracts", () => {
       },
       data: { persisted: true },
     };
-    bucket.seed(nullplugUiResponseFactKey(responseFact), JSON.stringify(responseFact));
+    bucket.seed(
+      nullplugUiResponseFactKey(responseFact),
+      JSON.stringify(responseFact),
+    );
     const event = makeEvent({
       eventId: "evt-data-put",
       sourceClientId: "writer-data-put",
@@ -1759,7 +2590,8 @@ describe("functions api diff contracts", () => {
           summary: "Persist the verified snapshot projection.",
           procedureCandidate: {
             goal: "Persist a verified snapshot projection",
-            summary: "Apply the marked diff and retain the immutable diff reference.",
+            summary:
+              "Apply the marked diff and retain the immutable diff reference.",
             completed: true,
           },
         },
@@ -1775,6 +2607,7 @@ describe("functions api diff contracts", () => {
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
         DB: db as unknown as D1Database,
+        ALLOW_INSECURE_ACCOUNT_HEADER: "1",
       },
       params: { id: rootDropId },
       waitUntil: (promise: Promise<void>) => {
@@ -1982,7 +2815,8 @@ describe("functions api diff contracts", () => {
     expect(policyFacts).toEqual([policyFact]);
 
     const nullmemRecords = [...db.nullmemRecords.values()].map(
-      (entry) => JSON.parse(entry) as NullMemFactRecord | NullMemProcedureRecord,
+      (entry) =>
+        JSON.parse(entry) as NullMemFactRecord | NullMemProcedureRecord,
     );
     const nullmemFacts = nullmemRecords.filter(
       (entry): entry is NullMemFactRecord => entry.kind === "fact",
@@ -2036,7 +2870,12 @@ describe("functions api diff contracts", () => {
         recordId: `memproc:auto-accepted-diff:${rootDropId}:${body.branchId}:${event.eventId}`,
         goal: "Persist a verified snapshot projection",
         outcome: "success",
-        labels: ["procedure-memory", "auto-extracted", "needs-review", "accepted-diff"],
+        labels: [
+          "procedure-memory",
+          "auto-extracted",
+          "needs-review",
+          "accepted-diff",
+        ],
         sourceRefs: [
           { kind: "branch", rootDropId, branchId: body.branchId },
           {
@@ -2059,7 +2898,7 @@ describe("functions api diff contracts", () => {
       text: "X",
       createdAt: 106,
       metadata: {
-        kind: "invalid.kind",
+        kind: "invalid.kind" as never,
       },
     });
 
@@ -2292,10 +3131,10 @@ describe("functions api diff contracts", () => {
     ]);
   });
 
-  it("runs provider-registered snapshotters on future appends", async () => {
+  it("runs server-runtime-registered snapshotters on future appends", async () => {
     const bucket = createSeededBucket();
     const db = new MemoryD1Database();
-    const provider = createCloudflareVoidProvider({
+    const serverRuntime = createCloudflareNulldownServerRuntime({
       R2_BUCKET: bucket as unknown as R2Bucket,
       DB: db as unknown as D1Database,
     });
@@ -2313,7 +3152,7 @@ describe("functions api diff contracts", () => {
     });
     const calls: string[] = [];
     const waitUntilPromises: Promise<void>[] = [];
-    const unsubscribe = provider.nulledit.registerSnapshotter({
+    const unsubscribe = serverRuntime.nulledit.registerSnapshotter({
       id: "provider-registered-snapshotter",
       phase: "secondary",
       snapshot(context) {
@@ -2324,7 +3163,7 @@ describe("functions api diff contracts", () => {
     });
 
     try {
-      const appended = await provider.nulledit.appendDiffEvents({
+      const appended = await serverRuntime.nulledit.appendDiffEvents({
         branch,
         events: [event],
         waitUntil: (promise) => {
@@ -2359,7 +3198,9 @@ describe("functions api diff contracts", () => {
     const calls: string[] = [];
     const commitBuffer: BranchCommitBuffer = {
       appendAcceptedCommit(commit) {
-        calls.push(`buffer:${commit.snapshotId}:${commit.acceptedEvents.length}`);
+        calls.push(
+          `buffer:${commit.snapshotId}:${commit.acceptedEvents.length}`,
+        );
         return {
           mode: "buffer",
           reason: "hot-branch",
@@ -2397,7 +3238,12 @@ describe("functions api diff contracts", () => {
       readBranch(bucket as unknown as R2Bucket, rootDropId, branch.branchId),
     ).resolves.toEqual(expect.objectContaining({ headSnapshotId: 1 }));
     await expect(
-      readSnapshot(bucket as unknown as R2Bucket, rootDropId, branch.branchId, 1),
+      readSnapshot(
+        bucket as unknown as R2Bucket,
+        rootDropId,
+        branch.branchId,
+        1,
+      ),
     ).resolves.toEqual(expect.objectContaining({ snapshotId: 1 }));
   });
 
@@ -2519,7 +3365,8 @@ describe("functions api diff contracts", () => {
         args: {
           procedureCandidate: {
             goal: "Exercise observer failure isolation",
-            summary: "A failing procedure writer must not reject the accepted diff.",
+            summary:
+              "A failing procedure writer must not reject the accepted diff.",
             completed: true,
           },
         },

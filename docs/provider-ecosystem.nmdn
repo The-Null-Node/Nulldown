@@ -1,61 +1,59 @@
 ```metadata
-title: Nulldown Void Provider Usage and Scaling Guide
+title: Nulldown Drop Provider Usage and Scaling Guide
 format: nmdn
 version: 1
 ```
 
-# Nulldown Void Provider Usage and Scaling Guide
+# Nulldown Drop Provider Usage and Scaling Guide
 
-This is a usage-first guide for the void provider runtime in Nulldown. It explains how app code creates, opens, and resolves drops while the runtime chooses local or remote sealed storage.
+This is a usage-first guide for browser drop providers in Nulldown. It explains how app code stages, publishes, opens, and resolves drops through local and remote sealed storage.
 
 If you are looking for how to create, fetch, or resolve drops, start with `dropStore`. Use providers directly only for tests, tooling, or runtime integration work.
 
-## What the void provider layer is
+## What the drop provider layer is
 
-The void provider layer gives the app one stable facade for plaintext drop operations while keeping storage and crypto separated:
+The drop provider layer gives browser code explicit local and remote ports for plaintext drop operations while keeping storage and crypto separated:
 
 - Local provider: sealed envelope storage in IndexedDB.
 - Remote provider: sealed envelope storage through `/api/store` and `/api/get/:id`.
 
-Providers are selected by:
-
-- Write mode: `offlineMode` in the store.
-- Drop id prefix: `offline_` routes to the local provider.
+The registry exposes local and remote ports plus an id-routing helper. The app-facing
+`dropStore` uses a local-first workflow instead: it stages every create locally,
+publishes through the remote port in online mode, and tries local reads before remote
+fallback.
 
 Storage implementations receive sealed envelopes only. Crypto seals, opens, signs, and verifies. The provider composes storage, crypto, and graph resolution without letting those boundaries overlap.
 
 ## Public runtime contract
 
-Defined through `src/lib/void/provider.ts` with implementation details split under `src/lib/void/provider/*`, `src/lib/void/storage/*`, `src/lib/void/crypto/*`, and `src/lib/void/vault/*`.
+Defined through `src/lib/drop/provider.ts` with drop-port implementation details under `src/lib/drop/provider/*`. Sealed storage, browser crypto, and vault behavior remain separate capabilities.
 
 ```ts
-type VoidProviderScope = "local" | "remote";
+type DropProviderPortScope = "local" | "remote";
 
 interface DropProviderPort {
-  scope: VoidProviderScope;
+  scope: DropProviderPortScope;
   create(
     payload: DropPayload,
-    options?: VoidCreateOptions,
-  ): Promise<{ id: string; url: string; scope: VoidProviderScope }>;
+    options?: DropProviderCreateOptions,
+  ): Promise<{ id: string; url: string; scope: DropProviderPortScope }>;
   get(id: string): Promise<DropPayload | null>;
   resolveGraph(id: string): Promise<DropGraph>;
   sync(
     target: DropProviderPort,
-    options?: VoidSyncOptions,
-    onProgress?: (progress: VoidSyncProgress) => void,
-  ): Promise<VoidSyncResult>;
+    options?: DropProviderSyncOptions,
+    onProgress?: (progress: DropProviderSyncProgress) => void,
+  ): Promise<DropProviderSyncResult>;
 }
 
-interface VoidProvider extends DropProviderPort {}
-
-interface VoidProviderRegistry {
-  local: VoidProvider;
-  remote: VoidProvider;
-  forDropId(id: string): VoidProvider;
+interface DropProviderPortRegistry {
+  local: DropProviderPort;
+  remote: DropProviderPort;
+  forDropId(id: string): DropProviderPort;
 }
 ```
 
-`VoidProvider` is the app-facing facade. `DropProviderPort` is only the child local, remote, or server capability port under a `VoidProvider`; do not reintroduce an app-facing `DropProvider` abstraction.
+`DropProviderPortRegistry` is the browser drop-routing boundary. It does not own Nullplug invocation or backend application composition.
 
 ### What each call guarantees
 
@@ -70,9 +68,9 @@ Most app code should use `dropStore`, not providers directly.
 
 From `src/stores/dropStore.ts`:
 
-- `createDrop(payload)` chooses local or remote storage by `offlineMode`.
-- `getDrop(id)` routes by id prefix.
-- `resolveDropGraph(id)` routes by id prefix.
+- `createDrop(payload)` seals and stores locally, then queues remote publication in online mode.
+- `getDrop(id)` tries local storage before the remote provider.
+- `resolveDropGraph(id)` tries local graph resolution before remote fallback.
 
 ### Example: share from UI
 
@@ -102,12 +100,12 @@ Use direct providers for tests, custom workflows, or tooling.
 
 ```ts
 import {
-  createLocalVoidProvider,
-  createRemoteVoidProvider,
-} from "src/lib/void/provider";
+  createLocalDropProviderPort,
+  createRemoteDropProviderPort,
+} from "src/lib/drop/provider";
 
-const local = createLocalVoidProvider();
-const remote = createRemoteVoidProvider();
+const local = createLocalDropProviderPort();
+const remote = createRemoteDropProviderPort();
 
 const localResult = await local.create({ content: "local note" });
 const remoteResult = await remote.create({ content: "remote note" });
@@ -116,17 +114,38 @@ const remoteResult = await remote.create({ content: "remote note" });
 ### Create a registry with shared crypto
 
 ```ts
-import { createBrowserVoidCrypto } from "src/lib/void/crypto/browserVoidCrypto";
-import { createVoidProviderRegistry } from "src/lib/void/provider";
+import { createBrowserDropCrypto } from "src/lib/crypto/browser-drop-crypto";
+import { createDropProviderPortRegistry } from "src/lib/drop/provider";
 
-const crypto = createBrowserVoidCrypto();
-const registry = createVoidProviderRegistry({ crypto });
+const crypto = createBrowserDropCrypto();
+const registry = createDropProviderPortRegistry({ crypto });
 
 const provider = registry.forDropId(dropId);
 const payload = await provider.get(dropId);
 ```
 
 This mirrors production behavior where local and remote providers share one browser crypto implementation.
+
+### Use the browser Nullplug client
+
+The editor creates a client for its own session lifetime:
+
+```ts
+import { createBrowserNullplugClient } from "src/lib/nullplug/browser-client";
+
+const nullplug = createBrowserNullplugClient();
+await nullplug.invoke(request);
+```
+
+Backend services compose their own request-independent runtime:
+
+```ts
+import { createNulldownServerRuntime } from "@thenullnode/nulldown/server/runtime";
+
+const runtime = createNulldownServerRuntime({ data, nulledit, memory, nullplug, policy });
+```
+
+The browser client preserves the existing Nullplug registry and invocation behavior and submits response/state facts through the branch API client. Submission context contains only `rootDropId`, `branchId`, `accountId`, and `clientId`; fetch and bearer-session details remain private to the browser adapter.
 
 ## End-to-end flow diagrams
 
@@ -136,15 +155,15 @@ This mirrors production behavior where local and remote providers share one brow
 flowchart LR
   UI[Editor and DropView]
   Store[dropStore]
-  Registry[VoidProviderRegistry]
+  Registry[DropProviderPortRegistry]
 
-  Local[Local VoidProvider]
-  Remote[Remote VoidProvider]
-  Crypto[BrowserVoidCrypto]
-  LocalStorage[IndexedDbVoidStorage]
-  RemoteStorage[HttpVoidStorage]
-  GraphLocal[LineageVoidGraph local cache]
-  GraphRemote[LineageVoidGraph remote cache]
+  Local[Local DropProviderPort]
+  Remote[Remote DropProviderPort]
+  Crypto[BrowserDropCrypto]
+  LocalStorage[IndexedDbDropStorage]
+  RemoteStorage[HttpDropStorage]
+  GraphLocal[LineageDropGraphResolver local cache]
+  GraphRemote[LineageDropGraphResolver remote cache]
 
   IDB[(IndexedDB drops + kv)]
   StoreApi[/POST /api/store/]
@@ -174,23 +193,27 @@ flowchart LR
 sequenceDiagram
   participant UI
   participant Store as dropStore
-  participant Remote as RemoteVoidProvider
-  participant Crypto as BrowserVoidCrypto
-  participant Storage as HttpVoidStorage
+  participant Local as LocalDropProviderPort
+  participant Crypto as BrowserDropCrypto
+  participant IDB as IndexedDB
+  participant Queue as Publish queue
+  participant Remote as RemoteDropProviderPort
   participant API as /api/store
   participant R2
 
   UI->>Store: createDrop(payload), offlineMode=false
-  Store->>Remote: create(payload)
-  Remote->>Crypto: seal(payload)
-  Crypto-->>Remote: DropEnvelopeV1
-  Remote->>Storage: create(envelope)
-  Storage->>API: POST sealed envelope
+  Store->>Local: create(payload)
+  Local->>Crypto: seal(payload)
+  Crypto-->>Local: DropEnvelope
+  Local->>IDB: store sealed envelope
+  Store->>Queue: enqueue local drop
+  Queue->>Remote: publish drop
+  Remote->>API: POST sealed envelope
   API->>API: optional provider signature
   API->>R2: put(id, envelope)
-  API-->>Storage: {id, url}
-  Storage-->>Remote: {id, url}
-  Remote-->>Store: {id, url, scope:"remote"}
+  API-->>Remote: {id, url}
+  Remote-->>Queue: {id, url, scope:"remote"}
+  Queue-->>Store: publication result
   Store-->>UI: share link
 ```
 
@@ -200,19 +223,19 @@ sequenceDiagram
 sequenceDiagram
   participant UI
   participant Store as dropStore
-  participant Local as LocalVoidProvider
-  participant Crypto as BrowserVoidCrypto
-  participant Storage as IndexedDbVoidStorage
+  participant Local as LocalDropProviderPort
+  participant Crypto as BrowserDropCrypto
+  participant Storage as IndexedDbDropStorage
   participant IDB as IndexedDB
 
   UI->>Store: createDrop(payload), offlineMode=true
   Store->>Local: create(payload)
   Local->>Crypto: seal(payload)
-  Crypto-->>Local: DropEnvelopeV1
+  Crypto-->>Local: DropEnvelope
   Local->>Storage: create(envelope)
   Storage->>IDB: putOfflineDrop(record)
   Storage-->>Local: {id, url}
-  Local-->>Store: {id:"offline_*", url, scope:"local"}
+  Local-->>Store: {id, url, scope:"local"}
   Store-->>UI: local-only share link
 ```
 
@@ -236,11 +259,11 @@ Scaling happens across traffic, compute, lineage, and codebase evolution.
 
 - Offline traffic is absorbed by browser storage and does not hit server APIs.
 - Remote traffic is stateless at the function layer and object-backed in R2.
-- Reads and writes split naturally by id prefix and mode without branching in UI code.
+- The store keeps local-first read and publication policy out of UI call sites.
 
 ### Compute scaling
 
-- Seal/open work happens in `BrowserVoidCrypto`, which keeps private payload crypto on the client.
+- Seal/open work happens in `BrowserDropCrypto`, which keeps private payload crypto on the client.
 - Server-side remote storage mainly validates, optionally signs, and stores envelopes.
 - Backend route files stay thin HTTP adapters over services.
 
@@ -254,12 +277,12 @@ Scaling happens across traffic, compute, lineage, and codebase evolution.
 
 - Provider internals are composed from storage, crypto, and graph ports.
 - New backends can be added by implementing ports and extending registry routing.
-- UI and store call sites stay stable because the `VoidProvider` facade does not change.
+- UI and store call sites stay stable because `dropStore` owns browser provider-port routing.
 
 ## Operational boundaries and limits
 
 - Offline links are local to the browser profile or device that created them.
-- Remote sealed envelopes can only be opened by the matching account vault.
+- Browser-side open requires the matching account vault; provider-assisted unlock applies only to envelopes and policies configured for that flow.
 - Provider signature verification requires configured client verify key `VITE_PROVIDER_SIGNING_PUBLIC_JWK`.
 - Graph cache currently has no TTL or version invalidation policy.
 
@@ -272,26 +295,28 @@ Scaling happens across traffic, compute, lineage, and codebase evolution.
 
 ## Extension recipe: add another provider scope
 
-1. Implement `VoidStorage` semantics for sealed envelopes only.
-2. Reuse `BrowserVoidCrypto` or add another `VoidCrypto` implementation.
-3. Reuse `LineageVoidGraph` or provide a custom `VoidGraph` implementation.
+1. Implement `DropStorage` semantics for sealed envelopes only.
+2. Reuse `BrowserDropCrypto` or add another `DropCrypto` implementation.
+3. Reuse `LineageDropGraphResolver` or provide a custom `DropGraphResolver` implementation.
 4. Add the provider instance to the registry and define a routing rule.
 5. Keep `dropStore` public methods unchanged so UI remains provider-agnostic.
 
 ## Key file map
 
-- `src/lib/void/provider.ts`: stable public void provider import path.
-- `src/lib/void/provider/defaultVoidProvider.ts`: runtime composition of storage, crypto, and graph.
-- `src/lib/void/provider/registry.ts`: local/remote registry and factory helpers.
-- `src/lib/void/storage/types.ts`: sealed storage contracts.
-- `src/lib/void/storage/indexedDbVoidStorage.ts`: local sealed envelope storage.
-- `src/lib/void/storage/httpVoidStorage.ts`: remote HTTP sealed envelope storage.
-- `src/lib/void/crypto/browserVoidCrypto.ts`: browser seal/open/sign/verify behavior.
-- `src/lib/void/vault/passkeyVault.ts`: browser vault keys, passkey gating, and unlock cache.
+- `src/lib/drop/provider.ts`: browser drop-provider port entrypoint.
+- `src/lib/drop/provider/default-drop-provider-port.ts`: runtime composition of storage, crypto, and graph.
+- `src/lib/drop/provider/registry.ts`: local/remote registry and factory helpers.
+- `src/lib/nullplug/browser-client.ts`: editor-session Nullplug invocation and fact submission.
+- `src/server/runtime.ts`: backend application runtime composition.
+- `src/lib/drop/storage/types.ts`: sealed storage contracts.
+- `src/lib/drop/storage/indexed-db-storage.ts`: local sealed envelope storage.
+- `src/lib/drop/storage/http-storage.ts`: remote HTTP sealed envelope storage.
+- `src/lib/crypto/browser-drop-crypto.ts`: browser seal/open/sign/verify behavior.
+- `src/lib/auth/vault/passkey-vault.ts`: browser vault keys, passkey gating, and unlock cache.
 - `src/stores/dropStore.ts`: app-facing provider routing.
 - `src/pages/editor/hooks/useShareDrop.ts`: share payload composition.
 - `functions/api/store.ts`: remote store route adapter.
-- `functions/api/_lib/storeService.ts`: remote store service.
+- `functions/api/_lib/drops/services/storeDrop.ts`: remote store service.
 - `functions/api/get/[id].ts`: remote read path.
-- `functions/api/_lib/void/serverVoidCrypto.ts`: server provider signing, escrow, promotion, unlock, and diff-auth key wrapping.
+- `functions/api/_lib/crypto/provider-crypto.ts`: provider signing, escrow, promotion, unlock, and diff-auth key wrapping.
 - `shared/drop/types.ts`: payload and envelope schemas.

@@ -115,6 +115,7 @@ const createRequest = (method: "GET" | "POST", body?: unknown, accountId?: strin
 
 const envFor = (bucket: MemoryR2Bucket) => ({
   R2_BUCKET: bucket as unknown as R2Bucket,
+  ALLOW_INSECURE_ACCOUNT_HEADER: "1",
   NULLPLUG_REGISTRY_SIGNATURE_SECRET: signatureSecret,
   NULLPLUG_REGISTRY_ALLOWED_HOSTS:
     "plugins.nulldown.test,api.nulldown.test",

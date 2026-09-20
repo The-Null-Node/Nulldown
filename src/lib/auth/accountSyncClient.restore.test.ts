@@ -21,7 +21,7 @@ const encryptAccountRecoveryPayload = jest.fn() as jest.Mock;
 const getKvValue = jest.fn() as jest.Mock;
 const isIndexedDbSupported = jest.fn(() => false) as jest.Mock;
 
-jest.unstable_mockModule("../void/vault/passkeyVault", () => ({
+jest.unstable_mockModule("./vault/passkey-vault", () => ({
   assignLocalAccountOwner,
   exportLocalAccountRecoveryPayload,
   getLocalAccountSummary,
@@ -38,7 +38,7 @@ jest.unstable_mockModule("./accountSession", () => ({
   clearAccountSession,
   getAccountAuthHeaders,
 }));
-jest.unstable_mockModule("../void/vault/recovery/crypto", () => ({
+jest.unstable_mockModule("./vault/recovery/crypto", () => ({
   decryptAccountRecoveryPackage,
   encryptAccountRecoveryPayload,
 }));
@@ -47,11 +47,16 @@ jest.unstable_mockModule("../indexedDb", () => ({
   isIndexedDbSupported,
 }));
 
-const { cancelAccountSyncOperations, restoreAccountSync, setupAccountSync } = await import(
-  "./accountSyncClient",
+const { cancelAccountSyncOperations, restoreAccountSync, setupAccountSync } =
+  await import("./accountSyncClient");
+const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "crypto",
 );
-const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
-const originalTextEncoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, "TextEncoder");
+const originalTextEncoderDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "TextEncoder",
+);
 
 const recoveryPackage = {
   metadata: {
@@ -73,8 +78,10 @@ const recoveryPackage = {
   ciphertext: "e".repeat(32),
 };
 
-const canonicalRecoveryPackage = decodeEncryptedAccountRecoveryPackage(recoveryPackage);
-if (!canonicalRecoveryPackage) throw new Error("Expected valid recovery package fixture.");
+const canonicalRecoveryPackage =
+  decodeEncryptedAccountRecoveryPackage(recoveryPackage);
+if (!canonicalRecoveryPackage)
+  throw new Error("Expected valid recovery package fixture.");
 
 const recoveredPayload = {
   accountId: "account-1",
@@ -119,7 +126,11 @@ describe("account sync restore ordering", () => {
       Reflect.deleteProperty(globalThis, "crypto");
     }
     if (originalTextEncoderDescriptor) {
-      Object.defineProperty(globalThis, "TextEncoder", originalTextEncoderDescriptor);
+      Object.defineProperty(
+        globalThis,
+        "TextEncoder",
+        originalTextEncoderDescriptor,
+      );
     } else {
       Reflect.deleteProperty(globalThis, "TextEncoder");
     }
@@ -147,18 +158,21 @@ describe("account sync restore ordering", () => {
     });
 
     await expect(
-      restoreAccountSync(
-        { userId: "user-1" },
-        "recovery-code",
-        { allowReplaceLocalAccount: true },
-      ),
+      restoreAccountSync({ userId: "user-1" }, "recovery-code", {
+        allowReplaceLocalAccount: true,
+      }),
     ).rejects.toThrow("Account sync is unavailable");
 
-    expect(decryptAccountRecoveryPackage).toHaveBeenCalledWith(recoveryPackage, "recovery-code");
+    expect(decryptAccountRecoveryPackage).toHaveBeenCalledWith(
+      recoveryPackage,
+      "recovery-code",
+    );
     expect(installLocalAccountRecoveryPayload).not.toHaveBeenCalled();
     expect(clearAccountSession).not.toHaveBeenCalled();
     expect(activateAccountSession).not.toHaveBeenCalled();
-    expect(window.localStorage.getItem("nulldown_pending_recovery_v1")).not.toBeNull();
+    expect(
+      window.localStorage.getItem("nulldown_pending_recovery_v1"),
+    ).not.toBeNull();
   });
 
   it("does not activate a session after cancellation during local commit", async () => {
@@ -183,19 +197,22 @@ describe("account sync restore ordering", () => {
     });
 
     await expect(
-      restoreAccountSync(
-        { userId: "user-1" },
-        "recovery-code",
-        { allowReplaceLocalAccount: true },
-      ),
-    ).resolves.toEqual({ accountId: "account-1", preservedAccountId: "local-account" });
+      restoreAccountSync({ userId: "user-1" }, "recovery-code", {
+        allowReplaceLocalAccount: true,
+      }),
+    ).resolves.toEqual({
+      accountId: "account-1",
+      preservedAccountId: "local-account",
+    });
 
     expect(clearAccountSession).not.toHaveBeenCalled();
     expect(activateAccountSession).not.toHaveBeenCalled();
   });
 
   it("encodes the canonical package as V1 before signing and uploading", async () => {
-    getAccountAuthHeaders.mockResolvedValue({ Authorization: "Bearer account-token" });
+    getAccountAuthHeaders.mockResolvedValue({
+      Authorization: "Bearer account-token",
+    });
     exportLocalAccountRecoveryPayload.mockResolvedValue(recoveredPayload);
     assignLocalAccountOwner.mockResolvedValue(undefined);
     getUnlockedVault.mockResolvedValue({
@@ -242,7 +259,8 @@ describe("account sync restore ordering", () => {
       ciphertextDigest: recoveryPackage.metadata.ciphertextDigest,
     });
 
-    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+    const recoveryUpload = fetch.mock.calls[1]?.[1] as RequestInit | undefined;
+    expect(JSON.parse(String(recoveryUpload?.body))).toEqual({
       package: encodeEncryptedAccountRecoveryPackage(canonicalRecoveryPackage),
       signature: "AQ",
     });

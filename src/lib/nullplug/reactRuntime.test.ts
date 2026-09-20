@@ -313,7 +313,10 @@ describe("nullplug React runtime selectors", () => {
         callIds: [],
         resolution: {
           ...baseCall.resolution,
+          pluginId: baseCall.resolution?.pluginId ?? "plugin",
+          version: baseCall.resolution?.version ?? "1.0.0",
           providerId: "remote-provider",
+          baseUrl: "https://provider.test",
           scope: "remote",
         },
         failure: {
@@ -350,6 +353,7 @@ describe("nullplug React runtime selectors", () => {
   it("keeps unsupported calls unresolved instead of inventing provider identity", () => {
     const call = createFrame().nullplugCalls[0]!;
     const { resolution: _resolution, ...unresolvedCall } = call;
+    void _resolution;
     const [status] = selectNullplugProviderStatuses([
       {
         ...unresolvedCall,
@@ -374,7 +378,9 @@ describe("nullplug React runtime selectors", () => {
     const calls = createFrame().nullplugCalls;
     const repeated = { ...calls[0]!, index: 2 };
 
-    expect(selectNullplugProviderStatuses([...calls, repeated])).toHaveLength(3);
+    expect(selectNullplugProviderStatuses([...calls, repeated])).toHaveLength(
+      3,
+    );
     expect(
       selectNullplugProviderStatuses([...calls, repeated], "call-1").map(
         (entry) => entry.index,
