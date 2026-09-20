@@ -7,10 +7,11 @@ describe("OpenAuth key storage patch", () => {
   test.each([
     ["signing", signingKeys, "ES256", "sig"],
     ["encryption", encryptionKeys, "RSA-OAEP-512", undefined],
-  ] as const)(
+  ] as Array<[string, typeof signingKeys, string, string | undefined]>)(
     "returns a newly persisted %s key when the following scan remains stale",
     async (family, loadKeys, algorithm, use) => {
-      const writes: Array<{ key: string[]; value: Record<string, unknown> }> = [];
+      const writes: Array<{ key: string[]; value: Record<string, unknown> }> =
+        [];
       let exposeExpiredKey = false;
       const storage: StorageAdapter = {
         async get() {
@@ -39,7 +40,7 @@ describe("OpenAuth key storage patch", () => {
       expect(keys[0]?.alg).toBe(algorithm);
       expect(keys[0]?.jwk.kid).toBe(keys[0]?.id);
       expect(keys[0]?.jwk.use).toBe(use);
-      expect(keys[0]?.private.extractable).toBe(false);
+      expect((keys[0]?.private as CryptoKey).extractable).toBe(false);
       expect(Object.hasOwn(keys[0] ?? {}, "expired")).toBe(true);
       expect(keys[0]?.expired).toBeUndefined();
 
@@ -58,7 +59,10 @@ describe("OpenAuth key storage patch", () => {
   test("reads listed Cloudflare KV values in exact 100-name batches and list order", async () => {
     const separator = String.fromCharCode(31);
     const prefix = `signing:key${separator}`;
-    const firstPage = Array.from({ length: 121 }, (_, index) => `${prefix}${index}`);
+    const firstPage = Array.from(
+      { length: 121 },
+      (_, index) => `${prefix}${index}`,
+    );
     const finalName = `${prefix}final`;
     const missingName = firstPage[37];
     const bulkReads: string[][] = [];
@@ -80,7 +84,9 @@ describe("OpenAuth key storage patch", () => {
         return new Map(
           [...names]
             .reverse()
-            .map((name) => [name, name === missingName ? null : { name }] as const),
+            .map(
+              (name) => [name, name === missingName ? null : { name }] as const,
+            ),
         );
       },
       async list(options: { prefix?: string; cursor?: string }) {
@@ -88,7 +94,9 @@ describe("OpenAuth key storage patch", () => {
         return pages[listCalls.length - 1];
       },
     };
-    const storage = CloudflareStorage({ namespace: namespace as unknown as KVNamespace });
+    const storage = CloudflareStorage({
+      namespace: namespace as unknown as KVNamespace,
+    });
     const names: string[] = [];
 
     for await (const [, value] of storage.scan(["signing:key"])) {
@@ -97,7 +105,10 @@ describe("OpenAuth key storage patch", () => {
 
     expect(bulkReads.map((batch) => batch.length)).toEqual([100, 21, 1]);
     expect(bulkReads.flat()).toEqual([...firstPage, finalName]);
-    expect(names).toEqual([...firstPage.filter((name) => name !== missingName), finalName]);
+    expect(names).toEqual([
+      ...firstPage.filter((name) => name !== missingName),
+      finalName,
+    ]);
     expect(listCalls).toEqual([
       { prefix, cursor: undefined },
       { prefix, cursor: "next-1" },

@@ -1,6 +1,6 @@
 # Nulldown API Agent Skill Prompt
 
-Use this prompt when an agent needs to read, create, edit, clone, promote, or document Nulldown drops. Prefer the Bun-native `nd` CLI and the low-token MCP tools when available. Use raw HTTP only as a fallback or when implementing a new client.
+Use this prompt when an agent needs to read, create, edit, clone, promote, or document Nulldown drops. Prefer direct Nulldown MCP tools for agent workflows. Use the Bun-native `nd` CLI for terminal automation, CLI-specific behavior, or an operation MCP does not expose. Use raw HTTP only as a fallback or when implementing a new client.
 
 For strategy or onboarding work, fetch the public Strategy Index first: https://nulldown.app/d/zyLn4c. Strategy drops are canonical; this skill is only a bootstrap wrapper.
 
@@ -17,12 +17,12 @@ Operate Nulldown safely. Prefer small, reversible, revision-aware changes. Use m
 
 ## Core Rules
 
-1. Prefer `nd` commands over raw `curl`.
+1. Stay on the selected surface: direct MCP tools for MCP agents, `nd` for CLI workflows, and raw HTTP only as a fallback.
 2. Always fetch before mutating.
 3. Read canonical IDs, revisions, payload shape, and metadata before editing.
 4. Store document state in `metadata`, not in markdown fences.
 5. Use revision-safe root upserts through `nd update` unless the user explicitly accepts last-write-wins.
-6. Prefer append-only branch diffs through `nd diff replace` or `nd diff apply` for branch edits.
+6. On the CLI surface, prefer append-only branch diffs through `nd diff replace` or `nd diff apply`; on MCP, use `diff_apply` directly.
 7. Never assume `nd get` or `/api/get/:id` returns plaintext. It may return an encrypted `nmdn.drop.v1` envelope.
 8. Never log bearer tokens, HMAC secrets, wrapped keys, private keys, decrypted keys, or decrypted private content.
 9. Verify final state after every mutation.
@@ -36,6 +36,13 @@ https://nulldown.app
 ```
 
 Override with `--base <url>` or `ND_BASE_URL` for local or preview environments.
+
+## MCP Basics
+
+When Nulldown MCP tools are available, load the MCP strategy with
+`strategy_get` for `6656xJ0oco1n`, then call the required `drop_*`, `branch_*`,
+`memory_*`, or `diff_apply` tools directly. Do not run `nulldown-mcp` as an
+interactive command and do not shell out to `nd` from an MCP workflow.
 
 ## CLI Basics
 
@@ -317,7 +324,10 @@ bun run nd -- diff token import "$TOKEN" --force
 
 The token can contain the RSA private key and unwrapped HMAC secrets. Treat it like a password.
 
-## Decision Tree
+## CLI Decision Tree
+
+Use this tree only after selecting the CLI surface. An MCP agent should call the
+equivalent Nulldown tools directly rather than shelling out.
 
 ```mermaid
 flowchart TD
@@ -366,7 +376,9 @@ curl -sS --fail-with-body 'https://nulldown.app/api/diff/<rootId>?branchId=<bran
 - Do not forget `allowedUrls` for embed-heavy documents.
 - Do not retry `revision_precondition_failed` blindly.
 
-## Minimal Checklist
+## CLI Minimal Checklist
+
+Use the native MCP equivalents when the MCP surface is selected.
 
 ```text
 1. nd get or nd branch content
@@ -375,3 +387,12 @@ curl -sS --fail-with-body 'https://nulldown.app/api/diff/<rootId>?branchId=<bran
 4. verify with nd get or nd branch content
 5. return shareable /d/:shortId link when user asks for a link
 ```
+
+## Hosted Strategies
+
+- MCP: https://nulldown.app/d/6656xJ
+- CLI: https://nulldown.app/d/oTnTI2
+
+Load the strategy for the selected surface before acting. The stable strategy
+drop owns current branch routing through its `metadata.strategyRef`; do not copy
+mutable branch or snapshot identifiers into this bootstrap prompt.

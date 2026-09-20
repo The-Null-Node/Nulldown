@@ -1,0 +1,29 @@
+# Dependencies, generated output, and local runtime/auth state.
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/.git/
+**/.wrangler/
+**/.cache/
+**/.diff-auth/
+**/.nulldown-data/
+**/.env*
+**/.dev.vars*
+**/*.tsbuildinfo
+src/__embedded.ts
+
+# Public assets/themes have not been classified as authored formatter inputs.
+public/
+/themes/
+/nulldown-mcp/
+
+# Lockfiles, custom documents, agent settings, and local notes are separate work.
+**/bun.lock
+**/bun.lockb
+**/package-lock.json
+**/pnpm-lock.yaml
+**/yarn.lock
+**/*.nmdn
+.opencode/
+.analysis-*.md
