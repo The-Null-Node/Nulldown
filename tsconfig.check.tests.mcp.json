@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.check.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["jest", "bun", "node"],
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": [
+    "packages/nulldown-mcp/src/**/*.test.ts",
+    "packages/nulldown-mcp/src/**/*.test.tsx",
+    "src/types/jest-mock-compat.d.ts"
+  ],
+  "exclude": ["node_modules", "dist", "packages/*/node_modules"]
+}

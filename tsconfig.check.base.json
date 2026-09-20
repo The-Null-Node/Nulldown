@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@thenullnode/nulldown/client": ["./src/client/nulldown-client.ts"],
+      "@thenullnode/nulldown/drop/authoring": [
+        "./shared/drop/authoringCrypto.ts"
+      ],
+      "@thenullnode/nulldown/auth/cliDevice": ["./shared/auth/cliDevice.ts"],
+      "@thenullnode/nulldown/auth/cliCredential": [
+        "./src/cli/cli-credential.ts"
+      ],
+      "@thenullnode/nulldown/drop/diff": ["./shared/drop/diff.ts"],
+      "@thenullnode/nulldown/nulledit/types": ["./shared/nulledit/types.ts"]
+    }
+  },
+  "references": [],
+  "include": []
+}

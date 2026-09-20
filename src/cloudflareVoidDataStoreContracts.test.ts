@@ -51,11 +51,17 @@ class MemoryR2Bucket {
     list.forEach((key) => this.objects.delete(key));
   }
 
-  async list(options?: { prefix?: string; cursor?: string; limit?: number }): Promise<any> {
+  async list(options?: {
+    prefix?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<any> {
     const prefix = options?.prefix ?? "";
     const limit = Math.max(1, Math.min(1000, options?.limit ?? 1000));
     const offset = options?.cursor ? Number.parseInt(options.cursor, 10) : 0;
-    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix)).sort();
+    const keys = [...this.objects.keys()]
+      .filter((key) => key.startsWith(prefix))
+      .sort();
     const page = keys.slice(offset, offset + limit);
     const nextOffset = offset + page.length;
     return {
@@ -120,7 +126,13 @@ class MemoryD1Statement {
 class MemoryD1Database {
   readonly records = new Map<string, DataRecordRow>();
   readonly indexes: DataIndexRow[] = [];
-  readonly fts: Array<{ namespace: string; collection: string; scope_key: string; id: string; text: string }> = [];
+  readonly fts: Array<{
+    namespace: string;
+    collection: string;
+    scope_key: string;
+    id: string;
+    text: string;
+  }> = [];
   readonly batchCalls: number[] = [];
 
   prepare(sql: string) {
@@ -132,22 +144,30 @@ class MemoryD1Database {
     return Promise.all(statements.map((statement) => statement.run()));
   }
 
-  private recordKey(namespace: unknown, collection: unknown, scopeKey: unknown, id: unknown): string {
+  private recordKey(
+    namespace: unknown,
+    collection: unknown,
+    scopeKey: unknown,
+    id: unknown,
+  ): string {
     return `${String(namespace)}/${String(collection)}/${String(scopeKey)}/${String(id)}`;
   }
 
   run(sql: string, params: unknown[]): void {
     if (sql.includes("INSERT INTO void_data_records")) {
-      this.records.set(this.recordKey(params[0], params[1], params[2], params[3]), {
-        namespace: String(params[0]),
-        collection: String(params[1]),
-        scope_key: String(params[2]),
-        id: String(params[3]),
-        key_json: String(params[4]),
-        record_json: String(params[5]),
-        content_type: typeof params[6] === "string" ? params[6] : null,
-        updated_at: Number(params[7]),
-      });
+      this.records.set(
+        this.recordKey(params[0], params[1], params[2], params[3]),
+        {
+          namespace: String(params[0]),
+          collection: String(params[1]),
+          scope_key: String(params[2]),
+          id: String(params[3]),
+          key_json: String(params[4]),
+          record_json: String(params[5]),
+          content_type: typeof params[6] === "string" ? params[6] : null,
+          updated_at: Number(params[7]),
+        },
+      );
       return;
     }
 
@@ -155,7 +175,14 @@ class MemoryD1Database {
       const key = this.recordKey(params[0], params[1], params[2], params[3]);
       for (let index = this.indexes.length - 1; index >= 0; index -= 1) {
         const row = this.indexes[index];
-        if (this.recordKey(row.namespace, row.collection, row.scope_key, row.id) === key) {
+        if (
+          this.recordKey(
+            row.namespace,
+            row.collection,
+            row.scope_key,
+            row.id,
+          ) === key
+        ) {
           this.indexes.splice(index, 1);
         }
       }
@@ -166,7 +193,14 @@ class MemoryD1Database {
       const key = this.recordKey(params[0], params[1], params[2], params[3]);
       for (let index = this.fts.length - 1; index >= 0; index -= 1) {
         const row = this.fts[index];
-        if (this.recordKey(row.namespace, row.collection, row.scope_key, row.id) === key) {
+        if (
+          this.recordKey(
+            row.namespace,
+            row.collection,
+            row.scope_key,
+            row.id,
+          ) === key
+        ) {
           this.fts.splice(index, 1);
         }
       }
@@ -201,13 +235,19 @@ class MemoryD1Database {
     }
 
     if (sql.includes("DELETE FROM void_data_records")) {
-      this.records.delete(this.recordKey(params[0], params[1], params[2], params[3]));
+      this.records.delete(
+        this.recordKey(params[0], params[1], params[2], params[3]),
+      );
     }
   }
 
   first(sql: string, params: unknown[]): Record<string, unknown> | null {
     if (sql.includes("FROM void_data_records")) {
-      return this.records.get(this.recordKey(params[0], params[1], params[2], params[3])) ?? null;
+      return (
+        (this.records.get(
+          this.recordKey(params[0], params[1], params[2], params[3]),
+        ) as unknown as Record<string, unknown> | undefined) ?? null
+      );
     }
     return null;
   }
@@ -215,7 +255,9 @@ class MemoryD1Database {
   all(sql: string, params: unknown[]): Record<string, unknown>[] {
     if (!sql.includes("FROM void_data_records")) return [];
     const namespace = String(params[0]);
-    const collection = sql.includes("collection = ?") ? String(params[1]) : null;
+    const collection = sql.includes("collection = ?")
+      ? String(params[1])
+      : null;
     const idPrefixParam = sql.includes("id LIKE ?")
       ? String(params[collection === null ? 1 : 2]).replace(/%$/, "")
       : null;
@@ -224,8 +266,12 @@ class MemoryD1Database {
 
     return [...this.records.values()]
       .filter((row) => row.namespace === namespace)
-      .filter((row) => (collection === null ? true : row.collection === collection))
-      .filter((row) => (idPrefixParam === null ? true : row.id.startsWith(idPrefixParam)))
+      .filter((row) =>
+        collection === null ? true : row.collection === collection,
+      )
+      .filter((row) =>
+        idPrefixParam === null ? true : row.id.startsWith(idPrefixParam),
+      )
       .sort((left, right) =>
         `${left.namespace}/${left.collection}/${left.scope_key}/${left.id}`.localeCompare(
           `${right.namespace}/${right.collection}/${right.scope_key}/${right.id}`,
@@ -293,8 +339,14 @@ describe("Cloudflare VoidDataStore contracts", () => {
         text: "snapshotter",
       }),
     ).resolves.toEqual([value]);
-    expect(db.indexes.some((entry) => entry.name === "labels" && entry.value_text === "data.put")).toBe(true);
-    expect(db.fts.some((entry) => entry.text.includes("snapshotter"))).toBe(true);
+    expect(
+      db.indexes.some(
+        (entry) => entry.name === "labels" && entry.value_text === "data.put",
+      ),
+    ).toBe(true);
+    expect(db.fts.some((entry) => entry.text.includes("snapshotter"))).toBe(
+      true,
+    );
   });
 
   it("keeps different scope value types isolated", async () => {
@@ -319,8 +371,12 @@ describe("Cloudflare VoidDataStore contracts", () => {
     await data.put(numericScopeKey, { source: "number" });
     await data.put(stringScopeKey, { source: "string" });
 
-    await expect(data.get(numericScopeKey)).resolves.toEqual({ source: "number" });
-    await expect(data.get(stringScopeKey)).resolves.toEqual({ source: "string" });
+    await expect(data.get(numericScopeKey)).resolves.toEqual({
+      source: "number",
+    });
+    await expect(data.get(stringScopeKey)).resolves.toEqual({
+      source: "string",
+    });
     await expect(
       data.list({
         namespace: "resolved",
@@ -403,7 +459,9 @@ describe("Cloudflare VoidDataStore contracts", () => {
     await expect(data.put(key, { ok: true })).rejects.toThrow(
       "void_data_store_db_required",
     );
-    await expect(data.delete(key)).rejects.toThrow("void_data_store_db_required");
+    await expect(data.delete(key)).rejects.toThrow(
+      "void_data_store_db_required",
+    );
     await expect(data.list({ namespace: "nulledit" })).rejects.toThrow(
       "void_data_store_db_required",
     );

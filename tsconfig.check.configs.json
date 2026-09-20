@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.check.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": ["*.ts", "*.mts", "*.cts", "*.js", "*.mjs", "*.cjs"],
+  "exclude": ["node_modules", "dist"]
+}

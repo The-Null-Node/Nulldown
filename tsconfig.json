@@ -14,7 +14,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@thenullnode/nulldown/client": ["./src/client/nulldownClient.ts"],
+      "@thenullnode/nulldown/client": ["./src/client/nulldown-client.ts"],
       "@thenullnode/nulldown/drop/diff": ["./shared/drop/diff.ts"],
       "@thenullnode/nulldown/nulledit/types": ["./shared/nulledit/types.ts"]
     },

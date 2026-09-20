@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.check.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["bun", "node"],
+    "moduleDetection": "force",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": [
+    "bin/**/*.ts",
+    "src/cli/**/*.ts",
+    "src/client/**/*.ts",
+    "src/server/**/*.ts",
+    "scripts/**/*.ts",
+    "scripts/**/*.mjs",
+    "packages/*/scripts/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]
+}

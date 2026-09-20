@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.check.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["jest", "node"],
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": [
+    "shared/**/*.test.ts",
+    "shared/**/*.test.tsx",
+    "src/types/jest-mock-compat.d.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

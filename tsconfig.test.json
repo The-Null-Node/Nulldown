@@ -4,5 +4,10 @@
     "types": ["jest", "node"],
     "noEmit": false
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "shared/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "shared/**/*.ts",
+    "packages/nulldown-mcp/src/**/*.ts"
+  ]
 }

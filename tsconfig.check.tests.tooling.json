@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.check.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["jest", "bun", "node"],
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": [
+    "src/cli/**/*.test.ts",
+    "src/cli/**/*.test.tsx",
+    "src/cliSeed.test.ts",
+    "src/filesystemBlobStoreContracts.test.ts",
+    "src/localNulldownServerContracts.test.ts",
+    "src/memoryVoidDataStoreContracts.test.ts",
+    "src/serverHttpContracts.test.ts",
+    "src/types/jest-mock-compat.d.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

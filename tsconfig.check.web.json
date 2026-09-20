@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.check.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "lib/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/cli",
+    "src/client",
+    "src/server",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
+}
