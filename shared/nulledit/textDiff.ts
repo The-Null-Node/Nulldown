@@ -7,7 +7,13 @@ Diff generation is pluggable via the `Differ` interface. Current implementation
 is `prefixSuffixDiffer`. Future algorithms (DP/LCS, Myers) will implement the same interface.
 */
 
-import { DiffOp, type Diff, type DiffAlgorithm, type DiffOptions, type Differ } from "./types";
+import {
+  DiffOp,
+  type Diff,
+  type DiffAlgorithm,
+  type DiffOptions,
+  type Differ,
+} from "./types";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -142,11 +148,10 @@ export const lcsDpDiffer: Differ = {
   compute(previous: string, next: string, options?: DiffOptions): Diff[] {
     if (previous === next) return [];
 
-    const {
-      prefixLength,
-      previousMiddle,
-      nextMiddle,
-    } = commonBounds(previous, next);
+    const { prefixLength, previousMiddle, nextMiddle } = commonBounds(
+      previous,
+      next,
+    );
 
     if (!previousMiddle.length || !nextMiddle.length) {
       return prefixSuffixDiffer.compute(previous, next);

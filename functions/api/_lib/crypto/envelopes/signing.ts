@@ -1,7 +1,7 @@
-import { serializeDropEnvelopeForProviderSignature } from "../../../../../shared/drop/codecs/envelopeV1";
+import { serializeDropEnvelopeForProviderSignature } from "../../../../../shared/drop/codecs/envelope-v1";
 import type { DropEnvelope } from "../../../../../shared/drop/types";
 import { serializeError, type RequestLogger } from "../../core/logging/logger";
-import { serverVoidCrypto } from "../void/serverVoidCrypto";
+import { providerCrypto } from "../provider-crypto";
 
 /** Environment values needed to attach provider signatures to stored envelopes. */
 export interface ProviderSigningEnv {
@@ -36,7 +36,7 @@ export const signProviderEnvelope = async (
   }
 
   const signedPayload = serializeDropEnvelopeForProviderSignature(envelope);
-  const signature = await serverVoidCrypto.signWithProviderKey(
+  const signature = await providerCrypto.signWithProviderKey(
     signedPayload,
     jwk,
   );
@@ -56,7 +56,7 @@ export const signProviderEnvelope = async (
       provider: {
         kid: keyId,
         alg: "ECDSA_P256_SHA256",
-        sig: serverVoidCrypto.toBase64(signature),
+        sig: providerCrypto.toBase64(signature),
       },
     },
   };

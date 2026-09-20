@@ -5,10 +5,7 @@ import {
   lcsDpDiffer,
   prefixSuffixDiffer,
 } from "./textDiff";
-import {
-  diffToDropDiffOp,
-  dropDiffOpToDiff,
-} from "../drop/diff";
+import { diffToDropDiffOp, dropDiffOpToDiff } from "../drop/diff";
 import { DiffOp, type Diff } from "./types";
 
 const applyAll = (base: string, diffs: Diff[]): string =>
@@ -56,7 +53,9 @@ describe("getDiffer selector", () => {
   });
 
   it("throws for unsupported algorithm", () => {
-    expect(() => getDiffer("myers" as any)).toThrow("Unsupported diff algorithm");
+    expect(() => getDiffer("myers" as any)).toThrow(
+      "Unsupported diff algorithm",
+    );
   });
 });
 
@@ -114,9 +113,7 @@ describe("lcsDpDiffer", () => {
     const diffs = lcsDpDiffer.compute(previous, next, { maxDpCells: 1 });
 
     expect(applyAll(previous, diffs)).toBe(next);
-    expect(diffs).toEqual(
-      prefixSuffixDiffer.compute(previous, next),
-    );
+    expect(diffs).toEqual(prefixSuffixDiffer.compute(previous, next));
   });
 
   it("handles pure insertion", () => {
@@ -139,9 +136,9 @@ describe("lcsDpDiffer", () => {
     const previous = "one two three four";
     const next = "one TWO three FOUR";
 
-    const ops = lcsDpDiffer.compute(previous, next).map((diff) =>
-      diffToDropDiffOp(diff),
-    );
+    const ops = lcsDpDiffer
+      .compute(previous, next)
+      .map((diff) => diffToDropDiffOp(diff));
 
     const restored = ops
       .map((op) => dropDiffOpToDiff(op))

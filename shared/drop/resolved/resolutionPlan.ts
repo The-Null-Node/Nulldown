@@ -32,7 +32,8 @@ export const createNulldownResolutionPlan = ({
   const ordered = items
     .map((item, index) => ({ item, index }))
     .sort(
-      (left, right) => left.item.order - right.item.order || left.index - right.index,
+      (left, right) =>
+        left.item.order - right.item.order || left.index - right.index,
     );
 
   for (const { item } of ordered) {

@@ -64,6 +64,16 @@ export interface DropDraftPack {
   snapshots: DropDraftSnapshot[];
 }
 
+/** Drop-owned strategy routing hint, not authority to access the branch. */
+export interface DropStrategyRef {
+  /** Only resolved branch strategies are supported. */
+  kind: "branch";
+  /** Canonical id of the drop owning this reference. */
+  rootDropId: string;
+  /** Explicit branch belonging to that same root. */
+  branchId: string;
+}
+
 /** Plain metadata stored with a drop payload and copied into sealed envelopes. */
 export interface DropMetadata {
   /** Theme id to apply when rendering the drop. */
@@ -76,6 +86,8 @@ export interface DropMetadata {
   snapshotId?: number;
   /** Network allowlist used by nullplug rendering. */
   allowedUrls?: string[];
+  /** Optional same-root strategy branch; readers validate before following. */
+  strategyRef?: DropStrategyRef;
   /** Additional feature-specific metadata. */
   [key: string]: unknown;
 }
@@ -199,6 +211,22 @@ export interface DropGraph {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
+
+/** Validates strategy routing separately from payload/envelope classification. */
+export const isDropStrategyRef = (
+  value: unknown,
+  canonicalRootId: string,
+): value is DropStrategyRef =>
+  isRecord(value) &&
+  !Array.isArray(value) &&
+  value.kind === "branch" &&
+  typeof value.rootDropId === "string" &&
+  value.rootDropId.length > 0 &&
+  value.rootDropId.trim() === value.rootDropId &&
+  value.rootDropId === canonicalRootId &&
+  typeof value.branchId === "string" &&
+  value.branchId.length > 0 &&
+  value.branchId.trim() === value.branchId;
 
 const normalizeForCanonicalJson = (value: unknown): unknown => {
   if (Array.isArray(value)) {

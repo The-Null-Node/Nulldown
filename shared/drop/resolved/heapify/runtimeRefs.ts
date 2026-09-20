@@ -23,7 +23,9 @@ import type {
 
 const fenceOpenPattern = /^\s{0,3}(`{3,}|~{3,})([^`~]*)$/;
 
-const parsePluginInfo = (info: string): { id: string; args: string | null } | null => {
+const parsePluginInfo = (
+  info: string,
+): { id: string; args: string | null } | null => {
   const trimmed = info.trim();
   if (!trimmed) return null;
   const match = /^([A-Za-z][\w.-]*)(?:\((.*)\))?$/.exec(trimmed);
@@ -39,7 +41,9 @@ const firstBodyLine = (value: string): string | null =>
 
 const extractArgValue = (args: string | null, name: string): string | null => {
   if (!args) return null;
-  const pattern = new RegExp(`(?:^|[,\\s])${name}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^,\\s)]+))`);
+  const pattern = new RegExp(
+    `(?:^|[,\\s])${name}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^,\\s)]+))`,
+  );
   const match = pattern.exec(args);
   return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
 };
@@ -65,7 +69,9 @@ const buildResolvedStateId = ({
     "resolved",
     rootDropId,
     branchId ?? "drop",
-    snapshotId ?? sourceRevision ?? sourceHash.slice(NULLDOWN_SOURCE_HASH_PREFIX.length, 19),
+    snapshotId ??
+      sourceRevision ??
+      sourceHash.slice(NULLDOWN_SOURCE_HASH_PREFIX.length, 19),
     resolverId,
     resolverVersion,
   ].join(":");
@@ -89,7 +95,9 @@ const parsePluginRefs = async (
 
     const invocation = parsePluginInfo(open[2]);
     const fenceChar = open[1][0];
-    const closePattern = new RegExp(`^\\s{0,3}${fenceChar}{${open[1].length},}\\s*$`);
+    const closePattern = new RegExp(
+      `^\\s{0,3}${fenceChar}{${open[1].length},}\\s*$`,
+    );
     const bodyStart = lineEnd === -1 ? content.length : lineEnd + 1;
     let scan = bodyStart;
     let closeStart = content.length;
@@ -114,7 +122,9 @@ const parsePluginRefs = async (
         pluginId: invocation.id,
         dropId:
           invocation.id === "nd"
-            ? extractArgValue(invocation.args, "id") ?? firstBodyLine(body) ?? undefined
+            ? (extractArgValue(invocation.args, "id") ??
+              firstBodyLine(body) ??
+              undefined)
             : undefined,
         sourceRange: { start: offset, end: closeEnd },
         sourceHash: sourceContentHash,
@@ -137,7 +147,9 @@ const indexUiResponses = async (
       source: fact.source,
       createdAt: fact.createdAt,
       proposedDiffEventCount: fact.proposedDiffs?.events.length,
-      responseHash: await hashNulldownSourceContent(serializeCanonicalJson(fact)),
+      responseHash: await hashNulldownSourceContent(
+        serializeCanonicalJson(fact),
+      ),
     })),
   );
 
@@ -154,8 +166,10 @@ const hashSuffix = (hash: NulldownSourceHash): string =>
 const jsonSearchText = (value: unknown): string => {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return value.map(jsonSearchText).filter(Boolean).join(" ");
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  if (Array.isArray(value))
+    return value.map(jsonSearchText).filter(Boolean).join(" ");
   if (typeof value === "object") {
     return Object.entries(value as Record<string, unknown>)
       .flatMap(([key, entry]) => [key, jsonSearchText(entry)])
@@ -183,13 +197,24 @@ const primitiveSearchText = (primitive: NullplugUiPrimitive): string => {
         ]),
       ]),
     ]
-      .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+      .filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.length > 0,
+      )
       .join(" ");
   }
 
   if (primitive.kind === "action") {
-    return [primitive.id, primitive.label, primitive.intent, jsonSearchText(primitive.value)]
-      .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    return [
+      primitive.id,
+      primitive.label,
+      primitive.intent,
+      jsonSearchText(primitive.value),
+    ]
+      .filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.length > 0,
+      )
       .join(" ");
   }
 
@@ -199,7 +224,9 @@ const primitiveSearchText = (primitive: NullplugUiPrimitive): string => {
     primitive.body,
     ...(primitive.actions ?? []).map((action) => primitiveSearchText(action)),
   ]
-    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    .filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    )
     .join(" ");
 };
 
@@ -223,7 +250,9 @@ const indexRuntimeNodes = async (input: {
 
   const primitiveNodes = await Promise.all(
     (input.uiPrimitives ?? []).map(async (primitive) => {
-      const sourceHash = await hashNulldownSourceContent(serializeCanonicalJson(primitive));
+      const sourceHash = await hashNulldownSourceContent(
+        serializeCanonicalJson(primitive),
+      );
       return {
         id: `ui.primitive:${hashSuffix(sourceHash)}:${primitive.id}`,
         kind: "ui.primitive" as const,
@@ -239,11 +268,15 @@ const indexRuntimeNodes = async (input: {
 
   const responseNodes = await Promise.all(
     (input.uiResponseFacts ?? []).map(async (fact) => {
-      const sourceHash = await hashNulldownSourceContent(serializeCanonicalJson(fact));
+      const sourceHash = await hashNulldownSourceContent(
+        serializeCanonicalJson(fact),
+      );
       return {
         id: `ui.response:${hashSuffix(sourceHash)}:${fact.id}`,
         kind: "ui.response" as const,
-        text: [fact.primitiveId, jsonSearchText(fact.data)].filter(Boolean).join(" "),
+        text: [fact.primitiveId, jsonSearchText(fact.data)]
+          .filter(Boolean)
+          .join(" "),
         sourceHash,
         source: fact.source,
         callId: fact.source.callId,
@@ -256,9 +289,19 @@ const indexRuntimeNodes = async (input: {
 
   const patchNodes = await Promise.all(
     (input.uiStatePatchFacts ?? []).map(async (fact) => {
-      const sourceHash = await hashNulldownSourceContent(serializeCanonicalJson(fact));
+      const sourceHash = await hashNulldownSourceContent(
+        serializeCanonicalJson(fact),
+      );
       const patchText = fact.patch
-        .map((operation) => [operation.op, operation.path.join("."), jsonSearchText(operation.value)].filter(Boolean).join(" "))
+        .map((operation) =>
+          [
+            operation.op,
+            operation.path.join("."),
+            jsonSearchText(operation.value),
+          ]
+            .filter(Boolean)
+            .join(" "),
+        )
         .join(" ");
       return {
         id: `ui.state.patch:${hashSuffix(sourceHash)}:${fact.id}`,
@@ -275,11 +318,15 @@ const indexRuntimeNodes = async (input: {
 
   const snapshotNodes = await Promise.all(
     (input.uiStateSnapshots ?? []).map(async (snapshot) => {
-      const sourceHash = await hashNulldownSourceContent(serializeCanonicalJson(snapshot));
+      const sourceHash = await hashNulldownSourceContent(
+        serializeCanonicalJson(snapshot),
+      );
       return {
         id: `ui.state.snapshot:${hashSuffix(sourceHash)}:${snapshot.id}`,
         kind: "ui.state" as const,
-        text: [snapshot.callId, jsonSearchText(snapshot.state)].filter(Boolean).join(" "),
+        text: [snapshot.callId, jsonSearchText(snapshot.state)]
+          .filter(Boolean)
+          .join(" "),
         sourceHash,
         source: snapshot.source,
         callId: snapshot.callId,
@@ -289,7 +336,13 @@ const indexRuntimeNodes = async (input: {
     }),
   );
 
-  return [...pluginNodes, ...primitiveNodes, ...responseNodes, ...patchNodes, ...snapshotNodes];
+  return [
+    ...pluginNodes,
+    ...primitiveNodes,
+    ...responseNodes,
+    ...patchNodes,
+    ...snapshotNodes,
+  ];
 };
 
 export const heapifyResolvedRuntimeRefs = async ({

@@ -1,7 +1,7 @@
 import {
   serializeDropEnvelopeForDeviceSignature,
   toDropEnvelopeSignable,
-} from "../../../../../shared/drop/codecs/envelopeV1";
+} from "../../../../../shared/drop/codecs/envelope-v1";
 import type { DropEnvelope } from "../../../../../shared/drop/types";
 import {
   isDropDeviceDelegation,

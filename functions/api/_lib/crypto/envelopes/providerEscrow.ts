@@ -5,12 +5,12 @@ need the provider key to rehydrate content or re-wrap the content key for anothe
 Treat every call site here as a trust boundary.
 */
 
-import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
 import type {
   DropEnvelope,
   DropPayload,
 } from "../../../../../shared/drop/types";
-import { serverVoidCrypto } from "../void/serverVoidCrypto";
+import { providerCrypto } from "../provider-crypto";
 
 /** Opens a provider-escrowed drop envelope into plaintext payload material. */
 export const decryptProviderEscrowEnvelope = async (
@@ -21,15 +21,15 @@ export const decryptProviderEscrowEnvelope = async (
     throw new Error("Drop does not allow provider escrow unlock.");
   }
 
-  const rawContentKey = await serverVoidCrypto.unwrapProviderContentKey(
+  const rawContentKey = await providerCrypto.unwrapProviderContentKey(
     rawProviderPrivateKey,
     envelope.providerEscrow.wrappedKey,
   );
-  const content = await serverVoidCrypto.decryptCipherText(
+  const content = await providerCrypto.decryptCipherText(
     rawContentKey,
     envelope.cipher,
   );
-  const draftPack = await serverVoidCrypto.decryptDraftPack(
+  const draftPack = await providerCrypto.decryptDraftPack(
     rawContentKey,
     envelope.draftCipher,
   );

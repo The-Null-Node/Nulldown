@@ -5,8 +5,9 @@ import {
   serializeDropEnvelopeForDeviceSignature,
   serializeDropEnvelopeForProviderSignature,
   toDropEnvelopeSignable,
-} from "./codecs/envelopeV1";
+} from "./codecs/envelope-v1";
 import {
+  isDropStrategyRef,
   serializeCanonicalJson,
   type DropEnvelope,
 } from "./types";
@@ -18,6 +19,29 @@ import {
 } from "./codecs/draft-pack-v1";
 
 describe("drop types", () => {
+  it("validates only same-root strategy branch references", () => {
+    const rootDropId = "root-drop";
+    const ref = {
+      kind: "branch",
+      rootDropId,
+      branchId: "clone_account:account-1",
+    };
+
+    expect(isDropStrategyRef(ref, rootDropId)).toBe(true);
+    for (const strategyRef of [
+      null,
+      {},
+      [],
+      { ...ref, kind: "root" },
+      { ...ref, rootDropId: "other-root" },
+      { ...ref, rootDropId: " root-drop" },
+      { ...ref, branchId: "" },
+      { ...ref, branchId: " branch" },
+    ]) {
+      expect(isDropStrategyRef(strategyRef, rootDropId)).toBe(false);
+    }
+  });
+
   it("decodes the legacy plaintext payload fixture without rewriting metadata", () => {
     const raw =
       '{"content":"legacy plaintext","draftPack":{"version":1,"policy":"edited-only","source":"edited-drop","createdAt":1700000000000,"snapshots":[{"snapshotId":4,"createdAt":1700000000000,"fromLength":6,"toLength":16,"ops":[{"type":"insert","start":6,"end":6,"text":" plaintext"}]}]}}';
