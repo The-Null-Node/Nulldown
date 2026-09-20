@@ -3,7 +3,7 @@ import type {
   VoidBlobStore,
   VoidSqlStore,
 } from "../../../../../src/server/ports";
-import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelopeV1";
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
 import type { DropEnvelope } from "../../../../../shared/drop/types";
 
 /** R2 key prefix for public drop index entries. */

@@ -1,7 +1,4 @@
-import {
-  dropDiffOpToDiff,
-  type DropDiffEvent,
-} from "../../diff";
+import { dropDiffOpToDiff, type DropDiffEvent } from "../../diff";
 import { decodeText } from "../../../nulledit/textDiff";
 import { DiffOp } from "../../../nulledit/types";
 import type {
@@ -52,7 +49,9 @@ const documentNodeSearchText = (node: ResolvedDocumentNode): string => {
     node.href,
     node.language,
   ]
-    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    .filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    )
     .join(" ")
     .toLowerCase();
   documentNodeSearchTextCache.set(node, searchable);
@@ -116,7 +115,11 @@ const createSourceRangeOverlapChecker = (
 
     // Large sections may overlap more than one changed range. Most nodes exit on
     // the first candidate, while the source-order cutoff keeps the rest bounded.
-    for (let index = low; index < ranges.length && ranges[index].start <= range.end; index += 1) {
+    for (
+      let index = low;
+      index < ranges.length && ranges[index].start <= range.end;
+      index += 1
+    ) {
       if (sourceRangesOverlap(range, ranges[index])) return true;
     }
     return false;
@@ -128,7 +131,9 @@ const eventRefsForNode = (
   events: readonly ResolvedDiffEventRef[],
 ): ResolvedDiffEventRef[] =>
   events.filter((event) =>
-    event.changedRanges.some((range) => sourceRangesOverlap(node.sourceRange, range)),
+    event.changedRanges.some((range) =>
+      sourceRangesOverlap(node.sourceRange, range),
+    ),
   );
 
 const priorityFromDiffRefs = (
@@ -150,7 +155,10 @@ const scoreDocumentNode = (
   priority: number,
 ): { score: number; reasons: string[]; changed: boolean } => {
   const reasons: string[] = [];
-  let score = node.importance ?? state.importance?.[node.id] ?? importanceForNodeKind(node.kind, node.depth, node.checked);
+  let score =
+    node.importance ??
+    state.importance?.[node.id] ??
+    importanceForNodeKind(node.kind, node.depth, node.checked);
   if (score > 0) reasons.push("importance");
 
   if (priority !== 0) {
@@ -244,7 +252,8 @@ const retainTopDocumentNode = (
 ): void => {
   if (
     candidates.length === limit &&
-    compareScoredDocumentNodes(candidate, candidates[candidates.length - 1]) >= 0
+    compareScoredDocumentNodes(candidate, candidates[candidates.length - 1]) >=
+      0
   ) {
     return;
   }
@@ -276,7 +285,8 @@ export const queryResolvedDocumentNodes = (
     ...(query.changedRanges ?? []),
     ...eventRefs.flatMap((event) => event.changedRanges),
   ]);
-  const changedRangeOverlapsNode = createSourceRangeOverlapChecker(changedRanges);
+  const changedRangeOverlapsNode =
+    createSourceRangeOverlapChecker(changedRanges);
   const candidates: ScoredDocumentNode[] = [];
 
   nodes.forEach((node) => {
@@ -316,9 +326,11 @@ export const queryResolvedDocumentNodes = (
     );
   });
 
-  const selected = candidates.map(({ changed: _changed, ...entry }) => ({
-    ...entry,
-    eventRefs: entry.eventRefs.length ? entry.eventRefs : undefined,
+  const selected = candidates.map(({ node, score, reasons, eventRefs }) => ({
+    node,
+    score,
+    reasons,
+    eventRefs: eventRefs.length ? eventRefs : undefined,
   }));
 
   if (!query.includeAncestors || selected.length === 0) {

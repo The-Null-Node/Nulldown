@@ -32,7 +32,9 @@ const runtimeNodeSearchText = (node: ResolvedRuntimeNode): string =>
     node.source?.rootDropId,
     node.source?.branchId,
   ]
-    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    .filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    )
     .join(" ")
     .toLowerCase();
 
@@ -43,7 +45,10 @@ const scoreRuntimeNode = (
   priority: number,
 ): { score: number; reasons: string[] } => {
   const reasons: string[] = [];
-  let score = node.importance ?? state.importance?.[node.id] ?? runtimeImportanceForKind(node.kind);
+  let score =
+    node.importance ??
+    state.importance?.[node.id] ??
+    runtimeImportanceForKind(node.kind);
   if (score > 0) reasons.push("importance");
 
   if (priority !== 0) {
@@ -92,7 +97,9 @@ export const queryResolvedRuntimeNodes = (
     .filter((node) => !kindSet || kindSet.has(node.kind))
     .filter((node) => !query.pluginId || node.pluginId === query.pluginId)
     .filter((node) => !query.callId || node.callId === query.callId)
-    .filter((node) => !query.primitiveId || node.primitiveId === query.primitiveId)
+    .filter(
+      (node) => !query.primitiveId || node.primitiveId === query.primitiveId,
+    )
     .map((node) => {
       const priority =
         (query.heapPriority ?? 0) + (query.priorityByNodeId?.[node.id] ?? 0);
@@ -103,7 +110,10 @@ export const queryResolvedRuntimeNodes = (
         reasons: scoredNode.reasons,
       };
     })
-    .filter((entry) => queryTokens.length === 0 || entry.reasons.includes("query-match"))
+    .filter(
+      (entry) =>
+        queryTokens.length === 0 || entry.reasons.includes("query-match"),
+    )
     .sort((left, right) => {
       if (right.score !== left.score) return right.score - left.score;
       const leftCreated = left.node.createdAt ?? Number.MAX_SAFE_INTEGER;

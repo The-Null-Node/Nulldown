@@ -1,5 +1,8 @@
 import { serializeCanonicalJson } from "../types";
-import { RESOLVED_HEAP_DELTA_RECORD_VERSION, RESOLVED_NODE_REF_RECORD_VERSION } from "./constants";
+import {
+  RESOLVED_HEAP_DELTA_RECORD_VERSION,
+  RESOLVED_NODE_REF_RECORD_VERSION,
+} from "./constants";
 import { hashNulldownSourceContent } from "./hash";
 import type {
   CreateResolvedHeapDeltaRecordOptions,
@@ -13,10 +16,7 @@ import type {
 export const createResolvedNodeRefRecords = async (
   state: ResolvedNulldownState,
 ): Promise<ResolvedNodeRefRecord[]> => {
-  const nodes = [
-    ...(state.documentNodes ?? []),
-    ...(state.runtimeNodes ?? []),
-  ];
+  const nodes = [...(state.documentNodes ?? []), ...(state.runtimeNodes ?? [])];
   return Promise.all(
     nodes.map(async (node) => ({
       version: RESOLVED_NODE_REF_RECORD_VERSION,

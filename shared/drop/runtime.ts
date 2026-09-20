@@ -263,8 +263,10 @@ export const isDropRuntimeVersionRef = (
     return false;
   }
   return (
-    (value.contentHash === undefined || typeof value.contentHash === "string") &&
-    (value.metadataHash === undefined || typeof value.metadataHash === "string") &&
+    (value.contentHash === undefined ||
+      typeof value.contentHash === "string") &&
+    (value.metadataHash === undefined ||
+      typeof value.metadataHash === "string") &&
     (value.runtimeHeapHash === undefined ||
       typeof value.runtimeHeapHash === "string")
   );

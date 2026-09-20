@@ -8,7 +8,10 @@ const toBase64Url = (bytes: Uint8Array): string => {
   bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 };
 
 const fromBase64Url = (value: string): Uint8Array | null => {

@@ -12,7 +12,7 @@ import type { DropDeviceDelegation } from "./deviceDelegation";
 import {
   serializeDropEnvelopeForDeviceSignature,
   toDropEnvelopeSignable,
-} from "./codecs/envelopeV1";
+} from "./codecs/envelope-v1";
 
 const toBase64 = (value: ArrayBuffer): string =>
   Buffer.from(value).toString("base64");

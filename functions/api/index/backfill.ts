@@ -1,7 +1,7 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { isDropIdToken } from "../../../shared/drop/id";
-import { decodeDropEnvelope } from "../../../shared/drop/codecs/envelopeV1";
+import { decodeDropEnvelope } from "../../../shared/drop/codecs/envelope-v1";
 import {
   isRemotePublicDropIndexKey,
   removePublicDropIndexEntry,

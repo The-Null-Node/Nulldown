@@ -20,7 +20,9 @@ const headingPattern = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/;
 const checklistPattern = /^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])]\s+(.*)$/;
 const fenceOpenPattern = /^\s{0,3}(`{3,}|~{3,})([^`~]*)$/;
 
-const parsePluginInfo = (info: string): { id: string; args: string | null } | null => {
+const parsePluginInfo = (
+  info: string,
+): { id: string; args: string | null } | null => {
   const trimmed = info.trim();
   if (!trimmed) return null;
   const match = /^([A-Za-z][\w.-]*)(?:\((.*)\))?$/.exec(trimmed);
@@ -36,7 +38,9 @@ const firstBodyLine = (value: string): string | null =>
 
 const extractArgValue = (args: string | null, name: string): string | null => {
   if (!args) return null;
-  const pattern = new RegExp(`(?:^|[,\\s])${name}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^,\\s)]+))`);
+  const pattern = new RegExp(
+    `(?:^|[,\\s])${name}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^,\\s)]+))`,
+  );
   const match = pattern.exec(args);
   return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
 };
@@ -65,7 +69,9 @@ const buildResolvedStateId = ({
     "resolved",
     rootDropId,
     branchId ?? "drop",
-    snapshotId ?? sourceRevision ?? sourceHash.slice(NULLDOWN_SOURCE_HASH_PREFIX.length, 19),
+    snapshotId ??
+      sourceRevision ??
+      sourceHash.slice(NULLDOWN_SOURCE_HASH_PREFIX.length, 19),
     resolverId,
     resolverVersion,
   ].join(":");
@@ -184,12 +190,19 @@ const importanceForNodeKind = (
 
 const linkPattern = /\[([^\]]+)]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const listItemPattern = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
-const knownNullplugFenceIds = new Set(["nd", "embed", "form", "action", "card"]);
+const knownNullplugFenceIds = new Set([
+  "nd",
+  "embed",
+  "form",
+  "action",
+  "card",
+]);
 
 const isLikelyNullplugInvocation = (invocation: {
   id: string;
   args: string | null;
-}): boolean => knownNullplugFenceIds.has(invocation.id) || invocation.args !== null;
+}): boolean =>
+  knownNullplugFenceIds.has(invocation.id) || invocation.args !== null;
 
 const addLinkRefNodes = (
   nodes: ResolvedDocumentNode[],
@@ -241,7 +254,8 @@ export const heapifyResolvedDocument = async ({
   let hasDocumentTitle = false;
   let index = 0;
 
-  const currentHeadingPath = (): string[] => headingStack.map((entry) => entry.text);
+  const currentHeadingPath = (): string[] =>
+    headingStack.map((entry) => entry.text);
   const currentSectionId = (): string | undefined =>
     headingStack[headingStack.length - 1]?.id;
 
@@ -249,9 +263,15 @@ export const heapifyResolvedDocument = async ({
     const span = lines[index];
     const headingMatch = headingPattern.exec(span.line);
     if (headingMatch) {
-      const depth = Math.min(6, Math.max(1, span.line.trimStart().match(/^#+/)?.[0].length ?? 1));
+      const depth = Math.min(
+        6,
+        Math.max(1, span.line.trimStart().match(/^#+/)?.[0].length ?? 1),
+      );
       const text = stripMarkdownHeadingText(headingMatch[1]);
-      while (headingStack.length && headingStack[headingStack.length - 1].depth >= depth) {
+      while (
+        headingStack.length &&
+        headingStack[headingStack.length - 1].depth >= depth
+      ) {
         headingStack.pop();
       }
       const heading: HeadingSpan = {
@@ -280,7 +300,12 @@ export const heapifyResolvedDocument = async ({
       if (!hasDocumentTitle && depth === 1) {
         hasDocumentTitle = true;
         nodes.push({
-          id: documentNodeId("document.title", sourceContentHash, span.start, span.end),
+          id: documentNodeId(
+            "document.title",
+            sourceContentHash,
+            span.start,
+            span.end,
+          ),
           kind: "document.title",
           text,
           sourceRange: { start: span.start, end: span.end },
@@ -298,9 +323,12 @@ export const heapifyResolvedDocument = async ({
     const fenceOpen = fenceOpenPattern.exec(span.line);
     if (fenceOpen) {
       const invocation = parsePluginInfo(fenceOpen[2]);
-      const language = fenceOpen[2]?.trim().split(/\s+/)[0]?.toLowerCase() || undefined;
+      const language =
+        fenceOpen[2]?.trim().split(/\s+/)[0]?.toLowerCase() || undefined;
       const fenceChar = fenceOpen[1][0];
-      const closePattern = new RegExp(`^\\s{0,3}${fenceChar}{${fenceOpen[1].length},}\\s*$`);
+      const closePattern = new RegExp(
+        `^\\s{0,3}${fenceChar}{${fenceOpen[1].length},}\\s*$`,
+      );
       let closeIndex = index;
       while (closeIndex + 1 < lines.length) {
         closeIndex += 1;
@@ -328,12 +356,22 @@ export const heapifyResolvedDocument = async ({
       if (invocation && isLikelyNullplugInvocation(invocation)) {
         const dropId =
           invocation.id === "nd"
-            ? extractArgValue(invocation.args, "id") ?? firstBodyLine(body) ?? undefined
+            ? (extractArgValue(invocation.args, "id") ??
+              firstBodyLine(body) ??
+              undefined)
             : undefined;
         nodes.push({
-          id: documentNodeId("nullplug.ref", sourceContentHash, span.start, end, invocation.id),
+          id: documentNodeId(
+            "nullplug.ref",
+            sourceContentHash,
+            span.start,
+            end,
+            invocation.id,
+          ),
           kind: "nullplug.ref",
-          text: [invocation.id, dropId, firstBodyLine(body)].filter(Boolean).join(" "),
+          text: [invocation.id, dropId, firstBodyLine(body)]
+            .filter(Boolean)
+            .join(" "),
           pluginId: invocation.id,
           dropId,
           sourceRange: { start: span.start, end },
@@ -355,7 +393,9 @@ export const heapifyResolvedDocument = async ({
         ? checklistMatch[1].toLowerCase() === "x"
         : undefined;
       const text = (checklistMatch?.[2] ?? listMatch?.[1] ?? "").trim();
-      const kind: ResolvedDocumentNodeKind = checklistMatch ? "checklist.item" : "list.item";
+      const kind: ResolvedDocumentNodeKind = checklistMatch
+        ? "checklist.item"
+        : "list.item";
       const headingPath = currentHeadingPath();
       const sectionId = currentSectionId();
       nodes.push({
@@ -392,8 +432,16 @@ export const heapifyResolvedDocument = async ({
     while (index < lines.length) {
       const candidate = lines[index];
       if (!candidate.line.trim()) break;
-      if (headingPattern.test(candidate.line) || fenceOpenPattern.test(candidate.line)) break;
-      if (checklistPattern.test(candidate.line) || listItemPattern.test(candidate.line)) break;
+      if (
+        headingPattern.test(candidate.line) ||
+        fenceOpenPattern.test(candidate.line)
+      )
+        break;
+      if (
+        checklistPattern.test(candidate.line) ||
+        listItemPattern.test(candidate.line)
+      )
+        break;
       paragraphLines.push(candidate);
       paragraphEnd = candidate.end;
       index += 1;
@@ -403,7 +451,12 @@ export const heapifyResolvedDocument = async ({
       const headingPath = currentHeadingPath();
       const sectionId = currentSectionId();
       nodes.push({
-        id: documentNodeId("paragraph", sourceContentHash, paragraphStart, paragraphEnd),
+        id: documentNodeId(
+          "paragraph",
+          sourceContentHash,
+          paragraphStart,
+          paragraphEnd,
+        ),
         kind: "paragraph",
         text,
         sourceRange: { start: paragraphStart, end: paragraphEnd },
@@ -429,7 +482,11 @@ export const heapifyResolvedDocument = async ({
   // equal or lesser depth without rescanning the heading list for every node.
   const nextHeadingStarts = Array<number>(7).fill(content.length);
   const sections: ResolvedDocumentNode[] = Array(headings.length);
-  for (let headingIndex = headings.length - 1; headingIndex >= 0; headingIndex -= 1) {
+  for (
+    let headingIndex = headings.length - 1;
+    headingIndex >= 0;
+    headingIndex -= 1
+  ) {
     const heading = headings[headingIndex];
     let end = content.length;
     for (let depth = 1; depth <= heading.depth; depth += 1) {
@@ -507,7 +564,10 @@ export const heapifyResolvedChecklist = async ({
 
     const checked = checklistMatch[1].toLowerCase() === "x";
     const text = checklistMatch[2].trim();
-    const idSuffix = sourceContentHash.slice(NULLDOWN_SOURCE_HASH_PREFIX.length, 19);
+    const idSuffix = sourceContentHash.slice(
+      NULLDOWN_SOURCE_HASH_PREFIX.length,
+      19,
+    );
     checklistItems.push({
       id: `checklist:${idSuffix}:${start}:${end}`,
       text,
@@ -554,7 +614,8 @@ export const getNextResolvedChecklistItem = (
 
   return [...candidates].sort((left, right) => {
     const leftImportance = left.importance ?? state.importance?.[left.id] ?? 0;
-    const rightImportance = right.importance ?? state.importance?.[right.id] ?? 0;
+    const rightImportance =
+      right.importance ?? state.importance?.[right.id] ?? 0;
     if (rightImportance !== leftImportance) {
       return rightImportance - leftImportance;
     }

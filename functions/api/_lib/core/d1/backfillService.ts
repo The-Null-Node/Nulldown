@@ -1,7 +1,7 @@
 import { isDropIdToken, toShortDropId } from "../../../../../shared/drop/id";
 import {
   decodeDropEnvelope,
-} from "../../../../../shared/drop/codecs/envelopeV1";
+} from "../../../../../shared/drop/codecs/envelope-v1";
 import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
 import type { DropEnvelope } from "../../../../../shared/drop/types";
 import { isDropDiffEvent } from "../../../../../shared/drop/diff";
@@ -374,8 +374,6 @@ const upsertWriterPointer = async (
 
 const extractTitleFromContent = (content: string): string | null => {
   const lines = content.split("\n");
-
-  const stringChunks = Math.ceil(lines.length / 100);
 
   for (const line of lines) {
     const trimmed = line.trim();

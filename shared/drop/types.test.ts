@@ -5,7 +5,7 @@ import {
   serializeDropEnvelopeForDeviceSignature,
   serializeDropEnvelopeForProviderSignature,
   toDropEnvelopeSignable,
-} from "./codecs/envelopeV1";
+} from "./codecs/envelope-v1";
 import {
   isDropStrategyRef,
   serializeCanonicalJson,
@@ -19,13 +19,29 @@ import {
 } from "./codecs/draft-pack-v1";
 
 describe("drop types", () => {
-  it("validates strategy references independently of payload classification", () => {
-    const ref = { kind: "branch", rootDropId: "root", branchId: "branch" };
-    expect(isDropStrategyRef(ref, "root")).toBe(true);
-    expect(isDropStrategyRef(ref, "alias")).toBe(false);
-    for (const strategyRef of [null, {}, { ...ref, branchId: " " }, { ...ref, rootDropId: " root" }]) {
-      expect(isDropStrategyRef(strategyRef, "root")).toBe(false);
-      expect(isDropPayload({ content: "title", metadata: { strategyRef } })).toBe(true);
+  it("validates only same-root strategy branch references", () => {
+    const rootDropId = "root-drop";
+    const ref = {
+      kind: "branch",
+      rootDropId,
+      branchId: "clone_account:account-1",
+    };
+
+    expect(isDropStrategyRef(ref, rootDropId)).toBe(true);
+    for (const strategyRef of [
+      null,
+      {},
+      [],
+      { ...ref, kind: "root" },
+      { ...ref, rootDropId: "other-root" },
+      { ...ref, rootDropId: " root-drop" },
+      { ...ref, branchId: "" },
+      { ...ref, branchId: " branch" },
+    ]) {
+      expect(isDropStrategyRef(strategyRef, rootDropId)).toBe(false);
+      expect(
+        isDropPayload({ content: "title", metadata: { strategyRef } }),
+      ).toBe(true);
     }
   });
 

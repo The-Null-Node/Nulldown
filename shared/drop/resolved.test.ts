@@ -214,9 +214,9 @@ describe("resolved drop helpers", () => {
   it("heapifies nullplug dependency refs and UI response refs", async () => {
     const content = [
       "# Runtime refs",
-      "```nd(id=\"child-drop-1\")",
+      '```nd(id="child-drop-1")',
       "```",
-      "```form(id=\"approval\")",
+      '```form(id="approval")',
       "Approve this patch.",
       "```",
     ].join("\n");
@@ -245,7 +245,11 @@ describe("resolved drop helpers", () => {
           id: "response-1",
           primitiveId: "approval",
           createdAt: 122,
-          source: { rootDropId: "root-1", branchId: "clone_anonymous", callId: "call-1" },
+          source: {
+            rootDropId: "root-1",
+            branchId: "clone_anonymous",
+            callId: "call-1",
+          },
           data: { approved: true },
           proposedDiffs: { version: 1, events: [] },
         },
@@ -257,7 +261,11 @@ describe("resolved drop helpers", () => {
           id: "patch-1",
           callId: "call-1",
           createdAt: 123,
-          source: { rootDropId: "root-1", branchId: "clone_anonymous", callId: "call-1" },
+          source: {
+            rootDropId: "root-1",
+            branchId: "clone_anonymous",
+            callId: "call-1",
+          },
           patch: [{ op: "set", path: ["approved"], value: true }],
         },
       ],
@@ -278,14 +286,22 @@ describe("resolved drop helpers", () => {
     expect(state.runtimeNodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "nullplug.ref", pluginId: "nd" }),
-        expect.objectContaining({ kind: "ui.primitive", primitiveId: "approve-action" }),
-        expect.objectContaining({ kind: "ui.response", primitiveId: "approval" }),
+        expect.objectContaining({
+          kind: "ui.primitive",
+          primitiveId: "approve-action",
+        }),
+        expect.objectContaining({
+          kind: "ui.response",
+          primitiveId: "approval",
+        }),
         expect.objectContaining({ kind: "ui.state", callId: "call-1" }),
       ]),
     );
     expect(
-      queryResolvedRuntimeNodes(state, { q: "approve", kinds: ["ui.primitive", "ui.response"] })
-        .map((entry) => entry.node.kind),
+      queryResolvedRuntimeNodes(state, {
+        q: "approve",
+        kinds: ["ui.primitive", "ui.response"],
+      }).map((entry) => entry.node.kind),
     ).toEqual(["ui.response", "ui.primitive"]);
   });
 
@@ -296,7 +312,7 @@ describe("resolved drop helpers", () => {
       "## Policy",
       "Policy text with [docs](https://nulldown.app/d/aN8B4B).",
       "- [ ] Add audit sidecars",
-      "```nd(id=\"child-drop-1\")",
+      '```nd(id="child-drop-1")',
       "```",
       "",
       "## Registry",
@@ -313,12 +329,29 @@ describe("resolved drop helpers", () => {
 
     expect(state.documentNodes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "document.title", text: "Runtime Plan" }),
+        expect.objectContaining({
+          kind: "document.title",
+          text: "Runtime Plan",
+        }),
         expect.objectContaining({ kind: "heading", text: "Policy" }),
-        expect.objectContaining({ kind: "section", headingPath: ["Runtime Plan", "Policy"] }),
-        expect.objectContaining({ kind: "link.ref", href: "https://nulldown.app/d/aN8B4B" }),
-        expect.objectContaining({ kind: "checklist.item", text: "Add audit sidecars", checked: false }),
-        expect.objectContaining({ kind: "nullplug.ref", pluginId: "nd", dropId: "child-drop-1" }),
+        expect.objectContaining({
+          kind: "section",
+          headingPath: ["Runtime Plan", "Policy"],
+        }),
+        expect.objectContaining({
+          kind: "link.ref",
+          href: "https://nulldown.app/d/aN8B4B",
+        }),
+        expect.objectContaining({
+          kind: "checklist.item",
+          text: "Add audit sidecars",
+          checked: false,
+        }),
+        expect.objectContaining({
+          kind: "nullplug.ref",
+          pluginId: "nd",
+          dropId: "child-drop-1",
+        }),
       ]),
     );
   });
@@ -336,7 +369,10 @@ describe("resolved drop helpers", () => {
       "# Final",
       "final content",
     ].join("\n");
-    const state = await heapifyResolvedDocument({ rootDropId: "root-1", content });
+    const state = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      content,
+    });
     const sections = (state.documentNodes ?? []).filter(
       (node) => node.kind === "section",
     );
@@ -435,9 +471,18 @@ describe("resolved drop helpers", () => {
   });
 
   it("keeps zero-length changes at source boundaries queryable", async () => {
-    const content = ["# Plan", "", "Alpha paragraph.", "", "Beta paragraph."].join("\n");
+    const content = [
+      "# Plan",
+      "",
+      "Alpha paragraph.",
+      "",
+      "Beta paragraph.",
+    ].join("\n");
     const alphaEnd = content.indexOf("\n\nBeta");
-    const state = await heapifyResolvedDocument({ rootDropId: "root-1", content });
+    const state = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      content,
+    });
 
     const results = queryResolvedDocumentNodes(state, {
       changedOnly: true,
@@ -445,13 +490,18 @@ describe("resolved drop helpers", () => {
       kinds: ["paragraph"],
     });
 
-    expect(results.map((entry) => entry.node.text)).toContain("Alpha paragraph.");
+    expect(results.map((entry) => entry.node.text)).toContain(
+      "Alpha paragraph.",
+    );
   });
 
   it("checks later disjoint changed ranges after a source-boundary candidate", async () => {
     const content = ["# Plan", "", "Alpha paragraph."].join("\n");
     const alphaStart = content.indexOf("Alpha paragraph.");
-    const state = await heapifyResolvedDocument({ rootDropId: "root-1", content });
+    const state = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      content,
+    });
 
     const results = queryResolvedDocumentNodes(state, {
       changedOnly: true,
@@ -462,7 +512,9 @@ describe("resolved drop helpers", () => {
       kinds: ["paragraph"],
     });
 
-    expect(results.map((entry) => entry.node.text)).toContain("Alpha paragraph.");
+    expect(results.map((entry) => entry.node.text)).toContain(
+      "Alpha paragraph.",
+    );
   });
 
   it("keeps source-order ties while retaining only the requested top document nodes", async () => {
@@ -549,7 +601,9 @@ describe("resolved drop helpers", () => {
     };
 
     expect(isResolvedNodeRefRecord(nodeRef)).toBe(true);
-    expect(isResolvedNodeRefRecord({ ...nodeRef, nodeHash: "sha1:bad" })).toBe(false);
+    expect(isResolvedNodeRefRecord({ ...nodeRef, nodeHash: "sha1:bad" })).toBe(
+      false,
+    );
 
     const checkpointDelta = {
       version: RESOLVED_HEAP_DELTA_RECORD_VERSION,
@@ -603,8 +657,18 @@ describe("resolved drop helpers", () => {
 
     expect(isResolvedHeapDeltaRecord(checkpointDelta)).toBe(true);
     expect(isResolvedHeapDeltaRecord(compactDelta)).toBe(true);
-    expect(isResolvedHeapDeltaRecord({ ...checkpointDelta, nodeRefs: [{ ...nodeRef, version: 2 }] })).toBe(false);
-    expect(isResolvedHeapDeltaRecord({ ...compactDelta, nodeOps: [{ op: "delete" }] })).toBe(false);
+    expect(
+      isResolvedHeapDeltaRecord({
+        ...checkpointDelta,
+        nodeRefs: [{ ...nodeRef, version: 2 }],
+      }),
+    ).toBe(false);
+    expect(
+      isResolvedHeapDeltaRecord({
+        ...compactDelta,
+        nodeOps: [{ op: "delete" }],
+      }),
+    ).toBe(false);
 
     const priorityFact = {
       version: RESOLVED_PRIORITY_FACT_RECORD_VERSION,
@@ -624,8 +688,15 @@ describe("resolved drop helpers", () => {
     };
 
     expect(isResolvedPriorityFactRecord(priorityFact)).toBe(true);
-    expect(isResolvedPriorityFactRecord({ ...priorityFact, targetKind: "drop" })).toBe(false);
-    expect(isResolvedPriorityFactRecord({ ...priorityFact, metadata: { bad: undefined } })).toBe(false);
+    expect(
+      isResolvedPriorityFactRecord({ ...priorityFact, targetKind: "drop" }),
+    ).toBe(false);
+    expect(
+      isResolvedPriorityFactRecord({
+        ...priorityFact,
+        metadata: { bad: undefined },
+      }),
+    ).toBe(false);
   });
 
   it("builds and applies compact semantic node ref deltas", async () => {

@@ -1,7 +1,4 @@
-import {
-  isDropDiffEventMetadata,
-  type JsonValue,
-} from "../diff";
+import { isDropDiffEventMetadata, type JsonValue } from "../diff";
 import {
   RESOLVED_HEAP_DELTA_RECORD_VERSION,
   RESOLVED_NODE_REF_RECORD_VERSION,
@@ -87,13 +84,13 @@ export const isNulldownContextToken = (
   if (value.version !== 1) return false;
   if (!isString(value.rootDropId)) return false;
   if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.snapshotId !== undefined && !isNonNegativeInteger(value.snapshotId)) {
+  if (
+    value.snapshotId !== undefined &&
+    !isNonNegativeInteger(value.snapshotId)
+  ) {
     return false;
   }
-  if (
-    value.checklistDropId !== undefined &&
-    !isString(value.checklistDropId)
-  ) {
+  if (value.checklistDropId !== undefined && !isString(value.checklistDropId)) {
     return false;
   }
   if (
@@ -115,7 +112,9 @@ export const isNulldownContextToken = (
   return true;
 };
 
-const isResolvedSourceRange = (value: unknown): value is ResolvedSourceRange => {
+const isResolvedSourceRange = (
+  value: unknown,
+): value is ResolvedSourceRange => {
   if (!isRecord(value)) return false;
   return isNonNegativeInteger(value.start) && isNonNegativeInteger(value.end);
 };
@@ -134,8 +133,12 @@ const isResolvedChecklistItem = (
   if (!isString(value.id) || !isString(value.text)) return false;
   if (typeof value.checked !== "boolean") return false;
   if (value.phase !== undefined && !isString(value.phase)) return false;
-  if (value.importance !== undefined && !isNumber(value.importance)) return false;
-  if (value.sourceRange !== undefined && !isResolvedSourceRange(value.sourceRange)) {
+  if (value.importance !== undefined && !isNumber(value.importance))
+    return false;
+  if (
+    value.sourceRange !== undefined &&
+    !isResolvedSourceRange(value.sourceRange)
+  ) {
     return false;
   }
   return isNulldownSourceHash(value.sourceHash);
@@ -145,7 +148,10 @@ const isResolvedPluginRef = (value: unknown): value is ResolvedPluginRef => {
   if (!isRecord(value)) return false;
   if (!isString(value.id) || !isString(value.pluginId)) return false;
   if (value.dropId !== undefined && !isString(value.dropId)) return false;
-  if (value.sourceRange !== undefined && !isResolvedSourceRange(value.sourceRange)) {
+  if (
+    value.sourceRange !== undefined &&
+    !isResolvedSourceRange(value.sourceRange)
+  ) {
     return false;
   }
   return isNulldownSourceHash(value.sourceHash);
@@ -156,11 +162,15 @@ const isResolvedPolicyFact = (value: unknown): value is ResolvedPolicyFact => {
   if (!isString(value.id) || !isString(value.kind) || !isString(value.text)) {
     return false;
   }
-  if (value.sourceRange !== undefined && !isResolvedSourceRange(value.sourceRange)) {
+  if (
+    value.sourceRange !== undefined &&
+    !isResolvedSourceRange(value.sourceRange)
+  ) {
     return false;
   }
   if (!isNulldownSourceHash(value.sourceHash)) return false;
-  if (value.importance !== undefined && !isNumber(value.importance)) return false;
+  if (value.importance !== undefined && !isNumber(value.importance))
+    return false;
   return true;
 };
 
@@ -168,7 +178,10 @@ const isNullplugUiSourceShape = (value: unknown): value is NullplugUiSource => {
   if (!isRecord(value)) return false;
   if (!isString(value.rootDropId)) return false;
   if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.snapshotId !== undefined && !isNonNegativeInteger(value.snapshotId)) {
+  if (
+    value.snapshotId !== undefined &&
+    !isNonNegativeInteger(value.snapshotId)
+  ) {
     return false;
   }
   if (value.eventId !== undefined && !isString(value.eventId)) return false;
@@ -200,23 +213,32 @@ const isResolvedRuntimeNodeKind = (
   value === "ui.state" ||
   value === "ui.response";
 
-const isResolvedRuntimeNode = (value: unknown): value is ResolvedRuntimeNode => {
+const isResolvedRuntimeNode = (
+  value: unknown,
+): value is ResolvedRuntimeNode => {
   if (!isRecord(value)) return false;
-  if (!isString(value.id) || !isResolvedRuntimeNodeKind(value.kind)) return false;
+  if (!isString(value.id) || !isResolvedRuntimeNodeKind(value.kind))
+    return false;
   if (!isString(value.text)) return false;
   if (!isNulldownSourceHash(value.sourceHash)) return false;
-  if (value.sourceRange !== undefined && !isResolvedSourceRange(value.sourceRange)) {
+  if (
+    value.sourceRange !== undefined &&
+    !isResolvedSourceRange(value.sourceRange)
+  ) {
     return false;
   }
-  if (value.source !== undefined && !isNullplugUiSourceShape(value.source)) return false;
+  if (value.source !== undefined && !isNullplugUiSourceShape(value.source))
+    return false;
   if (value.pluginId !== undefined && !isString(value.pluginId)) return false;
   if (value.dropId !== undefined && !isString(value.dropId)) return false;
   if (value.callId !== undefined && !isString(value.callId)) return false;
-  if (value.primitiveId !== undefined && !isString(value.primitiveId)) return false;
+  if (value.primitiveId !== undefined && !isString(value.primitiveId))
+    return false;
   if (value.createdAt !== undefined && !isNonNegativeInteger(value.createdAt)) {
     return false;
   }
-  if (value.importance !== undefined && !isNumber(value.importance)) return false;
+  if (value.importance !== undefined && !isNumber(value.importance))
+    return false;
   return true;
 };
 
@@ -234,13 +256,17 @@ const isResolvedDocumentNodeKind = (
   value === "link.ref" ||
   value === "diff.region";
 
-const isResolvedDocumentNode = (value: unknown): value is ResolvedDocumentNode => {
+const isResolvedDocumentNode = (
+  value: unknown,
+): value is ResolvedDocumentNode => {
   if (!isRecord(value)) return false;
-  if (!isString(value.id) || !isResolvedDocumentNodeKind(value.kind)) return false;
+  if (!isString(value.id) || !isResolvedDocumentNodeKind(value.kind))
+    return false;
   if (!isString(value.text)) return false;
   if (!isResolvedSourceRange(value.sourceRange)) return false;
   if (!isNulldownSourceHash(value.sourceHash)) return false;
-  if (value.headingPath !== undefined && !isStringArray(value.headingPath)) return false;
+  if (value.headingPath !== undefined && !isStringArray(value.headingPath))
+    return false;
   if (value.sectionId !== undefined && !isString(value.sectionId)) return false;
   if (value.parentId !== undefined && !isString(value.parentId)) return false;
   if (value.depth !== undefined && !isNumber(value.depth)) return false;
@@ -248,8 +274,10 @@ const isResolvedDocumentNode = (value: unknown): value is ResolvedDocumentNode =
   if (value.dropId !== undefined && !isString(value.dropId)) return false;
   if (value.href !== undefined && !isString(value.href)) return false;
   if (value.language !== undefined && !isString(value.language)) return false;
-  if (value.checked !== undefined && typeof value.checked !== "boolean") return false;
-  if (value.importance !== undefined && !isNumber(value.importance)) return false;
+  if (value.checked !== undefined && typeof value.checked !== "boolean")
+    return false;
+  if (value.importance !== undefined && !isNumber(value.importance))
+    return false;
   return true;
 };
 
@@ -276,12 +304,16 @@ export const isResolvedNodeRefRecord = (
   }
   if (!isNulldownSourceHash(value.nodeHash)) return false;
   if (!isNulldownSourceHash(value.sourceHash)) return false;
-  if (value.sourceRange !== undefined && !isResolvedSourceRange(value.sourceRange)) {
+  if (
+    value.sourceRange !== undefined &&
+    !isResolvedSourceRange(value.sourceRange)
+  ) {
     return false;
   }
   if (value.parentId !== undefined && !isString(value.parentId)) return false;
   if (value.text !== undefined && !isString(value.text)) return false;
-  if (value.importance !== undefined && !isNumber(value.importance)) return false;
+  if (value.importance !== undefined && !isNumber(value.importance))
+    return false;
   return true;
 };
 
@@ -303,10 +335,14 @@ export const isResolvedNodeDeltaOp = (
   return false;
 };
 
-const isResolvedDiffEventRef = (value: unknown): value is ResolvedDiffEventRef => {
+const isResolvedDiffEventRef = (
+  value: unknown,
+): value is ResolvedDiffEventRef => {
   if (!isRecord(value)) return false;
-  if (!isNonNegativeInteger(value.seq) || !isString(value.eventId)) return false;
-  if (value.sourceClientId !== undefined && !isString(value.sourceClientId)) return false;
+  if (!isNonNegativeInteger(value.seq) || !isString(value.eventId))
+    return false;
+  if (value.sourceClientId !== undefined && !isString(value.sourceClientId))
+    return false;
   if (value.createdAt !== undefined && !isNumber(value.createdAt)) return false;
   if (
     value.metadata !== undefined &&
@@ -328,7 +364,8 @@ export const isResolvedHeapDeltaRecord = (
   const record = value as unknown as Record<string, unknown>;
   if (record.version !== RESOLVED_HEAP_DELTA_RECORD_VERSION) return false;
   if (!isString(record.resolverVersion)) return false;
-  if (record.parent !== undefined && !isResolvedHeapRef(record.parent)) return false;
+  if (record.parent !== undefined && !isResolvedHeapRef(record.parent))
+    return false;
   if (!isNulldownSourceHash(record.sourceContentHash)) return false;
   if (
     record.sourceSeqRange !== undefined &&
@@ -336,7 +373,10 @@ export const isResolvedHeapDeltaRecord = (
   ) {
     return false;
   }
-  if (!isNumber(record.resolvedAt) || typeof record.checkpointed !== "boolean") {
+  if (
+    !isNumber(record.resolvedAt) ||
+    typeof record.checkpointed !== "boolean"
+  ) {
     return false;
   }
   const hasNodeRefs = Array.isArray(record.nodeRefs);
@@ -349,15 +389,24 @@ export const isResolvedHeapDeltaRecord = (
   ) {
     return false;
   }
-  if (hasNodeOps && !(record.nodeOps as unknown[]).every(isResolvedNodeDeltaOp)) {
+  if (
+    hasNodeOps &&
+    !(record.nodeOps as unknown[]).every(isResolvedNodeDeltaOp)
+  ) {
     return false;
   }
   if (record.diffRefs !== undefined) {
-    if (!Array.isArray(record.diffRefs) || !record.diffRefs.every(isResolvedDiffEventRef)) {
+    if (
+      !Array.isArray(record.diffRefs) ||
+      !record.diffRefs.every(isResolvedDiffEventRef)
+    ) {
       return false;
     }
   }
-  if (record.priorityFactIds !== undefined && !isStringArray(record.priorityFactIds)) {
+  if (
+    record.priorityFactIds !== undefined &&
+    !isStringArray(record.priorityFactIds)
+  ) {
     return false;
   }
   if (record.title !== undefined && !isString(record.title)) return false;
@@ -378,17 +427,20 @@ export const isResolvedPriorityFactRecord = (
   if (value.version !== RESOLVED_PRIORITY_FACT_RECORD_VERSION) return false;
   if (!isString(value.factId) || !isString(value.rootDropId)) return false;
   if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.resolverId !== undefined && !isString(value.resolverId)) return false;
+  if (value.resolverId !== undefined && !isString(value.resolverId))
+    return false;
   if (!isResolvedPriorityTargetKind(value.targetKind)) return false;
   if (!isString(value.targetId) || !isNumber(value.priority)) return false;
   if (!isNonNegativeInteger(value.createdAt)) return false;
   if (value.sourceSeq !== undefined && !isNonNegativeInteger(value.sourceSeq)) {
     return false;
   }
-  if (value.sourceEventId !== undefined && !isString(value.sourceEventId)) return false;
+  if (value.sourceEventId !== undefined && !isString(value.sourceEventId))
+    return false;
   if (value.reason !== undefined && !isString(value.reason)) return false;
   if (value.labels !== undefined && !isStringArray(value.labels)) return false;
-  if (value.metadata !== undefined && !isJsonRecord(value.metadata)) return false;
+  if (value.metadata !== undefined && !isJsonRecord(value.metadata))
+    return false;
   return true;
 };
 
@@ -402,7 +454,10 @@ export const isResolvedNulldownState = (
   if (value.version !== 1) return false;
   if (!isString(value.id) || !isString(value.rootDropId)) return false;
   if (value.branchId !== undefined && !isString(value.branchId)) return false;
-  if (value.snapshotId !== undefined && !isNonNegativeInteger(value.snapshotId)) {
+  if (
+    value.snapshotId !== undefined &&
+    !isNonNegativeInteger(value.snapshotId)
+  ) {
     return false;
   }
   if (value.sourceRevision !== undefined && !isString(value.sourceRevision)) {
@@ -415,7 +470,8 @@ export const isResolvedNulldownState = (
     return false;
   }
   if (!isNulldownSourceHash(value.sourceContentHash)) return false;
-  if (!isString(value.resolverId) || !isString(value.resolverVersion)) return false;
+  if (!isString(value.resolverId) || !isString(value.resolverVersion))
+    return false;
   if (!isNumber(value.resolvedAt)) return false;
   if (value.title !== undefined && !isString(value.title)) return false;
   if (value.summary !== undefined && !isString(value.summary)) return false;

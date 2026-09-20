@@ -1,6 +1,6 @@
 import {
   serializeDropEnvelopeForDeviceSignature,
-} from "./codecs/envelopeV1";
+} from "./codecs/envelope-v1";
 import { isDropDeviceDelegation } from "./codecs/device-delegation-v1";
 import {
   serializeCanonicalJson,

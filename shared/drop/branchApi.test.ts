@@ -93,7 +93,12 @@ describe("branch api client", () => {
       authTokenProvider: async () => "session-token",
       fetchImpl: (async (input, init) => {
         calls.push({ url: String(input), init });
-        return Response.json({ stored: true, indexed: true, key: "state-key", fact });
+        return Response.json({
+          stored: true,
+          indexed: true,
+          key: "state-key",
+          fact,
+        });
       }) as typeof fetch,
     });
 

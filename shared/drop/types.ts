@@ -212,8 +212,6 @@ export interface DropGraph {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-const isString = (value: unknown): value is string => typeof value === "string";
-
 /** Validates strategy routing separately from payload/envelope classification. */
 export const isDropStrategyRef = (
   value: unknown,
@@ -222,13 +220,14 @@ export const isDropStrategyRef = (
   isRecord(value) &&
   !Array.isArray(value) &&
   value.kind === "branch" &&
-  isString(value.rootDropId) &&
+  typeof value.rootDropId === "string" &&
   value.rootDropId.length > 0 &&
   value.rootDropId.trim() === value.rootDropId &&
   value.rootDropId === canonicalRootId &&
-  isString(value.branchId) &&
+  typeof value.branchId === "string" &&
   value.branchId.length > 0 &&
   value.branchId.trim() === value.branchId;
+
 const normalizeForCanonicalJson = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map((entry) => normalizeForCanonicalJson(entry));

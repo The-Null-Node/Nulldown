@@ -1,11 +1,11 @@
 import {
   serializeDropEnvelopeForDeviceSignature,
-} from "../../../../../shared/drop/codecs/envelopeV1";
+} from "../../../../../shared/drop/codecs/envelope-v1";
 import type {
   DropEnvelope,
   DropMetadata,
 } from "../../../../../shared/drop/types";
-import { serverVoidCrypto } from "../void/serverVoidCrypto";
+import { providerCrypto } from "../provider-crypto";
 
 /** Inputs for creating a provider-sealed drop envelope from promoted branch content. */
 export interface CreatePromotedEnvelopeInput {
@@ -29,23 +29,21 @@ export const createPromotedEnvelope = async (
   ) as JsonWebKey;
 
   const { jwk: encryptionPublicJwk, kid: keyId } =
-    serverVoidCrypto.deriveProviderEncryptionPublicJwk(encryptionPrivateJwk);
-
+    providerCrypto.deriveProviderEncryptionPublicJwk(encryptionPrivateJwk);
   const { jwk: signingPublicJwk, kid: signingKeyId } =
-    serverVoidCrypto.deriveProviderSigningPublicJwk(signingPrivateJwk);
-
-  const encryptedContent = await serverVoidCrypto.encryptTextWithNewContentKey(
+    providerCrypto.deriveProviderSigningPublicJwk(signingPrivateJwk);
+  const encryptedContent = await providerCrypto.encryptTextWithNewContentKey(
     input.content,
   );
 
   const wrappedKey =
-    await serverVoidCrypto.wrapRawContentKeyWithProviderPublicJwk(
+    await providerCrypto.wrapRawContentKeyWithProviderPublicJwk(
       encryptionPublicJwk,
       encryptedContent.rawContentKey,
     );
 
   const escrowWrappedKey =
-    await serverVoidCrypto.wrapRawContentKeyWithProviderPublicJwk(
+    await providerCrypto.wrapRawContentKeyWithProviderPublicJwk(
       encryptionPublicJwk,
       encryptedContent.rawContentKey,
     );
@@ -60,25 +58,25 @@ export const createPromotedEnvelope = async (
     metadata: input.metadata,
     cipher: {
       alg: "A256GCM" as const,
-      iv: serverVoidCrypto.encodeIv(encryptedContent.iv),
-      ciphertext: serverVoidCrypto.toBase64(encryptedContent.ciphertext),
+      iv: providerCrypto.encodeIv(encryptedContent.iv),
+      ciphertext: providerCrypto.toBase64(encryptedContent.ciphertext),
     },
     keyEnvelope: {
       mode: "account-vault-rsa-oaep" as const,
       kid: keyId,
-      wrappedKey: serverVoidCrypto.toBase64(wrappedKey),
+      wrappedKey: providerCrypto.toBase64(wrappedKey),
     },
     providerEscrow: {
       mode: "provider-rsa-oaep" as const,
       kid: keyId,
-      wrappedKey: serverVoidCrypto.toBase64(escrowWrappedKey),
+      wrappedKey: providerCrypto.toBase64(escrowWrappedKey),
     },
     deviceSignerPublicJwk: signingPublicJwk,
   };
 
   const signaturePayload =
     serializeDropEnvelopeForDeviceSignature(signableEnvelope);
-  const signature = await serverVoidCrypto.signWithProviderKey(
+  const signature = await providerCrypto.signWithProviderKey(
     signaturePayload,
     signingPrivateJwk,
   );
@@ -89,7 +87,7 @@ export const createPromotedEnvelope = async (
       device: {
         kid: signingKeyId,
         alg: "ECDSA_P256_SHA256",
-        sig: serverVoidCrypto.toBase64(signature),
+        sig: providerCrypto.toBase64(signature),
       },
     },
   };
