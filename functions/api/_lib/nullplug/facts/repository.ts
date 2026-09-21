@@ -73,16 +73,12 @@ export const readNullplugUiStateFact = async (
   fact:
     | Pick<NullplugUiStatePatchFact, "kind" | "id" | "callId" | "source">
     | Pick<NullplugUiStateSnapshot, "kind" | "id" | "callId" | "source">,
-): Promise<NullplugUiStatePatchFact | NullplugUiStateSnapshot | null> =>
-  readStoredFact(
-    bucket,
-    fact.kind === "ui.state.patch"
-      ? nullplugUiStatePatchFactKey(fact)
-      : nullplugUiStateSnapshotKey(fact),
-    fact.kind === "ui.state.patch"
-      ? isNullplugUiStatePatchFact
-      : isNullplugUiStateSnapshot,
-  );
+): Promise<NullplugUiStatePatchFact | NullplugUiStateSnapshot | null> => {
+  if (fact.kind === "ui.state.patch") {
+    return readStoredFact(bucket, nullplugUiStatePatchFactKey(fact), isNullplugUiStatePatchFact);
+  }
+  return readStoredFact(bucket, nullplugUiStateSnapshotKey(fact), isNullplugUiStateSnapshot);
+};
 
 const writeFactToD1 = async (
   db: VoidSqlStore | undefined,
@@ -295,13 +291,9 @@ export const putNullplugUiStateFact = async (
     onlyIf: { etagDoesNotMatch: "*" },
   });
   if (!written) {
-    const existing = await readStoredFact(
-      bucket,
-      key,
-      fact.kind === "ui.state.patch"
-        ? isNullplugUiStatePatchFact
-        : isNullplugUiStateSnapshot,
-    );
+    const existing = fact.kind === "ui.state.patch"
+      ? await readStoredFact(bucket, key, isNullplugUiStatePatchFact)
+      : await readStoredFact(bucket, key, isNullplugUiStateSnapshot);
     if (!existing) throw new Error("Existing nullplug state fact is invalid.");
     await writeFactToD1(db, existing.kind, existing);
     return { key, written: false, fact: existing };

@@ -1,10 +1,10 @@
 import { jest } from "@jest/globals";
-import { runCli } from "./index";
+import { runCli, type CliFetch } from "./index";
 
 describe("CLI branch promote", () => {
   it("forwards the fenced retry identity unchanged", async () => {
     const stdout: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>(async (input, init) => {
+    const fetchImpl = jest.fn<CliFetch>(async (input, init) => {
       expect(String(input)).toBe(
         "http://example.test/api/branches/root-1/branch-1/promote",
       );
@@ -43,7 +43,7 @@ describe("CLI branch promote", () => {
 
   it("requires the immutable promotion identity before network I/O", async () => {
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>();
+    const fetchImpl = jest.fn<CliFetch>();
 
     const result = await runCli(
       [

@@ -230,9 +230,8 @@ describe("functions api nullplug state contracts", () => {
       },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
-    const storedBranch = await bucket
-      .get(createBranchKey(rootDropId, branchId))
-      .then((object) => object?.json<Record<string, unknown>>());
+    const storedObject = await bucket.get(createBranchKey(rootDropId, branchId));
+    const storedBranch = await storedObject?.json() as Record<string, unknown> | undefined;
     bucket.seed(
       createBranchKey(rootDropId, branchId),
       JSON.stringify({ ...storedBranch, status: "archived" }),

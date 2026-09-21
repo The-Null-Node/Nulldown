@@ -112,7 +112,7 @@
     "package:check-cli": "bun run scripts/check-cli-package-boundary.ts",
     "package:check-mcp": "bun run scripts/check-mcp-package-boundary.ts",
     "package:verify-cli": "bun run test:cli-contracts && bun run test:cli-integration && bun run package:check-cli && bun run package:smoke-cli",
-    "package:verify-mcp": "bun run test -- src/mcp/server.test.ts --runInBand && bun run mcp:build:current && bun run package:check-mcp && bun run package:smoke-mcp",
+    "package:verify-mcp": "bun run test -- packages/nulldown-mcp/src/server.test.ts --runInBand && bun run mcp:build:current && bun run package:check-mcp && bun run package:smoke-mcp",
     "test:diff-webhook": "bun run bin/nulldown.ts smoke diff",
     "diff:keygen": "bun run bin/nulldown.ts diff keygen",
     "diff:register": "bun run bin/nulldown.ts diff register",

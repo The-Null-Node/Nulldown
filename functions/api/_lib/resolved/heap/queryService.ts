@@ -127,7 +127,9 @@ const queryResolvedHeapUnsafe = async (
       ? RESOLVED_RUNTIME_REFS_RESOLVER_ID
       : RESOLVED_DOCUMENT_RESOLVER_ID);
   const isNonDocumentSnapshotter =
-    Boolean(snapshotterId) && snapshotterId !== RESOLVED_DOCUMENT_SNAPSHOTTER_ID;
+    Boolean(snapshotterId) &&
+    !url.searchParams.has("resolverId") &&
+    snapshotterId !== RESOLVED_DOCUMENT_SNAPSHOTTER_ID;
   const canReadSensitive = await canReadSensitiveBranch(
     request,
     env,

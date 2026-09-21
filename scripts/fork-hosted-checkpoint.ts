@@ -15,7 +15,7 @@ import type { DropDiffPollResponse } from "../shared/drop/diff";
 import {
   createNulldownClient,
   DEFAULT_NULLDOWN_BASE_URL,
-} from "../src/client/nulldownClient";
+} from "../src/client/nulldown-client";
 
 const option = (args: string[], name: string): string | null => {
   const index = args.indexOf(name);
@@ -68,7 +68,7 @@ const createApi = (
   };
 };
 
-const usage = (): never => {
+function usage(): never {
   throw new Error(
     [
       "Usage:",
@@ -79,7 +79,7 @@ const usage = (): never => {
       "The script checkpoints one selected legacy head. apply requires a current ND_TOKEN for plan.targetAccountId.",
     ].join("\n"),
   );
-};
+}
 
 export const runHostedCheckpoint = async (
   args: string[],

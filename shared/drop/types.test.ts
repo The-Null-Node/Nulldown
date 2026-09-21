@@ -180,7 +180,10 @@ describe("drop types", () => {
     for (const strategyRef of [null, {}, { kind: "unknown" }]) {
       expect(
         isDropEnvelope(
-          encodeDropEnvelope({ ...envelope, metadata: { strategyRef } }),
+          encodeDropEnvelope({
+            ...envelope,
+            metadata: { strategyRef },
+          } as unknown as DropEnvelope),
         ),
       ).toBe(true);
     }

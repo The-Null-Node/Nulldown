@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli, type RunCliDependencies } from "./index";
 import { generateCliDeviceKeyPair } from "./auth";
-import { readCliCredential, writeCliCredential } from "./cliCredential";
-import { CLI_CREDENTIAL_KIND_V1, type CliCredentialBundleV1 } from "../../shared/auth/cliDevice";
+import { readCliCredential, writeCliCredential } from "./cli-credential";
+import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
+import { encodeCliCredentialBundle } from "../../shared/auth/codecs/cli-device-v1";
 
 const captureOutput = (): {
   stdout: string[];
@@ -30,9 +31,7 @@ describe("runCli", () => {
     const output = captureOutput();
     const keys = await generateCliDeviceKeyPair(true);
     const now = Date.now();
-    const current: CliCredentialBundleV1 = {
-      kind: CLI_CREDENTIAL_KIND_V1,
-      version: 1,
+    const current: CliCredentialBundle = {
       baseUrl: "https://nulldown.test",
       userId: "user-1",
       accountId: "account-1",
@@ -45,8 +44,6 @@ describe("runCli", () => {
       authoring: {
         ...keys.authoring!,
         deviceDelegation: {
-          schema: "nulldown.drop-device-delegation.v1",
-          version: 1,
           accountId: "account-1",
           credentialId: "credential-1",
           delegateSigningPublicJwk: keys.authoring!.signingPublicJwk,
@@ -78,7 +75,7 @@ describe("runCli", () => {
           if (path === "/api/auth/cli/refresh") {
             expect(headers.get("Authorization")).toBeNull();
             expect(JSON.parse(String(init?.body))).toEqual({ refreshToken: current.refreshToken });
-            return Response.json(replacement);
+            return Response.json(encodeCliCredentialBundle(replacement));
           }
           if (mode === "rejected" && paths.length === 1) {
             expect(headers.get("Authorization")).toBe(`Bearer ${current.accessToken}`);

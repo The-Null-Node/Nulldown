@@ -86,6 +86,12 @@ export interface CliExitResult {
   exitCode: number;
 }
 
+/** Portable HTTP request operation accepted by the CLI runtime. */
+export type CliFetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 /** Injectable process and transport boundaries used by `runCli`. */
 export interface RunCliDependencies {
   /** Writes one complete stdout value. */
@@ -93,7 +99,7 @@ export interface RunCliDependencies {
   /** Writes one complete stderr value. */
   stderr?(text: string): void;
   /** Performs outbound HTTP requests. */
-  fetch?: typeof globalThis.fetch;
+  fetch?: CliFetch;
   /** Reads stdin when a command uses `-`. */
   readStdin?(): Promise<string>;
   /** Generates a correlation id for one outbound request. */
@@ -109,7 +115,7 @@ export interface RunCliDependencies {
 interface ResolvedRunCliDependencies {
   stdout(text: string): void;
   stderr(text: string): void;
-  fetch: typeof globalThis.fetch;
+  fetch: CliFetch;
   readStdin(): Promise<string>;
   createRequestId(): string;
   now(): number;
@@ -1006,7 +1012,7 @@ const createRegisteredCommands = (
         : process.env.BRANCH_HEAP_BACKFILL_TOKEN) ||
     null;
   return [
-    createDoctorCommand({
+    createDoctorCommand<CliConfig>({
       readDiffAuthBundle,
       print: (activeConfig, value, human) =>
         print(activeConfig, dependencies, value, human),

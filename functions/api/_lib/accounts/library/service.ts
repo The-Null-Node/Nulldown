@@ -12,7 +12,7 @@ import {
   sameEncryptionRecipientKey,
   verifyDropDeviceDelegationSignature,
   verifyDropEnvelopeDeviceSignature,
-} from "../../crypto/void/envelopes/verification";
+} from "../../crypto/envelopes/verification";
 import {
   listAccountLibraryEntries,
   upsertAccountLibraryEntry,

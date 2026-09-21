@@ -11,7 +11,7 @@ import type {
 } from "../../shared/drop/diff";
 import { dropDiffOpToDiff } from "../../shared/drop/diff";
 import { applyDiff } from "../../shared/nulledit/textDiff";
-import type { NulldownDiffApplyRequest } from "../client/nulldownClient";
+import type { NulldownDiffApplyRequest } from "../client/nulldown-client";
 import {
   applyHostedCheckpointPlan,
   buildHostedCheckpointContent,

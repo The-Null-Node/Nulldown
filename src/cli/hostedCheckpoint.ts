@@ -12,7 +12,7 @@ import type {
 } from "../../shared/drop/diff";
 import { diffToDropDiffOp } from "../../shared/drop/diff";
 import { computeDiffOps } from "../../shared/nulledit/textDiff";
-import type { NulldownDiffApplyRequest } from "../client/nulldownClient";
+import type { NulldownDiffApplyRequest } from "../client/nulldown-client";
 
 export const HOSTED_CHECKPOINT_INPUT_SCHEMA_V1 =
   "nulldown.hosted-checkpoint-input.v1" as const;

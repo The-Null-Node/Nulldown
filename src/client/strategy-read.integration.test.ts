@@ -2,7 +2,7 @@ import {
   createCliDurabilityHarness,
   type CliProcessResult,
 } from "../cli/testHarness";
-import { createNulldownClient } from "./nulldownClient";
+import { createNulldownClient } from "./nulldown-client";
 
 const jsonResult = <T>(result: CliProcessResult): T => {
   if (result.status !== 0 || result.signal !== null || result.stderr !== "") {
@@ -11,7 +11,7 @@ const jsonResult = <T>(result: CliProcessResult): T => {
   return JSON.parse(result.stdout) as T;
 };
 
-it("reads explicit and metadata-selected local branches without replacing the title-only root", async () => {
+it("reads an explicit local branch without replacing the title-only root", async () => {
   const harness = await createCliDurabilityHarness();
   try {
     await harness.start();
@@ -132,12 +132,7 @@ it("reads explicit and metadata-selected local branches without replacing the ti
     expect(requests[beforeMissing].url).toContain("/resolved/query?");
     expect(await client.readStrategy({ id: created.id })).toEqual(root);
 
-    const strategyRef = { kind: "branch", rootDropId: created.id, branchId: branch.branchId };
-    const beforeUpdate = await client.getDrop(created.id);
-    jsonResult(await harness.nd([
-      "update", created.id, "-", `--metadata=${JSON.stringify({ strategyRef })}`,
-    ], title));
-    // Restart exercises persisted storage, not just an in-process metadata object.
+    // Restart exercises persisted storage, not just in-process branch state.
     await harness.stop();
     await harness.start();
     const fresh = createNulldownClient({
@@ -152,17 +147,16 @@ it("reads explicit and metadata-selected local branches without replacing the ti
         return fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
       },
     });
-    const beforeImplicit = requests.length;
-    const implicit = await fresh.readStrategy({ id: created.id, query: sentinel });
-    expect(implicit).toMatchObject({
+    const beforeRestartedRead = requests.length;
+    const restarted = await fresh.readStrategy({ ...target, query: sentinel });
+    expect(restarted).toMatchObject({
       read: "branch", rootDropId: created.id, branchId: branch.branchId,
       snapshotId: applied.snapshotId,
       data: { items: expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining(sentinel) })]) },
     });
-    expect(requests.slice(beforeImplicit)).toHaveLength(2);
+    expect(requests.slice(beforeRestartedRead)).toHaveLength(1);
     const raw = await fresh.getDrop(created.id);
-    expect(raw.body).toEqual({ content: title, metadata: { themeId: "system", strategyRef } });
-    expect(raw.revision).not.toBe(beforeUpdate.revision);
+    expect(raw.body).toEqual({ content: title, metadata: { themeId: "system" } });
     const beforeOverride = requests.length;
     const empty = await fresh.readStrategy({ id: created.id, branchId: branchB.branchId, query: sentinel });
     expect(empty).toMatchObject({ read: "branch", branchId: branchB.branchId, data: { items: [] } });

@@ -8,7 +8,7 @@ import type {
   VoidBlobStore,
   VoidSqlStore,
 } from "../../../../../src/server/ports";
-import { decryptProviderEscrowEnvelope } from "../../crypto/void/envelopes/providerEscrow";
+import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
   OWNER_BRANCH_ID,

@@ -9,7 +9,7 @@ import {
   verifyAccountLibraryEnvelope,
   verifyAccountLibraryEnvelopeOwnership,
 } from "../functions/api/_lib/accounts/library/service";
-import { verifyDropDeviceDelegationSignature } from "../functions/api/_lib/crypto/void/envelopes/verification";
+import { verifyDropDeviceDelegationSignature } from "../functions/api/_lib/crypto/envelopes/verification";
 import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
 import {
   serializeDropDeviceDelegationForSignature,

@@ -296,7 +296,10 @@ const handlePost = async (
         return { fact, key, written, runtimeFact } as const;
       },
     );
-    if ("error" in committed) return committed.error;
+    if ("error" in committed) {
+      if (!committed.error) throw new Error("Missing Nullplug state error.");
+      return committed.error;
+    }
     const { fact, key, written, runtimeFact } = committed;
 
     const projectionHeaders = new Headers(request.headers);

@@ -1,11 +1,11 @@
 import { jest } from "@jest/globals";
-import { runCli } from "./index";
+import { runCli, type CliFetch } from "./index";
 
 describe("CLI diff apply", () => {
   it("accepts the server-selected branch receipt when --branch is omitted", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>(async (input, init) => {
+    const fetchImpl = jest.fn<CliFetch>(async (input, init) => {
       const url = String(input);
       if (url === "http://example.test/api/get/root-1") {
         return Response.json({ content: "root" }, {
@@ -34,7 +34,7 @@ describe("CLI diff apply", () => {
 
   it("posts a complete explicit retry identity without a preliminary branch read", async () => {
     const stdout: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>(async (input, init) => {
+    const fetchImpl = jest.fn<CliFetch>(async (input, init) => {
       const url = String(input);
       if (url === "http://example.test/api/get/root-1") {
         return Response.json({ content: "root" }, {
@@ -88,11 +88,11 @@ describe("CLI diff apply", () => {
     [["--event-id=retry-1"], "Provide --event-id and --created-at together when retrying a diff."],
     [["--created-at=1725000000000"], "Provide --event-id and --created-at together when retrying a diff."],
     [["--event-id= retry-1", "--created-at=1"], "--event-id must be 1-120 characters without surrounding whitespace."],
-    [["--event-id=retry-1", "--created-at=-1"], "--created-at must be a non-negative integer."],
+    [["--event-id=retry-1", "--created-at=-1"], "--created-at must be a non-negative safe integer."],
     [["--event-id", "--created-at"], "--event-id and --created-at require values."],
   ])("rejects %j before network I/O", async (identityFlags, error) => {
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>();
+    const fetchImpl = jest.fn<CliFetch>();
     const args = [
       "diff",
       "apply",

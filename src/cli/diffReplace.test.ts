@@ -1,5 +1,5 @@
 import { jest } from "@jest/globals";
-import { runCli } from "./index";
+import { runCli, type CliFetch } from "./index";
 
 describe("CLI diff replace", () => {
   it("sends the fetched event cursor and returns nonzero when verification fails", async () => {
@@ -7,7 +7,7 @@ describe("CLI diff replace", () => {
     const stderr: string[] = [];
     let contentReads = 0;
     let postedEnvelope: unknown;
-    const fetchImpl = jest.fn<typeof fetch>(async (input, init) => {
+    const fetchImpl = jest.fn<CliFetch>(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === "/api/branches/root-1/branch-1/content") {
         contentReads += 1;
@@ -88,7 +88,7 @@ describe("CLI diff replace", () => {
   it("returns the structured stale predecessor conflict without verifying", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>(async (input, init) => {
+    const fetchImpl = jest.fn<CliFetch>(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === "/api/branches/root-1/branch-1/content") {
         return Response.json({
@@ -143,7 +143,7 @@ describe("CLI diff replace", () => {
 
   it("does not claim a branch replacement without a durable acknowledgement", async () => {
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>(async (input, init) => {
+    const fetchImpl = jest.fn<CliFetch>(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === "/api/branches/root-1/branch-1/content") {
         return Response.json({
@@ -188,7 +188,7 @@ describe("CLI diff replace", () => {
 
   it("rejects retry identity flags because replacement replay is not immutable", async () => {
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>();
+    const fetchImpl = jest.fn<CliFetch>();
 
     const result = await runCli(
       [
@@ -220,7 +220,7 @@ describe("CLI diff replace", () => {
 
   it("rejects a partial retry identity before reading the branch", async () => {
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>();
+    const fetchImpl = jest.fn<CliFetch>();
 
     const result = await runCli(
       [
@@ -250,7 +250,7 @@ describe("CLI diff replace", () => {
 
   it("requires a cursor before replacing an existing branch", async () => {
     const stderr: string[] = [];
-    const fetchImpl = jest.fn<typeof fetch>(async () =>
+    const fetchImpl = jest.fn<CliFetch>(async () =>
       Response.json({
         rootDropId: "root-1",
         branchId: "branch-1",
@@ -291,7 +291,7 @@ describe("CLI diff replace", () => {
       .fn<() => Promise<string>>()
       .mockResolvedValueOnce("stale")
       .mockResolvedValueOnce("after");
-    const fetchImpl = jest.fn<typeof fetch>(async () =>
+    const fetchImpl = jest.fn<CliFetch>(async () =>
       Response.json({
         rootDropId: "root-1",
         branchId: "branch-1",
