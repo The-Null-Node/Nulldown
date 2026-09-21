@@ -33,7 +33,8 @@ import {
   decryptAccountRecoveryPackage,
   encryptAccountRecoveryPayload,
 } from "./vault/recovery/crypto";
-import { getKvValue, isIndexedDbSupported } from "../indexedDb";
+import { isIndexedDbSupported } from "../indexed-db/database";
+import { getKvValue } from "../indexed-db/key-value";
 
 const CHALLENGE_PATH = "/api/account/challenge";
 const BIND_PATH = "/api/account/bind";

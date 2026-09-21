@@ -3,20 +3,15 @@ import type {
   DropDiffEvent,
   DropDiffEventMetadata,
   DropDiffOp,
-} from "../../../shared/drop/diff";
-import { hasConfirmedDropDiffAppendReceipt } from "../../../shared/drop/diff";
-import { DropDiffEventSchema } from "../../../shared/drop/codecs/diff-v1";
-import {
-  acknowledgeDiffOutboxEvent,
-  clearDiffOutboxBranchDraft,
-  clearDiffOutboxBranchDraftIfEmptyForWriter,
-  enqueueDiffOutboxEvent,
-  listDiffOutboxEvents,
-  updateDiffOutboxEventStatus,
-  type DiffOutboxEventRecord,
-  type DiffOutboxBranchDraftInput,
-  type DiffOutboxScope,
-} from "./diffOutboxStore";
+} from "../../../../shared/drop/diff";
+import { hasConfirmedDropDiffAppendReceipt } from "../../../../shared/drop/diff";
+import { DropDiffEventSchema } from "../../../../shared/drop/codecs/diff-v1";
+import { indexedDbDiffOutboxStore, type DiffOutboxStore } from "./store";
+import type {
+  DiffOutboxEventRecord,
+  DiffOutboxBranchDraftInput,
+  DiffOutboxScope,
+} from "./records";
 
 /** Retry categories retained by the outbox for a later ordered replay. */
 export const DIFF_OUTBOX_RETRY_ERROR_CLASSIFICATIONS = [
@@ -31,8 +26,7 @@ export type DiffOutboxRetryErrorClassification =
 
 /** The durable outbox disposition for a failed publish attempt. */
 export type DiffOutboxErrorClassification =
-  | DiffOutboxRetryErrorClassification
-  | "blocked";
+  DiffOutboxRetryErrorClassification | "blocked";
 
 /** Input used to prepare one immutable event before it enters a branch outbox. */
 export interface PrepareDiffOutboxEventInput {
@@ -47,8 +41,7 @@ export interface PrepareDiffOutboxEventInput {
 
 /** Input used to persist and optionally send one prepared branch event. */
 export interface SubmitDiffOutboxEventInput
-  extends PrepareDiffOutboxEventInput,
-    DiffOutboxScope {
+  extends PrepareDiffOutboxEventInput, DiffOutboxScope {
   /** Current optimistic branch text retained only while this event is unresolved. */
   draft?: DiffOutboxBranchDraftInput;
   /** Active browser writer lease required for remote branch queue writes. */
@@ -68,6 +61,8 @@ export type DiffOutboxTransport = (
 /** Optional deterministic dependencies for the browser outbox. */
 export interface CreateDiffOutboxOptions {
   transport: DiffOutboxTransport;
+  /** Durable persistence adapter used for this service lifetime. */
+  store?: DiffOutboxStore;
   /** Confirms the caller still owns the branch writer lease before each send. */
   canDrain?: (scope: DiffOutboxScope) => Promise<boolean>;
   /** Active browser writer used to fence post-send durable mutations. */
@@ -87,7 +82,9 @@ export interface DiffOutboxDrainResult {
 /** Non-React browser service for durable, ordered diff publication. */
 export interface DiffOutbox {
   prepare: (input: PrepareDiffOutboxEventInput) => DropDiffEvent;
-  enqueue: (input: SubmitDiffOutboxEventInput) => Promise<DiffOutboxEventRecord>;
+  enqueue: (
+    input: SubmitDiffOutboxEventInput,
+  ) => Promise<DiffOutboxEventRecord>;
   submit: (input: SubmitDiffOutboxEventInput) => Promise<DiffOutboxDrainResult>;
   drain: (scope: DiffOutboxScope) => Promise<DiffOutboxDrainResult>;
 }
@@ -120,7 +117,10 @@ const isBranchHeadSeq = (value: unknown): value is number =>
 
 const defaultCreateEventId = (input: PrepareDiffOutboxEventInput): string => {
   generatedEventCounter += 1;
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return `outbox-${crypto.randomUUID()}`;
   }
   return `outbox-${input.clientId}-${Date.now()}-${generatedEventCounter}`;
@@ -129,7 +129,8 @@ const defaultCreateEventId = (input: PrepareDiffOutboxEventInput): string => {
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const freezeJson = (value: unknown): void => {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return;
+  if (typeof value !== "object" || value === null || Object.isFrozen(value))
+    return;
   Object.freeze(value);
   Object.values(value).forEach(freezeJson);
 };
@@ -177,17 +178,24 @@ export const classifyDiffOutboxError = (
 };
 
 /** Creates a durable, FIFO outbox scoped by root and branch. */
-export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox => {
+export const createDiffOutbox = (
+  options: CreateDiffOutboxOptions,
+): DiffOutbox => {
   const now = options.now ?? Date.now;
   const createEventId = options.createEventId ?? defaultCreateEventId;
+  const store = options.store ?? indexedDbDiffOutboxStore;
   const drainingScopes = new Map<string, Promise<DiffOutboxDrainResult>>();
 
   const prepare = (input: PrepareDiffOutboxEventInput): DropDiffEvent => {
     if (!isBranchHeadSeq(input.branchHeadSeq)) {
-      throw new Error("Diff outbox branchHeadSeq must be an integer greater than or equal to -1.");
+      throw new Error(
+        "Diff outbox branchHeadSeq must be an integer greater than or equal to -1.",
+      );
     }
     if ((input.eventId === undefined) !== (input.createdAt === undefined)) {
-      throw new Error("Diff outbox retries must provide eventId and createdAt together.");
+      throw new Error(
+        "Diff outbox retries must provide eventId and createdAt together.",
+      );
     }
 
     const event = {
@@ -197,7 +205,10 @@ export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox =
       sourceClientId: input.clientId,
       createdAt: input.createdAt ?? now(),
       ops: cloneJson(input.ops),
-      metadata: cloneJson({ ...input.metadata, followsSeq: input.branchHeadSeq }),
+      metadata: cloneJson({
+        ...input.metadata,
+        followsSeq: input.branchHeadSeq,
+      }),
     };
     const parsed = DropDiffEventSchema.safeParse(event);
     if (!parsed.success) {
@@ -211,7 +222,7 @@ export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox =
   const enqueue = async (
     input: SubmitDiffOutboxEventInput,
   ): Promise<DiffOutboxEventRecord> =>
-    enqueueDiffOutboxEvent({
+    store.enqueue({
       rootId: input.rootId,
       branchId: input.branchId,
       event: prepare(input),
@@ -226,15 +237,15 @@ export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox =
     let sentCount = 0;
 
     while (true) {
-      const record = (await listDiffOutboxEvents(scope))[0];
+      const record = (await store.listEvents(scope))[0];
       if (!record) {
         const cleared = options.writerId
-          ? await clearDiffOutboxBranchDraftIfEmptyForWriter({
+          ? await store.clearDraftIfEmptyForWriter({
               ...scope,
               ownerId: options.writerId,
               now: now(),
             })
-          : await clearDiffOutboxBranchDraft(scope);
+          : await store.clearDraft(scope);
         if (options.writerId && !cleared) {
           return {
             status: "retry",
@@ -257,15 +268,23 @@ export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox =
       }
 
       try {
-        const response = await options.transport({ ...scope, event: record.event });
+        const response = await options.transport({
+          ...scope,
+          event: record.event,
+        });
         if (!hasMatchingAcknowledgement(response, scope, record.eventId)) {
           const retryClassification = "unknown" as const;
-          const updated = await updateDiffOutboxEventStatus({
-            ...scope,
-            eventId: record.eventId,
-            status: "retry",
-            now: now(),
-          }, options.writerId ? { ...scope, ownerId: options.writerId, now: now() } : undefined);
+          const updated = await store.updateEventStatus(
+            {
+              ...scope,
+              eventId: record.eventId,
+              status: "retry",
+              now: now(),
+            },
+            options.writerId
+              ? { ...scope, ownerId: options.writerId, now: now() }
+              : undefined,
+          );
           if (!updated && options.writerId) {
             return {
               status: "retry",
@@ -282,9 +301,11 @@ export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox =
           };
         }
 
-        const acknowledged = await acknowledgeDiffOutboxEvent(
+        const acknowledged = await store.acknowledgeEvent(
           { ...scope, eventId: record.eventId },
-          options.writerId ? { ...scope, ownerId: options.writerId, now: now() } : undefined,
+          options.writerId
+            ? { ...scope, ownerId: options.writerId, now: now() }
+            : undefined,
         );
         if (!acknowledged && options.writerId) {
           return {
@@ -298,12 +319,17 @@ export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox =
       } catch (error) {
         const classification = classifyDiffOutboxError(error);
         if (classification === "blocked") {
-          const updated = await updateDiffOutboxEventStatus({
-            ...scope,
-            eventId: record.eventId,
-            status: "blocked",
-            now: now(),
-          }, options.writerId ? { ...scope, ownerId: options.writerId, now: now() } : undefined);
+          const updated = await store.updateEventStatus(
+            {
+              ...scope,
+              eventId: record.eventId,
+              status: "blocked",
+              now: now(),
+            },
+            options.writerId
+              ? { ...scope, ownerId: options.writerId, now: now() }
+              : undefined,
+          );
           if (!updated && options.writerId) {
             return {
               status: "retry",
@@ -315,12 +341,17 @@ export const createDiffOutbox = (options: CreateDiffOutboxOptions): DiffOutbox =
           return { status: "blocked", sentCount, record: updated ?? record };
         }
 
-        const updated = await updateDiffOutboxEventStatus({
-          ...scope,
-          eventId: record.eventId,
-          status: "retry",
-          now: now(),
-        }, options.writerId ? { ...scope, ownerId: options.writerId, now: now() } : undefined);
+        const updated = await store.updateEventStatus(
+          {
+            ...scope,
+            eventId: record.eventId,
+            status: "retry",
+            now: now(),
+          },
+          options.writerId
+            ? { ...scope, ownerId: options.writerId, now: now() }
+            : undefined,
+        );
         if (!updated && options.writerId) {
           return {
             status: "retry",

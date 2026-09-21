@@ -3,7 +3,8 @@ import type {
   DropGraphNode,
   DropPayload,
 } from "../../../../shared/drop/types";
-import { getKvValue, isIndexedDbSupported, setKvValue } from "../../indexedDb";
+import { isIndexedDbSupported } from "../../indexed-db/database";
+import { getKvValue, setKvValue } from "../../indexed-db/key-value";
 import type { DropGraphResolver } from "./types";
 
 export const OFFLINE_DROP_GRAPH_CACHE_PREFIX =

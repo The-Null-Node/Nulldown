@@ -1,8 +1,5 @@
-import {
-  createLocalDiffChannel,
-  createRemoteDiffChannel,
-  DiffChannelError,
-} from "./lib/diff/diffChannel";
+import { createRemoteDiffChannel } from "./remote-channel";
+import type { DiffChannelError } from "./channel";
 
 describe("remote diff channel", () => {
   it("reuses a supplied event id and returns the server acknowledgement", async () => {
@@ -47,9 +44,7 @@ describe("remote diff channel", () => {
         },
       ]);
       expect(calls).toHaveLength(1);
-      expect(calls[0]?.url).toBe(
-        "/api/diff/root-1?branchId=branch-1",
-      );
+      expect(calls[0]?.url).toBe("/api/diff/root-1?branchId=branch-1");
       expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(
         expect.objectContaining({
           events: [
@@ -97,10 +92,17 @@ describe("remote diff channel", () => {
         branchId: "branch-1",
         clientId: "client-1",
       });
-      const options = { eventId: "stable-event-1", createdAt: 1_725_000_000_000 };
-      const ops = [{ type: "insert" as const, start: 0, end: 0, text: "hello" }];
+      const options = {
+        eventId: "stable-event-1",
+        createdAt: 1_725_000_000_000,
+      };
+      const ops = [
+        { type: "insert" as const, start: 0, end: 0, text: "hello" },
+      ];
 
-      await expect(channel.publish(ops, options)).rejects.toThrow("network interrupted");
+      await expect(channel.publish(ops, options)).rejects.toThrow(
+        "network interrupted",
+      );
       await expect(channel.publish(ops, options)).resolves.toEqual([
         {
           eventId: "stable-event-1",
@@ -143,10 +145,10 @@ describe("remote diff channel", () => {
         clientId: "client-1",
       });
       await expect(
-        channel.publish(
-          [{ type: "insert", start: 0, end: 0, text: "hello" }],
-          { eventId: "stable-event-1", createdAt: 1_725_000_000_000 },
-        ),
+        channel.publish([{ type: "insert", start: 0, end: 0, text: "hello" }], {
+          eventId: "stable-event-1",
+          createdAt: 1_725_000_000_000,
+        }),
       ).rejects.toMatchObject<Partial<DiffChannelError>>({
         code: "diff_receipt_unconfirmed",
       });
@@ -164,13 +166,10 @@ describe("remote diff channel", () => {
     });
 
     await expect(
-      channel.publish(
-        [{ type: "insert", start: 0, end: 0, text: "hello" }],
-        {
-          eventId: "stable-event-1",
-          createdAt: Number.MAX_SAFE_INTEGER + 1,
-        },
-      ),
+      channel.publish([{ type: "insert", start: 0, end: 0, text: "hello" }], {
+        eventId: "stable-event-1",
+        createdAt: Number.MAX_SAFE_INTEGER + 1,
+      }),
     ).rejects.toThrow("Invalid immutable diff event for this channel.");
     channel.stop();
   });
@@ -222,10 +221,10 @@ describe("remote diff channel", () => {
       });
 
       await expect(
-        channel.publish(
-          [{ type: "insert", start: 0, end: 0, text: "hello" }],
-          { eventId: "stable-event-1", createdAt: 1_725_000_000_000 },
-        ),
+        channel.publish([{ type: "insert", start: 0, end: 0, text: "hello" }], {
+          eventId: "stable-event-1",
+          createdAt: 1_725_000_000_000,
+        }),
       ).resolves.toHaveLength(1);
       expect(requestBodies).toEqual([requestBodies[0], requestBodies[0]]);
       expect(authorizationHeaders).toEqual([
@@ -264,23 +263,5 @@ describe("remote diff channel", () => {
     } finally {
       globalThis.fetch = previousFetch;
     }
-  });
-
-  it("deduplicates repeated local event identities", async () => {
-    const channel = createLocalDiffChannel({
-      dropId: "root-1",
-      clientId: "client-1",
-    });
-    channel.start();
-    const options = { eventId: "stable-event-1", createdAt: 1_725_000_000_000 };
-    const ops = [{ type: "insert" as const, start: 0, end: 0, text: "hello" }];
-
-    await expect(channel.publish(ops, options)).resolves.toEqual([
-      { eventId: "stable-event-1", seq: 1, snapshotId: 1, status: "accepted" },
-    ]);
-    await expect(channel.publish(ops, options)).resolves.toEqual([
-      { eventId: "stable-event-1", seq: 1, snapshotId: 1, status: "duplicate" },
-    ]);
-    channel.stop();
   });
 });

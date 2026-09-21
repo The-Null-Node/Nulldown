@@ -1,24 +1,24 @@
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB } from "fake-indexeddb";
-import type { DropDiffEvent, DropDiffEventMetadata, DropDiffOp } from "../../../shared/drop/diff";
-import {
-  acquireDiffOutboxWriterLease,
-  listDiffOutboxEvents,
-} from "./diffOutboxStore";
+import type {
+  DropDiffEvent,
+  DropDiffEventMetadata,
+  DropDiffOp,
+} from "../../../../shared/drop/diff";
+import { acquireDiffOutboxWriterLease, listDiffOutboxEvents } from "./store";
 import {
   DIFF_OUTBOX_RETRY_ERROR_CLASSIFICATIONS,
   classifyDiffOutboxError,
   createDiffOutbox,
   type DiffOutboxTransport,
   type SubmitDiffOutboxEventInput,
-} from "./diffOutbox";
-import { resetNulldownDatabaseForTests } from "../indexedDb";
+} from "./service";
+import { resetNulldownDatabaseForTests } from "../../indexed-db/database";
 
 const scope = { rootId: "root-1", branchId: "branch-1" };
 
 const ensureWindowWithIndexedDb = () => {
   const currentWindow = (globalThis as { window?: unknown }).window as
-    | { indexedDB?: IDBFactory }
-    | undefined;
+    { indexedDB?: IDBFactory } | undefined;
   if (!currentWindow) {
     Object.defineProperty(globalThis, "window", {
       value: { indexedDB },
@@ -33,7 +33,10 @@ const ensureWindowWithIndexedDb = () => {
   });
 };
 
-const acknowledgement = (eventId: string, status: "accepted" | "duplicate" = "accepted") => ({
+const acknowledgement = (
+  eventId: string,
+  status: "accepted" | "duplicate" = "accepted",
+) => ({
   accepted: status === "accepted" ? 1 : 0,
   deduplicated: status === "duplicate" ? 1 : 0,
   branchId: scope.branchId,
@@ -72,14 +75,17 @@ describe("diff outbox", () => {
   });
 
   it("prepares an immutable event and persists it before transport", async () => {
-    const ops: DropDiffOp[] = [{ type: "insert", start: 0, end: 0, text: "first" }];
+    const ops: DropDiffOp[] = [
+      { type: "insert", start: 0, end: 0, text: "first" },
+    ];
     const metadata: DropDiffEventMetadata = { args: { source: "editor" } };
     let sentEvent: DropDiffEvent | undefined;
     let persistedBeforeSend = false;
     const outbox = createOutbox(async ({ event }) => {
       sentEvent = event;
       const records = await listDiffOutboxEvents(scope);
-      persistedBeforeSend = records.length === 1 && records[0]?.event.eventId === event.eventId;
+      persistedBeforeSend =
+        records.length === 1 && records[0]?.event.eventId === event.eventId;
       return acknowledgement(event.eventId);
     });
 
@@ -110,7 +116,9 @@ describe("diff outbox", () => {
     ops[0]!.text = "changed after prepare";
     metadata.args!.source = "changed after prepare";
 
-    expect(result).toEqual(expect.objectContaining({ status: "drained", sentCount: 1 }));
+    expect(result).toEqual(
+      expect.objectContaining({ status: "drained", sentCount: 1 }),
+    );
     expect(persistedBeforeSend).toBe(true);
     expect(sentEvent).toEqual(
       expect.objectContaining({
@@ -169,11 +177,18 @@ describe("diff outbox", () => {
     });
 
     await expect(firstOutbox.submit(eventInput("event-1"))).resolves.toEqual(
-      expect.objectContaining({ status: "retry", retryClassification: "transport" }),
+      expect.objectContaining({
+        status: "retry",
+        retryClassification: "transport",
+      }),
     );
     const retryRecord = (await listDiffOutboxEvents(scope))[0];
     expect(retryRecord).toEqual(
-      expect.objectContaining({ eventId: "event-1", status: "retry", retryCount: 1 }),
+      expect.objectContaining({
+        eventId: "event-1",
+        status: "retry",
+        retryCount: 1,
+      }),
     );
 
     await resetNulldownDatabaseForTests({ deleteDatabase: false });
@@ -250,7 +265,11 @@ describe("diff outbox", () => {
     );
     expect(sent).toEqual(["event-1"]);
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ eventId: "event-1", status: "retry", retryCount: 1 }),
+      expect.objectContaining({
+        eventId: "event-1",
+        status: "retry",
+        retryCount: 1,
+      }),
       expect.objectContaining({ eventId: "event-2", status: "queued" }),
     ]);
   });
@@ -267,7 +286,11 @@ describe("diff outbox", () => {
       }),
     );
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ eventId: "event-1", status: "retry", retryCount: 1 }),
+      expect.objectContaining({
+        eventId: "event-1",
+        status: "retry",
+        retryCount: 1,
+      }),
     ]);
   });
 
@@ -280,7 +303,10 @@ describe("diff outbox", () => {
     await outbox.enqueue(eventInput("event-1"));
 
     await expect(outbox.drain(scope)).resolves.toEqual(
-      expect.objectContaining({ status: "retry", retryClassification: "unknown" }),
+      expect.objectContaining({
+        status: "retry",
+        retryClassification: "unknown",
+      }),
     );
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
       expect.objectContaining({ eventId: "event-1", status: "retry" }),
@@ -292,14 +318,20 @@ describe("diff outbox", () => {
       const receipt = acknowledgement(event.eventId);
       return {
         ...receipt,
-        acknowledgements: [...receipt.acknowledgements, receipt.acknowledgements[0]!],
+        acknowledgements: [
+          ...receipt.acknowledgements,
+          receipt.acknowledgements[0]!,
+        ],
       };
     });
 
     await outbox.enqueue(eventInput("event-1"));
 
     await expect(outbox.drain(scope)).resolves.toEqual(
-      expect.objectContaining({ status: "retry", retryClassification: "unknown" }),
+      expect.objectContaining({
+        status: "retry",
+        retryClassification: "unknown",
+      }),
     );
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
       expect.objectContaining({ eventId: "event-1", status: "retry" }),
@@ -361,12 +393,15 @@ describe("diff outbox", () => {
       "transient",
     ]);
     expect(
-      classifyDiffOutboxError({ status: 409, code: "diff_predecessor_mismatch" }),
+      classifyDiffOutboxError({
+        status: 409,
+        code: "diff_predecessor_mismatch",
+      }),
     ).toBe("blocked");
     expect(classifyDiffOutboxError({ status: 400 })).toBe("blocked");
-    expect(classifyDiffOutboxError({ status: 409, code: "branch_lock_timeout" })).toBe(
-      "transient",
-    );
+    expect(
+      classifyDiffOutboxError({ status: 409, code: "branch_lock_timeout" }),
+    ).toBe("transient");
     expect(
       classifyDiffOutboxError({
         status: 409,
@@ -374,7 +409,9 @@ describe("diff outbox", () => {
       }),
     ).toBe("transient");
     expect(classifyDiffOutboxError({ status: 503 })).toBe("transient");
-    expect(classifyDiffOutboxError({ code: "unexpected_response" })).toBe("unknown");
+    expect(classifyDiffOutboxError({ code: "unexpected_response" })).toBe(
+      "unknown",
+    );
     expect(classifyDiffOutboxError(new Error("offline"))).toBe("transport");
   });
 });

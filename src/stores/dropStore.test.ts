@@ -185,7 +185,7 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     },
   };
 
-  jest.unstable_mockModule("../lib/indexedDb", () => ({
+  jest.unstable_mockModule("../lib/indexed-db/key-value", () => ({
     getKvItem: jest.fn(async (key: string) => {
       const value = kvStore.get(key);
       return value === undefined || value === null ? null : String(value);
@@ -194,13 +194,15 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
       const value = kvStore.get(key);
       return value === undefined ? null : value;
     }),
-    isIndexedDbSupported: jest.fn().mockReturnValue(false),
     setKvItem: jest.fn(async (key: string, value: string) => {
       kvStore.set(key, value);
     }),
     setKvValue: jest.fn(async (key: string, value: unknown) => {
       kvStore.set(key, value);
     }),
+  }));
+  jest.unstable_mockModule("../lib/indexed-db/database", () => ({
+    isIndexedDbSupported: jest.fn().mockReturnValue(false),
   }));
 
   jest.unstable_mockModule("../lib/auth/vault/passkey-vault", () => ({

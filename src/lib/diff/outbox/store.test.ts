@@ -1,12 +1,14 @@
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB } from "fake-indexeddb";
-import type { DropDiffEvent } from "../../../shared/drop/diff";
+import type { DropDiffEvent } from "../../../../shared/drop/diff";
 import {
-  NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
-  NULLDOWN_DIFF_OUTBOX_EVENTS_STORE,
-  getKvValue,
   openNulldownDatabase,
   resetNulldownDatabaseForTests,
-} from "../indexedDb";
+} from "../../indexed-db/database";
+import { getKvValue } from "../../indexed-db/key-value";
+import {
+  DIFF_OUTBOX_BRANCH_STATE_STORE,
+  DIFF_OUTBOX_EVENTS_STORE,
+} from "./schema";
 import {
   acknowledgeDiffOutboxEvent,
   acquireDiffOutboxWriterLease,
@@ -22,14 +24,13 @@ import {
   releaseDiffOutboxWriterLease,
   renewDiffOutboxWriterLease,
   updateDiffOutboxEventStatus,
-} from "./diffOutboxStore";
+} from "./store";
 
 const scope = { rootId: "root-1", branchId: "branch-1" };
 
 const ensureWindowWithIndexedDb = () => {
   const currentWindow = (globalThis as { window?: unknown }).window as
-    | { indexedDB?: IDBFactory }
-    | undefined;
+    { indexedDB?: IDBFactory } | undefined;
   if (!currentWindow) {
     Object.defineProperty(globalThis, "window", {
       value: { indexedDB },
@@ -72,13 +73,24 @@ describe("diff outbox store", () => {
   });
 
   it("lists enqueued events in FIFO order after the database is reopened", async () => {
-    await enqueueDiffOutboxEvent({ ...scope, event: createEvent("event-1"), now: 10 });
-    await enqueueDiffOutboxEvent({ ...scope, event: createEvent("event-2"), now: 11 });
+    await enqueueDiffOutboxEvent({
+      ...scope,
+      event: createEvent("event-1"),
+      now: 10,
+    });
+    await enqueueDiffOutboxEvent({
+      ...scope,
+      event: createEvent("event-2"),
+      now: 11,
+    });
 
     await resetNulldownDatabaseForTests({ deleteDatabase: false });
 
     const restored = await listDiffOutboxEvents(scope);
-    expect(restored.map((record) => record.eventId)).toEqual(["event-1", "event-2"]);
+    expect(restored.map((record) => record.eventId)).toEqual([
+      "event-1",
+      "event-2",
+    ]);
     expect(restored.map((record) => record.queueOrder)).toEqual([0, 1]);
   });
 
@@ -117,23 +129,35 @@ describe("diff outbox store", () => {
   });
 
   it("clears a branch draft without changing queued events", async () => {
-    await enqueueDiffOutboxEvent({ ...scope, event: createEvent("event-1"), now: 10 });
-    await persistDiffOutboxBranchDraft({ ...scope, content: "Current branch content", now: 11 });
+    await enqueueDiffOutboxEvent({
+      ...scope,
+      event: createEvent("event-1"),
+      now: 10,
+    });
+    await persistDiffOutboxBranchDraft({
+      ...scope,
+      content: "Current branch content",
+      now: 11,
+    });
 
     await expect(clearDiffOutboxBranchDraft(scope)).resolves.toBe(true);
     await expect(readDiffOutboxBranchDraft(scope)).resolves.toBeNull();
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ eventId: "event-1", queueOrder: 0, enqueuedAt: 10 }),
+      expect.objectContaining({
+        eventId: "event-1",
+        queueOrder: 0,
+        enqueuedAt: 10,
+      }),
     ]);
   });
 
   it("fails closed for malformed branch draft state", async () => {
     const database = await openNulldownDatabase();
     const transaction = database.transaction(
-      NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
+      DIFF_OUTBOX_BRANCH_STATE_STORE,
       "readwrite",
     );
-    transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE).put({
+    transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE).put({
       ...scope,
       nextQueueOrder: 0,
       draft: { version: 1, content: 42, updatedAt: 10 },
@@ -170,15 +194,23 @@ describe("diff outbox store", () => {
   });
 
   it("rejects an immutable duplicate event identity with different data", async () => {
-    await enqueueDiffOutboxEvent({ ...scope, event: createEvent("event-1", "first") });
+    await enqueueDiffOutboxEvent({
+      ...scope,
+      event: createEvent("event-1", "first"),
+    });
 
     await expect(
-      enqueueDiffOutboxEvent({ ...scope, event: createEvent("event-1", "second") }),
+      enqueueDiffOutboxEvent({
+        ...scope,
+        event: createEvent("event-1", "second"),
+      }),
     ).rejects.toThrow("already exists with different data");
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
       expect.objectContaining({
         eventId: "event-1",
-        event: expect.objectContaining({ ops: [{ type: "insert", start: 0, end: 0, text: "first" }] }),
+        event: expect.objectContaining({
+          ops: [{ type: "insert", start: 0, end: 0, text: "first" }],
+        }),
       }),
     ]);
   });
@@ -188,29 +220,72 @@ describe("diff outbox store", () => {
     await enqueueDiffOutboxEvent({ ...scope, event, now: 10 });
 
     await expect(
-      updateDiffOutboxEventStatus({ ...scope, eventId: event.eventId, status: "retry", now: 20 }),
-    ).resolves.toEqual(expect.objectContaining({ status: "retry", retryCount: 1 }));
+      updateDiffOutboxEventStatus({
+        ...scope,
+        eventId: event.eventId,
+        status: "retry",
+        now: 20,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ status: "retry", retryCount: 1 }),
+    );
     await expect(
-      updateDiffOutboxEventStatus({ ...scope, eventId: event.eventId, status: "blocked", now: 30 }),
-    ).resolves.toEqual(expect.objectContaining({ status: "blocked", retryCount: 1 }));
+      updateDiffOutboxEventStatus({
+        ...scope,
+        eventId: event.eventId,
+        status: "blocked",
+        now: 30,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ status: "blocked", retryCount: 1 }),
+    );
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ event, status: "blocked", retryCount: 1, updatedAt: 30 }),
+      expect.objectContaining({
+        event,
+        status: "blocked",
+        retryCount: 1,
+        updatedAt: 30,
+      }),
     ]);
   });
 
   it("allows lease takeover only after expiration", async () => {
     await expect(
-      acquireDiffOutboxWriterLease({ ...scope, ownerId: "writer-1", leaseDurationMs: 100, now: 10 }),
-    ).resolves.toEqual(expect.objectContaining({ ownerId: "writer-1", expiresAt: 110 }));
+      acquireDiffOutboxWriterLease({
+        ...scope,
+        ownerId: "writer-1",
+        leaseDurationMs: 100,
+        now: 10,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ ownerId: "writer-1", expiresAt: 110 }),
+    );
     await expect(
-      renewDiffOutboxWriterLease({ ...scope, ownerId: "writer-1", leaseDurationMs: 100, now: 20 }),
+      renewDiffOutboxWriterLease({
+        ...scope,
+        ownerId: "writer-1",
+        leaseDurationMs: 100,
+        now: 20,
+      }),
     ).resolves.toEqual(expect.objectContaining({ expiresAt: 120 }));
     await expect(
-      acquireDiffOutboxWriterLease({ ...scope, ownerId: "writer-2", leaseDurationMs: 100, now: 119 }),
+      acquireDiffOutboxWriterLease({
+        ...scope,
+        ownerId: "writer-2",
+        leaseDurationMs: 100,
+        now: 119,
+      }),
     ).resolves.toBeNull();
     await expect(
-      acquireDiffOutboxWriterLease({ ...scope, ownerId: "writer-2", leaseDurationMs: 100, now: 120 }),
-    ).resolves.toEqual(expect.objectContaining({ ownerId: "writer-2", expiresAt: 220 }));
+      acquireDiffOutboxWriterLease({
+        ...scope,
+        ownerId: "writer-2",
+        leaseDurationMs: 100,
+        now: 120,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ ownerId: "writer-2", expiresAt: 220 }),
+    );
     await expect(
       releaseDiffOutboxWriterLease({ ...scope, ownerId: "writer-1" }),
     ).resolves.toBe(false);
@@ -235,7 +310,9 @@ describe("diff outbox store", () => {
         force: true,
         now: 20,
       }),
-    ).resolves.toEqual(expect.objectContaining({ ownerId: "writer-2", expiresAt: 120 }));
+    ).resolves.toEqual(
+      expect.objectContaining({ ownerId: "writer-2", expiresAt: 120 }),
+    );
     await expect(
       renewDiffOutboxWriterLease({
         ...scope,
@@ -247,8 +324,16 @@ describe("diff outbox store", () => {
   });
 
   it("does not discard a new writer's branch state after takeover", async () => {
-    await enqueueDiffOutboxEvent({ ...scope, event: createEvent("event-1"), now: 10 });
-    await persistDiffOutboxBranchDraft({ ...scope, content: "local draft", now: 10 });
+    await enqueueDiffOutboxEvent({
+      ...scope,
+      event: createEvent("event-1"),
+      now: 10,
+    });
+    await persistDiffOutboxBranchDraft({
+      ...scope,
+      content: "local draft",
+      now: 10,
+    });
     await acquireDiffOutboxWriterLease({
       ...scope,
       ownerId: "writer-1",
@@ -264,7 +349,11 @@ describe("diff outbox store", () => {
     });
 
     await expect(
-      discardDiffOutboxScopeForWriter({ ...scope, ownerId: "writer-1", now: 20 }),
+      discardDiffOutboxScopeForWriter({
+        ...scope,
+        ownerId: "writer-1",
+        now: 20,
+      }),
     ).resolves.toBe(false);
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
       expect.objectContaining({ eventId: "event-1" }),
@@ -275,7 +364,11 @@ describe("diff outbox store", () => {
   });
 
   it("does not let a former writer block the active writer's event", async () => {
-    await enqueueDiffOutboxEvent({ ...scope, event: createEvent("event-1"), now: 10 });
+    await enqueueDiffOutboxEvent({
+      ...scope,
+      event: createEvent("event-1"),
+      now: 10,
+    });
     await acquireDiffOutboxWriterLease({
       ...scope,
       ownerId: "writer-1",
@@ -363,7 +456,9 @@ describe("diff outbox store", () => {
     const request = indexedDB.open("nulldown", 1);
     await new Promise<void>((resolve, reject) => {
       request.onupgradeneeded = () => {
-        request.result.createObjectStore("kv").put("legacy-value", "legacy-key");
+        request.result
+          .createObjectStore("kv")
+          .put("legacy-value", "legacy-key");
         request.result.createObjectStore("drops", { keyPath: "id" });
       };
       request.onsuccess = () => {
@@ -376,8 +471,12 @@ describe("diff outbox store", () => {
     const database = await openNulldownDatabase();
     expect(database.objectStoreNames.contains("kv")).toBe(true);
     expect(database.objectStoreNames.contains("drops")).toBe(true);
-    expect(database.objectStoreNames.contains(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE)).toBe(true);
-    expect(database.objectStoreNames.contains(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE)).toBe(true);
+    expect(database.objectStoreNames.contains(DIFF_OUTBOX_EVENTS_STORE)).toBe(
+      true,
+    );
+    expect(
+      database.objectStoreNames.contains(DIFF_OUTBOX_BRANCH_STATE_STORE),
+    ).toBe(true);
     await expect(getKvValue("legacy-key")).resolves.toBe("legacy-value");
   });
 });

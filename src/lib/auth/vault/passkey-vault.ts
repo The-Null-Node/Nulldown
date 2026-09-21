@@ -7,10 +7,10 @@ fallback so existing browsers can still unlock previously created vaults.
 import {
   getKvItem,
   getKvValue,
-  isIndexedDbSupported,
   setKvValue,
   setKvValues,
-} from "../../indexedDb";
+} from "../../indexed-db/key-value";
+import { isIndexedDbSupported } from "../../indexed-db/database";
 import { type AccountRecoveryPayload } from "../../../../shared/auth/recovery";
 import {
   decodeAccountRecoveryPayload,

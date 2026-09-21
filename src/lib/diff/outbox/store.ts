@@ -1,282 +1,41 @@
-import type { DropDiffEvent } from "../../../shared/drop/diff";
-import { DropDiffEventSchema } from "../../../shared/drop/codecs/diff-v1";
-import { serializeCanonicalJson } from "../../../shared/drop/types";
+import { openNulldownDatabase } from "../../indexed-db/database";
 import {
-  NULLDOWN_DIFF_OUTBOX_BRANCH_QUEUE_INDEX,
-  NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
-  NULLDOWN_DIFF_OUTBOX_EVENTS_STORE,
-  openNulldownDatabase,
-} from "../indexedDb";
-
-export type DiffOutboxEventStatus = "queued" | "retry" | "blocked";
-
-export interface DiffOutboxEventRecord {
-  rootId: string;
-  branchId: string;
-  eventId: string;
-  queueOrder: number;
-  event: DropDiffEvent;
-  status: DiffOutboxEventStatus;
-  retryCount: number;
-  enqueuedAt: number;
-  updatedAt: number;
-}
-
-export interface DiffOutboxWriterLease {
-  rootId: string;
-  branchId: string;
-  ownerId: string;
-  expiresAt: number;
-}
-
-export interface DiffOutboxBranchDraft {
-  version: 1;
-  content: string;
-  updatedAt: number;
-}
-
-interface DiffOutboxBranchState {
-  rootId: string;
-  branchId: string;
-  nextQueueOrder: number;
-  lease?: DiffOutboxWriterLease;
-  draft?: DiffOutboxBranchDraft;
-}
-
-export interface DiffOutboxScope {
-  rootId: string;
-  branchId: string;
-}
-
-export interface EnqueueDiffOutboxEventInput extends DiffOutboxScope {
-  event: DropDiffEvent;
-  draft?: DiffOutboxBranchDraftInput;
-  ownerId?: string;
-  now?: number;
-}
-
-export interface DiffOutboxBranchDraftInput {
-  content: string;
-  updatedAt?: number;
-}
-
-export interface PersistDiffOutboxBranchDraftInput
-  extends DiffOutboxScope,
-    DiffOutboxBranchDraftInput {
-  now?: number;
-}
-
-export interface DiffOutboxEventIdentity extends DiffOutboxScope {
-  eventId: string;
-}
-
-export interface DiffOutboxWriterEventIdentity extends DiffOutboxEventIdentity {
-  ownerId: string;
-  now?: number;
-}
-
-export interface UpdateDiffOutboxEventStatusInput
-  extends DiffOutboxEventIdentity {
-  status: DiffOutboxEventStatus;
-  now?: number;
-}
-
-export interface BlockDiffOutboxEventForWriterInput extends DiffOutboxEventIdentity {
-  ownerId: string;
-  now?: number;
-}
-
-export interface DiffOutboxLeaseInput extends DiffOutboxScope {
-  ownerId: string;
-  leaseDurationMs: number;
-  /** Explicitly replaces another browser tab's lease. */
-  force?: boolean;
-  now?: number;
-}
-
-export interface ReleaseDiffOutboxLeaseInput extends DiffOutboxScope {
-  ownerId: string;
-}
-
-export interface ClearDiffOutboxBranchDraftIfEmptyInput
-  extends ReleaseDiffOutboxLeaseInput {
-  now?: number;
-}
-
-export interface DiscardDiffOutboxScopeInput extends ReleaseDiffOutboxLeaseInput {
-  now?: number;
-}
-
-const requestToPromise = <T>(request: IDBRequest<T>, message: string) =>
-  new Promise<T>((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () =>
-      reject(
-        request.error
-          ? new Error(`${message}: ${request.error.message}`)
-          : new Error(message),
-      );
-  });
-
-const waitForTransaction = (transaction: IDBTransaction) =>
-  new Promise<void>((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () =>
-      reject(
-        transaction.error
-          ? new Error(`IndexedDB transaction failed: ${transaction.error.message}`)
-          : new Error("IndexedDB transaction failed"),
-      );
-    transaction.onabort = () =>
-      reject(
-        transaction.error
-          ? new Error(`IndexedDB transaction aborted: ${transaction.error.message}`)
-          : new Error("IndexedDB transaction aborted"),
-      );
-  });
-
-const abortTransaction = (transaction: IDBTransaction): void => {
-  try {
-    transaction.abort();
-  } catch {
-    // The request failure may already have aborted the transaction.
-  }
-};
-
-const isNonEmptyString = (value: unknown): value is string =>
-  typeof value === "string" && value.trim() === value && value.length > 0;
-
-const isNonNegativeInteger = (value: unknown): value is number =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-
-const isPositiveInteger = (value: unknown): value is number =>
-  isNonNegativeInteger(value) && value > 0;
-
-const isEventStatus = (value: unknown): value is DiffOutboxEventStatus =>
-  value === "queued" || value === "retry" || value === "blocked";
-
-const parseBranchDraft = (value: unknown): DiffOutboxBranchDraft => {
-  if (typeof value !== "object" || value === null) {
-    throw new Error("Invalid diff outbox branch draft.");
-  }
-
-  const draft = value as Record<string, unknown>;
-  if (
-    draft.version !== 1 ||
-    typeof draft.content !== "string" ||
-    !isNonNegativeInteger(draft.updatedAt)
-  ) {
-    throw new Error("Invalid diff outbox branch draft.");
-  }
-
-  return {
-    version: 1,
-    content: draft.content,
-    updatedAt: draft.updatedAt,
-  };
-};
-
-const assertScope = (scope: DiffOutboxScope): void => {
-  if (!isNonEmptyString(scope.rootId) || !isNonEmptyString(scope.branchId)) {
-    throw new Error("Diff outbox rootId and branchId must be non-empty strings.");
-  }
-};
-
-const parseEvent = (value: unknown): DropDiffEvent => {
-  const parsed = DropDiffEventSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new Error("Invalid diff outbox event envelope.");
-  }
-  return parsed.data;
-};
-
-const parseEventRecord = (value: unknown): DiffOutboxEventRecord => {
-  if (typeof value !== "object" || value === null) {
-    throw new Error("Invalid diff outbox event record.");
-  }
-
-  const record = value as Record<string, unknown>;
-  const event = parseEvent(record.event);
-  if (
-    !isNonEmptyString(record.rootId) ||
-    !isNonEmptyString(record.branchId) ||
-    !isNonEmptyString(record.eventId) ||
-    !isNonNegativeInteger(record.queueOrder) ||
-    !isEventStatus(record.status) ||
-    !isNonNegativeInteger(record.retryCount) ||
-    !isNonNegativeInteger(record.enqueuedAt) ||
-    !isNonNegativeInteger(record.updatedAt) ||
-    event.dropId !== record.rootId ||
-    event.eventId !== record.eventId
-  ) {
-    throw new Error("Invalid diff outbox event record.");
-  }
-
-  return {
-    rootId: record.rootId,
-    branchId: record.branchId,
-    eventId: record.eventId,
-    queueOrder: record.queueOrder,
-    event,
-    status: record.status,
-    retryCount: record.retryCount,
-    enqueuedAt: record.enqueuedAt,
-    updatedAt: record.updatedAt,
-  };
-};
-
-const parseBranchState = (
-  value: unknown,
-  scope: DiffOutboxScope,
-): DiffOutboxBranchState => {
-  if (value === undefined) {
-    return { ...scope, nextQueueOrder: 0 };
-  }
-  if (typeof value !== "object" || value === null) {
-    throw new Error("Invalid diff outbox branch state.");
-  }
-
-  const state = value as Record<string, unknown>;
-  if (
-    state.rootId !== scope.rootId ||
-    state.branchId !== scope.branchId ||
-    !isNonNegativeInteger(state.nextQueueOrder)
-  ) {
-    throw new Error("Invalid diff outbox branch state.");
-  }
-
-  const normalized: DiffOutboxBranchState = {
-    rootId: scope.rootId,
-    branchId: scope.branchId,
-    nextQueueOrder: state.nextQueueOrder,
-  };
-  if (state.lease !== undefined) {
-    if (typeof state.lease !== "object" || state.lease === null) {
-      throw new Error("Invalid diff outbox writer lease.");
-    }
-
-    const lease = state.lease as Record<string, unknown>;
-    if (
-      lease.rootId !== scope.rootId ||
-      lease.branchId !== scope.branchId ||
-      !isNonEmptyString(lease.ownerId) ||
-      !isNonNegativeInteger(lease.expiresAt)
-    ) {
-      throw new Error("Invalid diff outbox writer lease.");
-    }
-    normalized.lease = {
-      rootId: scope.rootId,
-      branchId: scope.branchId,
-      ownerId: lease.ownerId,
-      expiresAt: lease.expiresAt,
-    };
-  }
-  if (state.draft !== undefined) {
-    normalized.draft = parseBranchDraft(state.draft);
-  }
-
-  return normalized;
-};
+  abortTransaction,
+  requestToPromise,
+  waitForTransaction,
+} from "../../indexed-db/transaction";
+import {
+  DIFF_OUTBOX_BRANCH_QUEUE_INDEX,
+  DIFF_OUTBOX_BRANCH_STATE_STORE,
+  DIFF_OUTBOX_EVENTS_STORE,
+} from "./schema";
+import {
+  assertLeaseInput,
+  assertScope,
+  createBranchDraft,
+  eventIdentityPayload,
+  hasActiveWriterLease,
+  isEventStatus,
+  isNonEmptyString,
+  leaseExpiresAt,
+  nowFor,
+  parseBranchState,
+  parseEvent,
+  parseEventRecord,
+  type BlockDiffOutboxEventForWriterInput,
+  type ClearDiffOutboxBranchDraftIfEmptyInput,
+  type DiffOutboxBranchDraft,
+  type DiffOutboxEventIdentity,
+  type DiffOutboxEventRecord,
+  type DiffOutboxLeaseInput,
+  type DiffOutboxScope,
+  type DiffOutboxWriterLease,
+  type DiscardDiffOutboxScopeInput,
+  type EnqueueDiffOutboxEventInput,
+  type PersistDiffOutboxBranchDraftInput,
+  type ReleaseDiffOutboxLeaseInput,
+  type UpdateDiffOutboxEventStatusInput,
+} from "./records";
 
 const eventKey = (identity: DiffOutboxEventIdentity): IDBValidKey[] => [
   identity.rootId,
@@ -289,58 +48,7 @@ const branchKey = (scope: DiffOutboxScope): IDBValidKey[] => [
   scope.branchId,
 ];
 
-const eventIdentityPayload = (event: DropDiffEvent): string =>
-  serializeCanonicalJson(event);
-
-const nowFor = (now: number | undefined): number => {
-  const value = now ?? Date.now();
-  if (!isNonNegativeInteger(value)) {
-    throw new Error("Diff outbox time must be a non-negative integer.");
-  }
-  return value;
-};
-
-const createBranchDraft = (
-  input: DiffOutboxBranchDraftInput,
-  defaultUpdatedAt: number,
-): DiffOutboxBranchDraft => {
-  if (typeof input.content !== "string") {
-    throw new Error("Diff outbox branch draft content must be a string.");
-  }
-
-  return {
-    version: 1,
-    content: input.content,
-    updatedAt: nowFor(input.updatedAt ?? defaultUpdatedAt),
-  };
-};
-
-const assertLeaseInput = (input: DiffOutboxLeaseInput): void => {
-  assertScope(input);
-  if (!isNonEmptyString(input.ownerId) || !isPositiveInteger(input.leaseDurationMs)) {
-    throw new Error("Diff outbox lease ownerId and leaseDurationMs are invalid.");
-  }
-};
-
-const leaseExpiresAt = (now: number, leaseDurationMs: number): number => {
-  const expiresAt = now + leaseDurationMs;
-  if (!isNonNegativeInteger(expiresAt)) {
-    throw new Error("Diff outbox lease expiration is invalid.");
-  }
-  return expiresAt;
-};
-
-const hasActiveWriterLease = (
-  state: DiffOutboxBranchState,
-  ownerId: string,
-  now: number,
-): boolean =>
-  Boolean(
-    state.lease &&
-      state.lease.ownerId === ownerId &&
-      state.lease.expiresAt > now,
-  );
-
+/** Atomically appends an immutable event and optional current branch draft. */
 export const enqueueDiffOutboxEvent = async (
   input: EnqueueDiffOutboxEventInput,
 ): Promise<DiffOutboxEventRecord> => {
@@ -354,11 +62,11 @@ export const enqueueDiffOutboxEvent = async (
   const draft = input.draft ? createBranchDraft(input.draft, now) : undefined;
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    [NULLDOWN_DIFF_OUTBOX_EVENTS_STORE, NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE],
+    [DIFF_OUTBOX_EVENTS_STORE, DIFF_OUTBOX_BRANCH_STATE_STORE],
     "readwrite",
   );
-  const events = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE);
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const events = transaction.objectStore(DIFF_OUTBOX_EVENTS_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
 
   try {
     const state = parseBranchState(
@@ -378,7 +86,9 @@ export const enqueueDiffOutboxEvent = async (
     );
     if (existingValue !== undefined) {
       const existing = parseEventRecord(existingValue);
-      if (eventIdentityPayload(existing.event) !== eventIdentityPayload(event)) {
+      if (
+        eventIdentityPayload(existing.event) !== eventIdentityPayload(event)
+      ) {
         transaction.abort();
         throw new Error(
           `Diff outbox event ${event.eventId} already exists with different data.`,
@@ -425,8 +135,11 @@ export const hasDiffOutboxWriterLease = async (
     throw new Error("Diff outbox lease ownerId must be a non-empty string.");
   }
   const db = await openNulldownDatabase();
-  const transaction = db.transaction(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE, "readonly");
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const transaction = db.transaction(
+    DIFF_OUTBOX_BRANCH_STATE_STORE,
+    "readonly",
+  );
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -443,13 +156,17 @@ export const hasDiffOutboxWriterLease = async (
   }
 };
 
+/** Reads the durable unsynchronized draft for one branch. */
 export const readDiffOutboxBranchDraft = async (
   scope: DiffOutboxScope,
 ): Promise<DiffOutboxBranchDraft | null> => {
   assertScope(scope);
   const db = await openNulldownDatabase();
-  const transaction = db.transaction(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE, "readonly");
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const transaction = db.transaction(
+    DIFF_OUTBOX_BRANCH_STATE_STORE,
+    "readonly",
+  );
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -466,6 +183,7 @@ export const readDiffOutboxBranchDraft = async (
   }
 };
 
+/** Persists the latest unsynchronized draft for one branch. */
 export const persistDiffOutboxBranchDraft = async (
   input: PersistDiffOutboxBranchDraftInput,
 ): Promise<DiffOutboxBranchDraft> => {
@@ -474,10 +192,10 @@ export const persistDiffOutboxBranchDraft = async (
   const draft = createBranchDraft(input, now);
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
+    DIFF_OUTBOX_BRANCH_STATE_STORE,
     "readwrite",
   );
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -495,16 +213,17 @@ export const persistDiffOutboxBranchDraft = async (
   }
 };
 
+/** Removes one branch draft without changing queued events. */
 export const clearDiffOutboxBranchDraft = async (
   scope: DiffOutboxScope,
 ): Promise<boolean> => {
   assertScope(scope);
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
+    DIFF_OUTBOX_BRANCH_STATE_STORE,
     "readwrite",
   );
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -542,11 +261,11 @@ export const clearDiffOutboxBranchDraftIfEmptyForWriter = async (
   const now = nowFor(input.now);
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    [NULLDOWN_DIFF_OUTBOX_EVENTS_STORE, NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE],
+    [DIFF_OUTBOX_EVENTS_STORE, DIFF_OUTBOX_BRANCH_STATE_STORE],
     "readwrite",
   );
-  const events = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE);
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const events = transaction.objectStore(DIFF_OUTBOX_EVENTS_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -559,7 +278,7 @@ export const clearDiffOutboxBranchDraftIfEmptyForWriter = async (
       await waitForTransaction(transaction);
       return false;
     }
-    const queue = events.index(NULLDOWN_DIFF_OUTBOX_BRANCH_QUEUE_INDEX);
+    const queue = events.index(DIFF_OUTBOX_BRANCH_QUEUE_INDEX);
     const range = IDBKeyRange.bound(
       [input.rootId, input.branchId, 0],
       [input.rootId, input.branchId, Number.MAX_SAFE_INTEGER],
@@ -602,11 +321,11 @@ export const discardDiffOutboxScopeForWriter = async (
   const now = nowFor(input.now);
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    [NULLDOWN_DIFF_OUTBOX_EVENTS_STORE, NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE],
+    [DIFF_OUTBOX_EVENTS_STORE, DIFF_OUTBOX_BRANCH_STATE_STORE],
     "readwrite",
   );
-  const events = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE);
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const events = transaction.objectStore(DIFF_OUTBOX_EVENTS_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -624,7 +343,7 @@ export const discardDiffOutboxScopeForWriter = async (
       return false;
     }
 
-    const queue = events.index(NULLDOWN_DIFF_OUTBOX_BRANCH_QUEUE_INDEX);
+    const queue = events.index(DIFF_OUTBOX_BRANCH_QUEUE_INDEX);
     const range = IDBKeyRange.bound(
       [input.rootId, input.branchId, 0],
       [input.rootId, input.branchId, Number.MAX_SAFE_INTEGER],
@@ -650,15 +369,16 @@ export const discardDiffOutboxScopeForWriter = async (
   }
 };
 
+/** Lists one branch queue in durable FIFO order. */
 export const listDiffOutboxEvents = async (
   scope: DiffOutboxScope,
 ): Promise<DiffOutboxEventRecord[]> => {
   assertScope(scope);
   const db = await openNulldownDatabase();
-  const transaction = db.transaction(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE, "readonly");
+  const transaction = db.transaction(DIFF_OUTBOX_EVENTS_STORE, "readonly");
   const index = transaction
-    .objectStore(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE)
-    .index(NULLDOWN_DIFF_OUTBOX_BRANCH_QUEUE_INDEX);
+    .objectStore(DIFF_OUTBOX_EVENTS_STORE)
+    .index(DIFF_OUTBOX_BRANCH_QUEUE_INDEX);
   const range = IDBKeyRange.bound(
     [scope.rootId, scope.branchId, 0],
     [scope.rootId, scope.branchId, Number.MAX_SAFE_INTEGER],
@@ -671,6 +391,7 @@ export const listDiffOutboxEvents = async (
   return values.map(parseEventRecord);
 };
 
+/** Removes one confirmed event, optionally fenced by the active writer lease. */
 export const acknowledgeDiffOutboxEvent = async (
   identity: DiffOutboxEventIdentity,
   writer?: ReleaseDiffOutboxLeaseInput & { now?: number },
@@ -693,17 +414,17 @@ export const acknowledgeDiffOutboxEvent = async (
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
     writer
-      ? [NULLDOWN_DIFF_OUTBOX_EVENTS_STORE, NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE]
-      : NULLDOWN_DIFF_OUTBOX_EVENTS_STORE,
+      ? [DIFF_OUTBOX_EVENTS_STORE, DIFF_OUTBOX_BRANCH_STATE_STORE]
+      : DIFF_OUTBOX_EVENTS_STORE,
     "readwrite",
   );
-  const events = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE);
+  const events = transaction.objectStore(DIFF_OUTBOX_EVENTS_STORE);
   try {
     if (writer) {
       const state = parseBranchState(
         await requestToPromise<unknown>(
           transaction
-            .objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE)
+            .objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE)
             .get(branchKey(writer)),
           "Failed to read diff outbox branch state",
         ),
@@ -732,6 +453,7 @@ export const acknowledgeDiffOutboxEvent = async (
   }
 };
 
+/** Changes one event's retry disposition without mutating its envelope. */
 export const updateDiffOutboxEventStatus = async (
   input: UpdateDiffOutboxEventStatusInput,
   writer?: ReleaseDiffOutboxLeaseInput & { now?: number },
@@ -755,17 +477,17 @@ export const updateDiffOutboxEventStatus = async (
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
     writer
-      ? [NULLDOWN_DIFF_OUTBOX_EVENTS_STORE, NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE]
-      : NULLDOWN_DIFF_OUTBOX_EVENTS_STORE,
+      ? [DIFF_OUTBOX_EVENTS_STORE, DIFF_OUTBOX_BRANCH_STATE_STORE]
+      : DIFF_OUTBOX_EVENTS_STORE,
     "readwrite",
   );
-  const events = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE);
+  const events = transaction.objectStore(DIFF_OUTBOX_EVENTS_STORE);
   try {
     if (writer) {
       const state = parseBranchState(
         await requestToPromise<unknown>(
           transaction
-            .objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE)
+            .objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE)
             .get(branchKey(writer)),
           "Failed to read diff outbox branch state",
         ),
@@ -790,7 +512,9 @@ export const updateDiffOutboxEventStatus = async (
       ...existing,
       status: input.status,
       retryCount:
-        input.status === "retry" ? existing.retryCount + 1 : existing.retryCount,
+        input.status === "retry"
+          ? existing.retryCount + 1
+          : existing.retryCount,
       updatedAt: now,
     };
     events.put(updated);
@@ -808,17 +532,19 @@ export const blockDiffOutboxEventForWriter = async (
 ): Promise<DiffOutboxEventRecord | null> => {
   assertScope(input);
   if (!isNonEmptyString(input.eventId) || !isNonEmptyString(input.ownerId)) {
-    throw new Error("Diff outbox eventId and lease ownerId must be non-empty strings.");
+    throw new Error(
+      "Diff outbox eventId and lease ownerId must be non-empty strings.",
+    );
   }
 
   const now = nowFor(input.now);
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    [NULLDOWN_DIFF_OUTBOX_EVENTS_STORE, NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE],
+    [DIFF_OUTBOX_EVENTS_STORE, DIFF_OUTBOX_BRANCH_STATE_STORE],
     "readwrite",
   );
-  const events = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_EVENTS_STORE);
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const events = transaction.objectStore(DIFF_OUTBOX_EVENTS_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -858,6 +584,7 @@ export const blockDiffOutboxEventForWriter = async (
   }
 };
 
+/** Acquires or explicitly takes over the browser writer lease for one branch. */
 export const acquireDiffOutboxWriterLease = async (
   input: DiffOutboxLeaseInput,
 ): Promise<DiffOutboxWriterLease | null> => {
@@ -865,10 +592,10 @@ export const acquireDiffOutboxWriterLease = async (
   const now = nowFor(input.now);
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
+    DIFF_OUTBOX_BRANCH_STATE_STORE,
     "readwrite",
   );
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -902,6 +629,7 @@ export const acquireDiffOutboxWriterLease = async (
   }
 };
 
+/** Renews the caller's active browser writer lease. */
 export const renewDiffOutboxWriterLease = async (
   input: DiffOutboxLeaseInput,
 ): Promise<DiffOutboxWriterLease | null> => {
@@ -909,10 +637,10 @@ export const renewDiffOutboxWriterLease = async (
   const now = nowFor(input.now);
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
+    DIFF_OUTBOX_BRANCH_STATE_STORE,
     "readwrite",
   );
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const state = parseBranchState(
       await requestToPromise<unknown>(
@@ -945,6 +673,7 @@ export const renewDiffOutboxWriterLease = async (
   }
 };
 
+/** Releases the caller's browser writer lease without dropping durable edits. */
 export const releaseDiffOutboxWriterLease = async (
   input: ReleaseDiffOutboxLeaseInput,
 ): Promise<boolean> => {
@@ -955,10 +684,10 @@ export const releaseDiffOutboxWriterLease = async (
 
   const db = await openNulldownDatabase();
   const transaction = db.transaction(
-    NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE,
+    DIFF_OUTBOX_BRANCH_STATE_STORE,
     "readwrite",
   );
-  const states = transaction.objectStore(NULLDOWN_DIFF_OUTBOX_BRANCH_STATE_STORE);
+  const states = transaction.objectStore(DIFF_OUTBOX_BRANCH_STATE_STORE);
   try {
     const value = await requestToPromise<unknown>(
       states.get(branchKey(input)),
@@ -987,4 +716,40 @@ export const releaseDiffOutboxWriterLease = async (
     abortTransaction(transaction);
     throw error;
   }
+};
+
+/** Browser persistence operations available to diff-sync orchestration. */
+export interface DiffOutboxStore {
+  enqueue: typeof enqueueDiffOutboxEvent;
+  hasWriterLease: typeof hasDiffOutboxWriterLease;
+  readDraft: typeof readDiffOutboxBranchDraft;
+  persistDraft: typeof persistDiffOutboxBranchDraft;
+  clearDraft: typeof clearDiffOutboxBranchDraft;
+  clearDraftIfEmptyForWriter: typeof clearDiffOutboxBranchDraftIfEmptyForWriter;
+  discardForWriter: typeof discardDiffOutboxScopeForWriter;
+  listEvents: typeof listDiffOutboxEvents;
+  acknowledgeEvent: typeof acknowledgeDiffOutboxEvent;
+  updateEventStatus: typeof updateDiffOutboxEventStatus;
+  blockEventForWriter: typeof blockDiffOutboxEventForWriter;
+  acquireWriterLease: typeof acquireDiffOutboxWriterLease;
+  renewWriterLease: typeof renewDiffOutboxWriterLease;
+  releaseWriterLease: typeof releaseDiffOutboxWriterLease;
+}
+
+/** Process-independent IndexedDB adapter for durable diff outbox operations. */
+export const indexedDbDiffOutboxStore: DiffOutboxStore = {
+  enqueue: enqueueDiffOutboxEvent,
+  hasWriterLease: hasDiffOutboxWriterLease,
+  readDraft: readDiffOutboxBranchDraft,
+  persistDraft: persistDiffOutboxBranchDraft,
+  clearDraft: clearDiffOutboxBranchDraft,
+  clearDraftIfEmptyForWriter: clearDiffOutboxBranchDraftIfEmptyForWriter,
+  discardForWriter: discardDiffOutboxScopeForWriter,
+  listEvents: listDiffOutboxEvents,
+  acknowledgeEvent: acknowledgeDiffOutboxEvent,
+  updateEventStatus: updateDiffOutboxEventStatus,
+  blockEventForWriter: blockDiffOutboxEventForWriter,
+  acquireWriterLease: acquireDiffOutboxWriterLease,
+  renewWriterLease: renewDiffOutboxWriterLease,
+  releaseWriterLease: releaseDiffOutboxWriterLease,
 };

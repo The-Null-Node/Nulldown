@@ -42,10 +42,10 @@ jest.unstable_mockModule("./vault/recovery/crypto", () => ({
   decryptAccountRecoveryPackage,
   encryptAccountRecoveryPayload,
 }));
-jest.unstable_mockModule("../indexedDb", () => ({
-  getKvValue,
+jest.unstable_mockModule("../indexed-db/database", () => ({
   isIndexedDbSupported,
 }));
+jest.unstable_mockModule("../indexed-db/key-value", () => ({ getKvValue }));
 
 const { cancelAccountSyncOperations, restoreAccountSync, setupAccountSync } =
   await import("./accountSyncClient");

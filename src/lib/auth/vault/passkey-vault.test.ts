@@ -1,7 +1,8 @@
 import { webcrypto } from "node:crypto";
 import { jest } from "@jest/globals";
 import { indexedDB } from "fake-indexeddb";
-import { getKvValue, resetNulldownDatabaseForTests, setKvValue } from "../../indexedDb";
+import { resetNulldownDatabaseForTests } from "../../indexed-db/database";
+import { getKvValue, setKvValue } from "../../indexed-db/key-value";
 import {
   PASSKEY_PROTECTION_STORAGE_KEY,
   PasskeyVault,

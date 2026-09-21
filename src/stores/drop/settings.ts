@@ -3,10 +3,10 @@ import { PASSKEY_PROTECTION_STORAGE_KEY } from "../../lib/auth/vault/passkey-vau
 import {
   getKvItem,
   getKvValue,
-  isIndexedDbSupported,
   setKvItem,
   setKvValue,
-} from "../../lib/indexedDb";
+} from "../../lib/indexed-db/key-value";
+import { isIndexedDbSupported } from "../../lib/indexed-db/database";
 import {
   DEFAULT_NETWORK_ALLOWLIST,
   normalizeNetworkAllowlist,

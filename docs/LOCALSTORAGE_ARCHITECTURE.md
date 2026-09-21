@@ -37,7 +37,7 @@ Migration keys are copied from localStorage to IndexedDB on initialization:
 - `nulldown_draft`
 - `nulldown_offline_mode`
 
-### 2. IndexedDB Utilities (`src/lib/indexedDb.ts`)
+### 2. IndexedDB Modules (`src/lib/indexed-db/`)
 
 Database: `nulldown`
 
@@ -45,6 +45,13 @@ Object stores:
 
 - `kv` - generic key-value data (draft + settings)
 - `drops` - offline shared drops (legacy plaintext payloads and sealed envelopes)
+- `diffOutboxEvents` - immutable branch events awaiting confirmed delivery
+- `diffOutboxBranchState` - queue cursors, drafts, and browser-writer leases
+
+`database.ts` owns connection and upgrade lifetime, `transaction.ts` owns request
+completion helpers, `key-value.ts` owns generic values, and `drops.ts` owns local
+drop records. Diff outbox schema and persistence remain owned by
+`src/lib/diff/outbox/`.
 
 `kv` also stores:
 

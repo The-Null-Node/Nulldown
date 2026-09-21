@@ -31,7 +31,7 @@ import BranchActivityDialog from "./editor/components/BranchActivityDialog";
 import BranchSyncBanner from "./editor/components/BranchSyncBanner";
 import { useShareDrop } from "./editor/hooks/useShareDrop";
 import { usePreviewToggle } from "./editor/hooks/usePreviewToggle";
-import { useDiffChannel } from "./editor/hooks/useDiffChannel";
+import { useDiffChannel } from "./editor/sync/use-channel";
 import {
   listRecentExternalDrops,
   type RecentExternalDropRecord,

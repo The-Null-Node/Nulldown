@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import type { DiffSyncState } from "../hooks/useDiffChannel";
+import type { DiffSyncState } from "../sync/session";
 
 interface BranchSyncBannerProps {
   state: DiffSyncState;

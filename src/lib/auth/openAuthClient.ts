@@ -1,4 +1,5 @@
-import { isIndexedDbSupported, setKvValue } from "../indexedDb";
+import { isIndexedDbSupported } from "../indexed-db/database";
+import { setKvValue } from "../indexed-db/key-value";
 
 export interface OpenAuthPrincipal {
   userId: string;

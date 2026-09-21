@@ -9,16 +9,18 @@ import {
 } from "../../../../shared/drop/codecs/envelope-v1";
 import type { DropEnvelope } from "../../../../shared/drop/types";
 import {
-  getKvItem,
   getOfflineDrop,
-  isIndexedDbSupported,
   listOfflineDrops,
   putOfflineDrop,
-  removeKvItem,
   removeOfflineDrop,
-  setKvItem,
   type IndexedDbDropRecord,
-} from "../../indexedDb";
+} from "../../indexed-db/drops";
+import { isIndexedDbSupported } from "../../indexed-db/database";
+import {
+  getKvItem,
+  removeKvItem,
+  setKvItem,
+} from "../../indexed-db/key-value";
 import type {
   DropCrudRecord,
   StoredDropRecord,

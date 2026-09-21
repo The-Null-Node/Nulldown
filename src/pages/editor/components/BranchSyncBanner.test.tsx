@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { jest } from "@jest/globals";
-import type { DiffSyncState } from "../hooks/useDiffChannel";
+import type { DiffSyncState } from "../sync/session";
 import BranchSyncBanner from "./BranchSyncBanner";
 
 const blockedState: DiffSyncState = {

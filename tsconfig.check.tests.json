@@ -18,7 +18,6 @@
     "src/stores/**/*.test.tsx",
     "src/theme/**/*.test.ts",
     "src/theme/**/*.test.tsx",
-    "src/diffChannel.test.ts",
     "src/**/*.d.ts",
     "lib/**/*.d.ts"
   ],

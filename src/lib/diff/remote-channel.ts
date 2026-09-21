@@ -5,11 +5,9 @@ originating from the current client to avoid replaying our own writes.
 */
 
 import type {
-  DropBranchRuntimeFact,
   DropDiffAppendResponse,
   DropDiffEnvelope,
   DropDiffEvent,
-  DropDiffEventMetadata,
   DropDiffOp,
   DropDiffPollResponse,
 } from "../../../shared/drop/diff";
@@ -19,59 +17,18 @@ import {
 } from "../../../shared/drop/diff";
 import { DropDiffAppendEnvelopeSchema } from "../../../shared/drop/codecs/diff-v1";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../shared/drop/branch";
-import { serializeCanonicalJson } from "../../../shared/drop/types";
 import { emitEvent } from "../events/eventBus";
-
-/** One received branch transport batch. */
-export interface DiffChannelBatch {
-  /** Markdown diff events after the current event cursor. */
-  events: DropDiffEvent[];
-  /** Runtime facts after the independent fact cursor. */
-  facts: DropBranchRuntimeFact[];
-}
-
-export type DiffChannelListener = (batch: DiffChannelBatch) => void;
-
-export interface DiffChannel {
-  readonly dropId: string;
-  readonly clientId: string;
-  publish: (
-    ops: DropDiffOp[],
-    options?: DiffChannelPublishOptions,
-  ) => Promise<DiffChannelPublishAck[]>;
-  /** Publishes one already-prepared immutable event without regenerating identity. */
-  publishEvent: (event: DropDiffEvent) => Promise<DropDiffAppendResponse>;
-  poll: () => Promise<DiffChannelBatch>;
-  subscribe: (listener: DiffChannelListener) => () => void;
-  start: () => void;
-  stop: () => void;
-  readonly cursor: string | null;
-  readonly factCursor: string | null;
-}
-
-export interface DiffChannelPublishOptions {
-  metadata?: DropDiffEventMetadata;
-  /** Stable writer identity reused when a failed request is retried. */
-  eventId?: string;
-  /** Original creation time reused with an explicit event identity. */
-  createdAt?: number;
-}
-
-export type DiffChannelPublishAck =
-  DropDiffAppendResponse["acknowledgements"][number];
-
-/** Structured transport failure used by durable browser retry policy. */
-export class DiffChannelError extends Error {
-  readonly status: number | null;
-  readonly code: string | null;
-
-  constructor(input: { message: string; status?: number | null; code?: string | null }) {
-    super(input.message);
-    this.name = "DiffChannelError";
-    this.status = input.status ?? null;
-    this.code = input.code ?? null;
-  }
-}
+import {
+  createDiffChannelClientId,
+  createDiffChannelEventId,
+  DiffChannelError,
+  serializeDiffChannelEventIdentity,
+  type DiffChannel,
+  type DiffChannelBatch,
+  type DiffChannelListener,
+  type DiffChannelPublishAck,
+  type DiffChannelPublishOptions,
+} from "./channel";
 
 const responseError = async (response: Response): Promise<DiffChannelError> => {
   const body = await response.text();
@@ -94,31 +51,6 @@ const responseError = async (response: Response): Promise<DiffChannelError> => {
   });
 };
 
-const generateClientId = (): string => {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-
-  return `client_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-};
-
-let globalEventCounter = 0;
-
-const nextEventId = (clientId: string): string => {
-  globalEventCounter += 1;
-  return `${clientId}:${Date.now()}:${globalEventCounter}`;
-};
-
-const eventRetryPayload = (event: DropDiffEvent): string =>
-  serializeCanonicalJson({
-    eventId: event.eventId,
-    dropId: event.dropId,
-    sourceClientId: event.sourceClientId,
-    createdAt: event.createdAt,
-    ops: event.ops,
-    metadata: event.metadata,
-  });
-
 /* Remote diff channel (polls /api/diff/:id). */
 
 export interface RemoteDiffChannelOptions {
@@ -127,7 +59,8 @@ export interface RemoteDiffChannelOptions {
   accountId?: string | null;
   clientId?: string;
   authToken?: string | null;
-  authTokenProvider?: ((options?: { forceRefresh?: boolean }) => Promise<string | null>) | null;
+  authTokenProvider?:
+    ((options?: { forceRefresh?: boolean }) => Promise<string | null>) | null;
   pollIntervalMs?: number;
   initialCursor?: string | null;
   initialFactCursor?: string | null;
@@ -144,7 +77,7 @@ export const createRemoteDiffChannel = (
   const accountId = options.accountId ?? null;
   const authToken = options.authToken ?? null;
   const authTokenProvider = options.authTokenProvider ?? null;
-  const clientId = options.clientId ?? generateClientId();
+  const clientId = options.clientId ?? createDiffChannelClientId();
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   let cursor: string | null = options.initialCursor ?? null;
@@ -152,14 +85,13 @@ export const createRemoteDiffChannel = (
   const enableRuntimeFacts = options.enableRuntimeFacts ?? false;
   let timer: ReturnType<typeof setInterval> | null = null;
   const listeners = new Set<DiffChannelListener>();
-  let localSeq = 0;
   let hasCompletedHandshake = options.initialCursor !== undefined;
   let pollInFlight = false;
   const preparedEvents = new Map<string, DropDiffEvent>();
 
-  const buildHeaders = async (
-    authOptions?: { forceRefresh?: boolean },
-  ): Promise<HeadersInit> => {
+  const buildHeaders = async (authOptions?: {
+    forceRefresh?: boolean;
+  }): Promise<HeadersInit> => {
     const headers: Record<string, string> = {
       "x-nulldown-client-id": clientId,
     };
@@ -214,8 +146,10 @@ export const createRemoteDiffChannel = (
   ): Promise<DropDiffAppendResponse> => {
     if (
       !isDropDiffEvent(candidate) ||
-      !DropDiffAppendEnvelopeSchema.safeParse({ version: 1, events: [candidate] })
-        .success ||
+      !DropDiffAppendEnvelopeSchema.safeParse({
+        version: 1,
+        events: [candidate],
+      }).success ||
       candidate.dropId !== dropId
     ) {
       throw new Error("Invalid immutable diff event for this channel.");
@@ -223,7 +157,8 @@ export const createRemoteDiffChannel = (
     const existing = preparedEvents.get(candidate.eventId);
     if (
       existing &&
-      eventRetryPayload(existing) !== eventRetryPayload(candidate)
+      serializeDiffChannelEventIdentity(existing) !==
+        serializeDiffChannelEventIdentity(candidate)
     ) {
       throw new Error(
         `Diff event ${candidate.eventId} was already prepared with different data.`,
@@ -283,11 +218,13 @@ export const createRemoteDiffChannel = (
   ): Promise<DiffChannelPublishAck[]> => {
     if (!ops.length) return [];
     if ((options.eventId === undefined) !== (options.createdAt === undefined)) {
-      throw new Error("Diff retries must provide eventId and createdAt together.");
+      throw new Error(
+        "Diff retries must provide eventId and createdAt together.",
+      );
     }
 
     const response = await publishEvent({
-      eventId: options.eventId ?? nextEventId(clientId),
+      eventId: options.eventId ?? createDiffChannelEventId(clientId),
       seq: 0,
       dropId,
       sourceClientId: clientId,
@@ -396,158 +333,6 @@ export const createRemoteDiffChannel = (
     },
     get factCursor() {
       return factCursor;
-    },
-  };
-};
-
-/* Local diff channel (BroadcastChannel + in-memory). */
-
-export interface LocalDiffChannelOptions {
-  dropId: string;
-  clientId?: string;
-}
-
-export const createLocalDiffChannel = (
-  options: LocalDiffChannelOptions,
-): DiffChannel => {
-  const dropId = options.dropId;
-  const clientId = options.clientId ?? generateClientId();
-  const listeners = new Set<DiffChannelListener>();
-  let localSeq = 0;
-  let broadcastChannel: BroadcastChannel | null = null;
-  const localEvents = new Map<
-    string,
-    { event: DropDiffEvent; acknowledgement: DiffChannelPublishAck }
-  >();
-
-  const channelName = `nulldown_diff_${dropId}`;
-
-  const initBroadcast = () => {
-    if (typeof BroadcastChannel === "undefined") return;
-    if (broadcastChannel) return;
-
-    broadcastChannel = new BroadcastChannel(channelName);
-    broadcastChannel.onmessage = (event) => {
-      const data = event.data as {
-        sourceClientId?: string;
-        events?: DropDiffEvent[];
-      };
-
-      if (data.sourceClientId === clientId) return;
-      if (!Array.isArray(data.events) || !data.events.length) return;
-
-      listeners.forEach((listener) => {
-        try {
-          listener({ events: data.events!, facts: [] });
-        } catch (error) {
-          console.error("[local-diff-channel] Listener error:", error);
-        }
-      });
-    };
-  };
-
-  const publishEvent = async (
-    candidate: DropDiffEvent,
-  ): Promise<DropDiffAppendResponse> => {
-    if (!isDropDiffEvent(candidate) || candidate.dropId !== dropId) {
-      throw new Error("Invalid immutable diff event for this channel.");
-    }
-    const existing = localEvents.get(candidate.eventId);
-    if (existing) {
-      if (eventRetryPayload(existing.event) !== eventRetryPayload(candidate)) {
-        throw new Error(
-          `Diff event ${candidate.eventId} was already prepared with different data.`,
-        );
-      }
-      return {
-        accepted: 0,
-        deduplicated: 1,
-        branchId: dropId,
-        snapshotId: existing.acknowledgement.snapshotId,
-        totalStored: localEvents.size,
-        acknowledgements: [{ ...existing.acknowledgement, status: "duplicate" }],
-      };
-    }
-
-    localSeq += 1;
-    const event = { ...candidate, seq: localSeq };
-    const acknowledgement: DiffChannelPublishAck = {
-      eventId: event.eventId,
-      seq: event.seq,
-      snapshotId: event.seq,
-      status: "accepted",
-    };
-    localEvents.set(event.eventId, { event, acknowledgement });
-
-    // Local state already applied this diff; the broadcast is only for sibling tabs.
-    broadcastChannel?.postMessage({
-      sourceClientId: clientId,
-      events: [event],
-    });
-    return {
-      accepted: 1,
-      deduplicated: 0,
-      branchId: dropId,
-      snapshotId: acknowledgement.snapshotId,
-      totalStored: localEvents.size,
-      acknowledgements: [acknowledgement],
-    };
-  };
-
-  const publish = async (
-    ops: DropDiffOp[],
-    options: DiffChannelPublishOptions = {},
-  ): Promise<DiffChannelPublishAck[]> => {
-    if (!ops.length) return [];
-    if ((options.eventId === undefined) !== (options.createdAt === undefined)) {
-      throw new Error("Diff retries must provide eventId and createdAt together.");
-    }
-    const response = await publishEvent({
-      eventId: options.eventId ?? nextEventId(clientId),
-      seq: 0,
-      dropId,
-      sourceClientId: clientId,
-      createdAt: options.createdAt ?? Date.now(),
-      ops,
-      metadata: options.metadata,
-    });
-    return response.acknowledgements;
-  };
-
-  const poll = async (): Promise<DiffChannelBatch> => {
-    return { events: [], facts: [] };
-  };
-
-  const subscribe = (listener: DiffChannelListener): (() => void) => {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  };
-
-  const start = () => {
-    initBroadcast();
-  };
-
-  const stop = () => {
-    broadcastChannel?.close();
-    broadcastChannel = null;
-  };
-
-  return {
-    dropId,
-    clientId,
-    publish,
-    publishEvent,
-    poll,
-    subscribe,
-    start,
-    stop,
-    get cursor() {
-      return null;
-    },
-    get factCursor() {
-      return null;
     },
   };
 };

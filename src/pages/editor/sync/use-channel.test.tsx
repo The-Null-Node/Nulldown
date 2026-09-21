@@ -15,9 +15,9 @@ import type {
   DiffChannel,
   DiffChannelBatch,
   DiffChannelListener,
-} from "../../../lib/diff/diffChannel";
-import { resetNulldownDatabaseForTests } from "../../../lib/indexedDb";
-import type { DiffSyncState, UseDiffChannelOptions } from "./useDiffChannel";
+} from "../../../lib/diff/channel";
+import { resetNulldownDatabaseForTests } from "../../../lib/indexed-db/database";
+import type { DiffSyncState, UseDiffChannelOptions } from "./use-channel";
 
 const scope = { rootId: "root-1", branchId: "branch-1" };
 const clientId = "client-1";
@@ -34,7 +34,7 @@ const {
   hasDiffOutboxWriterLease,
   listDiffOutboxEvents,
   readDiffOutboxBranchDraft,
-} = await import("../../../lib/diff/diffOutboxStore");
+} = await import("../../../lib/diff/outbox/store");
 
 const acknowledgement = (
   eventId: string,
@@ -63,8 +63,9 @@ class ControlledDiffChannel implements DiffChannel {
     this.clientId = clientId;
   }
 
-  publishEvent = async (event: DropDiffEvent): Promise<DropDiffAppendResponse> =>
-    publishEvent(event);
+  publishEvent = async (
+    event: DropDiffEvent,
+  ): Promise<DropDiffAppendResponse> => publishEvent(event);
 
   poll = async (): Promise<DiffChannelBatch> => ({ events: [], facts: [] });
 
@@ -83,26 +84,36 @@ const publishedEvents: DropDiffEvent[] = [];
 let loseResponse = false;
 let deliveryGate: Promise<void> | null = null;
 
-const publishEvent = async (event: DropDiffEvent): Promise<DropDiffAppendResponse> => {
+const publishEvent = async (
+  event: DropDiffEvent,
+): Promise<DropDiffAppendResponse> => {
   publishedEvents.push(event);
   if (deliveryGate) await deliveryGate;
   if (loseResponse) {
     throw new Error("response lost after acceptance");
   }
-  return acknowledgement(event.eventId, publishedEvents.length === 1 ? "accepted" : "duplicate");
+  return acknowledgement(
+    event.eventId,
+    publishedEvents.length === 1 ? "accepted" : "duplicate",
+  );
 };
 
-jest.unstable_mockModule("../../../lib/diff/diffChannel", () => ({
+jest.unstable_mockModule("../../../lib/diff/remote-channel", () => ({
   createRemoteDiffChannel: (options: { dropId: string; clientId?: string }) => {
-    const channel = new ControlledDiffChannel(options.dropId, options.clientId ?? "generated");
+    const channel = new ControlledDiffChannel(
+      options.dropId,
+      options.clientId ?? "generated",
+    );
     channels.set(channel.clientId, channel);
     return channel;
   },
+}));
+jest.unstable_mockModule("../../../lib/diff/local-channel", () => ({
   createLocalDiffChannel: (options: { dropId: string; clientId?: string }) =>
     new ControlledDiffChannel(options.dropId, options.clientId ?? "generated"),
 }));
 
-const { useDiffChannel } = await import("./useDiffChannel");
+const { useDiffChannel } = await import("./use-channel");
 const { applyDiff } = await import("../../../../shared/nulledit/textDiff");
 
 interface HookHandle {
@@ -126,7 +137,9 @@ const HookHarness = ({ options, onUpdate }: HookHarnessProps) => {
   useEffect(() => {
     onUpdate(result);
   });
-  return <output>{`${result.syncState.mode}:${result.syncState.pendingCount}`}</output>;
+  return (
+    <output>{`${result.syncState.mode}:${result.syncState.pendingCount}`}</output>
+  );
 };
 
 const createInsertDiff = (text: string): Diff => ({
@@ -163,7 +176,10 @@ describe("useDiffChannel durable browser outbox", () => {
     publishedEvents.length = 0;
     loseResponse = false;
     deliveryGate = null;
-    Object.defineProperty(window, "indexedDB", { value: indexedDB, configurable: true });
+    Object.defineProperty(window, "indexedDB", {
+      value: indexedDB,
+      configurable: true,
+    });
     Object.defineProperty(globalThis, "IDBKeyRange", {
       value: fakeIDBKeyRange,
       configurable: true,
@@ -179,120 +195,239 @@ describe("useDiffChannel durable browser outbox", () => {
 
   it("persists subsequent keypresses while the first network delivery is pending", async () => {
     let handle: HookHandle | null = null;
-    render(<HookHarness options={createOptions({ isOffline: false })} onUpdate={(value) => { handle = value; }} />);
+    render(
+      <HookHarness
+        options={createOptions({ isOffline: false })}
+        onUpdate={(value) => {
+          handle = value;
+        }}
+      />,
+    );
     await waitFor(() => expect(handle?.syncState.mode).toBe("synced"));
     let release!: () => void;
-    const pending = new Promise<void>((resolve) => { release = resolve; });
-    const send = jest.spyOn(channels.get(clientId)!, "publishEvent").mockImplementation(async (event) => {
-      await pending;
-      return acknowledgement(event.eventId);
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    const send = jest
+      .spyOn(channels.get(clientId)!, "publishEvent")
+      .mockImplementation(async (event) => {
+        await pending;
+        return acknowledgement(event.eventId);
+      });
     try {
       await act(async () => {
         void handle!.publishDiffs([createInsertDiff("first")], {
-          eventId: "in-flight", createdAt: 1, draftContent: "first",
+          eventId: "in-flight",
+          createdAt: 1,
+          draftContent: "first",
         });
       });
       await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       await act(async () => {
         void handle!.publishDiffs([createInsertDiff("second")], {
-          eventId: "durable-second", createdAt: 2, draftContent: "secondfirst",
+          eventId: "durable-second",
+          createdAt: 2,
+          draftContent: "secondfirst",
         });
       });
       await waitFor(async () => {
-        expect((await listDiffOutboxEvents(scope)).map((entry) => entry.eventId))
-          .toEqual(["in-flight", "durable-second"]);
-        expect(await readDiffOutboxBranchDraft(scope)).toMatchObject({ content: "secondfirst" });
+        expect(
+          (await listDiffOutboxEvents(scope)).map((entry) => entry.eventId),
+        ).toEqual(["in-flight", "durable-second"]);
+        expect(await readDiffOutboxBranchDraft(scope)).toMatchObject({
+          content: "secondfirst",
+        });
       });
       expect(send).toHaveBeenCalledTimes(1);
     } finally {
       release();
-      await act(async () => { await handle!.flushPendingDiffs(); });
+      await act(async () => {
+        await handle!.flushPendingDiffs();
+      });
     }
   });
 
-  it.each([false, true])("does not replay recovered old-client edits after reload (takeover: %s), but still applies foreign edits", async (takeover) => {
-    const base = "FIRST SECOND.";
-    const expected = "FIRST SECOND RECOVER.";
-    let content = base;
-    let handle: HookHandle | null = null;
-    let release!: () => void;
-    deliveryGate = new Promise<void>((resolve) => { release = resolve; });
-    const editor = { addDiffs: jest.fn((diffs: Diff[]) => {
-      content = diffs.reduce((text, diff) => applyDiff(text, diff), content);
-    }) };
-    const first = render(<HookHarness options={createOptions({ isOffline: false, editor })}
-      onUpdate={(value) => { handle = value; }} />);
-    try {
-      await waitFor(() => expect(handle?.syncState.mode).toBe("synced"));
-      await act(async () => {
-        for (const [index, character] of [..." RECOVER"].entries()) {
-          const position = base.length - 1 + index;
-          const diff = { ...createInsertDiff(character), range: { start: position, end: position } };
-          content = applyDiff(content, diff);
-          await handle!.publishDiffs([diff], {
-            eventId: `recovered-${index}`, createdAt: 100 + index, draftContent: content,
+  it.each([false, true])(
+    "does not replay recovered old-client edits after reload (takeover: %s), but still applies foreign edits",
+    async (takeover) => {
+      const base = "FIRST SECOND.";
+      const expected = "FIRST SECOND RECOVER.";
+      let content = base;
+      let handle: HookHandle | null = null;
+      let release!: () => void;
+      deliveryGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const editor = {
+        addDiffs: jest.fn((diffs: Diff[]) => {
+          content = diffs.reduce(
+            (text, diff) => applyDiff(text, diff),
+            content,
+          );
+        }),
+      };
+      const first = render(
+        <HookHarness
+          options={createOptions({ isOffline: false, editor })}
+          onUpdate={(value) => {
+            handle = value;
+          }}
+        />,
+      );
+      try {
+        await waitFor(() => expect(handle?.syncState.mode).toBe("synced"));
+        await act(async () => {
+          for (const [index, character] of [..." RECOVER"].entries()) {
+            const position = base.length - 1 + index;
+            const diff = {
+              ...createInsertDiff(character),
+              range: { start: position, end: position },
+            };
+            content = applyDiff(content, diff);
+            await handle!.publishDiffs([diff], {
+              eventId: `recovered-${index}`,
+              createdAt: 100 + index,
+              draftContent: content,
+            });
+          }
+        });
+        await waitFor(() => expect(publishedEvents).toHaveLength(1));
+        const queued = await listDiffOutboxEvents(scope);
+        expect(queued).toHaveLength(8);
+        expect(content).toBe(expected);
+        first.unmount();
+        await waitFor(async () =>
+          expect(
+            await hasDiffOutboxWriterLease({ ...scope, ownerId: clientId }),
+          ).toBe(false),
+        );
+        if (takeover) {
+          // A crashed/reloaded page can leave its old writer lease alive.
+          await acquireDiffOutboxWriterLease({
+            ...scope,
+            ownerId: clientId,
+            leaseDurationMs: 15_000,
           });
         }
-      });
-      await waitFor(() => expect(publishedEvents).toHaveLength(1));
-      const queued = await listDiffOutboxEvents(scope);
-      expect(queued).toHaveLength(8);
-      expect(content).toBe(expected);
-      first.unmount();
-      await waitFor(async () => expect(await hasDiffOutboxWriterLease({ ...scope, ownerId: clientId })).toBe(false));
-      if (takeover) {
-        // A crashed/reloaded page can leave its old writer lease alive.
-        await acquireDiffOutboxWriterLease({ ...scope, ownerId: clientId, leaseDurationMs: 15_000 });
-      }
-      content = base;
-      const restored = jest.fn((draft: string) => { content = draft; });
-      const options = createOptions({ clientId: "reloaded-client", isOffline: false, editor, onRestoreBranchDraft: restored });
-      const second = render(<HookHarness options={options} onUpdate={(value) => { handle = value; }} />);
-      let takingOver: Promise<void> | undefined;
-      if (takeover) {
-        await waitFor(() => expect(handle?.syncState.mode).toBe("observer"));
-        expect(restored).not.toHaveBeenCalled();
-        await act(async () => { takingOver = handle!.takeOverEditing(); });
-      }
-      await waitFor(() => expect(restored).toHaveBeenCalledWith(expected));
-      expect(content).toBe(expected);
-      // A restore callback identity change must not discard represented event IDs.
-      second.rerender(<HookHarness options={{ ...options, onRestoreBranchDraft: (draft) => { content = draft; } }}
-        onUpdate={(value) => { handle = value; }} />);
-      await act(async () => { release(); await takingOver; await handle!.flushPendingDiffs(); });
-      await waitFor(() => expect(handle?.syncState.mode).toBe("synced"));
-      expect(await listDiffOutboxEvents(scope)).toEqual([]);
-      // A later account/client transport refresh must also retain those identities.
-      second.rerender(<HookHarness options={{ ...options, clientId: "refreshed-client", isOffline: true }}
-        onUpdate={(value) => { handle = value; }} />);
-      await waitFor(() => expect(handle?.syncState.mode).toBe("offline"));
-      const echo = queued.map((record, index) => ({ ...record.event, seq: 8 + index, snapshotId: 9 + index }));
-      await act(async () => {
-        channels.get("refreshed-client")!.emit({ events: [...echo, {
-          ...foreignEvent(), seq: 16,
-          ops: [{ type: "insert", start: expected.length, end: expected.length, text: " FOREIGN" }],
-        }], facts: [] });
-      });
-      await waitFor(() => expect(editor.addDiffs).toHaveBeenCalled());
-      expect(content).toBe(`${expected} FOREIGN`);
-      expect(editor.addDiffs.mock.calls.flatMap(([diffs]) => diffs)).toHaveLength(1);
-      await act(async () => {
-        await handle!.publishDiffs([createInsertDiff("next")], {
-          eventId: "next-after-recovery", createdAt: 200, draftContent: `next${content}`,
+        content = base;
+        const restored = jest.fn((draft: string) => {
+          content = draft;
         });
-      });
-      expect((await listDiffOutboxEvents(scope))[0].event.metadata?.followsSeq).toBe(16);
-      // Recovery dedupe must not suppress a different writer while local edits wait.
-      await act(async () => {
-        channels.get("refreshed-client")!.emit({ events: [{ ...foreignEvent(), eventId: "conflicting-foreign", seq: 17 }], facts: [] });
-      });
-      await waitFor(() => expect(handle?.syncState.mode).toBe("blocked"));
-      expect(content).toBe(`${expected} FOREIGN`);
-    } finally {
-      release();
-    }
-  });
+        const options = createOptions({
+          clientId: "reloaded-client",
+          isOffline: false,
+          editor,
+          onRestoreBranchDraft: restored,
+        });
+        const second = render(
+          <HookHarness
+            options={options}
+            onUpdate={(value) => {
+              handle = value;
+            }}
+          />,
+        );
+        let takingOver: Promise<void> | undefined;
+        if (takeover) {
+          await waitFor(() => expect(handle?.syncState.mode).toBe("observer"));
+          expect(restored).not.toHaveBeenCalled();
+          await act(async () => {
+            takingOver = handle!.takeOverEditing();
+          });
+        }
+        await waitFor(() => expect(restored).toHaveBeenCalledWith(expected));
+        expect(content).toBe(expected);
+        // A restore callback identity change must not discard represented event IDs.
+        second.rerender(
+          <HookHarness
+            options={{
+              ...options,
+              onRestoreBranchDraft: (draft) => {
+                content = draft;
+              },
+            }}
+            onUpdate={(value) => {
+              handle = value;
+            }}
+          />,
+        );
+        await act(async () => {
+          release();
+          await takingOver;
+          await handle!.flushPendingDiffs();
+        });
+        await waitFor(() => expect(handle?.syncState.mode).toBe("synced"));
+        expect(await listDiffOutboxEvents(scope)).toEqual([]);
+        // A later account/client transport refresh must also retain those identities.
+        second.rerender(
+          <HookHarness
+            options={{
+              ...options,
+              clientId: "refreshed-client",
+              isOffline: true,
+            }}
+            onUpdate={(value) => {
+              handle = value;
+            }}
+          />,
+        );
+        await waitFor(() => expect(handle?.syncState.mode).toBe("offline"));
+        const echo = queued.map((record, index) => ({
+          ...record.event,
+          seq: 8 + index,
+          snapshotId: 9 + index,
+        }));
+        await act(async () => {
+          channels.get("refreshed-client")!.emit({
+            events: [
+              ...echo,
+              {
+                ...foreignEvent(),
+                seq: 16,
+                ops: [
+                  {
+                    type: "insert",
+                    start: expected.length,
+                    end: expected.length,
+                    text: " FOREIGN",
+                  },
+                ],
+              },
+            ],
+            facts: [],
+          });
+        });
+        await waitFor(() => expect(editor.addDiffs).toHaveBeenCalled());
+        expect(content).toBe(`${expected} FOREIGN`);
+        expect(
+          editor.addDiffs.mock.calls.flatMap(([diffs]) => diffs),
+        ).toHaveLength(1);
+        await act(async () => {
+          await handle!.publishDiffs([createInsertDiff("next")], {
+            eventId: "next-after-recovery",
+            createdAt: 200,
+            draftContent: `next${content}`,
+          });
+        });
+        expect(
+          (await listDiffOutboxEvents(scope))[0].event.metadata?.followsSeq,
+        ).toBe(16);
+        // Recovery dedupe must not suppress a different writer while local edits wait.
+        await act(async () => {
+          channels.get("refreshed-client")!.emit({
+            events: [
+              { ...foreignEvent(), eventId: "conflicting-foreign", seq: 17 },
+            ],
+            facts: [],
+          });
+        });
+        await waitFor(() => expect(handle?.syncState.mode).toBe("blocked"));
+        expect(content).toBe(`${expected} FOREIGN`);
+      } finally {
+        release();
+      }
+    },
+  );
 
   it("replays a response-lost immutable event after reload and clears its restored draft on a duplicate receipt", async () => {
     const restoredDraft = jest.fn();
@@ -300,7 +435,10 @@ describe("useDiffChannel durable browser outbox", () => {
     loseResponse = true;
     const firstRender = render(
       <HookHarness
-        options={createOptions({ isOffline: false, onRestoreBranchDraft: restoredDraft })}
+        options={createOptions({
+          isOffline: false,
+          onRestoreBranchDraft: restoredDraft,
+        })}
         onUpdate={(value) => {
           firstHandle = value;
         }}
@@ -319,7 +457,11 @@ describe("useDiffChannel durable browser outbox", () => {
     await waitFor(async () => {
       expect(publishedEvents).toHaveLength(1);
       await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
-        expect.objectContaining({ eventId: "event-1", status: "retry", retryCount: 1 }),
+        expect.objectContaining({
+          eventId: "event-1",
+          status: "retry",
+          retryCount: 1,
+        }),
       ]);
     });
     const durableEvent = (await listDiffOutboxEvents(scope))[0]!.event;
@@ -334,7 +476,10 @@ describe("useDiffChannel durable browser outbox", () => {
     let reloadedHandle: HookHandle | null = null;
     render(
       <HookHarness
-        options={createOptions({ isOffline: false, onRestoreBranchDraft: restoredDraft })}
+        options={createOptions({
+          isOffline: false,
+          onRestoreBranchDraft: restoredDraft,
+        })}
         onUpdate={(value) => {
           reloadedHandle = value;
         }}
@@ -369,9 +514,11 @@ describe("useDiffChannel durable browser outbox", () => {
     );
 
     await waitFor(() => expect(writer?.syncState.canEdit).toBe(true));
-    await waitFor(() => expect(observer?.syncState).toEqual(
-      expect.objectContaining({ mode: "observer", canEdit: false }),
-    ));
+    await waitFor(() =>
+      expect(observer?.syncState).toEqual(
+        expect.objectContaining({ mode: "observer", canEdit: false }),
+      ),
+    );
 
     await act(async () => {
       await observer!.takeOverEditing();
@@ -466,7 +613,10 @@ describe("useDiffChannel durable browser outbox", () => {
     );
     render(
       <HookHarness
-        options={createOptions({ clientId: "client-2", onRestoreBranchDraft: restoredDraft })}
+        options={createOptions({
+          clientId: "client-2",
+          onRestoreBranchDraft: restoredDraft,
+        })}
         onUpdate={(value) => {
           observer = value;
         }}
@@ -508,7 +658,10 @@ describe("useDiffChannel durable browser outbox", () => {
       ).resolves.toEqual([]);
     });
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ eventId: "event-offline-durable", status: "queued" }),
+      expect.objectContaining({
+        eventId: "event-offline-durable",
+        status: "queued",
+      }),
     ]);
     await expect(readDiffOutboxBranchDraft(scope)).resolves.toEqual(
       expect.objectContaining({ content: "local draft" }),
@@ -586,9 +739,15 @@ describe("useDiffChannel durable browser outbox", () => {
     });
     channels.get(clientId)!.emit({ events: [foreignEvent()], facts: [] });
 
-    await waitFor(() => expect(handle?.syncState).toEqual(
-      expect.objectContaining({ mode: "blocked", pendingCount: 1, canEdit: true }),
-    ));
+    await waitFor(() =>
+      expect(handle?.syncState).toEqual(
+        expect.objectContaining({
+          mode: "blocked",
+          pendingCount: 1,
+          canEdit: true,
+        }),
+      ),
+    );
     await expect(listDiffOutboxEvents(scope)).resolves.toEqual([
       expect.objectContaining({ eventId: "event-1", status: "blocked" }),
     ]);
