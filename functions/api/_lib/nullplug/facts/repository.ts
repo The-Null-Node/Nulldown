@@ -14,8 +14,8 @@ import {
   type NullplugUiStateSnapshot,
 } from "../../../../../shared/nullplug/ui";
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { parseJsonColumn } from "../../core/d1/metadata";
 
@@ -42,7 +42,7 @@ const mergeFacts = <
 };
 
 const readStoredFact = async <T>(
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   key: string,
   guard: (value: unknown) => value is T,
 ): Promise<T | null> => {
@@ -58,7 +58,7 @@ const readStoredFact = async <T>(
 
 /** Reads a persisted UI response fact by its immutable identity. */
 export const readNullplugUiResponseFact = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fact: Pick<NullplugUiResponseFact, "id" | "primitiveId" | "source">,
 ): Promise<NullplugUiResponseFact | null> =>
   readStoredFact(
@@ -69,7 +69,7 @@ export const readNullplugUiResponseFact = async (
 
 /** Reads a persisted UI state fact by its immutable identity. */
 export const readNullplugUiStateFact = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fact:
     | Pick<NullplugUiStatePatchFact, "kind" | "id" | "callId" | "source">
     | Pick<NullplugUiStateSnapshot, "kind" | "id" | "callId" | "source">,
@@ -81,7 +81,7 @@ export const readNullplugUiStateFact = async (
 };
 
 const writeFactToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   kind: NullplugFactKind,
   fact:
     | NullplugUiResponseFact
@@ -113,18 +113,18 @@ const writeFactToD1 = async (
 
 /** Writes a UI response fact into D1 metadata storage without touching R2. */
 export const syncNullplugUiResponseFactToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   fact: NullplugUiResponseFact,
 ): Promise<void> => writeFactToD1(db, "ui.response", fact);
 
 /** Writes a UI state fact into D1 metadata storage without touching R2. */
 export const syncNullplugUiStateFactToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   fact: NullplugUiStatePatchFact | NullplugUiStateSnapshot,
 ): Promise<void> => writeFactToD1(db, fact.kind, fact);
 
 const listFactsFromD1 = async <T>(
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   kind: NullplugFactKind,
   rootDropId: string,
   branchId: string | undefined,
@@ -148,7 +148,7 @@ const listFactsFromD1 = async <T>(
 };
 
 const listJsonByPrefix = async <T>(
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   prefix: string,
   guard: (value: unknown) => value is T,
 ): Promise<T[]> => {
@@ -181,10 +181,10 @@ const listJsonByPrefix = async <T>(
 
 /** Lists persisted UI response facts for a root drop or branch. */
 export const listNullplugUiResponseFacts = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId?: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<NullplugUiResponseFact[]> => {
   const facts = await listFactsFromD1(
     db,
@@ -203,10 +203,10 @@ export const listNullplugUiResponseFacts = async (
 
 /** Lists persisted UI state patch facts for a root drop or branch. */
 export const listNullplugUiStatePatchFacts = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId?: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<NullplugUiStatePatchFact[]> => {
   const facts = await listFactsFromD1(
     db,
@@ -225,10 +225,10 @@ export const listNullplugUiStatePatchFacts = async (
 
 /** Lists persisted UI state snapshots for a root drop or branch. */
 export const listNullplugUiStateSnapshots = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId?: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<NullplugUiStateSnapshot[]> => {
   const facts = await listFactsFromD1(
     db,
@@ -247,9 +247,9 @@ export const listNullplugUiStateSnapshots = async (
 
 /** Writes a UI response fact to R2 and D1 metadata storage. */
 export const putNullplugUiResponseFact = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fact: NullplugUiResponseFact,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{ key: string; written: boolean; fact: NullplugUiResponseFact }> => {
   const key = nullplugUiResponseFactKey(fact);
   const written = await bucket.put(key, JSON.stringify(fact), {
@@ -274,9 +274,9 @@ export const putNullplugUiResponseFact = async (
 
 /** Writes a UI state fact to R2 and D1 metadata storage. */
 export const putNullplugUiStateFact = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fact: NullplugUiStatePatchFact | NullplugUiStateSnapshot,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{
   key: string;
   written: boolean;
@@ -305,10 +305,10 @@ export const putNullplugUiStateFact = async (
 
 /** Reads all nullplug runtime facts used by resolved runtime heap materialization. */
 export const listNullplugRuntimeFacts = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId?: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{
   uiResponseFacts: NullplugUiResponseFact[];
   uiStatePatchFacts: NullplugUiStatePatchFact[];

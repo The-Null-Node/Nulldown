@@ -1,7 +1,7 @@
 import type {
-  VoidBlobObject,
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObject,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { createDropIdentityRepository } from "../identity/id";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
@@ -13,8 +13,8 @@ import type { AccountAuthEnv } from "../../accounts/session/auth";
 
 /** Environment required by the shared root-object read service. */
 export interface GetRootDropServiceEnv extends AccountAuthEnv {
-  blobs: VoidBlobStore;
-  sql?: VoidSqlStore;
+  blobs: BlobObjectStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Inputs supplied by platform HTTP adapters to the root-object read service. */
@@ -25,7 +25,7 @@ export interface GetRootDropInput {
   logger: RequestLogger;
 }
 
-const copyHttpMetadata = (headers: Headers, object: VoidBlobObject): void => {
+const copyHttpMetadata = (headers: Headers, object: BlobObject): void => {
   const headerNames: Record<string, string> = {
     contentType: "Content-Type",
     contentLanguage: "Content-Language",

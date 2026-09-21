@@ -1,5 +1,5 @@
 import { parseJsonColumn } from "../../core/d1/metadata";
-import type { VoidSqlStore } from "../../../../../src/server/ports";
+import type { SqlMetadataStore } from "../../../../../src/server/ports";
 import type { ResolvedPriorityFactRecord } from "../../../../../shared/drop/resolved/types";
 import { isResolvedPriorityFactRecord } from "../../../../../shared/drop/resolved/validators";
 
@@ -28,7 +28,7 @@ export interface ResolvedPriorityFactListOptions {
 }
 
 const readResolvedPriorityFactsFromD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   branchId: string,
   resolverId: string,
@@ -54,7 +54,7 @@ const readResolvedPriorityFactsFromD1 = async (
 
 /** Upserts one resolved priority fact into SQL metadata storage. */
 export const writeResolvedPriorityFactToD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   fact: ResolvedPriorityFactRecord,
 ): Promise<void> => {
   await db
@@ -89,7 +89,7 @@ export const writeResolvedPriorityFactToD1 = async (
 
 /** Upserts a resolved priority fact into SQL metadata storage when D1 exists. */
 export const syncResolvedPriorityFactToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   fact: ResolvedPriorityFactRecord,
 ): Promise<void> => {
   if (!db) return;
@@ -98,7 +98,7 @@ export const syncResolvedPriorityFactToD1 = async (
 
 /** Lists branch-scoped resolved priority facts from SQL metadata storage. */
 export const listBranchResolvedPriorityFactsFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   options: ResolvedPriorityFactListOptions = {},
@@ -142,7 +142,7 @@ export const listBranchResolvedPriorityFactsFromD1 = async (
 
 /** Reads one branch-scoped resolved priority fact by fact id. */
 export const readBranchResolvedPriorityFactFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   factId: string,
@@ -163,7 +163,7 @@ export const readBranchResolvedPriorityFactFromD1 = async (
 
 /** Deletes one branch-scoped resolved priority fact by fact id. */
 export const deleteBranchResolvedPriorityFactFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   factId: string,
@@ -218,7 +218,7 @@ const priorityScoringFromFacts = (
 
 /** Reads priority overlays for one resolved heap query from SQL metadata. */
 export const readResolvedPriorityScoring = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   branchId: string,
   resolverId: string,

@@ -39,6 +39,13 @@ Deprecated aliases are intentionally not shipped.
 | `VoidNullplugRuntime`                   | `NullplugRuntime`                      | Portable Nullplug invocation capability.                                 |
 | `VoidRuntimePolicy`                     | `NullplugRuntimePolicy`                | Portable policy evaluation capability used by the Nullplug runtime.      |
 | `createMemoryVoidDataStore(...)`        | `createMemoryRuntimeDataStore(...)`    | In-memory implementation exported by `server/memory-data-store`.         |
+| `VoidSqlStore`                          | `SqlMetadataStore`                     | Portable SQL metadata boundary for D1, SQLite, and test adapters.        |
+| `VoidBlobStore`                         | `BlobObjectStore`                      | Opaque object-storage boundary used by backend services.                 |
+| `VoidDataStore`                         | `RuntimeDataStore`                     | Functional persistence, indexing, caching, and locking boundary.         |
+| `VoidBackgroundTasks`                   | `BackgroundTaskScheduler`              | Platform-specific background lifetime management.                        |
+
+Supporting `VoidSql*`, `VoidBlob*`, and `VoidData*` value types follow the
+same responsibility-based families: `Sql*`, `Blob*`, and `RuntimeData*`.
 
 The `@thenullnode/nulldown/client`, `auth/cliCredential`, and
 `auth/cliDevice` package subpaths remain unchanged. Their source modules moved

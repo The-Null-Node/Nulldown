@@ -12,7 +12,7 @@ import type {
   NulleditSnapshotterUnsubscribe,
 } from "./nulledit";
 import type { NulleditNextRequest, NulleditNextResult } from "./nulledit/types";
-import type { VoidDataStore } from "./ports";
+import type { RuntimeDataStore } from "./ports";
 import type {
   NullMemCapsule,
   NullMemFactRecord,
@@ -229,7 +229,7 @@ export interface BranchMemoryService {
 /** Backend server runtime composed from data, edit, memory, nullplug, and policy services. */
 export interface NulldownServerRuntime {
   /** Functional persistence, indexing, caching, and locking boundary. */
-  data: VoidDataStore;
+  data: RuntimeDataStore;
   /** Shared edit, snapshot, and query engine. */
   nulledit: ServerNulleditService;
   /** Branch-scoped facts, procedures, and capability memory. */
@@ -243,7 +243,7 @@ export interface NulldownServerRuntime {
 /** Dependencies required to compose a backend NulldownServerRuntime. */
 export interface CreateNulldownServerRuntimeOptions {
   /** Functional datastore implementation for the current platform. */
-  data: VoidDataStore;
+  data: RuntimeDataStore;
   /** Nulledit facade implementation for the current platform. */
   nulledit: ServerNulleditService;
   /** Memory facade implementation for the current platform. */

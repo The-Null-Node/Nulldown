@@ -4,8 +4,8 @@ import {
 } from "../../../../../shared/drop/diff";
 import { nullplugUiRuntimeFactId } from "../../../../../shared/nullplug/ui";
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { parseJsonColumn } from "../../core/d1/metadata";
 import {
@@ -20,9 +20,9 @@ import { withBranchMutationLock } from "./mutationLock";
 /** Ports used by the branch runtime-fact timeline repository. */
 export interface BranchRuntimeFactLogRepositoryPorts {
   /** Blob store containing cursor-addressable fallback fact records. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** Optional SQL store containing queryable fact records. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Cursor-addressable repository for immutable branch runtime facts. */
@@ -70,7 +70,7 @@ const normalizeLimit = (value: number): number =>
   Math.max(1, Math.min(200, Math.floor(value)));
 
 const readD1FactById = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   branchId: string,
   factId: string,
@@ -88,7 +88,7 @@ const readD1FactById = async (
 };
 
 const readD1HeadRuntimeFactSeq = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   branchId: string,
 ): Promise<number> => {
@@ -105,7 +105,7 @@ const readD1HeadRuntimeFactSeq = async (
 };
 
 const writeD1RuntimeFact = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   event: DropBranchRuntimeFact,
 ): Promise<void> => {
   if (!db) return;
@@ -150,7 +150,7 @@ const isBranchRuntimeFactHead = (
 };
 
 const readR2RuntimeFactHead = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
 ): Promise<BranchRuntimeFactHead | null> =>
@@ -161,7 +161,7 @@ const readR2RuntimeFactHead = async (
   );
 
 const writeR2RuntimeFactHead = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   head: BranchRuntimeFactHead,
 ): Promise<void> => {
   await writeR2Json(
@@ -172,7 +172,7 @@ const writeR2RuntimeFactHead = async (
 };
 
 const readR2HeadRuntimeFactSeq = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   afterSeq = -1,
@@ -205,7 +205,7 @@ const readR2HeadRuntimeFactSeq = async (
 };
 
 const writeR2RuntimeFactSequence = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   event: DropBranchRuntimeFact,
@@ -222,7 +222,7 @@ const writeR2RuntimeFactSequence = async (
 };
 
 const repairPendingR2RuntimeFact = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
 ): Promise<void> => {
@@ -248,11 +248,11 @@ const repairPendingR2RuntimeFact = async (
 
 /** Reads one runtime fact through the D1-primary/R2-fallback identity index. */
 export const readBranchRuntimeFactById = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   factId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropBranchRuntimeFact | null> => {
   const fromSql = await readD1FactById(db, rootDropId, branchId, factId);
   if (fromSql?.factId === factId) return fromSql;
@@ -268,10 +268,10 @@ export const readBranchRuntimeFactById = async (
 
 /** Resolves the highest stored runtime-fact sequence for one branch. */
 export const readBranchHeadRuntimeFactSeq = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<number> => {
   const sqlHeadSeq = await readD1HeadRuntimeFactSeq(db, rootDropId, branchId);
   return readR2HeadRuntimeFactSeq(
@@ -284,11 +284,11 @@ export const readBranchHeadRuntimeFactSeq = async (
 
 /** Appends a runtime fact under the existing branch mutation lock. */
 export const appendBranchRuntimeFact = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   fact: DropBranchRuntimeFact["fact"],
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{ event: DropBranchRuntimeFact; appended: boolean }> => {
   return withBranchMutationLock(bucket, rootDropId, branchId, async (lock) => {
     await lock.beginCommit();
@@ -304,11 +304,11 @@ export const appendBranchRuntimeFact = async (
 
 /** Appends a runtime fact without reacquiring the branch lock. */
 export const appendBranchRuntimeFactUnderLock = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   fact: DropBranchRuntimeFact["fact"],
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{ event: DropBranchRuntimeFact; appended: boolean }> => {
   await repairPendingR2RuntimeFact(bucket, rootDropId, branchId);
   const factId = nullplugUiRuntimeFactId(fact);
@@ -381,12 +381,12 @@ export const appendBranchRuntimeFactUnderLock = async (
 
 /** Polls runtime facts after a branch-local cursor with D1-primary/R2 fallback. */
 export const pollBranchRuntimeFactsSince = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   afterSeq: number,
   limit: number,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{
   facts: DropBranchRuntimeFact[];
   nextCursor: number | null;

@@ -11,12 +11,12 @@ import {
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
 } from "../shared/drop/resolved/constants";
 import type {
-  VoidBlobBody,
-  VoidBlobStore,
-  VoidBlobWriteCondition,
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  BlobObjectBody,
+  BlobObjectStore,
+  BlobWriteCondition,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 
 type Visibility = "public" | "unlisted" | "private";
@@ -31,7 +31,7 @@ interface ProjectionRow {
   deleted_at: number | null;
 }
 
-class InstrumentedBlobStore implements VoidBlobStore {
+class InstrumentedBlobStore implements BlobObjectStore {
   private readonly objects = new Map<string, string>();
   private revision = 0;
   readonly reads = { aliases: 0, branches: 0, deeper: 0 };
@@ -76,8 +76,8 @@ class InstrumentedBlobStore implements VoidBlobStore {
 
   async put(
     key: string,
-    value: VoidBlobBody,
-    options?: { onlyIf?: VoidBlobWriteCondition },
+    value: BlobObjectBody,
+    options?: { onlyIf?: BlobWriteCondition },
   ) {
     if (options?.onlyIf?.etagDoesNotMatch === "*" && this.objects.has(key)) {
       return null;
@@ -113,7 +113,7 @@ class InstrumentedBlobStore implements VoidBlobStore {
   }
 }
 
-class ProjectionDatabase implements VoidSqlStore {
+class ProjectionDatabase implements SqlMetadataStore {
   readonly deeperReads = { heaps: 0, priority: 0, runtimeFacts: 0 };
   runs = 0;
 
@@ -126,9 +126,9 @@ class ProjectionDatabase implements VoidSqlStore {
     this.runs = 0;
   }
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;
@@ -263,7 +263,7 @@ const setup = async () => {
   return { bucket, db };
 };
 
-const envFor = (bucket: InstrumentedBlobStore, db?: VoidSqlStore) => ({
+const envFor = (bucket: InstrumentedBlobStore, db?: SqlMetadataStore) => ({
   R2_BUCKET: bucket,
   ...(db ? { DB: db } : {}),
   ALLOW_INSECURE_ACCOUNT_HEADER: "1",
@@ -288,7 +288,7 @@ const requestFor = (
 
 const query = (
   bucket: InstrumentedBlobStore,
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   branchId = "owner",
   queryString = "",
@@ -305,7 +305,7 @@ const query = (
 
 const update = (
   bucket: InstrumentedBlobStore,
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   branchId = "owner",
   accountId?: string,

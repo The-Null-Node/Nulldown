@@ -6,19 +6,19 @@ import type {
 } from "../../../../shared/nullmem/types";
 import { readNullMemFreshnessWatermark } from "../../../../src/server/nulledit";
 import type {
-  VoidBlobStore,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../src/server/ports";
 
 /** Ports used by the branch-scoped NullMem freshness evaluator. */
 export interface NullMemFreshnessServicePorts {
   /** Blob store used to read the canonical branch when no derived watermark exists. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** SQL metadata store used by the branch repository fallback. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
   /** Data store containing optional derived freshness watermarks. */
-  data?: VoidDataStore;
+  data?: RuntimeDataStore;
 }
 
 /** Request for evaluating freshness reports for queried memory records. */

@@ -5,8 +5,8 @@ import {
 import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
 import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
 import {
@@ -37,7 +37,7 @@ export interface RootDropState {
 
 /** Reads root drop ownership and plaintext content needed for branch creation. */
 export const readRootDropState = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   rawProviderPrivateKey?: string,
 ): Promise<RootDropState | null> => {
@@ -99,7 +99,7 @@ export const readRootDropState = async (
 
 /** Reads the owning account id for a root drop without materializing branch content. */
 export const getOwnerAccountIdForDrop = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
 ): Promise<string | null> => {
   const object = await bucket.get(rootDropId);
@@ -131,10 +131,10 @@ export const getOwnerAccountIdForDrop = async (
 
 /** Upgrades a branch to heap-v2 event storage while the caller holds its mutation fence. */
 export const ensureBranchHeapV2ForMutation = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   branch: DropBranchRecord,
   lock: BranchMutationLockContext,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
   expectedEtag?: string,
 ): Promise<DropBranchRecord> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
@@ -263,9 +263,9 @@ export const ensureBranchHeapV2ForMutation = async (
 
 /** Upgrades a branch to heap-v2 event storage without removing legacy fallback data. */
 export const ensureBranchSnapshotHeap = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   branch: DropBranchRecord,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropBranchRecord> => {
   if (
     branch.snapshotHeapVersion === 2 &&
@@ -299,10 +299,10 @@ export const ensureBranchSnapshotHeap = async (
 };
 
 const readWriterBranchId = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   writerKey: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   if (db) {
     const row = await db
@@ -323,11 +323,11 @@ const readWriterBranchId = async (
 };
 
 const writeWriterBranchId = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   writerKey: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   const now = Date.now();
   if (db) {
@@ -349,7 +349,7 @@ const writeWriterBranchId = async (
 };
 
 const createInitialBranchState = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   mode: DropBranchRecord["mode"],
@@ -357,7 +357,7 @@ const createInitialBranchState = async (
   writerAccountId: string | null,
   writerClientId: string | null,
   baseContent: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropBranchRecord> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const now = Date.now();
@@ -417,12 +417,12 @@ const createInitialBranchState = async (
 
 /** Resolves or creates the branch assigned to an authenticated actor/client pair. */
 export const resolveBranchForActor = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   accountId: string | null,
   clientId: string | null,
   rawProviderPrivateKey?: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{ branch: DropBranchRecord; created: boolean }> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const ownerAccountId = await getOwnerAccountIdForDrop(bucket, rootDropId);
@@ -505,10 +505,10 @@ export const resolveBranchForActor = async (
 
 /** Migrates one branch to heap-v2 snapshot/event storage under the branch mutation lock. */
 export const backfillBranchToSnapshotHeap = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropBranchRecord | null> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const existing = await branchRepository.readBranch(rootDropId, branchId);

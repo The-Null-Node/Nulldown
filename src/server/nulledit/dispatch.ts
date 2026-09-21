@@ -9,7 +9,7 @@ import type {
   NulleditSnapshotterDispatchOptions,
   NulleditSnapshotterPhase,
 } from "./types";
-import type { VoidDataStore } from "../ports";
+import type { RuntimeDataStore } from "../ports";
 
 const PHASE_ORDER: Record<NulleditSnapshotterPhase, number> = {
   primary: 0,
@@ -35,7 +35,7 @@ const sortSnapshotters = (
 /** Creates the snapshotter context represented by an accepted branch commit. */
 export const createNulleditSnapshotContextForCommit = (
   commit: BranchAcceptedCommit,
-  data: VoidDataStore,
+  data: RuntimeDataStore,
 ): NulleditSnapshotContext => ({
   data,
   rootDropId: commit.rootDropId,

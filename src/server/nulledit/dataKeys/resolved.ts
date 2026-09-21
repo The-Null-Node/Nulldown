@@ -4,10 +4,10 @@ import type {
   ResolvedRuntimeNode,
 } from "../../../../shared/drop/resolved/types";
 import type {
-  VoidDataIndexEntry,
-  VoidDataKey,
-  VoidDataPutRecord,
-  VoidDataStore,
+  RuntimeDataIndexEntry,
+  RuntimeDataKey,
+  RuntimeDataPutRecord,
+  RuntimeDataStore,
 } from "../../ports";
 
 const resolvedSnapshotScope = (
@@ -31,7 +31,7 @@ export const createResolvedHeapDataKey = (
     ResolvedNulldownState,
     "rootDropId" | "branchId" | "snapshotId" | "resolverId"
   >,
-): VoidDataKey => ({
+): RuntimeDataKey => ({
   namespace: "resolved",
   collection: "heaps",
   scope: resolvedSnapshotScope(input),
@@ -45,7 +45,7 @@ export const createResolvedDocumentNodeDataKey = (
     "rootDropId" | "branchId" | "snapshotId" | "resolverId"
   >,
   node: Pick<ResolvedDocumentNode, "id">,
-): VoidDataKey => ({
+): RuntimeDataKey => ({
   namespace: "resolved",
   collection: "document_nodes",
   scope: {
@@ -62,7 +62,7 @@ export const createResolvedRuntimeNodeDataKey = (
     "rootDropId" | "branchId" | "snapshotId" | "resolverId"
   >,
   node: Pick<ResolvedRuntimeNode, "id">,
-): VoidDataKey => ({
+): RuntimeDataKey => ({
   namespace: "resolved",
   collection: "runtime_nodes",
   scope: {
@@ -73,10 +73,10 @@ export const createResolvedRuntimeNodeDataKey = (
 });
 
 const pushOptionalIndex = (
-  indexes: VoidDataIndexEntry[],
+  indexes: RuntimeDataIndexEntry[],
   name: string,
   value: string | number | boolean | null | undefined,
-  mode: VoidDataIndexEntry["mode"] = "exact",
+  mode: RuntimeDataIndexEntry["mode"] = "exact",
 ): void => {
   if (value !== undefined) {
     indexes.push({ name, value, mode });
@@ -85,7 +85,7 @@ const pushOptionalIndex = (
 
 const resolvedHeapIndexes = (
   state: ResolvedNulldownState,
-): VoidDataIndexEntry[] => [
+): RuntimeDataIndexEntry[] => [
   { name: "resolverId", value: state.resolverId, mode: "exact" },
   { name: "resolverVersion", value: state.resolverVersion, mode: "exact" },
   { name: "sourceContentHash", value: state.sourceContentHash, mode: "exact" },
@@ -104,8 +104,8 @@ const resolvedHeapIndexes = (
 
 const resolvedDocumentNodeIndexes = (
   node: ResolvedDocumentNode,
-): VoidDataIndexEntry[] => {
-  const indexes: VoidDataIndexEntry[] = [
+): RuntimeDataIndexEntry[] => {
+  const indexes: RuntimeDataIndexEntry[] = [
     { name: "kind", value: node.kind, mode: "exact" },
     { name: "sourceStart", value: node.sourceRange.start, mode: "range" },
     { name: "sourceEnd", value: node.sourceRange.end, mode: "range" },
@@ -130,8 +130,8 @@ const resolvedDocumentNodeIndexes = (
 
 const resolvedRuntimeNodeIndexes = (
   node: ResolvedRuntimeNode,
-): VoidDataIndexEntry[] => {
-  const indexes: VoidDataIndexEntry[] = [
+): RuntimeDataIndexEntry[] => {
+  const indexes: RuntimeDataIndexEntry[] = [
     { name: "kind", value: node.kind, mode: "exact" },
     { name: "text", value: node.text, mode: "fulltext" },
   ];
@@ -148,17 +148,17 @@ const resolvedRuntimeNodeIndexes = (
 
 /** Persists a resolved heap and its materialized nodes through the portable data store. */
 export const putResolvedDocumentState = async (
-  data: VoidDataStore,
+  data: RuntimeDataStore,
   state: ResolvedNulldownState,
 ): Promise<void> => {
-  const records: VoidDataPutRecord[] = [
+  const records: RuntimeDataPutRecord[] = [
     {
       key: createResolvedHeapDataKey(state),
       value: state,
       options: { indexes: resolvedHeapIndexes(state) },
     },
     ...(state.documentNodes ?? []).map(
-      (node): VoidDataPutRecord<ResolvedDocumentNode> => ({
+      (node): RuntimeDataPutRecord<ResolvedDocumentNode> => ({
         key: createResolvedDocumentNodeDataKey(state, node),
         value: node,
         options: {
@@ -167,7 +167,7 @@ export const putResolvedDocumentState = async (
       }),
     ),
     ...(state.runtimeNodes ?? []).map(
-      (node): VoidDataPutRecord<ResolvedRuntimeNode> => ({
+      (node): RuntimeDataPutRecord<ResolvedRuntimeNode> => ({
         key: createResolvedRuntimeNodeDataKey(state, node),
         value: node,
         options: {

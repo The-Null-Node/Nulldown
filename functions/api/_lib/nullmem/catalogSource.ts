@@ -6,12 +6,12 @@ import {
   NULLPLUG_REGISTRY_LATEST_KEY_PREFIX,
   isRemoteNullplugRegistryRecord,
 } from "../../../../shared/nullplug/registry";
-import type { VoidBlobStore } from "../../../../src/server/ports";
+import type { BlobObjectStore } from "../../../../src/server/ports";
 
 /** Ports used by the optional NullMem capability catalog source. */
 export interface NullMemCatalogSourcePorts {
   /** Blob store containing optional remote nullplug registry entries. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
 }
 
 /** Source for derived capability records that are queried alongside persisted memory. */
@@ -23,7 +23,7 @@ export interface NullMemCatalogSource {
 }
 
 const readRemoteNullplugCapabilityRecords = async (
-  store: VoidBlobStore,
+  store: BlobObjectStore,
 ): Promise<NullMemRecord[]> => {
   const records: NullMemRecord[] = [];
   let cursor: string | undefined;

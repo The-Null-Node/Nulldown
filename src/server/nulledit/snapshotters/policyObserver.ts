@@ -1,8 +1,8 @@
 import type { DropDiffEvent } from "../../../../shared/drop/diff";
 import type {
-  VoidDataIndexEntry,
-  VoidDataKey,
-  VoidDataPutRecord,
+  RuntimeDataIndexEntry,
+  RuntimeDataKey,
+  RuntimeDataPutRecord,
 } from "../../ports";
 import type {
   NulleditNextRequest,
@@ -18,7 +18,7 @@ export const createNulleditPolicyDecisionFactDataKey = (
     NulleditPolicyDecisionFactRecord,
     "rootDropId" | "branchId" | "snapshotId" | "factId"
   >,
-): VoidDataKey => ({
+): RuntimeDataKey => ({
   namespace: "nulledit",
   collection: "policy_decision_facts",
   scope: {
@@ -76,7 +76,7 @@ const createPolicyDecisionFactRecord = (
 };
 
 const pushOptionalIndex = (
-  indexes: VoidDataIndexEntry[],
+  indexes: RuntimeDataIndexEntry[],
   name: string,
   value: string | number | boolean | null | undefined,
 ): void => {
@@ -87,8 +87,8 @@ const pushOptionalIndex = (
 
 const policyDecisionFactIndexes = (
   fact: NulleditPolicyDecisionFactRecord,
-): VoidDataIndexEntry[] => {
-  const indexes: VoidDataIndexEntry[] = [
+): RuntimeDataIndexEntry[] => {
+  const indexes: RuntimeDataIndexEntry[] = [
     { name: "eventId", value: fact.sourceEventId, mode: "exact" },
     { name: "seq", value: fact.sourceSeq, mode: "range" },
     { name: "snapshotId", value: fact.snapshotId, mode: "exact" },
@@ -117,7 +117,7 @@ export const createNulleditPolicyObserverSnapshotter =
 
       await context.data.putMany(
         facts.map(
-          (fact): VoidDataPutRecord<NulleditPolicyDecisionFactRecord> => ({
+          (fact): RuntimeDataPutRecord<NulleditPolicyDecisionFactRecord> => ({
             key: createNulleditPolicyDecisionFactDataKey(fact),
             value: fact,
             options: { indexes: policyDecisionFactIndexes(fact) },

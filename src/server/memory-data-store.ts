@@ -1,44 +1,44 @@
 import type {
-  VoidDataIndexEntry,
-  VoidDataIndexFilter,
-  VoidDataKey,
-  VoidDataListItem,
-  VoidDataListQuery,
-  VoidDataListResult,
-  VoidDataPrimitive,
-  VoidDataPutOptions,
-  VoidDataPutRecord,
-  VoidDataQuery,
-  VoidDataScope,
-  VoidDataStore,
+  RuntimeDataIndexEntry,
+  RuntimeDataIndexFilter,
+  RuntimeDataKey,
+  RuntimeDataListItem,
+  RuntimeDataListQuery,
+  RuntimeDataListResult,
+  RuntimeDataPrimitive,
+  RuntimeDataPutOptions,
+  RuntimeDataPutRecord,
+  RuntimeDataQuery,
+  RuntimeDataScope,
+  RuntimeDataStore,
 } from "./ports";
 
 interface MemoryRecord<T = unknown> {
-  key: VoidDataKey;
+  key: RuntimeDataKey;
   value: T;
-  indexes?: VoidDataIndexEntry[];
+  indexes?: RuntimeDataIndexEntry[];
   updatedAt: number;
 }
 
-const scopeEntries = (scope: VoidDataScope | undefined) =>
+const scopeEntries = (scope: RuntimeDataScope | undefined) =>
   Object.entries(scope ?? {}).sort(([left], [right]) =>
     left.localeCompare(right),
   );
 
-const scopeSegment = ([key, value]: [string, VoidDataPrimitive]): string =>
+const scopeSegment = ([key, value]: [string, RuntimeDataPrimitive]): string =>
   `${encodeURIComponent(key)}=${encodeURIComponent(JSON.stringify(value))}`;
 
-const keyScope = (scope: VoidDataScope | undefined): string =>
+const keyScope = (scope: RuntimeDataScope | undefined): string =>
   scopeEntries(scope).map(scopeSegment).join("/");
 
-const storeKey = (key: VoidDataKey): string =>
+const storeKey = (key: RuntimeDataKey): string =>
   [key.namespace, key.collection ?? "", keyScope(key.scope), key.id]
     .map((segment) => encodeURIComponent(segment))
     .join("/");
 
 const matchesListQuery = <T>(
-  item: VoidDataListItem<T>,
-  query: VoidDataListQuery,
+  item: RuntimeDataListItem<T>,
+  query: RuntimeDataListQuery,
 ): boolean => {
   if (item.key.namespace !== query.namespace) return false;
   if (
@@ -57,8 +57,8 @@ const matchesListQuery = <T>(
 };
 
 const indexValueMatches = (
-  actual: VoidDataIndexEntry["value"],
-  expected: VoidDataIndexEntry["value"],
+  actual: RuntimeDataIndexEntry["value"],
+  expected: RuntimeDataIndexEntry["value"],
 ): boolean => {
   const actualValues = Array.isArray(actual) ? actual : [actual];
   const expectedValues = Array.isArray(expected) ? expected : [expected];
@@ -68,8 +68,8 @@ const indexValueMatches = (
 };
 
 const matchesIndexFilter = (
-  indexes: VoidDataIndexEntry[] | undefined,
-  filter: VoidDataIndexFilter,
+  indexes: RuntimeDataIndexEntry[] | undefined,
+  filter: RuntimeDataIndexFilter,
 ): boolean => {
   const matches = indexes?.filter((entry) => entry.name === filter.name) ?? [];
   if (!matches.length) return false;
@@ -86,7 +86,7 @@ const matchesIndexFilter = (
 };
 
 const matchesTextQuery = <T>(
-  item: VoidDataListItem<T>,
+  item: RuntimeDataListItem<T>,
   text: string | undefined,
 ): boolean => {
   const query = text?.trim().toLowerCase();
@@ -99,26 +99,26 @@ const matchesTextQuery = <T>(
   return searchable.toLowerCase().includes(query);
 };
 
-const toListItem = <T>(record: MemoryRecord<T>): VoidDataListItem<T> => ({
+const toListItem = <T>(record: MemoryRecord<T>): RuntimeDataListItem<T> => ({
   key: record.key,
   value: record.value,
   indexes: record.indexes,
   updatedAt: record.updatedAt,
 });
 
-/** Creates an in-memory `VoidDataStore` for portable server tests and local adapters. */
-export const createMemoryRuntimeDataStore = (): VoidDataStore => {
+/** Creates an in-memory `RuntimeDataStore` for portable server tests and local adapters. */
+export const createMemoryRuntimeDataStore = (): RuntimeDataStore => {
   const records = new Map<string, MemoryRecord>();
   const locks = new Map<string, Promise<void>>();
 
-  const dataStore: VoidDataStore = {
-    get: async <T = unknown>(key: VoidDataKey): Promise<T | null> =>
+  const dataStore: RuntimeDataStore = {
+    get: async <T = unknown>(key: RuntimeDataKey): Promise<T | null> =>
       (records.get(storeKey(key))?.value as T | undefined) ?? null,
 
     put: async <T = unknown>(
-      key: VoidDataKey,
+      key: RuntimeDataKey,
       value: T,
-      options?: VoidDataPutOptions,
+      options?: RuntimeDataPutOptions,
     ): Promise<void> => {
       const id = storeKey(key);
       if (options?.ifAbsent && records.has(id)) {
@@ -132,19 +132,19 @@ export const createMemoryRuntimeDataStore = (): VoidDataStore => {
       });
     },
 
-    putMany: async (items: VoidDataPutRecord[]): Promise<void> => {
+    putMany: async (items: RuntimeDataPutRecord[]): Promise<void> => {
       for (const item of items) {
         await dataStore.put(item.key, item.value, item.options);
       }
     },
 
-    delete: async (key: VoidDataKey): Promise<void> => {
+    delete: async (key: RuntimeDataKey): Promise<void> => {
       records.delete(storeKey(key));
     },
 
     list: async <T = unknown>(
-      query: VoidDataListQuery,
-    ): Promise<VoidDataListResult<T>> => {
+      query: RuntimeDataListQuery,
+    ): Promise<RuntimeDataListResult<T>> => {
       const limit = Math.max(1, Math.min(1000, query.limit ?? 1000));
       const offset = query.cursor
         ? Math.max(0, Number.parseInt(query.cursor, 10) || 0)
@@ -162,7 +162,7 @@ export const createMemoryRuntimeDataStore = (): VoidDataStore => {
       };
     },
 
-    query: async <T = unknown>(query: VoidDataQuery): Promise<T[]> => {
+    query: async <T = unknown>(query: RuntimeDataQuery): Promise<T[]> => {
       const listed = await dataStore.list<T>(query);
       return listed.items
         .filter((item) =>
@@ -174,12 +174,12 @@ export const createMemoryRuntimeDataStore = (): VoidDataStore => {
         .map((item) => item.value);
     },
 
-    tx: async <T>(work: (data: VoidDataStore) => Promise<T>): Promise<T> =>
+    tx: async <T>(work: (data: RuntimeDataStore) => Promise<T>): Promise<T> =>
       work(dataStore),
 
     lock: async <T>(
-      key: VoidDataKey,
-      work: (data: VoidDataStore) => Promise<T>,
+      key: RuntimeDataKey,
+      work: (data: RuntimeDataStore) => Promise<T>,
     ): Promise<T> => {
       const id = storeKey(key);
       const previous = locks.get(id) ?? Promise.resolve();

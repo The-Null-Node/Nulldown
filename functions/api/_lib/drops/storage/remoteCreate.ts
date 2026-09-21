@@ -1,4 +1,4 @@
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { DROP_ID_LENGTH, generateDropId } from "../../../../../shared/drop/id";
 import { syncPublicDropIndexForPayload } from "../index/repository";
 import { createDropIdentityRepository } from "../identity/id";
@@ -8,9 +8,9 @@ const MAX_ID_ALLOCATION_ATTEMPTS = 64;
 
 /** Allocates a remote drop id and stores a JSON payload under that id. */
 export const createRemoteJsonDrop = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   payload: object,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string> => {
   const storedPayload = JSON.stringify(payload);
   const dropRepository = createDropObjectRepository({ blobs: bucket, sql: db });
@@ -49,8 +49,8 @@ export const createRemoteJsonDrop = async (
 
 /** Reserves a unique drop id before a separate durable workflow records it. */
 export const reserveRemoteJsonDropId = async (
-  bucket: VoidBlobStore,
-  db?: VoidSqlStore,
+  bucket: BlobObjectStore,
+  db?: SqlMetadataStore,
 ): Promise<string> => {
   const dropIdentityRepository = createDropIdentityRepository({
     blobs: bucket,
@@ -69,9 +69,9 @@ export const reserveRemoteJsonDropId = async (
 
 /** Releases an unused remote id reservation after its owning workflow fails before persistence. */
 export const releaseReservedRemoteJsonDropId = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   const dropIdentityRepository = createDropIdentityRepository({
     blobs: bucket,
@@ -82,10 +82,10 @@ export const releaseReservedRemoteJsonDropId = async (
 
 /** Stores a payload at a previously reserved id, accepting only an exact retry match. */
 export const createReservedRemoteJsonDrop = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
   payload: object,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<"stored" | "existing"> => {
   const dropIdentityRepository = createDropIdentityRepository({
     blobs: bucket,

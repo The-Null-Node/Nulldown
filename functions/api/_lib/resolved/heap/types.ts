@@ -15,17 +15,17 @@ import type {
   NulleditNextResult,
 } from "../../../../../src/server/nulledit/types";
 import type {
-  VoidBlobStore,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 
 /** Environment required by resolved heap route services. */
 export interface ResolvedHeapEnv extends AccountAuthEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
   /** Trusted runtime snapshotter storage; never populated from request payloads. */
-  resolvedDocumentData?: Pick<VoidDataStore, "get">;
+  resolvedDocumentData?: Pick<RuntimeDataStore, "get">;
 }
 
 /** Route parameters for branch resolved heap operations. */

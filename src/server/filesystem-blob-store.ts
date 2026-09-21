@@ -10,13 +10,13 @@ import {
 } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import type {
-  VoidBlobBody,
-  VoidBlobListOptions,
-  VoidBlobListResult,
-  VoidBlobObject,
-  VoidBlobObjectMetadata,
-  VoidBlobPutOptions,
-  VoidBlobStore,
+  BlobObjectBody,
+  BlobListOptions,
+  BlobListResult,
+  BlobObject,
+  BlobObjectMetadata,
+  BlobPutOptions,
+  BlobObjectStore,
 } from "./ports";
 
 /** Options for the local filesystem blob-store adapter. */
@@ -53,7 +53,7 @@ const filePathForKey = (rootDir: string, key: string): string => {
 const metadataPathForFile = (filePath: string): string =>
   `${filePath}${METADATA_SUFFIX}`;
 
-const toUint8Array = async (body: VoidBlobBody): Promise<Uint8Array> => {
+const toUint8Array = async (body: BlobObjectBody): Promise<Uint8Array> => {
   if (body === null) return new Uint8Array();
   if (typeof body === "string") return new TextEncoder().encode(body);
   if (body instanceof ArrayBuffer) return new Uint8Array(body);
@@ -87,7 +87,7 @@ const readSidecar = async (
 const objectMetadata = async (
   key: string,
   filePath: string,
-): Promise<VoidBlobObjectMetadata | null> => {
+): Promise<BlobObjectMetadata | null> => {
   try {
     const [stats, bytes, sidecar] = await Promise.all([
       stat(filePath),
@@ -111,7 +111,7 @@ const objectMetadata = async (
 const blobObject = async (
   key: string,
   filePath: string,
-): Promise<VoidBlobObject | null> => {
+): Promise<BlobObject | null> => {
   try {
     const bytes = await readFile(filePath);
     const metadata = await objectMetadata(key, filePath);
@@ -129,7 +129,7 @@ const blobObject = async (
 
 const writeSidecar = async (
   filePath: string,
-  options: VoidBlobPutOptions | undefined,
+  options: BlobPutOptions | undefined,
 ): Promise<void> => {
   const sidecar: FilesystemBlobSidecar = {
     uploaded: new Date().toISOString(),
@@ -145,7 +145,7 @@ const writeSidecar = async (
 const conditionAllowsWrite = async (
   key: string,
   filePath: string,
-  options: VoidBlobPutOptions | undefined,
+  options: BlobPutOptions | undefined,
 ): Promise<boolean> => {
   const condition = options?.onlyIf;
   if (!condition) return true;
@@ -187,10 +187,10 @@ const walkKeys = async (
   return out;
 };
 
-/** Creates a local filesystem-backed `VoidBlobStore` for Bun/local server adapters. */
+/** Creates a local filesystem-backed `BlobObjectStore` for Bun/local server adapters. */
 export const createFilesystemBlobStore = ({
   rootDir,
-}: FilesystemBlobStoreOptions): VoidBlobStore => {
+}: FilesystemBlobStoreOptions): BlobObjectStore => {
   const pendingConditionalWrites = new Map<string, Promise<void>>();
 
   const withConditionalWriteLock = async <T>(
@@ -243,9 +243,7 @@ export const createFilesystemBlobStore = ({
         ),
       );
     },
-    list: async (
-      options?: VoidBlobListOptions,
-    ): Promise<VoidBlobListResult> => {
+    list: async (options?: BlobListOptions): Promise<BlobListResult> => {
       const limit = Math.max(1, Math.min(options?.limit ?? 1000, 1000));
       const offset = options?.cursor
         ? Math.max(0, Number.parseInt(options.cursor, 10) || 0)
@@ -259,7 +257,7 @@ export const createFilesystemBlobStore = ({
         await Promise.all(
           page.map((key) => objectMetadata(key, filePathForKey(rootDir, key))),
         )
-      ).filter((entry): entry is VoidBlobObjectMetadata => Boolean(entry));
+      ).filter((entry): entry is BlobObjectMetadata => Boolean(entry));
       const nextOffset = offset + limit;
       return {
         objects,

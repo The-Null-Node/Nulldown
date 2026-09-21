@@ -4,7 +4,7 @@ or already-sealed envelopes, optionally adds a provider signature, and reserves 
 short-id alias namespace that `/d/:id` later resolves through.
 */
 
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import {
   DROP_ID_LENGTH,
   generateDropId,
@@ -44,8 +44,8 @@ import {
 
 /** Environment required by the store route service. */
 export interface StoreServiceEnv extends ProviderSigningEnv {
-  blobs: VoidBlobStore;
-  sql?: VoidSqlStore;
+  blobs: BlobObjectStore;
+  sql?: SqlMetadataStore;
   PUBLIC_BASE_URL?: string;
 }
 
@@ -159,7 +159,7 @@ const jsonErrorResponse = (
 };
 
 const upsertDropMetadata = async (input: {
-  db?: VoidSqlStore;
+  db?: SqlMetadataStore;
   id: string;
   contentType: string;
   envelope: DropEnvelope | null;
@@ -206,7 +206,7 @@ const extractTitleFromContent = (content: string): string | null => {
 };
 
 const indexDropForSearch = async (
-  db: VoidSqlStore | undefined | null,
+  db: SqlMetadataStore | undefined | null,
   id: string,
   content: string,
   envelope: DropEnvelope | null,

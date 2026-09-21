@@ -18,9 +18,9 @@ import {
   type NullMemRecord,
 } from "../../../../shared/nullmem/types";
 import type {
-  VoidBlobStore,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../src/server/ports";
 import type {
   BranchMemoryService,
@@ -30,11 +30,11 @@ import type {
 /** Dependencies required to compose the NullMem application service. */
 export interface CreateNullMemServiceOptions {
   /** Blob store used to read optional capability source catalogs. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** SQL metadata store used to read and write memory records. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
   /** Data store used for derived freshness watermarks. */
-  data?: VoidDataStore;
+  data?: RuntimeDataStore;
 }
 
 /** Application service that orchestrates NullMem records, catalogs, and freshness. */

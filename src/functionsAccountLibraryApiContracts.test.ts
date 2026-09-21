@@ -21,7 +21,7 @@ import {
   toDropEnvelopeSignable,
 } from "../shared/drop/codecs/envelope-v1";
 import type { DropEnvelope } from "../shared/drop/types";
-import type { VoidBlobStore, VoidSqlStore } from "./server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "./server/ports";
 
 const toBase64Url = (bytes: ArrayBuffer): string => {
   let binary = "";
@@ -231,14 +231,14 @@ const createVerificationEnvironment = (
     statement.bind.mockReturnValue(statement);
     return statement;
   });
-  const blobs: VoidBlobStore = {
+  const blobs: BlobObjectStore = {
     get: async () => null,
     head: async () => null,
     put: async (key) => ({ key }),
     delete: async () => undefined,
     list: async () => ({ objects: [], truncated: false }),
   };
-  const sql = { prepare } as unknown as VoidSqlStore;
+  const sql = { prepare } as unknown as SqlMetadataStore;
   return {
     DB: { prepare },
     env: {

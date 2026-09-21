@@ -21,7 +21,7 @@ import {
 } from "../../../../../shared/drop/codecs/device-delegation-v1";
 import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
 import { serializeCanonicalJson } from "../../../../../shared/drop/types";
-import type { VoidBlobStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore } from "../../../../../src/server/ports";
 import { sameEncryptionRecipientKey } from "../../crypto/envelopes/verification";
 import {
   issueAccountSessionToken,
@@ -56,7 +56,7 @@ const textEncoder = new TextEncoder();
 
 /** Environment bindings used by the browser-mediated CLI authorization flow. */
 export interface CliAuthEnvironment extends OpenAuthBffEnvironment {
-  R2_BUCKET?: VoidBlobStore;
+  R2_BUCKET?: BlobObjectStore;
   ACCOUNT_AUTH_SECRET?: string;
   ACCOUNT_AUTH_TOKEN_TTL_MS?: string;
   CLI_DEVICE_TICKET_TTL_MS?: string;

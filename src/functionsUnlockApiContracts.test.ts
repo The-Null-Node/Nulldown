@@ -16,9 +16,9 @@ import {
 import { encodeDropEnvelope } from "../shared/drop/codecs/envelope-v1";
 import type { DropEnvelope } from "../shared/drop/types";
 import type {
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 
 interface StoredObject {
@@ -75,7 +75,7 @@ interface ProjectionRow {
   deleted_at: number | null;
 }
 
-class ProjectionDatabase implements VoidSqlStore {
+class ProjectionDatabase implements SqlMetadataStore {
   runs = 0;
   aliasReads = 0;
   projectionReads = 0;
@@ -85,9 +85,9 @@ class ProjectionDatabase implements VoidSqlStore {
     private readonly aliases = new Map<string, string>(),
   ) {}
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;
@@ -264,7 +264,7 @@ const callUnlock = async (
   requesterPublicJwk: JsonWebKey,
   providerPrivateJwk?: string,
   options: {
-    db?: VoidSqlStore;
+    db?: SqlMetadataStore;
     headers?: Record<string, string>;
     env?: Record<string, string>;
   } = {},

@@ -8,7 +8,7 @@ import {
 } from "../functions/api/_lib/branches/storage/mutationLock";
 import { createBranchLockKey } from "../functions/api/_lib/branches/storage/keys";
 import { createFilesystemBlobStore } from "./server/filesystem-blob-store";
-import type { VoidBlobStore } from "./server/ports";
+import type { BlobObjectStore } from "./server/ports";
 
 describe("branch mutation lock", () => {
   let rootDir: string;
@@ -103,7 +103,7 @@ describe("branch mutation lock", () => {
 
   it("returns a committed result with a structured cleanup warning", async () => {
     const delegate = createFilesystemBlobStore({ rootDir });
-    const store: VoidBlobStore = {
+    const store: BlobObjectStore = {
       get: delegate.get,
       head: delegate.head,
       put: async (key, value, options) => {
@@ -141,7 +141,7 @@ describe("branch mutation lock", () => {
 
   it("reconciles a successful delete whose response is lost", async () => {
     const delegate = createFilesystemBlobStore({ rootDir });
-    const store: VoidBlobStore = {
+    const store: BlobObjectStore = {
       get: delegate.get,
       head: delegate.head,
       put: delegate.put,
@@ -197,7 +197,7 @@ describe("branch mutation lock", () => {
   it("reports an unknown outcome when ownership cannot be read after commit begins", async () => {
     const delegate = createFilesystemBlobStore({ rootDir });
     let getCount = 0;
-    const store: VoidBlobStore = {
+    const store: BlobObjectStore = {
       get: async (key) => {
         getCount += 1;
         if (getCount > 1) throw new Error("read unavailable");

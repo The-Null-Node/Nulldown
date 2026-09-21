@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
-import type { VoidSqlStore } from "../../server/ports";
+import type { SqlMetadataStore } from "../../server/ports";
 
-export type SearchDatabaseStore = D1Database | VoidSqlStore;
+export type SearchDatabaseStore = D1Database | SqlMetadataStore;
 
 export interface SearchIndexRecord {
   id: string;

@@ -9,9 +9,9 @@ import type {
 import { serializeCanonicalJson } from "../../../../shared/drop/types";
 import { hashNulldownSourceContent } from "../../../../shared/drop/resolved/hash";
 import type {
-  VoidBlobStore,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../src/server/ports";
 import {
   dispatchNulleditSnapshottersForCommit,
@@ -41,7 +41,7 @@ import {
 /** Options controlling Nulledit snapshotter dispatch for a branch append operation. */
 export interface BranchAppendOptions extends NulleditSnapshotterDispatchOptions {
   /** Functional datastore used by snapshotters; Cloudflare bindings are adapted when omitted. */
-  data?: VoidDataStore;
+  data?: RuntimeDataStore;
   /** Snapshotters fired after diff events are accepted and snapshotted. */
   snapshotters?: NulleditSnapshotter[];
   /** Optional policy that can buffer or skip derived snapshotter work. */
@@ -60,7 +60,7 @@ export interface BranchAppendResult {
   totalStored: number;
 }
 
-const unavailableDataStore = (): VoidDataStore => {
+const unavailableDataStore = (): RuntimeDataStore => {
   const fail = (): never => {
     throw new Error("void_data_store_required");
   };
@@ -246,11 +246,11 @@ const committedAcknowledgementFor = async (
 
 /** Appends deduplicated events to a branch and creates the next branch snapshot. */
 export const appendEventsToBranch = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   branch: DropBranchRecord,
   events: DropDiffEvent[],
   options?: BranchAppendOptions,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<BranchAppendResult> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const branchDiffRepository = createBranchDiffRepository({

@@ -4,13 +4,13 @@ import {
   createRemoteAliasKey,
 } from "../functions/api/_lib/drops/identity/id";
 import type {
-  VoidBlobStore,
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 
-class AliasBlobStore implements VoidBlobStore {
+class AliasBlobStore implements BlobObjectStore {
   readonly values = new Map<string, string>();
   gets = 0;
   puts = 0;
@@ -43,14 +43,14 @@ class AliasBlobStore implements VoidBlobStore {
   }
 }
 
-class AliasDatabase implements VoidSqlStore {
+class AliasDatabase implements SqlMetadataStore {
   readonly aliases = new Map<string, string>();
   reads = 0;
   runs = 0;
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;

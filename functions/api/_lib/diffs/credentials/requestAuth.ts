@@ -9,8 +9,8 @@ import {
   isTimestampFresh,
 } from "../../../../../shared/drop/diffAuth";
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import {
   createDiffCredentialRepository,
@@ -23,8 +23,8 @@ import {
 
 /** Environment required to verify `/api/diff/:id` request authentication. */
 export interface DiffRequestAuthEnv extends AccountAuthEnv {
-  R2_BUCKET?: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET?: BlobObjectStore;
+  DB?: SqlMetadataStore;
   DIFF_WEBHOOK_SECRET?: string;
   DIFF_AUTH_MAX_SKEW_MS?: string;
 }

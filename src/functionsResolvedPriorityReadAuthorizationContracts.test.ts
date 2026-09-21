@@ -15,12 +15,12 @@ import {
 import type { DropBranchRecord } from "../shared/drop/branch";
 import type { ResolvedPriorityFactRecord } from "../shared/drop/resolved/types";
 import type {
-  VoidBlobBody,
-  VoidBlobStore,
-  VoidBlobWriteCondition,
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  BlobObjectBody,
+  BlobObjectStore,
+  BlobWriteCondition,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 
 interface ProjectionRow {
@@ -33,7 +33,7 @@ interface ProjectionRow {
   deleted_at: number | null;
 }
 
-class InstrumentedBlobStore implements VoidBlobStore {
+class InstrumentedBlobStore implements BlobObjectStore {
   private readonly objects = new Map<string, string>();
   private revision = 0;
   readonly reads = { aliases: 0, branches: 0, deeper: 0 };
@@ -74,8 +74,8 @@ class InstrumentedBlobStore implements VoidBlobStore {
 
   async put(
     key: string,
-    value: VoidBlobBody,
-    options?: { onlyIf?: VoidBlobWriteCondition },
+    value: BlobObjectBody,
+    options?: { onlyIf?: BlobWriteCondition },
   ) {
     if (options?.onlyIf?.etagDoesNotMatch === "*" && this.objects.has(key)) {
       return null;
@@ -106,7 +106,7 @@ class InstrumentedBlobStore implements VoidBlobStore {
   }
 }
 
-class PriorityReadDatabase implements VoidSqlStore {
+class PriorityReadDatabase implements SqlMetadataStore {
   readonly reads = { projection: 0, priority: 0 };
   readonly writes = { aliases: 0, priority: 0 };
   runs = 0;
@@ -122,9 +122,9 @@ class PriorityReadDatabase implements VoidSqlStore {
     this.runs = 0;
   }
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;
@@ -312,7 +312,7 @@ const setup = async () => {
   return { bucket, db };
 };
 
-const envFor = (bucket: InstrumentedBlobStore, db?: VoidSqlStore) => ({
+const envFor = (bucket: InstrumentedBlobStore, db?: SqlMetadataStore) => ({
   R2_BUCKET: bucket,
   ...(db ? { DB: db } : {}),
   ALLOW_INSECURE_ACCOUNT_HEADER: "1",
@@ -327,7 +327,7 @@ const requestFor = (path: string, accountId?: string): Request => {
 
 const list = (
   bucket: InstrumentedBlobStore,
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   accountId?: string,
   query = "",
@@ -371,7 +371,7 @@ const priorityRequest = (
 
 const create = (
   bucket: InstrumentedBlobStore,
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   options: PriorityRequestOptions = {},
 ) =>
@@ -387,7 +387,7 @@ const create = (
 
 const deleteFact = (
   bucket: InstrumentedBlobStore,
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   factId: string,
   options: PriorityRequestOptions = {},
@@ -404,7 +404,7 @@ const deleteFact = (
 
 const resolvedQuery = (
   bucket: InstrumentedBlobStore,
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   accountId?: string,
   query = "",

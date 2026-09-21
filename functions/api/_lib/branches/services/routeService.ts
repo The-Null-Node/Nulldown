@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { verifyBearerToken } from "../../core/auth/bearer";
 import {
   resolveAuthenticatedAccountId,
@@ -31,8 +31,8 @@ import {
 
 /** Environment required by branch route services. */
 export interface BranchRouteEnv extends AccountAuthEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
   BRANCH_HEAP_BACKFILL_TOKEN?: string;
 }

@@ -3,8 +3,8 @@ import {
   isDropDiffEvent,
 } from "../../../../../shared/drop/diff";
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { parseJsonColumn } from "../../core/d1/metadata";
 import {
@@ -41,9 +41,9 @@ export type BranchDiffEventIdentityLookup =
 /** Ports used by branch diff-event repositories. */
 export interface BranchDiffRepositoryPorts {
   /** Blob store containing branch diff logs and fallback event objects. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** Optional SQL store containing queryable branch event metadata. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository for branch diff logs, event records, and polling cursors. */
@@ -137,7 +137,7 @@ const isBranchDiffEventIdMarkerV2 = (
 
 /** Reads the legacy single-object branch diff log. */
 export const readLegacyBranchDiffLog = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
 ): Promise<DropDiffEvent[]> =>
@@ -149,10 +149,10 @@ export const readLegacyBranchDiffLog = async (
 
 /** Reads heap-v2 per-sequence branch diff events. */
 export const readHeapBranchDiffLog = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropDiffEvent[]> => {
   const prefix = createBranchDiffEventPrefix(rootDropId, branchId);
   const out: DropDiffEvent[] = [];
@@ -206,10 +206,10 @@ export const readHeapBranchDiffLog = async (
 
 /** Reads branch diff events, preferring heap-v2 storage with legacy fallback. */
 export const readBranchDiffLog = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropDiffEvent[]> => {
   const branch = await readBranch(bucket, rootDropId, branchId, db);
   if (branch?.snapshotHeapVersion === 2) {
@@ -220,10 +220,10 @@ export const readBranchDiffLog = async (
 
 /** Resolves the highest stored branch diff event sequence. */
 export const readBranchHeadEventSeq = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<number> => {
   const branch = await readBranch(bucket, rootDropId, branchId, db);
   if (branch && typeof branch.headEventSeq === "number") {
@@ -236,11 +236,11 @@ export const readBranchHeadEventSeq = async (
 
 /** Reads one heap-v2 branch diff event by sequence with D1-primary/R2 fallback. */
 export const readBranchDiffEventBySeq = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   seq: number,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropDiffEvent | null> => {
   const canonical = await readR2Json(
     bucket,
@@ -288,7 +288,7 @@ const hasSameStoredEventAllowingLegacySnapshot = (
   hasSameStoredEventAllowingMissingSnapshot(right, left);
 
 const readR2BranchDiffEventBySeq = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   seq: number,
@@ -300,7 +300,7 @@ const readR2BranchDiffEventBySeq = async (
   );
 
 const readBranchDiffEventIdMarkerV2 = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   eventId: string,
@@ -324,11 +324,11 @@ const readBranchDiffEventIdMarkerV2 = async (
 
 /** Resolves an exact event identity without treating legacy marker collisions as presence. */
 export const lookupBranchDiffEventIdentity = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   eventId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<BranchDiffEventIdentityLookup> => {
   const marker = await readBranchDiffEventIdMarkerV2(
     bucket,
@@ -427,11 +427,11 @@ export const lookupBranchDiffEventIdentity = async (
 
 /** Reads a branch diff event through D1, the R2 identity index, or legacy storage. */
 export const readBranchDiffEventById = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   eventId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropDiffEvent | null> => {
   const result = await lookupBranchDiffEventIdentity(
     bucket,
@@ -445,11 +445,11 @@ export const readBranchDiffEventById = async (
 
 /** Checks whether a branch diff event id has already been stored. */
 export const hasBranchDiffEventId = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   eventId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<boolean> => {
   if (db) {
     const row = await db
@@ -469,11 +469,11 @@ export const hasBranchDiffEventId = async (
 
 /** Writes one heap-v2 branch diff event to D1 and R2 fallback storage. */
 export const writeBranchDiffEvent = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   event: DropDiffEvent,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   const key = createBranchDiffEventKey(rootDropId, branchId, event.seq);
   if (!(await writeR2JsonIfAbsent(bucket, key, event))) {
@@ -590,10 +590,10 @@ const committedContiguousPage = (
 };
 
 const readCommittedBranchHeadSeq = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<number> => {
   const canonicalBranch = await readBranch(bucket, rootDropId, branchId);
   if (canonicalBranch && typeof canonicalBranch.headEventSeq === "number") {
@@ -604,7 +604,7 @@ const readCommittedBranchHeadSeq = async (
 
 /** Writes or validates the exact v2 marker for an accepted branch event. */
 export const writeBranchDiffEventIdMarker = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   event: DropDiffEvent,
@@ -637,13 +637,13 @@ export const writeBranchDiffEventIdMarker = async (
 
 /** Polls branch diff events after a sequence cursor with heap-v2 and legacy fallback. */
 export const pollBranchDiffEventsSince = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   afterSeq: number,
   limit: number,
   excludeClient?: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{
   events: DropDiffEvent[];
   nextCursor: number | null;

@@ -10,20 +10,20 @@ import { createLocalNulldownServer } from "./server/local";
 import { createMemoryRuntimeDataStore } from "./server/memory-data-store";
 import { createNullMemFreshnessWatermarkKey } from "./server/nulledit";
 import type {
-  VoidDataStore,
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  RuntimeDataStore,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 
 const localRootDropId = "LocalAdapterRoot";
 const localBranchId = "writer";
 const localOwnerAccountId = "local-adapter-owner";
 
-class LocalReadDatabase implements VoidSqlStore {
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+class LocalReadDatabase implements SqlMetadataStore {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;
@@ -52,15 +52,15 @@ class LocalReadDatabase implements VoidSqlStore {
   }
 }
 
-class LocalRootProjectionDatabase implements VoidSqlStore {
+class LocalRootProjectionDatabase implements SqlMetadataStore {
   constructor(
     private readonly visibility: unknown,
     private readonly ownerAccountId: string,
   ) {}
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;
@@ -363,9 +363,9 @@ describe("createLocalNulldownServer", () => {
       },
     );
     let freshnessReads = 0;
-    const data: VoidDataStore = {
+    const data: RuntimeDataStore = {
       ...storedData,
-      get: <T = unknown>(key: Parameters<VoidDataStore["get"]>[0]) => {
+      get: <T = unknown>(key: Parameters<RuntimeDataStore["get"]>[0]) => {
         freshnessReads += 1;
         return storedData.get<T>(key);
       },

@@ -1,5 +1,5 @@
 import type { DropBranchRecord } from "../../../../shared/drop/branch";
-import type { VoidSqlStore } from "../../../../src/server/ports";
+import type { SqlMetadataStore } from "../../../../src/server/ports";
 import { readAccountLibraryEntry } from "../accounts/library/repository";
 import {
   resolveAuthenticatedAccountId,
@@ -9,7 +9,7 @@ import {
 
 /** Neutral ports required to authorize identifier-based root reads. */
 export interface RootReadAuthorizationPorts extends AccountAuthEnv {
-  DB?: VoidSqlStore;
+  DB?: SqlMetadataStore;
 }
 
 /** Authorizes a sensitive branch read from trusted projection and exact-writer state. */

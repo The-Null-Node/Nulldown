@@ -39,7 +39,7 @@ import {
   resolveRootReadAuthorization,
 } from "../../security/readAuthorization";
 import type { NulldownServerRuntime } from "../../../../../src/server/runtime";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { createRequestLogger, toLogRef } from "../../core/logging/logger";
 import {
   apiHttpErrorResponse,
@@ -54,8 +54,8 @@ import {
 
 /** Environment required by the diff transport service. */
 export interface DiffTransportEnv extends AccountAuthEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
   DIFF_WEBHOOK_SECRET?: string;
   DIFF_AUTH_MAX_SKEW_MS?: string;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;

@@ -1,4 +1,4 @@
-import type { VoidBlobStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore } from "../../../../../src/server/ports";
 import { createBranchPromotionReceiptKey } from "./keys";
 import { readR2Json, writeR2Json, writeR2JsonIfAbsent } from "./repository";
 
@@ -45,7 +45,7 @@ export const isBranchPromotionReceipt = (
 
 /** Reads one promotion receipt or fails closed when its durable record is malformed. */
 export const readBranchPromotionReceipt = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   input: Pick<
     BranchPromotionReceipt,
     "rootDropId" | "branchId" | "actorAccountId" | "idempotencyKey"
@@ -66,7 +66,7 @@ export const readBranchPromotionReceipt = async (
 
 /** Creates a receipt once so a response-lost promotion can resume with the same target. */
 export const createBranchPromotionReceipt = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   receipt: BranchPromotionReceipt,
 ): Promise<boolean> =>
   writeR2JsonIfAbsent(
@@ -82,7 +82,7 @@ export const createBranchPromotionReceipt = async (
 
 /** Marks a promoted receipt complete only after its target drop is durably present. */
 export const completeBranchPromotionReceipt = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   receipt: BranchPromotionReceipt,
 ): Promise<BranchPromotionReceipt> => {
   const completed: BranchPromotionReceipt = {

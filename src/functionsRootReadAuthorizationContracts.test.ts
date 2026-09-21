@@ -3,9 +3,9 @@ import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest, onRequestGet } from "../functions/api/get/[id]";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import type {
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 
 interface ProjectionRow {
@@ -62,7 +62,7 @@ class RootReadBucket {
   }
 }
 
-class RootReadDatabase implements VoidSqlStore {
+class RootReadDatabase implements SqlMetadataStore {
   runs = 0;
   aliasReads = 0;
 
@@ -71,9 +71,9 @@ class RootReadDatabase implements VoidSqlStore {
     private readonly aliases = new Map<string, string>(),
   ) {}
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;
@@ -118,7 +118,7 @@ const callGet = (
   bucket: RootReadBucket,
   id: string,
   options: {
-    db?: VoidSqlStore;
+    db?: SqlMetadataStore;
     headers?: Record<string, string>;
     env?: Record<string, string>;
   } = {},

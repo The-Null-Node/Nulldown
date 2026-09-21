@@ -20,9 +20,9 @@ import type {
   NulleditNextResult,
 } from "../../../../../src/server/nulledit/types";
 import type {
-  VoidBlobStore,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { appendEventsToBranch } from "../../nulledit/service";
 import { createNullMemService } from "../../nullmem/service";
@@ -72,7 +72,7 @@ export interface CloudflareBufferedCommitRepairTarget {
 /** Composed Cloudflare backend runtime used by route adapters. */
 export interface CloudflareBackendRuntime {
   /** Cloudflare-backed functional data store. */
-  data: VoidDataStore;
+  data: RuntimeDataStore;
   /** Branch-scoped memory facade backed by NullMem records. */
   memory: NulldownServerRuntime["memory"];
   /** Nulledit append and snapshotter operations. */
@@ -110,11 +110,11 @@ let builtInSnapshottersRegistered = false;
 
 const resolveBlobStore = (
   store: CloudflareBackendRuntimeBindings["R2_BUCKET"],
-): VoidBlobStore => createCloudflareBlobStore(store);
+): BlobObjectStore => createCloudflareBlobStore(store);
 
 const resolveSqlStore = (
   store: CloudflareBackendRuntimeBindings["DB"],
-): VoidSqlStore | undefined => createCloudflareSqlStore(store);
+): SqlMetadataStore | undefined => createCloudflareSqlStore(store);
 
 const registerBuiltInSnapshotters = (): void => {
   if (builtInSnapshottersRegistered) {
@@ -129,7 +129,7 @@ const registerBuiltInSnapshotters = (): void => {
 
 const writeNullMemFreshnessWatermark =
   (
-    data: VoidDataStore,
+    data: RuntimeDataStore,
   ): Parameters<
     typeof createNulleditNullMemFreshnessSnapshotter
   >[0]["writeWatermark"] =>
@@ -155,7 +155,7 @@ const writeNullMemFreshnessWatermark =
 
 const listCloudflareSnapshotters = (
   bindings: CloudflareBackendRuntimeBindings,
-  data: VoidDataStore,
+  data: RuntimeDataStore,
   memory: NulldownServerRuntime["memory"],
 ): NulleditSnapshotter[] => {
   const db = resolveSqlStore(bindings.DB);
@@ -211,7 +211,7 @@ const listCloudflareSnapshotters = (
 
 const createCloudflareNulleditRuntime = (
   bindings: CloudflareBackendRuntimeBindings,
-  data: VoidDataStore,
+  data: RuntimeDataStore,
   memory: NulldownServerRuntime["memory"],
 ): NulldownServerRuntime["nulledit"] => {
   const blobs = resolveBlobStore(bindings.R2_BUCKET);

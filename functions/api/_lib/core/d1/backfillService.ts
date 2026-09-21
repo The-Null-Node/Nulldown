@@ -61,15 +61,15 @@ import { verifyBearerToken } from "../auth/bearer";
 import { jsonErrorResponse, jsonResponse } from "../http/responses";
 import { type RequestLogger, toLogRef } from "../logging/logger";
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
 
 /** Environment required by D1 metadata backfill. */
 export interface MetadataBackfillEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
   METADATA_BACKFILL_TOKEN?: string;
   DROP_INDEX_BACKFILL_TOKEN?: string;
 }
@@ -276,7 +276,7 @@ const backfillAccountLibrary = async (
 };
 
 const upsertDropMetadataFromObject = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   id: string,
   object: {
     etag?: string;
@@ -348,7 +348,7 @@ const upsertDropMetadataFromObject = async (
 };
 
 const upsertWriterPointer = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   key: string,
   branchId: string,
 ): Promise<boolean> => {

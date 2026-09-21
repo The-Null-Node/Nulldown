@@ -1,19 +1,19 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import type {
-  VoidBlobStore,
-  VoidDataIndexEntry,
-  VoidDataIndexFilter,
-  VoidDataKey,
-  VoidDataListItem,
-  VoidDataListQuery,
-  VoidDataListResult,
-  VoidDataPrimitive,
-  VoidDataPutOptions,
-  VoidDataPutRecord,
-  VoidDataQuery,
-  VoidDataScope,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataIndexEntry,
+  RuntimeDataIndexFilter,
+  RuntimeDataKey,
+  RuntimeDataListItem,
+  RuntimeDataListQuery,
+  RuntimeDataListResult,
+  RuntimeDataPrimitive,
+  RuntimeDataPutOptions,
+  RuntimeDataPutRecord,
+  RuntimeDataQuery,
+  RuntimeDataScope,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 
 /** Cloudflare bindings used by backend services through portable ports. */
@@ -23,9 +23,9 @@ export interface CloudflareStorageBindings {
 }
 
 interface CloudflareRuntimeDataEnvelope<T = unknown> {
-  key: VoidDataKey;
+  key: RuntimeDataKey;
   value: T;
-  indexes?: VoidDataIndexEntry[];
+  indexes?: RuntimeDataIndexEntry[];
   updatedAt: number;
 }
 
@@ -42,12 +42,12 @@ const DATA_LOCK_STALE_MS = 20_000;
 
 const encodeKeySegment = (value: string): string => encodeURIComponent(value);
 
-const scopeEntries = (scope: VoidDataScope | undefined) =>
+const scopeEntries = (scope: RuntimeDataScope | undefined) =>
   Object.entries(scope ?? {}).sort(([left], [right]) =>
     left.localeCompare(right),
   );
 
-const scopeSegment = (entry: [string, VoidDataPrimitive]): string => {
+const scopeSegment = (entry: [string, RuntimeDataPrimitive]): string => {
   const [key, value] = entry;
   return `${encodeKeySegment(key)}=${encodeKeySegment(JSON.stringify(value))}`;
 };
@@ -55,10 +55,10 @@ const scopeSegment = (entry: [string, VoidDataPrimitive]): string => {
 const normalizeCollection = (collection: string | undefined): string =>
   collection ?? "";
 
-const resolveScopeKey = (scope: VoidDataScope | undefined): string =>
+const resolveScopeKey = (scope: RuntimeDataScope | undefined): string =>
   scopeEntries(scope).map(scopeSegment).join("/");
 
-const resolveDataLockKey = (key: VoidDataKey): string =>
+const resolveDataLockKey = (key: RuntimeDataKey): string =>
   [
     DATA_LOCK_PREFIX,
     encodeKeySegment(key.namespace),
@@ -90,7 +90,7 @@ const parseEnvelope = <T>(
     if (!isRecord(parsed) || !isRecord(parsed.key) || !("value" in parsed)) {
       return null;
     }
-    const key = parsed.key as Partial<VoidDataKey>;
+    const key = parsed.key as Partial<RuntimeDataKey>;
     if (typeof key.namespace !== "string" || typeof key.id !== "string") {
       return null;
     }
@@ -102,7 +102,7 @@ const parseEnvelope = <T>(
 
 const envelopeToListItem = <T>(
   envelope: CloudflareRuntimeDataEnvelope<T>,
-): VoidDataListItem<T> => ({
+): RuntimeDataListItem<T> => ({
   key: envelope.key,
   value: envelope.value,
   indexes: envelope.indexes,
@@ -117,8 +117,8 @@ const parseRecordRow = <T>(
   );
 
 const indexValueMatches = (
-  actual: VoidDataIndexEntry["value"],
-  expected: VoidDataIndexEntry["value"],
+  actual: RuntimeDataIndexEntry["value"],
+  expected: RuntimeDataIndexEntry["value"],
 ): boolean => {
   const actualValues = Array.isArray(actual) ? actual : [actual];
   const expectedValues = Array.isArray(expected) ? expected : [expected];
@@ -128,8 +128,8 @@ const indexValueMatches = (
 };
 
 const matchesIndexFilter = (
-  indexes: VoidDataIndexEntry[] | undefined,
-  filter: VoidDataIndexFilter,
+  indexes: RuntimeDataIndexEntry[] | undefined,
+  filter: RuntimeDataIndexFilter,
 ): boolean => {
   const matches = indexes?.filter((entry) => entry.name === filter.name) ?? [];
   if (!matches.length) return false;
@@ -149,7 +149,7 @@ const matchesIndexFilter = (
 };
 
 const matchesTextQuery = <T>(
-  item: VoidDataListItem<T>,
+  item: RuntimeDataListItem<T>,
   text: string | undefined,
 ): boolean => {
   const query = text?.trim().toLowerCase();
@@ -163,8 +163,8 @@ const matchesTextQuery = <T>(
 };
 
 const matchesListQuery = <T>(
-  item: VoidDataListItem<T>,
-  query: VoidDataListQuery,
+  item: RuntimeDataListItem<T>,
+  query: RuntimeDataListQuery,
 ): boolean => {
   if (item.key.namespace !== query.namespace) return false;
   if (
@@ -182,10 +182,10 @@ const matchesListQuery = <T>(
   return true;
 };
 
-const d1ScalarValues = (entry: VoidDataIndexEntry): VoidDataPrimitive[] =>
+const d1ScalarValues = (entry: RuntimeDataIndexEntry): RuntimeDataPrimitive[] =>
   Array.isArray(entry.value) ? entry.value : [entry.value];
 
-const d1IndexValueParams = (value: VoidDataPrimitive) => ({
+const d1IndexValueParams = (value: RuntimeDataPrimitive) => ({
   valueText: value === null ? null : String(value),
   valueNumber: typeof value === "number" ? value : null,
   valueBool: typeof value === "boolean" ? (value ? 1 : 0) : null,
@@ -216,13 +216,13 @@ const parseLockPayload = (
 };
 
 /** Exposes a Cloudflare R2 bucket through the portable blob-store port. */
-export const createCloudflareBlobStore = (bucket: R2Bucket): VoidBlobStore =>
-  bucket as unknown as VoidBlobStore;
+export const createCloudflareBlobStore = (bucket: R2Bucket): BlobObjectStore =>
+  bucket as unknown as BlobObjectStore;
 
 /** Exposes a Cloudflare D1 database through the portable SQL-store port. */
 export const createCloudflareSqlStore = (
   db: D1Database | undefined,
-): VoidSqlStore | undefined => db as unknown as VoidSqlStore | undefined;
+): SqlMetadataStore | undefined => db as unknown as SqlMetadataStore | undefined;
 
 /** Converts Cloudflare storage bindings into portable service ports. */
 export const createCloudflareStorageServiceEnv = <
@@ -230,8 +230,8 @@ export const createCloudflareStorageServiceEnv = <
 >(
   bindings: TBindings,
 ): Omit<TBindings, "R2_BUCKET" | "DB"> & {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
 } => ({
   ...bindings,
   R2_BUCKET: createCloudflareBlobStore(bindings.R2_BUCKET),
@@ -240,7 +240,7 @@ export const createCloudflareStorageServiceEnv = <
 
 const readEnvelopeFromD1 = async <T>(
   db: D1Database,
-  key: VoidDataKey,
+  key: RuntimeDataKey,
 ): Promise<CloudflareRuntimeDataEnvelope<T> | null> => {
   const row = await db
     .prepare(
@@ -260,8 +260,8 @@ const readEnvelopeFromD1 = async <T>(
 
 const listEnvelopesFromD1 = async <T>(
   db: D1Database,
-  query: VoidDataListQuery,
-): Promise<VoidDataListResult<T>> => {
+  query: RuntimeDataListQuery,
+): Promise<RuntimeDataListResult<T>> => {
   const filters = ["namespace = ?"];
   const params: Array<string | number> = [query.namespace];
   if (query.collection !== undefined) {
@@ -333,9 +333,9 @@ const executeD1Statements = async (
 
 const createPutStatements = <T>(
   db: D1Database,
-  key: VoidDataKey,
+  key: RuntimeDataKey,
   value: T,
-  options: VoidDataPutOptions | undefined,
+  options: RuntimeDataPutOptions | undefined,
   updatedAt: number,
 ): CloudflareSqlStatement[] => {
   const envelope: CloudflareRuntimeDataEnvelope<T> = {
@@ -437,23 +437,23 @@ const createPutStatements = <T>(
 export const createCloudflareRuntimeDataStore = ({
   R2_BUCKET,
   DB,
-}: CloudflareStorageBindings): VoidDataStore => {
+}: CloudflareStorageBindings): RuntimeDataStore => {
   const blobs = createCloudflareBlobStore(R2_BUCKET);
 
-  const get = async <T = unknown>(key: VoidDataKey): Promise<T | null> => {
+  const get = async <T = unknown>(key: RuntimeDataKey): Promise<T | null> => {
     const envelope = await readEnvelopeFromD1<T>(requireVoidDataD1(DB), key);
     return envelope?.value ?? null;
   };
 
   const put = async <T = unknown>(
-    key: VoidDataKey,
+    key: RuntimeDataKey,
     value: T,
-    options?: VoidDataPutOptions,
+    options?: RuntimeDataPutOptions,
   ): Promise<void> => {
     await putMany([{ key, value, options }]);
   };
 
-  const putMany = async (records: VoidDataPutRecord[]): Promise<void> => {
+  const putMany = async (records: RuntimeDataPutRecord[]): Promise<void> => {
     if (!records.length) return;
     const db = requireVoidDataD1(DB);
     const statements: CloudflareSqlStatement[] = [];
@@ -477,7 +477,7 @@ export const createCloudflareRuntimeDataStore = ({
     await executeD1Statements(db, statements);
   };
 
-  const deleteValue = async (key: VoidDataKey): Promise<void> => {
+  const deleteValue = async (key: RuntimeDataKey): Promise<void> => {
     const db = requireVoidDataD1(DB);
     const collection = normalizeCollection(key.collection);
     const scopeKey = resolveScopeKey(key.scope);
@@ -505,18 +505,18 @@ export const createCloudflareRuntimeDataStore = ({
   };
 
   const list = async <T = unknown>(
-    query: VoidDataListQuery,
-  ): Promise<VoidDataListResult<T>> => {
+    query: RuntimeDataListQuery,
+  ): Promise<RuntimeDataListResult<T>> => {
     return listEnvelopesFromD1<T>(requireVoidDataD1(DB), query);
   };
 
-  const dataStore: VoidDataStore = {
+  const dataStore: RuntimeDataStore = {
     get,
     put,
     putMany,
     delete: deleteValue,
     list,
-    query: async <T = unknown>(query: VoidDataQuery): Promise<T[]> => {
+    query: async <T = unknown>(query: RuntimeDataQuery): Promise<T[]> => {
       const listed = await list<T>(query);
       return listed.items
         .filter((item) =>
@@ -527,11 +527,11 @@ export const createCloudflareRuntimeDataStore = ({
         .filter((item) => matchesTextQuery(item, query.text))
         .map((item) => item.value);
     },
-    tx: async <T>(work: (data: VoidDataStore) => Promise<T>): Promise<T> =>
+    tx: async <T>(work: (data: RuntimeDataStore) => Promise<T>): Promise<T> =>
       work(dataStore),
     lock: async <T>(
-      key: VoidDataKey,
-      work: (data: VoidDataStore) => Promise<T>,
+      key: RuntimeDataKey,
+      work: (data: RuntimeDataStore) => Promise<T>,
     ): Promise<T> => {
       const lockKey = resolveDataLockKey(key);
       const token = crypto.randomUUID();

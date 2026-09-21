@@ -14,12 +14,12 @@ import type {
   BranchMemoryQueryRequest,
 } from "./server/runtime";
 import type {
-  VoidBlobBody,
-  VoidBlobObject,
-  VoidBlobStore,
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  BlobObjectBody,
+  BlobObject,
+  BlobObjectStore,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 
 type Visibility = "public" | "unlisted" | "private";
@@ -85,7 +85,7 @@ const makeBranch = (
   updatedAt: 1,
 });
 
-class InstrumentedBlobStore implements VoidBlobStore {
+class InstrumentedBlobStore implements BlobObjectStore {
   private readonly objects = new Map<string, string>();
   private branchReads = 0;
   readonly events: string[];
@@ -94,7 +94,7 @@ class InstrumentedBlobStore implements VoidBlobStore {
     this.events = events;
   }
 
-  async get(key: string): Promise<VoidBlobObject | null> {
+  async get(key: string): Promise<BlobObject | null> {
     if (key.startsWith("__drop_branch__/")) {
       this.events.push(this.branchReads++ === 0 ? "branch" : "freshness-head");
     }
@@ -115,7 +115,7 @@ class InstrumentedBlobStore implements VoidBlobStore {
     return this.objects.has(key) ? { key } : null;
   }
 
-  async put(key: string, value: VoidBlobBody) {
+  async put(key: string, value: BlobObjectBody) {
     const text =
       typeof value === "string"
         ? value
@@ -143,7 +143,7 @@ class InstrumentedBlobStore implements VoidBlobStore {
   }
 }
 
-class InstrumentedDatabase implements VoidSqlStore {
+class InstrumentedDatabase implements SqlMetadataStore {
   readonly records: NullMemRecord[] = [];
   runs = 0;
   watermarkHeadSnapshotId = 9;
@@ -153,9 +153,9 @@ class InstrumentedDatabase implements VoidSqlStore {
     private readonly events: string[],
   ) {}
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;

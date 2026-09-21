@@ -1,6 +1,6 @@
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import {
   DROP_LINK_ID_LENGTH,
@@ -28,9 +28,9 @@ type DropIdLogger = Pick<RequestLogger, "debug" | "info" | "warn">;
 /** Ports used by drop identity repositories. */
 export interface DropIdentityRepositoryPorts {
   /** Blob store containing drop alias fallback records. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** Optional SQL store containing queryable drop alias rows. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository for resolving and maintaining canonical remote drop ids. */
@@ -97,7 +97,7 @@ const readObjectText = async (
 };
 
 const readRemoteAliasFromD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   shortId: string,
 ): Promise<string | null> => {
   if (!db) return null;
@@ -110,7 +110,7 @@ const readRemoteAliasFromD1 = async (
 
 /** Writes a short-link alias row into D1 metadata storage. */
 export const writeRemoteAliasToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   shortId: string,
   fullId: string,
 ): Promise<void> => {
@@ -136,9 +136,9 @@ export const createRemoteAliasKey = (shortId: string) =>
 
 /** Reads a short-link alias from memory, D1, or R2 fallback. */
 export const readRemoteAlias = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   shortId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   const cached = readAliasCache(shortId);
   if (cached) {
@@ -169,9 +169,9 @@ export const readRemoteAlias = async (
 };
 
 const readRemoteAliasWithoutPersistentWrites = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   shortId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   const cached = readAliasCache(shortId);
   if (cached) {
@@ -196,10 +196,10 @@ const readRemoteAliasWithoutPersistentWrites = async (
 
 /** Reserves the short-link alias for a full drop id if it is still available. */
 export const reserveRemoteAlias = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fullId: string,
   logger?: DropIdLogger,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<"reserved" | "already-registered" | "conflict"> => {
   const shortId = toShortDropId(fullId);
   const existing = await readRemoteAlias(bucket, shortId, db);
@@ -269,10 +269,10 @@ export const reserveRemoteAlias = async (
 
 /** Removes a short-link alias only when it still points to the expected drop id. */
 export const removeRemoteAliasIfMatch = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fullId: string,
   logger?: DropIdLogger,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   const shortId = toShortDropId(fullId);
   const aliasKey = createRemoteAliasKey(shortId);
@@ -303,10 +303,10 @@ export const removeRemoteAliasIfMatch = async (
 
 /** Resolves a user-supplied full or short drop id to a canonical remote drop id. */
 export const resolveRemoteDropId = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
   logger?: DropIdLogger,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   const candidate = id.trim();
   if (!candidate || !isDropIdToken(candidate)) {
@@ -340,10 +340,10 @@ export const resolveRemoteDropId = async (
 
 /** Resolves a read-request full or short drop id without persistent writes. */
 export const resolveRemoteDropIdForReadRequest = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
   logger?: DropIdLogger,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   const candidate = id.trim();
   if (!candidate || !isDropIdToken(candidate)) {

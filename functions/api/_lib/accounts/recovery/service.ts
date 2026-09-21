@@ -7,7 +7,7 @@ import {
   encodeEncryptedAccountRecoveryPackage,
   serializeAccountRecoveryPackage,
 } from "../../../../../shared/auth/codecs/account-recovery-v1";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { readAccountRecord, resolveAuthenticatedAccountId } from "../session/auth";
 import {
   isSameOriginOpenAuthRequest,
@@ -69,7 +69,7 @@ const ciphertextDigest = async (ciphertext: string): Promise<string> =>
   )}`;
 
 const parseStoredPackage = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   objectKey: string,
 ): Promise<EncryptedAccountRecoveryPackage | null> => {
   const object = await bucket.get(objectKey);
@@ -168,7 +168,7 @@ export const writeRecoveryPackageResponse = async (
   const account = await readAccountRecord(
     env.R2_BUCKET,
     accountId,
-    identity.db as unknown as VoidSqlStore,
+    identity.db as unknown as SqlMetadataStore,
   );
   if (
     !account ||

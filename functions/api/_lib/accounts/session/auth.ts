@@ -1,5 +1,5 @@
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../../../shared/drop/branch";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { serializeCanonicalJson } from "../../../../../shared/drop/types";
 
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/;
@@ -16,8 +16,8 @@ export interface AccountAuthRequest {
 
 /** Environment bindings used by account authentication services. */
 export interface AccountAuthEnv {
-  R2_BUCKET?: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET?: BlobObjectStore;
+  DB?: SqlMetadataStore;
   ACCOUNT_AUTH_SECRET?: string;
   ACCOUNT_AUTH_TOKEN_TTL_MS?: string;
   ALLOW_INSECURE_ACCOUNT_HEADER?: string;
@@ -423,9 +423,9 @@ export const resolveAuthenticatedAccountId = async (
 
 /** Reads a persisted account record by account id. */
 export const readAccountRecord = async (
-  bucket: VoidBlobStore | undefined,
+  bucket: BlobObjectStore | undefined,
   accountId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<AccountRecordV1 | null> => {
   if (db) {
     const row = await db
@@ -488,9 +488,9 @@ export const readAccountRecord = async (
 
 /** Writes the current account signing record to D1 and R2 fallback storage. */
 export const putAccountRecord = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   record: AccountRecordV1,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   if (db) {
     await db
@@ -520,9 +520,9 @@ export const putAccountRecord = async (
 
 /** Reserves an account's first signing key without allowing a competing key to replace it. */
 export const reserveAccountRecord = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   record: AccountRecordV1,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<AccountRecordV1 | null> => {
   if (db) {
     await db
@@ -568,10 +568,10 @@ export const reserveAccountRecord = async (
 
 /** Pins an account encryption recipient once without allowing a later replacement. */
 export const pinAccountEncryptionRecipient = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   record: AccountRecordV1,
   recipient: AccountEncryptionRecipient,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<AccountRecordV1 | null> => {
   const existingRecipient = record.encryptionKid
     ? {

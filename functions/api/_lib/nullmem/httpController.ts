@@ -25,9 +25,9 @@ import {
 import type { JsonValue } from "../../../../shared/nullplug/types";
 import { NULLPLUG_REGISTRY_LATEST_KEY_PREFIX } from "../../../../shared/nullplug/registry";
 import type {
-  VoidBlobStore,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../src/server/ports";
 import type {
   BranchMemoryService,
@@ -37,8 +37,8 @@ import type {
 
 /** Environment required by branch-scoped NullMem services. */
 export interface NullMemEnv extends AccountAuthEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
 }
 
 /** Route params for branch-scoped NullMem operations. */
@@ -83,7 +83,7 @@ interface NullMemProcedureRequest {
 
 interface NullMemHttpServices {
   /** Optional runtime data store used to read derived freshness watermarks. */
-  data?: VoidDataStore;
+  data?: RuntimeDataStore;
   memory: BranchMemoryService;
 }
 
@@ -315,8 +315,8 @@ const resolveNullMemQueryTarget = async (
 };
 
 const withoutRemoteCapabilityCatalog = (
-  blobs: VoidBlobStore,
-): VoidBlobStore => ({
+  blobs: BlobObjectStore,
+): BlobObjectStore => ({
   get: (key) => blobs.get(key),
   head: (key) => blobs.head(key),
   put: (key, value, options) => blobs.put(key, value, options),

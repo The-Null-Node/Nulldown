@@ -2,16 +2,16 @@ import { mkdir, readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import type {
-  VoidSqlBindableValue,
-  VoidSqlRows,
-  VoidSqlStatement,
-  VoidSqlStore,
+  SqlBindableValue,
+  SqlRows,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./ports";
 
 type BunSqliteBindable = string | number | null | Uint8Array;
 
 /** Bun SQLite implementation of the portable SQL metadata store. */
-export interface BunSqliteStore extends VoidSqlStore {
+export interface BunSqliteStore extends SqlMetadataStore {
   /** Absolute or relative path to the SQLite database file. */
   databasePath: string;
   /** Executes raw SQL text, including multi-statement migration files. */
@@ -26,7 +26,7 @@ export interface CreateBunSqliteStoreOptions {
   databasePath: string;
 }
 
-const normalizeBindable = (value: VoidSqlBindableValue): BunSqliteBindable => {
+const normalizeBindable = (value: SqlBindableValue): BunSqliteBindable => {
   if (value === null) return null;
   if (typeof value === "boolean") return value ? 1 : 0;
   if (typeof value === "string" || typeof value === "number") return value;
@@ -34,7 +34,7 @@ const normalizeBindable = (value: VoidSqlBindableValue): BunSqliteBindable => {
   return value;
 };
 
-class BunSqliteStatement implements VoidSqlStatement {
+class BunSqliteStatement implements SqlStatement {
   private readonly statement: ReturnType<Database["query"]>;
   private values: BunSqliteBindable[] = [];
 
@@ -43,7 +43,7 @@ class BunSqliteStatement implements VoidSqlStatement {
   }
 
   /** Binds positional values for the next statement execution. */
-  bind(...values: VoidSqlBindableValue[]): VoidSqlStatement {
+  bind(...values: SqlBindableValue[]): SqlStatement {
     this.values = values.map(normalizeBindable);
     return this;
   }
@@ -59,12 +59,12 @@ class BunSqliteStatement implements VoidSqlStatement {
   }
 
   /** Reads all rows returned by a query. */
-  async all<T = Record<string, unknown>>(): Promise<VoidSqlRows<T>> {
+  async all<T = Record<string, unknown>>(): Promise<SqlRows<T>> {
     return { results: this.statement.all(...this.values) as T[] };
   }
 }
 
-/** Creates a Bun SQLite store that satisfies the portable `VoidSqlStore` port. */
+/** Creates a Bun SQLite store that satisfies the portable `SqlMetadataStore` port. */
 export const createBunSqliteStore = async ({
   databasePath,
 }: CreateBunSqliteStoreOptions): Promise<BunSqliteStore> => {

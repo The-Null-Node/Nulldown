@@ -14,12 +14,12 @@ import {
   createWriterKey,
 } from "../functions/api/_lib/branches/storage/keys";
 import type {
-  VoidBlobBody,
-  VoidBlobStore,
-  VoidBlobWriteCondition,
-  VoidSqlBindableValue,
-  VoidSqlStatement,
-  VoidSqlStore,
+  BlobObjectBody,
+  BlobObjectStore,
+  BlobWriteCondition,
+  SqlBindableValue,
+  SqlStatement,
+  SqlMetadataStore,
 } from "./server/ports";
 import type { DropBranchRecord } from "../shared/drop/branch";
 
@@ -29,7 +29,7 @@ interface StoredObject {
   etag: string;
 }
 
-class MemoryBlobStore implements VoidBlobStore {
+class MemoryBlobStore implements BlobObjectStore {
   private readonly objects = new Map<string, StoredObject>();
   private revision = 0;
   aliasReads = 0;
@@ -115,10 +115,10 @@ class MemoryBlobStore implements VoidBlobStore {
 
   async put(
     key: string,
-    value: VoidBlobBody,
+    value: BlobObjectBody,
     options?: {
       httpMetadata?: { contentType?: string };
-      onlyIf?: VoidBlobWriteCondition;
+      onlyIf?: BlobWriteCondition;
     },
   ) {
     this.countWrite(key);
@@ -176,14 +176,14 @@ interface ProjectionRow {
   deleted_at: number | null;
 }
 
-class ProjectionDatabase implements VoidSqlStore {
+class ProjectionDatabase implements SqlMetadataStore {
   runs = 0;
 
   constructor(private readonly rows: Map<string, ProjectionRow>) {}
 
-  prepare(sql: string): VoidSqlStatement {
-    let values: VoidSqlBindableValue[] = [];
-    const statement: VoidSqlStatement = {
+  prepare(sql: string): SqlStatement {
+    let values: SqlBindableValue[] = [];
+    const statement: SqlStatement = {
       bind: (...bound) => {
         values = bound;
         return statement;
@@ -345,7 +345,7 @@ const call = (
 
 const envFor = (
   bucket: MemoryBlobStore,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Record<string, unknown> => ({
   R2_BUCKET: bucket,
   ...(db ? { DB: db } : {}),
@@ -417,7 +417,7 @@ const sensitiveReadRequest = (accountId?: string, bearer?: string): Request => {
 };
 
 const canReadSensitive = (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   rootDropId: string,
   writerAccountId: string | null,
   accountId?: string,

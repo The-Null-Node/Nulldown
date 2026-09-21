@@ -20,7 +20,7 @@ import {
   isResolvedNulldownState,
   isResolvedNodeRefRecord,
 } from "../../../../../shared/drop/resolved/validators";
-import type { VoidSqlStore } from "../../../../../src/server/ports";
+import type { SqlMetadataStore } from "../../../../../src/server/ports";
 
 const RESOLVED_HEAP_CHECKPOINT_INTERVAL = 24;
 const RESOLVED_HEAP_MAX_DELTA_DEPTH = 64;
@@ -100,7 +100,7 @@ const isResolvedRuntimeNodeProjection = (
 /** Ports used by compact resolved heap projection repositories. */
 export interface ResolvedHeapProjectionRepositoryPorts {
   /** Optional SQL metadata store containing resolved heap projection rows. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository for compact resolved heap state, node payload, and delta rows. */
@@ -117,7 +117,7 @@ export interface ResolvedHeapProjectionRepository {
 }
 
 const readResolvedNodeRefsFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   target: ResolvedHeapRef,
 ): Promise<ResolvedNodeRefRecord[] | null> => {
   const { results = [] } = await db
@@ -142,7 +142,7 @@ const readResolvedNodeRefsFromD1 = async (
 };
 
 const readResolvedHeapDeltaFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   resolverId: string,
@@ -160,7 +160,7 @@ const readResolvedHeapDeltaFromD1 = async (
 };
 
 const resolveResolvedNodeRefsFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   target: ResolvedHeapRef,
 ): Promise<ResolvedNodeRefRecord[] | null> => {
   const chain: ResolvedHeapDeltaRecord[] = [];
@@ -204,7 +204,7 @@ const resolveResolvedNodeRefsFromD1 = async (
 };
 
 const hydrateResolvedNodesFromPayloads = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   refs: readonly ResolvedNodeRefRecord[],
   resolverId: string,
 ): Promise<Array<ResolvedDocumentNode | ResolvedRuntimeNode> | null> => {
@@ -242,7 +242,7 @@ const hydrateResolvedNodesFromPayloads = async (
 };
 
 const hydrateResolvedNodesFromProjection = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   target: ResolvedHeapRef,
   refs: readonly ResolvedNodeRefRecord[],
 ): Promise<Array<ResolvedDocumentNode | ResolvedRuntimeNode> | null> => {
@@ -278,7 +278,7 @@ const hydrateResolvedNodesFromProjection = async (
 };
 
 const materializeResolvedStateFromD1Delta = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   delta: ResolvedHeapDeltaRecord,
 ): Promise<ResolvedNulldownState | null> => {
   const refs = await resolveResolvedNodeRefsFromD1(db, delta);
@@ -319,7 +319,7 @@ const materializeResolvedStateFromD1Delta = async (
 };
 
 const readResolvedStateFromD1Delta = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   resolverId: string,
@@ -337,7 +337,7 @@ const readResolvedStateFromD1Delta = async (
 };
 
 const readResolvedStateSnapshotFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   resolverId: string,
@@ -355,7 +355,7 @@ const readResolvedStateSnapshotFromD1 = async (
 };
 
 const syncResolvedNodesToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   state: ResolvedNulldownState,
 ): Promise<void> => {
   if (!db || !state.branchId || state.snapshotId === undefined) return;
@@ -403,7 +403,7 @@ const syncResolvedNodesToD1 = async (
 };
 
 const syncResolvedNodeRefsToD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   delta: ResolvedHeapDeltaRecord,
   nodeRefs: readonly ResolvedNodeRefRecord[],
 ): Promise<void> => {
@@ -421,7 +421,7 @@ const syncResolvedNodeRefsToD1 = async (
 };
 
 const writeResolvedNodeRefToD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   delta: ResolvedHeapDeltaRecord,
   nodeRef: ResolvedNodeRefRecord,
 ): Promise<void> => {
@@ -462,7 +462,7 @@ const writeResolvedNodeRefToD1 = async (
 };
 
 const writeResolvedNodePayloadsToD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   state: ResolvedNulldownState,
   nodeRefs: readonly ResolvedNodeRefRecord[],
 ): Promise<void> => {
@@ -502,7 +502,7 @@ const shouldCheckpointResolvedHeap = (
   snapshotId % RESOLVED_HEAP_CHECKPOINT_INTERVAL === 0;
 
 const syncResolvedHeapDeltaToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   state: ResolvedNulldownState,
 ): Promise<void> => {
   if (!db || !state.branchId || state.snapshotId === undefined) return;
@@ -571,7 +571,7 @@ const syncResolvedHeapDeltaToD1 = async (
 
 /** Writes compact resolved heap projections into D1 without touching R2 blobs. */
 export const syncResolvedStateToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   state: ResolvedNulldownState,
 ): Promise<void> => {
   if (!db || !state.branchId || state.snapshotId === undefined) return;

@@ -1,4 +1,4 @@
-import type { VoidBlobStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore } from "../../../../../src/server/ports";
 import { createBranchLockKey } from "./keys";
 
 const BRANCH_LOCK_MAX_ATTEMPTS = 120;
@@ -127,7 +127,7 @@ const lockBody = (token: string, released = false): string =>
   });
 
 const readBranchLock = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   key: string,
 ): Promise<ReadBranchLock> => {
   const object = await bucket.get(key);
@@ -138,7 +138,7 @@ const readBranchLock = async (
 };
 
 const recoverOwnedLease = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   lock: BranchLockLease,
 ): Promise<BranchLockOwnershipOutcome> => {
   try {
@@ -158,7 +158,7 @@ const recoverOwnedLease = async (
 };
 
 const acquireBranchMutationLock = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
 ): Promise<BranchLockLease> => {
@@ -210,7 +210,7 @@ const acquireBranchMutationLock = async (
 };
 
 const renewBranchMutationLock = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   lock: BranchLockLease,
 ): Promise<BranchLockOwnershipOutcome> => {
   try {
@@ -235,7 +235,7 @@ const renewBranchMutationLock = async (
 };
 
 const releaseBranchMutationLock = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   lock: BranchLockLease,
 ): Promise<BranchLockReleaseOutcome> => {
   const renewal = await renewBranchMutationLock(bucket, lock);
@@ -270,7 +270,7 @@ const warnUnconfirmedCleanup = (
 
 /** Runs a branch mutation under a lease with explicit pre-commit ownership proof. */
 export const withBranchMutationLock = async <T>(
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   work: (context: BranchMutationLockContext) => Promise<T>,

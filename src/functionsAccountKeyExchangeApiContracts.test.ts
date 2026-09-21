@@ -9,7 +9,7 @@ import {
 } from "../functions/api/account/recovery";
 import type { AccountBindingEnvironment } from "../functions/api/_lib/accounts/binding/service";
 import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
-import type { VoidBlobObject, VoidBlobStore } from "./server/ports";
+import type { BlobObject, BlobObjectStore } from "./server/ports";
 import {
   type AccountRecoveryPayload,
   type EncryptedAccountRecoveryPackage,
@@ -214,7 +214,7 @@ class MemoryDatabase {
   }
 }
 
-class MemoryBlobObject implements VoidBlobObject {
+class MemoryBlobObject implements BlobObject {
   readonly body = null;
 
   constructor(
@@ -231,10 +231,10 @@ class MemoryBlobObject implements VoidBlobObject {
   }
 }
 
-class MemoryBucket implements VoidBlobStore {
+class MemoryBucket implements BlobObjectStore {
   readonly objects = new Map<string, string>();
 
-  async get(key: string): Promise<VoidBlobObject | null> {
+  async get(key: string): Promise<BlobObject | null> {
     const value = this.objects.get(key);
     return value === undefined ? null : new MemoryBlobObject(key, value);
   }

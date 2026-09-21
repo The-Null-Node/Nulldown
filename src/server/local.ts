@@ -65,7 +65,11 @@ import {
   type NulldownServer,
   type NulldownServerRoute,
 } from "./http";
-import type { VoidBlobStore, VoidDataStore, VoidSqlStore } from "./ports";
+import type {
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
+} from "./ports";
 
 /** Environment variables and ports used by the local Nulldown server adapter. */
 export interface LocalNulldownServerEnv extends Omit<
@@ -73,9 +77,9 @@ export interface LocalNulldownServerEnv extends Omit<
   "blobs" | "sql"
 > {
   /** Blob storage used by existing backend services through the R2-shaped keyspace. */
-  R2_BUCKET: VoidBlobStore;
+  R2_BUCKET: BlobObjectStore;
   /** Optional SQL metadata store. `nd serve` supplies a Bun SQLite implementation by default. */
-  DB?: VoidSqlStore;
+  DB?: SqlMetadataStore;
   /** Allows local branch ownership via account headers when auth secrets are absent. */
   ALLOW_INSECURE_ACCOUNT_HEADER?: string;
   /** Optional shared secret for diff transport authentication. */
@@ -97,9 +101,9 @@ export interface CreateLocalNulldownServerOptions {
   /** Public base URL used in store responses. */
   publicBaseUrl?: string;
   /** Optional SQL metadata store for future SQLite adapters. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
   /** Optional functional data store. Defaults to an in-memory store. */
-  data?: VoidDataStore;
+  data?: RuntimeDataStore;
   /** Optional log level passed to backend request loggers. */
   logLevel?: string;
 }

@@ -1,4 +1,4 @@
-import type { VoidBlobStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore } from "../../../../../src/server/ports";
 
 const ROOT_LOCK_PREFIX = "__drop_root_lock__/";
 const LOCK_MAX_ATTEMPTS = 120;
@@ -70,7 +70,7 @@ const lockBody = (token: string, released = false): string =>
     ...(released ? { releasedAt: Date.now() } : {}),
   });
 
-const readLock = async (blobs: VoidBlobStore, key: string): Promise<RootLockState> => {
+const readLock = async (blobs: BlobObjectStore, key: string): Promise<RootLockState> => {
   const object = await blobs.get(key);
   let value: string | null = null;
   try {
@@ -88,7 +88,7 @@ const jitter = (): number => crypto.getRandomValues(new Uint8Array(1))[0] % 10;
 
 /** Acquires an R2-backed lease shared by protected root writers and deleters. */
 export const acquireRootMutationLock = async (
-  blobs: VoidBlobStore,
+  blobs: BlobObjectStore,
   rootId: string,
 ): Promise<RootMutationLock> => {
   const key = lockKey(rootId);

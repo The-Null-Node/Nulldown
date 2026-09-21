@@ -1,10 +1,10 @@
-import type { VoidSqlStore } from "../../../../../src/server/ports";
+import type { SqlMetadataStore } from "../../../../../src/server/ports";
 
 /** JSON-compatible primitive values accepted by D1 bind parameters. */
 export type D1BindableValue = string | number | null;
 
 /** Minimal SQL binding shape used by metadata repositories. */
-export type MetadataSqlStore = Pick<VoidSqlStore, "prepare" | "batch">;
+export type MetadataSqlStore = Pick<SqlMetadataStore, "prepare" | "batch">;
 
 /** Converts booleans to SQLite integer flags. */
 export const booleanToSqlite = (value: boolean): number => (value ? 1 : 0);

@@ -2,7 +2,7 @@ import type { DropSnapshotRecord } from "../../../../../shared/drop/branch";
 import { type DropDiffEvent, dropDiffOpToDiff } from "../../../../../shared/drop/diff";
 import { applyDiff } from "../../../../../shared/nulledit/textDiff";
 import { DiffOp, type Diff } from "../../../../../shared/nulledit/types";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { createBranchDiffRepository } from "../storage/diffLogRepository";
 import { createBranchRepository } from "../storage/repository";
 
@@ -40,12 +40,12 @@ export const applyBranchDiffEvents = (
 };
 
 const readEventsBySeqRange = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   startSeq: number,
   endSeq: number,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropDiffEvent[] | null> => {
   if (endSeq < startSeq) {
     return [];
@@ -77,22 +77,22 @@ const readEventsBySeqRange = async (
 
 /** Reads a contiguous branch event range, returning an empty list when incomplete. */
 export const readBranchEventsBySeqRange = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   startSeq: number,
   endSeq: number,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropDiffEvent[]> =>
   (await readEventsBySeqRange(bucket, rootDropId, branchId, startSeq, endSeq, db)) ?? [];
 
 /** Rebuilds branch content for a snapshot from checkpoints and compact event ranges. */
 export const readBranchContent = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   snapshotId: number,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const direct = await branchRepository.readSnapshotCheckpoint(

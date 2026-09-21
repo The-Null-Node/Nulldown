@@ -4,7 +4,7 @@ import type {
   DropBranchPromoteRequest,
   DropBranchPromoteResponse,
 } from "../../../../../shared/drop/branch";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
@@ -66,8 +66,8 @@ const hasMatchingPromotionIdentity = (
 
 /** Environment required to promote a branch snapshot into a new drop. */
 export interface BranchPromotionEnv extends AccountAuthEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
   PUBLIC_BASE_URL: string;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
   PROVIDER_SIGNING_PRIVATE_JWK?: string;

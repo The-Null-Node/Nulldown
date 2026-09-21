@@ -1,5 +1,5 @@
 import type { DropEnvelope, DropVisibility } from "../../../../../shared/drop/types";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import {
   readAccountRecord,
   resolveAuthenticatedAccountId,
@@ -25,11 +25,11 @@ import {
 } from "../openAuth/service";
 
 export interface AccountLibraryEnv extends Omit<AccountAuthEnv, "R2_BUCKET"> {
-  DB?: VoidSqlStore;
+  DB?: SqlMetadataStore;
 }
 
 interface AccountLibraryProjectionEnv extends AccountLibraryEnv {
-  R2_BUCKET?: VoidBlobStore;
+  R2_BUCKET?: BlobObjectStore;
 }
 
 export class AccountLibraryError extends Error {
@@ -216,7 +216,7 @@ export const verifyAccountLibraryEnvelope = async (
 
 /** Persists the verified, metadata-only ownership projection for an authenticated envelope. */
 export const projectAccountLibraryEnvelope = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   dropId: string,
   accountId: string | null,
   envelope: DropEnvelope | null,

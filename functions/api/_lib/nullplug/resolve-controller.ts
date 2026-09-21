@@ -17,7 +17,7 @@ import {
   resolveRootReadAuthorization,
   type RootReadAuthorizationPorts,
 } from "../security/readAuthorization";
-import type { VoidBlobStore } from "../../../../src/server/ports";
+import type { BlobObjectStore } from "../../../../src/server/ports";
 import {
   jsonErrorResponse,
   jsonResponse,
@@ -27,7 +27,7 @@ import {
 
 /** Portable storage and auth ports used by the Nullplug resolve controller. */
 export interface NullplugResolveControllerEnv extends RootReadAuthorizationPorts {
-  R2_BUCKET: VoidBlobStore;
+  R2_BUCKET: BlobObjectStore;
 }
 
 /** Authorized caller context used to construct a request-scoped Nullplug runtime. */

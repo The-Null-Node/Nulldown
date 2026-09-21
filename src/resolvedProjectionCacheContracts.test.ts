@@ -13,7 +13,7 @@ import { heapifyResolvedRuntimeRefs } from "../shared/drop/resolved/heapify/runt
 import { createResolvedHeapDeltaRecord } from "../shared/drop/resolved/nodeRefs";
 import { writeResolvedNulldownState } from "../shared/drop/resolved/storage";
 import type { ResolvedHeapDeltaRecord, ResolvedNulldownState } from "../shared/drop/resolved/types";
-import type { VoidBlobStore, VoidSqlBindableValue, VoidSqlStore } from "./server/ports";
+import type { BlobObjectStore, SqlBindableValue, SqlMetadataStore } from "./server/ports";
 
 const source = {
   rootDropId: "projection-root",
@@ -28,11 +28,11 @@ const projectionFixture = async (state: ResolvedNulldownState) => {
   const nodes = [...(state.documentNodes ?? []), ...(state.runtimeNodes ?? [])];
   const payloads = new Map(delta.nodeRefs!.map((ref, index) => [ref.nodeHash, JSON.stringify(nodes[index])]));
   const legacyNodes = new Map<string, string>();
-  const queries: Array<{ sql: string; values: VoidSqlBindableValue[] }> = [];
+  const queries: Array<{ sql: string; values: SqlBindableValue[] }> = [];
   const fixture = { delta: delta as ResolvedHeapDeltaRecord | null, legacyState: null as ResolvedNulldownState | null };
-  const db: VoidSqlStore = {
+  const db: SqlMetadataStore = {
     prepare(sql) {
-      let values: VoidSqlBindableValue[] = [];
+      let values: SqlBindableValue[] = [];
       const matchesTarget = () => JSON.stringify(values) === JSON.stringify([
         state.rootDropId, state.branchId, state.snapshotId, state.resolverId,
       ]);
@@ -74,7 +74,7 @@ const projectionFixture = async (state: ResolvedNulldownState) => {
   return { db, read, fixture, delta, payloads, legacyNodes, queries };
 };
 
-const memoryBlobs = (): VoidBlobStore => {
+const memoryBlobs = (): BlobObjectStore => {
   const values = new Map<string, string>();
   const etags = new Map<string, string>();
   let revision = 0;

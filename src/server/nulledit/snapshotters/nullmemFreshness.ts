@@ -1,4 +1,4 @@
-import type { VoidDataKey, VoidDataStore } from "../../ports";
+import type { RuntimeDataKey, RuntimeDataStore } from "../../ports";
 import type {
   NulleditNextRequest,
   NulleditNextResult,
@@ -24,18 +24,18 @@ export interface NulleditNullMemFreshnessWatermark {
   acceptedEventCount: number;
 }
 
-/** VoidDataStore namespace for NullMem freshness watermarks. */
+/** RuntimeDataStore namespace for NullMem freshness watermarks. */
 export const NULLMEM_FRESHNESS_WATERMARK_NAMESPACE = "nullmem" as const;
 
-/** VoidDataStore collection for NullMem freshness watermarks. */
+/** RuntimeDataStore collection for NullMem freshness watermarks. */
 export const NULLMEM_FRESHNESS_WATERMARK_COLLECTION =
   "freshness_watermarks" as const;
 
-/** Builds the VoidDataStore key for a branch freshness watermark. */
+/** Builds the RuntimeDataStore key for a branch freshness watermark. */
 export const createNullMemFreshnessWatermarkKey = (
   rootDropId: string,
   branchId: string,
-): VoidDataKey => ({
+): RuntimeDataKey => ({
   namespace: NULLMEM_FRESHNESS_WATERMARK_NAMESPACE,
   collection: NULLMEM_FRESHNESS_WATERMARK_COLLECTION,
   scope: { rootDropId, branchId },
@@ -81,9 +81,9 @@ export const createNulleditNullMemFreshnessSnapshotter = ({
   },
 });
 
-/** Reads the latest freshness watermark for a branch from the VoidDataStore. */
+/** Reads the latest freshness watermark for a branch from the RuntimeDataStore. */
 export const readNullMemFreshnessWatermark = async (
-  data: VoidDataStore,
+  data: RuntimeDataStore,
   rootDropId: string,
   branchId: string,
 ): Promise<NulleditNullMemFreshnessWatermark | null> =>
