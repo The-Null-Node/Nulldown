@@ -1,7 +1,7 @@
 import type { NulleditSnapshotter } from "../types";
 import { createNulleditDiffRefSnapshotter } from "./diffRefs";
 import { createNulleditFrameSnapshotter } from "./frame";
-import { createNulleditPolicyObserverSnapshotter } from "./policyObserver";
+import { createNulleditPolicyObserverSnapshotter } from "./policy-observer";
 import { createNulleditResolvedDocumentSnapshotter } from "./resolvedDocument";
 
 /** Creates the built-in Nulledit snapshotters registered by provider adapters. */
