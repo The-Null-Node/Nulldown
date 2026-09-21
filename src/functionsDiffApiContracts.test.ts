@@ -5,8 +5,8 @@ import { onRequest } from "../functions/api/diff/[id]";
 import { postDiffEvents } from "../functions/api/_lib/diffs/transport/service";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutation-lock";
-import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare-storage-adapters";
-import { createCloudflareBackendRuntime } from "../functions/api/_lib/core/platform/cloudflare-backend-runtime";
+import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare/runtime-data/store";
+import { createCloudflareBackendRuntime } from "../functions/api/_lib/core/platform/cloudflare/runtime/composition";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle";
 import {

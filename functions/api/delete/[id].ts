@@ -2,7 +2,7 @@ import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-ty
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../_lib/core/platform/cloudflare-storage-adapters";
+} from "../_lib/core/platform/cloudflare/storage";
 import { removePublicDropIndexEntry } from "../_lib/drops/index/repository";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { acquireRootMutationLock } from "../_lib/drops/storage/mutationLock";

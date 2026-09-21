@@ -6,7 +6,7 @@ import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEs
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../../core/platform/cloudflare-storage-adapters";
+} from "../../core/platform/cloudflare/storage";
 import { createDropIdentityRepository } from "../identity/id";
 import type { AccountAuthRequest } from "../../accounts/session/authentication";
 import {

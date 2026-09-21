@@ -9,7 +9,7 @@ import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../_lib/core/platform/cloudflare-storage-adapters";
+} from "../_lib/core/platform/cloudflare/storage";
 import {
   getRootDrop,
   type GetRootDropServiceEnv,

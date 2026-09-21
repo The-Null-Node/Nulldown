@@ -1,10 +1,10 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { handleNullplugResolveRequest } from "../_lib/nullplug/resolve-controller";
-import { createCloudflareBackendRuntime } from "../_lib/core/platform/cloudflare-backend-runtime";
+import { createCloudflareBackendRuntime } from "../_lib/core/platform/cloudflare/runtime/composition";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../_lib/core/platform/cloudflare-storage-adapters";
+} from "../_lib/core/platform/cloudflare/storage";
 
 interface Env {
   R2_BUCKET: R2Bucket;

@@ -1,16 +1,19 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { createHash } from "node:crypto";
-import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare-storage-adapters";
-import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
-import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle";
-import { onRequestGet } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
-import { ensureResolvedHeapProjection } from "../functions/api/_lib/resolved/heap/projector";
-import { readResolvedHeapState } from "../functions/api/_lib/resolved/heap/state";
-import { createNulleditResolvedDocumentSnapshotter } from "./server/nulledit/snapshotters/resolvedDocument";
-import { createResolvedHeapDataKey } from "./server/nulledit/dataKeys/resolved";
-import { heapifyResolvedDocument } from "../shared/drop/resolved/heapify/document";
-import { RESOLVED_DOCUMENT_RESOLVER_ID, RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved/constants";
-import type { ResolvedNulldownState } from "../shared/drop/resolved/types";
+import { createCloudflareRuntimeDataStore } from "./store";
+import { appendEventsToBranch } from "../../../../nulledit/service";
+import { resolveBranchForActor } from "../../../../branches/lifecycle";
+import { onRequestGet } from "../../../../../branches/[rootId]/[branchId]/resolved/query";
+import { ensureResolvedHeapProjection } from "../../../../resolved/heap/projector";
+import { readResolvedHeapState } from "../../../../resolved/heap/state";
+import { createNulleditResolvedDocumentSnapshotter } from "../../../../../../../src/server/nulledit/snapshotters/resolvedDocument";
+import { createResolvedHeapDataKey } from "../../../../../../../src/server/nulledit/dataKeys/resolved";
+import { heapifyResolvedDocument } from "../../../../../../../shared/drop/resolved/heapify/document";
+import {
+  RESOLVED_DOCUMENT_RESOLVER_ID,
+  RESOLVED_RUNTIME_REFS_RESOLVER_ID,
+} from "../../../../../../../shared/drop/resolved/constants";
+import type { ResolvedNulldownState } from "../../../../../../../shared/drop/resolved/types";
 
 interface StoredObject {
   value: string;
@@ -560,5 +563,32 @@ describe("Cloudflare runtime data store contracts", () => {
     await expect(data.query({ namespace: "nulledit" })).rejects.toThrow(
       "void_data_store_db_required",
     );
+  });
+
+  it("holds and releases the stable R2 lock around runtime-data work", async () => {
+    const bucket = new MemoryR2Bucket();
+    const data = createCloudflareRuntimeDataStore({
+      R2_BUCKET: bucket as unknown as R2Bucket,
+      DB: new MemoryD1Database() as unknown as D1Database,
+    });
+    const key = {
+      namespace: "nulledit",
+      collection: "snapshot_frames",
+      scope: { rootDropId: "root-1", branchId: "owner" },
+      id: "1",
+    };
+
+    await expect(
+      data.lock(key, async (locked) => {
+        const during = await bucket.list({ prefix: "void-data-locks/" });
+        expect(during.objects).toHaveLength(1);
+        await locked.put(key, { locked: true });
+        return locked.get(key);
+      }),
+    ).resolves.toEqual({ locked: true });
+
+    await expect(
+      bucket.list({ prefix: "void-data-locks/" }),
+    ).resolves.toEqual(expect.objectContaining({ objects: [] }));
   });
 });

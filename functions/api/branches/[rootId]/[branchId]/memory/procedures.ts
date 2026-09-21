@@ -3,11 +3,11 @@ import type {
   PagesFunction,
   R2Bucket,
 } from "@cloudflare/workers-types";
-import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/cloudflare-backend-runtime";
+import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/cloudflare/runtime/composition";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../../../../_lib/core/platform/cloudflare-storage-adapters";
+} from "../../../../_lib/core/platform/cloudflare/storage";
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
 import {
   createNullMemProcedure,

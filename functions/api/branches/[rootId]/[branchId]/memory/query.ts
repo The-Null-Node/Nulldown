@@ -4,10 +4,8 @@ import type {
   R2Bucket,
 } from "@cloudflare/workers-types";
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
-import {
-  createCloudflareStorageServiceEnv,
-  createCloudflareRuntimeDataStore,
-} from "../../../../_lib/core/platform/cloudflare-storage-adapters";
+import { createCloudflareStorageServiceEnv } from "../../../../_lib/core/platform/cloudflare/storage";
+import { createCloudflareRuntimeDataStore } from "../../../../_lib/core/platform/cloudflare/runtime-data/store";
 import { queryNullMem, type NullMemEnv } from "../../../../_lib/nullmem/http";
 
 interface Env extends Omit<NullMemEnv, "R2_BUCKET" | "DB"> {

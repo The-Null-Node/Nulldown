@@ -8,11 +8,11 @@ import {
   type ResolvedHeapEnv,
 } from "../../../../_lib/resolved/heap/service";
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
-import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/cloudflare-backend-runtime";
+import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/cloudflare/runtime/composition";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../../../../_lib/core/platform/cloudflare-storage-adapters";
+} from "../../../../_lib/core/platform/cloudflare/storage";
 
 interface Env extends Omit<ResolvedHeapEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;

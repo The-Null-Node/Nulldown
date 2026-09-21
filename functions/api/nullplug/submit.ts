@@ -3,7 +3,7 @@ import { handleNullplugResponseRequest } from "../_lib/nullplug/response-control
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../_lib/core/platform/cloudflare-storage-adapters";
+} from "../_lib/core/platform/cloudflare/storage";
 
 interface Env {
   R2_BUCKET: R2Bucket;

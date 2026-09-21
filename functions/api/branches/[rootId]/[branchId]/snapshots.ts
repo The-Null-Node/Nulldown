@@ -5,7 +5,7 @@ import type {
 } from "@cloudflare/workers-types";
 import { listBranchSnapshots } from "../../../_lib/branches/http/read";
 import type { BranchRouteEnv } from "../../../_lib/branches/http/request-context";
-import { createCloudflareStorageServiceEnv } from "../../../_lib/core/platform/cloudflare-storage-adapters";
+import { createCloudflareStorageServiceEnv } from "../../../_lib/core/platform/cloudflare/storage";
 
 interface Env extends Omit<BranchRouteEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;
