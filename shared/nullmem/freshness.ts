@@ -1,14 +1,72 @@
-import type {
-  NullMemCapsule,
-  NullMemFactRecord,
-  NullMemFreshnessInput,
-  NullMemFreshnessOptions,
-  NullMemFreshnessQueryResult,
-  NullMemFreshnessReport,
-  NullMemFreshnessResult,
-  NullMemFreshnessStatus,
-  NullMemRecord,
-} from "./types";
+import type { NullMemCapsule } from "./capsule";
+import type { NullMemQuery } from "./query";
+import type { NullMemFactRecord, NullMemRecord } from "./records";
+import type { NullMemProcedureStepProjection } from "./procedure";
+
+/** Freshness status for a NullMem record relative to its cited sources. */
+export type NullMemFreshnessStatus =
+  | "fresh"
+  | "explicit-stale"
+  | "superseded"
+  | "snapshot-outdated"
+  | "source-missing"
+  | "needs-review"
+  | "unverifiable";
+
+/** Report describing the freshness evaluation for a single memory record. */
+export interface NullMemFreshnessReport {
+  recordId: string;
+  status: NullMemFreshnessStatus;
+  reason: string;
+  currentSnapshotId?: number;
+  outdatedSnapshotRefs?: number[];
+  supersededBy?: string[];
+  hasStaleLabel: boolean;
+  hasSourceRefs: boolean;
+}
+
+/** Options controlling a freshness evaluation. */
+export interface NullMemFreshnessOptions {
+  currentSnapshotId?: number;
+  snapshotHeads?: Record<string, number>;
+  knownSupersedingIds?: string[];
+}
+
+/** Input bundle used to evaluate freshness for a batch of records. */
+export interface NullMemFreshnessInput {
+  records: NullMemRecord[];
+  currentSnapshotId?: number;
+  snapshotHeads?: Record<string, number>;
+  knownSupersedingIds?: string[];
+}
+
+/** Result of a batch freshness evaluation. */
+export interface NullMemFreshnessResult {
+  reports: NullMemFreshnessReport[];
+  byRecordId: Record<string, NullMemFreshnessReport>;
+}
+
+/** Request accepted when evaluating freshness for a branch memory query. */
+export interface NullMemFreshnessQueryRequest {
+  rootDropId: string;
+  branchId: string;
+  q?: string;
+  kind?: NullMemRecord["kind"];
+  labels?: string[];
+  limit?: number;
+  includeRecords?: boolean;
+}
+
+/** Result returned for a freshness query. */
+export interface NullMemFreshnessQueryResult {
+  rootDropId: string;
+  branchId: string;
+  query: NullMemQuery;
+  reports: NullMemFreshnessReport[];
+  records?: NullMemRecord[];
+  capsules?: NullMemCapsule[];
+  procedureSteps?: NullMemProcedureStepProjection[];
+}
 
 /** Extracts explicit superseding record ids from a record's labels. */
 export const extractSupersedesFromLabels = (labels?: string[]): string[] =>

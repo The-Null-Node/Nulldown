@@ -1,4 +1,18 @@
-import type { NullMemCapsule, NullMemRecord } from "./types";
+import type { NullMemRecord } from "./records";
+import type { NullMemSourceRef } from "./source-reference";
+
+/** Compact result returned to agents before expanding full source refs. */
+export interface NullMemCapsule {
+  recordId: string;
+  kind: NullMemRecord["kind"];
+  title?: string;
+  summary: string;
+  labels?: string[];
+  priority?: number;
+  confidence?: number;
+  sourceRefs?: NullMemSourceRef[];
+  record: NullMemRecord;
+}
 
 /** Builds searchable text for a NullMem record without copying full source content. */
 export const nullMemRecordText = (record: NullMemRecord): string => {

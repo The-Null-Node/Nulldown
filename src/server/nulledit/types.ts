@@ -12,8 +12,8 @@ import type { ResolvedPriorityFactRecord } from "../../../shared/drop/resolved/t
 import type {
   NullMemFactRecord,
   NullMemProcedureRecord,
-  NullMemSourceRef,
-} from "../../../shared/nullmem/types";
+} from "../../../shared/nullmem/records";
+import type { NullMemSourceRef } from "../../../shared/nullmem/source-reference";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,

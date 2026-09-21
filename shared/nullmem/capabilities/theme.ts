@@ -2,7 +2,10 @@ import {
   staticThemeCatalog,
   type StaticThemeCatalogEntry,
 } from "../../themeCatalog";
-import { NULLMEM_RECORD_VERSION, type NullMemCapabilityRecord } from "../types";
+import {
+  NULLMEM_RECORD_VERSION,
+  type NullMemCapabilityRecord,
+} from "../records";
 import { jsonRecordWithDefinedValues } from "./common";
 
 const themeModeLabels = (mode: StaticThemeCatalogEntry["mode"]): string[] =>

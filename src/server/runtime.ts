@@ -13,16 +13,16 @@ import type {
 } from "./nulledit";
 import type { NulleditNextRequest, NulleditNextResult } from "./nulledit/types";
 import type { RuntimeDataStore } from "./ports";
+import type { NullMemCapsule } from "../../shared/nullmem/capsule";
+import type { NullMemFreshnessReport } from "../../shared/nullmem/freshness";
+import type { NullMemQuery } from "../../shared/nullmem/query";
 import type {
-  NullMemCapsule,
   NullMemFactRecord,
-  NullMemFreshnessReport,
-  NullMemProcedureStepProjection,
   NullMemProcedureRecord,
-  NullMemQuery,
   NullMemRecord,
-  NullMemSourceRef,
-} from "../../shared/nullmem/types";
+} from "../../shared/nullmem/records";
+import type { NullMemProcedureStepProjection } from "../../shared/nullmem/procedure";
+import type { NullMemSourceRef } from "../../shared/nullmem/source-reference";
 import type { JsonValue } from "../../shared/nullplug/types";
 import type {
   NullplugRuntime,

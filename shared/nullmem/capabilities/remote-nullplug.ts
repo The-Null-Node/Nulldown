@@ -1,6 +1,9 @@
 import type { RemoteNullplugRegistryRecord } from "../../nullplug/registry";
 import type { JsonValue } from "../../nullplug/types";
-import { NULLMEM_RECORD_VERSION, type NullMemCapabilityRecord } from "../types";
+import {
+  NULLMEM_RECORD_VERSION,
+  type NullMemCapabilityRecord,
+} from "../records";
 import { jsonRecordWithDefinedValues, permissionLabel } from "./common";
 
 /** Converts a registered remote nullplug manifest into queryable capability memory. */

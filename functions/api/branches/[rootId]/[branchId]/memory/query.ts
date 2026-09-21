@@ -8,10 +8,7 @@ import {
   createCloudflareStorageServiceEnv,
   createCloudflareRuntimeDataStore,
 } from "../../../../_lib/core/platform/cloudflare-storage-adapters";
-import {
-  queryNullMem,
-  type NullMemEnv,
-} from "../../../../_lib/nullmem/service";
+import { queryNullMem, type NullMemEnv } from "../../../../_lib/nullmem/http";
 
 interface Env extends Omit<NullMemEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;

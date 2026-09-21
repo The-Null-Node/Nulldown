@@ -1,4 +1,7 @@
-import { NULLMEM_RECORD_VERSION, type NullMemCapabilityRecord } from "../types";
+import {
+  NULLMEM_RECORD_VERSION,
+  type NullMemCapabilityRecord,
+} from "../records";
 
 /** Returns built-in CLI operational capability records for repeatable agent workflows. */
 export const createCliOperationalCapabilityRecords = (

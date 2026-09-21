@@ -1,7 +1,7 @@
 import { parseJsonColumn } from "../core/d1/metadata";
 import { nullMemRecordText } from "../../../../shared/nullmem/capsule";
-import { isNullMemRecord } from "../../../../shared/nullmem/schemas";
-import type { NullMemRecord } from "../../../../shared/nullmem/types";
+import type { NullMemRecord } from "../../../../shared/nullmem/records";
+import { isNullMemRecord } from "../../../../shared/nullmem/validation";
 import type { SqlMetadataStore } from "../../../../src/server/ports";
 
 /** Ports used by the branch-scoped NullMem repository. */

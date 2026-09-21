@@ -1,9 +1,7 @@
 import { createBranchRepository } from "../branches/storage/repository";
 import { evaluateNullMemFreshnessBatch } from "../../../../shared/nullmem/freshness";
-import type {
-  NullMemFreshnessReport,
-  NullMemRecord,
-} from "../../../../shared/nullmem/types";
+import type { NullMemFreshnessReport } from "../../../../shared/nullmem/freshness";
+import type { NullMemRecord } from "../../../../shared/nullmem/records";
 import { readNullMemFreshnessWatermark } from "../../../../src/server/nulledit";
 import type {
   BlobObjectStore,

@@ -1,18 +1,18 @@
 import { describe, expect, it } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { onRequestGet as queryNullMemRoute } from "../functions/api/branches/[rootId]/[branchId]/memory/query";
-import { createBranchKey } from "../functions/api/_lib/branches/storage/keys";
-import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
-import { queryNullMem } from "../functions/api/_lib/nullmem/httpController";
-import { NULLPLUG_REGISTRY_LATEST_KEY_PREFIX } from "../shared/nullplug/registry";
-import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../shared/nullplug/protocol";
-import { createNullMemFreshnessWatermarkKey } from "./server/nulledit";
-import type { DropBranchRecord } from "../shared/drop/branch";
-import type { NullMemRecord } from "../shared/nullmem/types";
+import { onRequestGet as queryNullMemRoute } from "../../branches/[rootId]/[branchId]/memory/query";
+import { createBranchKey } from "../branches/storage/keys";
+import { createRemoteAliasKey } from "../drops/identity/id";
+import { queryNullMem } from "./http";
+import { NULLPLUG_REGISTRY_LATEST_KEY_PREFIX } from "../../../../shared/nullplug/registry";
+import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../../../shared/nullplug/protocol";
+import { createNullMemFreshnessWatermarkKey } from "../../../../src/server/nulledit";
+import type { DropBranchRecord } from "../../../../shared/drop/branch";
+import type { NullMemRecord } from "../../../../shared/nullmem/records";
 import type {
   BranchMemoryService,
   BranchMemoryQueryRequest,
-} from "./server/runtime";
+} from "../../../../src/server/runtime";
 import type {
   BlobObjectBody,
   BlobObject,
@@ -20,7 +20,7 @@ import type {
   SqlBindableValue,
   SqlStatement,
   SqlMetadataStore,
-} from "./server/ports";
+} from "../../../../src/server/ports";
 
 type Visibility = "public" | "unlisted" | "private";
 

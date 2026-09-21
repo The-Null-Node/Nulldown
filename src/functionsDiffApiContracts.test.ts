@@ -52,7 +52,7 @@ import type { DropDiffEvent } from "../shared/drop/diff";
 import type {
   NullMemFactRecord,
   NullMemProcedureRecord,
-} from "../shared/nullmem/types";
+} from "../shared/nullmem/records";
 
 interface StoredObject {
   value: string;

@@ -12,7 +12,7 @@ import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
 import {
   createNullMemFact,
   type NullMemEnv,
-} from "../../../../_lib/nullmem/service";
+} from "../../../../_lib/nullmem/http";
 
 interface Env extends Omit<NullMemEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;

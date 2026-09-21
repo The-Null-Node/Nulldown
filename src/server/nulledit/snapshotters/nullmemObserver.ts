@@ -1,5 +1,5 @@
 import type { JsonValue, DropDiffEvent } from "../../../../shared/drop/diff";
-import type { NullMemSourceRef } from "../../../../shared/nullmem/types";
+import type { NullMemSourceRef } from "../../../../shared/nullmem/source-reference";
 import type {
   NulleditNextRequest,
   NulleditNextResult,

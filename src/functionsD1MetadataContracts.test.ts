@@ -29,10 +29,10 @@ import {
 import {
   createNullMemFact,
   createNullMemProcedure,
-  createNullMemService,
   deleteNullMemRecord,
   queryNullMem,
-} from "../functions/api/_lib/nullmem/service";
+} from "../functions/api/_lib/nullmem/http";
+import { createNullMemService } from "../functions/api/_lib/nullmem/service";
 import { backfillD1Metadata } from "../functions/api/_lib/core/d1/backfillService";
 import {
   putNullplugUiResponseFact,

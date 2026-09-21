@@ -5,14 +5,14 @@ import {
   type NullMemCapabilityExample,
   type NullMemCapabilityRecord,
   type NullMemFactRecord,
-  type NullMemProcedureCallHint,
   type NullMemProcedureRecord,
-  type NullMemProcedureStep,
-  type NullMemQuery,
   type NullMemRecord,
-} from "./types";
-import { NullMemSourceRefSchema } from "./sourceRefs";
-export { NullMemSourceRefSchema, isNullMemSourceRef } from "./sourceRefs";
+} from "./records";
+import type {
+  NullMemProcedureCallHint,
+  NullMemProcedureStep,
+} from "./procedure";
+import { NullMemSourceRefSchema } from "./source-reference";
 
 const finiteNumberSchema = z.number().finite();
 
@@ -180,17 +180,6 @@ export const NullMemRecordSchema = z.discriminatedUnion("kind", [
   NullMemProcedureRecordSchema,
   NullMemFactRecordSchema,
 ]) satisfies z.ZodType<NullMemRecord>;
-
-/** Canonical schema for querying NullMem capsules. */
-export const NullMemQuerySchema = z.object({
-  q: z.string().optional(),
-  kind: z.enum(["capability", "procedure", "fact"]).optional(),
-  labels: z.array(z.string()).optional(),
-  limit: finiteNumberSchema.optional(),
-  procedureId: z.string().optional(),
-  afterStep: finiteNumberSchema.optional(),
-  stepLimit: finiteNumberSchema.optional(),
-}) satisfies z.ZodType<NullMemQuery>;
 
 /** Returns true when a value is any valid NullMem record. */
 export const isNullMemRecord = (value: unknown): value is NullMemRecord =>

@@ -15,8 +15,8 @@ import {
   hasStaleMemoryLabel,
   extractSupersedesFromLabels,
   collectSnapshotSourceIds,
-} from "./nullmem";
-import { NULLPLUG_INVOKE_CONTENT_TYPE } from "./nullplug/registry";
+} from "../nullmem";
+import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../nullplug/registry";
 
 describe("NullMem contracts", () => {
   it("validates capability, procedure, and fact records", () => {

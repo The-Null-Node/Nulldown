@@ -1,27 +1,22 @@
 import {
-  resolveAuthenticatedAccountId,
-  type AccountAuthEnv,
-} from "../accounts/session/auth";
-import { createBranchRepository } from "../branches/storage/repository";
-import {
   jsonErrorResponse,
   jsonResponse,
   readRequestTextWithLimit,
   resolveParam,
 } from "../core/http/responses";
-import { createDropIdentityRepository } from "../drops/identity/id";
 import {
-  canReadBranch,
-  canReadSensitiveBranch,
-  resolveRootReadAuthorization,
-} from "../security/readAuthorization";
-import { createNullMemService } from "./applicationService";
+  authorizeNullMemAccess,
+  resolveNullMemQueryTarget,
+  resolveNullMemTarget,
+  type NullMemAuthorizationEnv,
+} from "./authorization";
+import { createNullMemService } from "./service";
 import {
   type NullMemFactRecord,
   type NullMemProcedureRecord,
   type NullMemRecord,
-  type NullMemSourceRef,
-} from "../../../../shared/nullmem/types";
+} from "../../../../shared/nullmem/records";
+import type { NullMemSourceRef } from "../../../../shared/nullmem/source-reference";
 import type { JsonValue } from "../../../../shared/nullplug/types";
 import { NULLPLUG_REGISTRY_LATEST_KEY_PREFIX } from "../../../../shared/nullplug/registry";
 import type {
@@ -36,7 +31,7 @@ import type {
 } from "../../../../src/server/runtime";
 
 /** Environment required by branch-scoped NullMem services. */
-export interface NullMemEnv extends AccountAuthEnv {
+export interface NullMemEnv extends NullMemAuthorizationEnv {
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
 }
@@ -46,12 +41,6 @@ export interface NullMemParams {
   rootId: string | string[];
   branchId: string | string[];
   recordId?: string | string[];
-}
-
-interface ResolvedNullMemTarget {
-  rootDropId: string;
-  branchId: string;
-  branch: { ownerAccountId?: string | null; writerAccountId?: string | null };
 }
 
 interface NullMemFactRequest {
@@ -89,14 +78,6 @@ interface NullMemHttpServices {
 
 const NULLMEM_BODY_MAX_BYTES = 256_000;
 const PUBLIC_MEMORY_LABEL = "public-memory";
-
-interface NullMemAccess {
-  isAnonymous: boolean;
-}
-
-interface ResolvedNullMemQueryTarget extends ResolvedNullMemTarget {
-  canReadSensitive: boolean;
-}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -195,125 +176,6 @@ const parseOptionalBoolean = (value: string | null): boolean | undefined => {
   return value === "true" ? true : value === "false" ? false : undefined;
 };
 
-const resolveNullMemTarget = async (
-  env: NullMemEnv,
-  params: NullMemParams,
-): Promise<ResolvedNullMemTarget | { error: Response }> => {
-  const requestedRootId = resolveParam(params.rootId);
-  const requestedBranchId = resolveParam(params.branchId);
-  if (!requestedRootId || !requestedBranchId) {
-    return {
-      error: jsonErrorResponse(
-        400,
-        "validation_failed",
-        "rootId and branchId are required.",
-      ),
-    };
-  }
-
-  const dropIdentityRepository = createDropIdentityRepository({
-    blobs: env.R2_BUCKET,
-    sql: env.DB,
-  });
-  const rootDropId = await dropIdentityRepository.resolveRemoteDropId(
-    requestedRootId,
-  );
-  if (!rootDropId) {
-    return {
-      error: jsonErrorResponse(
-        404,
-        "root_drop_not_found",
-        "Root drop not found.",
-      ),
-    };
-  }
-
-  const branchRepository = createBranchRepository({
-    blobs: env.R2_BUCKET,
-    sql: env.DB,
-  });
-  const branch = await branchRepository.readBranch(
-    rootDropId,
-    requestedBranchId,
-  );
-  if (!branch) {
-    return {
-      error: jsonErrorResponse(404, "branch_not_found", "Branch not found."),
-    };
-  }
-
-  return { rootDropId, branchId: requestedBranchId, branch };
-};
-
-const branchNotFoundResponse = (): Response =>
-  jsonErrorResponse(404, "branch_not_found", "Branch not found.");
-
-const resolveNullMemQueryTarget = async (
-  request: Request,
-  env: NullMemEnv,
-  params: NullMemParams,
-): Promise<ResolvedNullMemQueryTarget | { error: Response }> => {
-  const requestedRootId = resolveParam(params.rootId);
-  const requestedBranchId = resolveParam(params.branchId);
-  if (!requestedRootId || !requestedBranchId) {
-    return {
-      error: jsonErrorResponse(
-        400,
-        "validation_failed",
-        "rootId and branchId are required.",
-      ),
-    };
-  }
-
-  const dropIdentityRepository = createDropIdentityRepository({
-    blobs: env.R2_BUCKET,
-    sql: env.DB,
-  });
-  const rootDropId =
-    await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
-      requestedRootId,
-    );
-  if (!rootDropId) {
-    return {
-      error: jsonErrorResponse(
-        404,
-        "root_drop_not_found",
-        "Root drop not found.",
-      ),
-    };
-  }
-
-  const rootDecision = await resolveRootReadAuthorization(
-    request,
-    env,
-    rootDropId,
-  );
-  if (rootDecision.kind === "denied") {
-    return { error: branchNotFoundResponse() };
-  }
-
-  const branchRepository = createBranchRepository({
-    blobs: env.R2_BUCKET,
-    sql: env.DB,
-  });
-  const branch = await branchRepository.readBranch(rootDropId, requestedBranchId);
-  if (!branch || !canReadBranch(rootDecision, branch)) {
-    return { error: branchNotFoundResponse() };
-  }
-
-  return {
-    rootDropId,
-    branchId: requestedBranchId,
-    branch,
-    canReadSensitive: await canReadSensitiveBranch(
-      request,
-      env,
-      rootDropId,
-      branch,
-    ),
-  };
-};
-
 const withoutRemoteCapabilityCatalog = (
   blobs: BlobObjectStore,
 ): BlobObjectStore => ({
@@ -326,38 +188,6 @@ const withoutRemoteCapabilityCatalog = (
       ? Promise.resolve({ objects: [], truncated: false })
       : blobs.list(options),
 });
-
-const authorizeNullMemAccess = async (
-  request: Request,
-  env: NullMemEnv,
-  branch: { ownerAccountId?: string | null; writerAccountId?: string | null },
-  action: "query" | "create" | "delete",
-): Promise<NullMemAccess | Response> => {
-  const accountId = await resolveAuthenticatedAccountId(request, env);
-  if (!accountId) {
-    if (action === "query") {
-      return { isAnonymous: true };
-    }
-    return jsonErrorResponse(
-      401,
-      "account_required",
-      "Authenticated account session is required.",
-    );
-  }
-
-  if (
-    accountId !== branch.ownerAccountId &&
-    accountId !== branch.writerAccountId
-  ) {
-    return jsonErrorResponse(
-      403,
-      "forbidden",
-      `You are not allowed to ${action} memory for this branch.`,
-    );
-  }
-
-  return { isAnonymous: false };
-};
 
 const createNullMemHttpServices = (
   env: NullMemEnv,
@@ -432,14 +262,17 @@ export const queryNullMem = async (
       url.searchParams.get("stepLimit") ?? url.searchParams.get("step_limit"),
     );
     const includeRecords = parseOptionalBoolean(
-      url.searchParams.get("includeRecords") ?? url.searchParams.get("include_records"),
+      url.searchParams.get("includeRecords") ??
+        url.searchParams.get("include_records"),
     );
     const includeFreshness =
       url.searchParams.get("includeFreshness") === "true" ||
       url.searchParams.get("include_freshness") === "true" ||
       url.searchParams.get("freshness") === "true";
     const wantsProcedureSteps = Boolean(
-      procedureId || typeof afterStep === "number" || typeof stepLimit === "number",
+      procedureId ||
+      typeof afterStep === "number" ||
+      typeof stepLimit === "number",
     );
 
     const memory =

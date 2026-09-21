@@ -1,5 +1,40 @@
 import { z } from "zod";
-import type { NullMemSourceRef } from "./types";
+
+/** Stable source reference used by NullMem records to cite primary evidence. */
+export type NullMemSourceRef =
+  | { kind: "drop"; rootDropId: string }
+  | { kind: "branch"; rootDropId: string; branchId: string }
+  | {
+      kind: "snapshot";
+      rootDropId: string;
+      branchId: string;
+      snapshotId: number;
+    }
+  | {
+      kind: "diff";
+      rootDropId: string;
+      branchId: string;
+      eventId: string;
+      seq?: number;
+    }
+  | {
+      kind: "node";
+      rootDropId: string;
+      branchId: string;
+      resolverId: string;
+      nodeId: string;
+    }
+  | {
+      kind: "heap";
+      rootDropId: string;
+      branchId: string;
+      resolverId: string;
+      snapshotId: number;
+    }
+  | { kind: "nullplug"; pluginId: string; version?: string }
+  | { kind: "tool"; toolId: string }
+  | { kind: "theme"; themeId: string }
+  | { kind: "mcp"; toolId: string };
 
 const finiteNumberSchema = z.number().finite();
 

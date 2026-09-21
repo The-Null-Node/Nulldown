@@ -1,7 +1,7 @@
-import { createBuiltInNullMemCapabilities } from "../../../../shared/nullmem/capabilities/builtIns";
-import { createRemoteNullplugCapabilityRecord } from "../../../../shared/nullmem/capabilities/remoteNullplug";
+import { createBuiltInNullMemCapabilities } from "../../../../shared/nullmem/capabilities/built-ins";
+import { createRemoteNullplugCapabilityRecord } from "../../../../shared/nullmem/capabilities/remote-nullplug";
 import { createThemeCatalogCapabilityRecords } from "../../../../shared/nullmem/capabilities/theme";
-import type { NullMemRecord } from "../../../../shared/nullmem/types";
+import type { NullMemRecord } from "../../../../shared/nullmem/records";
 import {
   NULLPLUG_REGISTRY_LATEST_KEY_PREFIX,
   isRemoteNullplugRegistryRecord,
