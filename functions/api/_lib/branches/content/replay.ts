@@ -3,7 +3,7 @@ import { type DropDiffEvent, dropDiffOpToDiff } from "../../../../../shared/drop
 import { applyDiff } from "../../../../../shared/nulledit/textDiff";
 import { DiffOp, type Diff } from "../../../../../shared/nulledit/types";
 import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
-import { createBranchDiffRepository } from "../storage/diffLogRepository";
+import { createBranchDiffRepository } from "../storage/diff-log";
 import { createBranchRepository } from "../storage/repository";
 
 const toEditableDiff = (op: DropDiffEvent["ops"][number]): Diff | null => {

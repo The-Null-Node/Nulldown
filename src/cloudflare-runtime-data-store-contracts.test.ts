@@ -2,7 +2,7 @@ import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { createHash } from "node:crypto";
 import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare-storage-adapters";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
-import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
+import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle";
 import { onRequestGet } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
 import { ensureResolvedHeapProjection } from "../functions/api/_lib/resolved/heap/projector";
 import { readResolvedHeapState } from "../functions/api/_lib/resolved/heap/state";

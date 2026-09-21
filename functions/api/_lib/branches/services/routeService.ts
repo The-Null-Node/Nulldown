@@ -8,7 +8,7 @@ import {
 import {
   backfillBranchToSnapshotHeap,
   resolveBranchForActor,
-} from "../lifecycle/service";
+} from "../lifecycle";
 import { readBranchContent } from "../content/replay";
 import { createBranchRepository } from "../storage/repository";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";

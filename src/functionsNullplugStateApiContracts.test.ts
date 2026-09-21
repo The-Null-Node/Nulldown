@@ -11,7 +11,7 @@ import {
   createBranchKey,
   createCheckpointKey,
 } from "../functions/api/_lib/branches/storage/keys";
-import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtimeFactLogRepository";
+import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtime-fact-log";
 
 interface StoredObject {
   value: string;

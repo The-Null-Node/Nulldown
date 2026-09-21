@@ -4,7 +4,7 @@ import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest as onResolvedQueryRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
 import { onRequest as onResolvedUpdateRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/update";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
-import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
+import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle";
 import type { DropDiffEvent } from "../shared/drop/diff";
 import { NULLDOWN_ACCOUNT_ID_HEADER, isDropSnapshotRecord } from "../shared/drop/branch";
 import { createBranchRepository } from "../functions/api/_lib/branches/storage/repository";

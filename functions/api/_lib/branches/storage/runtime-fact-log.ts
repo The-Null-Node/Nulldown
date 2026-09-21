@@ -15,7 +15,7 @@ import {
   createBranchRuntimeFactHeadKey,
 } from "./keys";
 import { readR2Json, writeR2Json } from "./repository";
-import { withBranchMutationLock } from "./mutationLock";
+import { withBranchMutationLock } from "./mutation-lock";
 
 /** Ports used by the branch runtime-fact timeline repository. */
 export interface BranchRuntimeFactLogRepositoryPorts {

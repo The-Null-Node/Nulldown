@@ -1,42 +1,42 @@
 import { z } from "zod";
-import { toShortDropId } from "../../../../../shared/drop/id";
+import { toShortDropId } from "../../../../shared/drop/id";
 import type {
   DropBranchPromoteRequest,
   DropBranchPromoteResponse,
-} from "../../../../../shared/drop/branch";
-import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
+} from "../../../../shared/drop/branch";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../src/server/ports";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../accounts/session/authentication";
-import { readBranchContent } from "../content/replay";
-import { createBranchRepository } from "../storage/repository";
+} from "../accounts/session/authentication";
+import { readBranchContent } from "./content/replay";
+import { createBranchRepository } from "./storage/repository";
 import {
   completeBranchPromotionReceipt,
   createBranchPromotionReceipt,
   readBranchPromotionReceipt,
   type BranchPromotionReceipt,
-} from "../storage/promotionReceiptRepository";
+} from "./storage/promotion-receipt";
 import {
   BranchMutationLockError,
   withBranchMutationLock,
-} from "../storage/mutationLock";
-import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
-import { createDropIdentityRepository } from "../../drops/identity/id";
+} from "./storage/mutation-lock";
+import { sanitizeDiffAuthToken } from "../diffs/credentials/repository";
+import { createDropIdentityRepository } from "../drops/identity/id";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
   jsonErrorResponse,
   readJsonBodyWithSchema,
   resolveParam,
-} from "../../core/http/responses";
-import { createPromotedEnvelope } from "../../crypto/envelopes/promotion";
-import { encodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
+} from "../core/http/responses";
+import { createPromotedEnvelope } from "../crypto/envelopes/promotion";
+import { encodeDropEnvelope } from "../../../../shared/drop/codecs/envelope-v1";
 import {
   createReservedRemoteJsonDrop,
   releaseReservedRemoteJsonDropId,
   reserveRemoteJsonDropId,
-} from "../../drops/storage/remoteCreate";
+} from "../drops/storage/remoteCreate";
 
 const PROMOTION_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/;
 const PROMOTION_REQUEST_MAX_BYTES = 1024;

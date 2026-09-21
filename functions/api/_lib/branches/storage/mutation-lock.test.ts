@@ -2,13 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { jest } from "@jest/globals";
-import {
-  BranchMutationLockError,
-  withBranchMutationLock,
-} from "../functions/api/_lib/branches/storage/mutationLock";
-import { createBranchLockKey } from "../functions/api/_lib/branches/storage/keys";
-import { createFilesystemBlobStore } from "./server/filesystem-blob-store";
-import type { BlobObjectStore } from "./server/ports";
+import { withBranchMutationLock } from "./mutation-lock";
+import type { BranchMutationLockError } from "./mutation-lock";
+import { createBranchLockKey } from "./keys";
+import { createFilesystemBlobStore } from "../../../../../src/server/filesystem-blob-store";
+import type { BlobObjectStore } from "../../../../../src/server/ports";
 
 describe("branch mutation lock", () => {
   let rootDir: string;

@@ -1,7 +1,7 @@
 import { createResolvedHeapProjectionRepository } from "../functions/api/_lib/resolved/heap/projectionRepository";
 import { ensureResolvedHeapProjection } from "../functions/api/_lib/resolved/heap/projector";
 import { readResolvedHeapState } from "../functions/api/_lib/resolved/heap/state";
-import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtimeFactLogRepository";
+import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtime-fact-log";
 import { putNullplugUiResponseFact } from "../functions/api/_lib/nullplug/facts/repository";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,

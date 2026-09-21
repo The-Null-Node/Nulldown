@@ -1,14 +1,14 @@
 import {
   type DropBranchRecord,
   type DropSnapshotRecord,
-} from "../../../../../shared/drop/branch";
-import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
-import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
+} from "../../../../shared/drop/branch";
+import { isDropPayload } from "../../../../shared/drop/codecs/draft-pack-v1";
+import { decodeDropEnvelope } from "../../../../shared/drop/codecs/envelope-v1";
 import type {
   BlobObjectStore,
   SqlMetadataStore,
-} from "../../../../../src/server/ports";
-import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
+} from "../../../../src/server/ports";
+import { decryptProviderEscrowEnvelope } from "../crypto/envelopes/providerEscrow";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
   OWNER_BRANCH_ID,
@@ -16,17 +16,17 @@ import {
   createCloneBranchId,
   createWriterBranchKey,
   createWriterKey,
-} from "../storage/keys";
-import { createBranchDiffRepository } from "../storage/diffLogRepository";
+} from "./storage/keys";
+import { createBranchDiffRepository } from "./storage/diff-log";
 import {
   withBranchMutationLock,
   type BranchMutationLockContext,
-} from "../storage/mutationLock";
+} from "./storage/mutation-lock";
 import {
   createBranchRepository,
   readR2Text,
   resolveSnapshotCheckpointKey,
-} from "../storage/repository";
+} from "./storage/repository";
 
 /** Root drop material required to initialize or resolve branch timelines. */
 export interface RootDropState {

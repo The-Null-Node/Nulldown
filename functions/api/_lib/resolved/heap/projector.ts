@@ -1,6 +1,6 @@
 import { listNullplugRuntimeFacts } from "../../nullplug/facts/repository";
-import { createBranchRuntimeFactLogRepository } from "../../branches/storage/runtimeFactLogRepository";
-import { withBranchMutationLock } from "../../branches/storage/mutationLock";
+import { createBranchRuntimeFactLogRepository } from "../../branches/storage/runtime-fact-log";
+import { withBranchMutationLock } from "../../branches/storage/mutation-lock";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,

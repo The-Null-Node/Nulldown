@@ -30,9 +30,9 @@ import {
   applyBranchDiffEvents,
   readBranchContent,
 } from "../branches/content/replay";
-import { ensureBranchHeapV2ForMutation } from "../branches/lifecycle/service";
-import { withBranchMutationLock } from "../branches/storage/mutationLock";
-import { createBranchDiffRepository } from "../branches/storage/diffLogRepository";
+import { ensureBranchHeapV2ForMutation } from "../branches/lifecycle";
+import { withBranchMutationLock } from "../branches/storage/mutation-lock";
+import { createBranchDiffRepository } from "../branches/storage/diff-log";
 import {
   createBranchRepository,
   resolveSnapshotCheckpointKey,

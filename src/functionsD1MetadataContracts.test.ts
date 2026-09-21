@@ -56,7 +56,7 @@ import {
   pollBranchDiffEventsSince,
   readBranchDiffEventBySeq,
   writeBranchDiffEvent,
-} from "../functions/api/_lib/branches/storage/diffLogRepository";
+} from "../functions/api/_lib/branches/storage/diff-log";
 import {
   createBranchDiffEventIdMarkerV2Key,
   createBranchDiffEventKey,

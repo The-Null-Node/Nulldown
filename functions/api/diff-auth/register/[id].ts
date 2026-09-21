@@ -9,7 +9,7 @@ import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
 } from "../../_lib/accounts/session/authentication";
-import { resolveBranchForActor } from "../../_lib/branches/lifecycle/service";
+import { resolveBranchForActor } from "../../_lib/branches/lifecycle";
 import { createDropIdentityRepository } from "../../_lib/drops/identity/id";
 import { createRequestLogger, serializeError, toLogRef } from "../../_lib/core/logging/logger";
 import type {

@@ -48,7 +48,7 @@ import {
   createBranchRepository,
   readR2Json,
 } from "../../branches/storage/repository";
-import { createBranchDiffRepository } from "../../branches/storage/diffLogRepository";
+import { createBranchDiffRepository } from "../../branches/storage/diff-log";
 import {
   createDiffCredentialRepository,
   DIFF_AUTH_KEY_PREFIX,

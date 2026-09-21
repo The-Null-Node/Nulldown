@@ -4,11 +4,11 @@ import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/diff/[id]";
 import { postDiffEvents } from "../functions/api/_lib/diffs/transport/service";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
-import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutationLock";
+import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutation-lock";
 import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare-storage-adapters";
 import { createCloudflareBackendRuntime } from "../functions/api/_lib/core/platform/cloudflare-backend-runtime";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
-import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
+import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle";
 import {
   readBranch,
   readSnapshot,
@@ -21,7 +21,7 @@ import {
   createBranchDiffEventKey,
   createSnapshotKey,
 } from "../functions/api/_lib/branches/storage/keys";
-import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtimeFactLogRepository";
+import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtime-fact-log";
 import {
   createNulleditNullMemObserverSnapshotter,
   createNulleditPolicyDecisionFactDataKey,

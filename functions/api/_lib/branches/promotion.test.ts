@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
-import { promoteBranchSnapshot } from "../functions/api/_lib/branches/services/promotionService";
-import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
-import { createBranchPromotionReceipt } from "../functions/api/_lib/branches/storage/promotionReceiptRepository";
-import { writeBranch } from "../functions/api/_lib/branches/storage/repository";
-import { createBranchLockKey } from "../functions/api/_lib/branches/storage/keys";
+import { resolveBranchForActor } from "./lifecycle";
+import { promoteBranchSnapshot } from "./promotion";
+import { createBranchLockKey } from "./storage/keys";
+import { createBranchPromotionReceipt } from "./storage/promotion-receipt";
+import { writeBranch } from "./storage/repository";
 
 interface StoredObject {
   value: string;

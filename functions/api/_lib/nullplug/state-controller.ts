@@ -17,11 +17,11 @@ import { createDropIdentityRepository } from "../drops/identity/id";
 import { resolveAuthenticatedAccountId } from "../accounts/session/authentication";
 import { createBranchRepository } from "../branches/storage/repository";
 import { readBranchContent } from "../branches/content/replay";
-import { createBranchRuntimeFactLogRepository } from "../branches/storage/runtimeFactLogRepository";
+import { createBranchRuntimeFactLogRepository } from "../branches/storage/runtime-fact-log";
 import {
   BranchMutationLockError,
   withBranchMutationLock,
-} from "../branches/storage/mutationLock";
+} from "../branches/storage/mutation-lock";
 import { sanitizeDiffAuthToken } from "../diffs/credentials/repository";
 import { updateResolvedHeap } from "../resolved/heap/service";
 import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../../../../shared/drop/resolved/constants";

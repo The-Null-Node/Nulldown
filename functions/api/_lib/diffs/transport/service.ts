@@ -25,12 +25,12 @@ import {
 import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import {
   createBranchDiffRepository,
-} from "../../branches/storage/diffLogRepository";
+} from "../../branches/storage/diff-log";
 import {
   createBranchRuntimeFactLogRepository,
-} from "../../branches/storage/runtimeFactLogRepository";
-import { BranchMutationLockError } from "../../branches/storage/mutationLock";
-import { resolveBranchForActor } from "../../branches/lifecycle/service";
+} from "../../branches/storage/runtime-fact-log";
+import { BranchMutationLockError } from "../../branches/storage/mutation-lock";
+import { resolveBranchForActor } from "../../branches/lifecycle";
 import { createBranchRepository } from "../../branches/storage/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import {
