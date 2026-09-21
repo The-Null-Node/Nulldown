@@ -38,6 +38,7 @@ Deprecated aliases are intentionally not shipped.
 | `VoidMemory`                            | `BranchMemoryService`                  | Branch-scoped memory query and mutation service.                         |
 | `VoidNullplugRuntime`                   | `NullplugRuntime`                      | Portable Nullplug invocation capability.                                 |
 | `VoidRuntimePolicy`                     | `NullplugRuntimePolicy`                | Portable policy evaluation capability used by the Nullplug runtime.      |
+| `createMemoryVoidDataStore(...)`        | `createMemoryRuntimeDataStore(...)`    | In-memory implementation exported by `server/memory-data-store`.         |
 
 The `@thenullnode/nulldown/client`, `auth/cliCredential`, and
 `auth/cliDevice` package subpaths remain unchanged. Their source modules moved
