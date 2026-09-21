@@ -1,8 +1,10 @@
-import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import {
-  backfillD1Metadata,
-  type MetadataBackfillEnv,
-} from "../_lib/core/d1/backfillService";
+import type {
+  D1Database,
+  PagesFunction,
+  R2Bucket,
+} from "@cloudflare/workers-types";
+import type { MetadataBackfillEnv } from "../_lib/core/d1/backfill/contracts";
+import { backfillD1Metadata } from "../_lib/core/d1/backfill/run";
 import { methodNotAllowedResponse } from "../_lib/core/http/responses";
 import { createRequestLogger } from "../_lib/core/logging/logger";
 
