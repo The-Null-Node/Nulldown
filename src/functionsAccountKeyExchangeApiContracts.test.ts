@@ -8,7 +8,7 @@ import {
   onRequestPut as recoveryPutRoute,
 } from "../functions/api/account/recovery";
 import type { AccountBindingEnvironment } from "../functions/api/_lib/accounts/binding/service";
-import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
+import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/token";
 import type { BlobObject, BlobObjectStore } from "./server/ports";
 import {
   type AccountRecoveryPayload,

@@ -20,10 +20,12 @@ import {
   NULLPLUG_UI_STATE_SNAPSHOT_KEY_PREFIX,
 } from "../../../../../shared/nullplug/ui";
 import {
-  ACCOUNT_RECORD_PREFIX,
   isAccountRecord,
+} from "../../accounts/identity/records";
+import {
+  ACCOUNT_RECORD_PREFIX,
   putAccountRecord,
-} from "../../accounts/session/auth";
+} from "../../accounts/identity/repository";
 import { verifyAccountLibraryEnvelopeOwnership } from "../../accounts/library/service";
 import { upsertAccountLibraryEntry } from "../../accounts/library/repository";
 import {

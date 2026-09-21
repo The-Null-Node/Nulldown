@@ -23,7 +23,7 @@ import {
 } from "../../../../shared/nullplug/types";
 import { normalizeAllowedHosts } from "../../../../shared/nullplug/policy";
 import { readProviderDropPayload } from "../drops/services/providerPayload";
-import type { AccountAuthRequest } from "../accounts/session/auth";
+import type { AccountAuthRequest } from "../accounts/session/authentication";
 
 const REMOTE_NULLPLUG_RESPONSE_MAX_BYTES = 1_000_000;
 const REMOTE_NULLPLUG_TIMEOUT_MS = 10_000;

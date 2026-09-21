@@ -1,4 +1,4 @@
-import type { AccountAuthEnv } from "../../accounts/session/auth";
+import type { AccountAuthEnv } from "../../accounts/session/authentication";
 import type {
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,

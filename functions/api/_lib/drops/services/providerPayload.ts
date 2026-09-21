@@ -8,7 +8,7 @@ import {
   createCloudflareSqlStore,
 } from "../../core/platform/cloudflare-storage-adapters";
 import { createDropIdentityRepository } from "../identity/id";
-import type { AccountAuthRequest } from "../../accounts/session/auth";
+import type { AccountAuthRequest } from "../../accounts/session/authentication";
 import {
   canReadRoot,
   resolveRootReadAuthorization,

@@ -1,14 +1,14 @@
 import { webcrypto, type webcrypto as NodeWebCrypto } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import { onRequest, onRequestPost } from "../functions/api/auth/session";
+import { onRequest, onRequestPost } from "./session";
+import { ACCOUNT_RECORD_PREFIX } from "../_lib/accounts/identity/repository";
+import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/authentication";
 import {
-  ACCOUNT_RECORD_PREFIX,
   issueAccountSessionToken,
-  resolveAuthenticatedAccountId,
   verifyAccountSessionToken,
-} from "../functions/api/_lib/accounts/session/auth";
-import { serializeCanonicalJson } from "../shared/drop/types";
+} from "../_lib/accounts/session/token";
+import { serializeCanonicalJson } from "../../../shared/drop/types";
 
 const crypto = webcrypto;
 type NodeCryptoKeyPair = NodeWebCrypto.CryptoKeyPair;

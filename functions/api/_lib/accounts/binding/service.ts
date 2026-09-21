@@ -5,10 +5,8 @@ import {
   serializeAccountBindingChallenge,
 } from "../../../../../shared/auth/codecs/account-binding-v1";
 import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
-import {
-  readAccountRecord,
-  resolveAuthenticatedAccountId,
-} from "../session/auth";
+import { readAccountRecord } from "../identity/repository";
+import { resolveAuthenticatedAccountId } from "../session/authentication";
 import {
   isSameOriginOpenAuthRequest,
   resolveOpenAuthRequestIdentity,

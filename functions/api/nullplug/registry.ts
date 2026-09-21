@@ -19,7 +19,7 @@ import { normalizeAllowedHosts } from "../../../shared/nullplug/policy";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../_lib/accounts/session/auth";
+} from "../_lib/accounts/session/authentication";
 import { timingSafeStringEqual } from "../_lib/core/auth/bearer";
 import { createRequestLogger } from "../_lib/core/logging/logger";
 import {

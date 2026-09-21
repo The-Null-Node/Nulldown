@@ -1,12 +1,12 @@
 import type { DropEnvelope, DropVisibility } from "../../../../../shared/drop/types";
 import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
+import { readAccountRecord } from "../identity/repository";
 import {
-  readAccountRecord,
   resolveAuthenticatedAccountId,
-  verifyAccountSessionToken,
   type AccountAuthRequest,
   type AccountAuthEnv,
-} from "../session/auth";
+} from "../session/authentication";
+import { verifyAccountSessionToken } from "../session/token";
 import {
   sameDeviceSigningKey,
   sameEncryptionRecipientKey,

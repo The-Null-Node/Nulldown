@@ -8,7 +8,7 @@ import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { acquireRootMutationLock } from "../_lib/drops/storage/mutationLock";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import { readAccountLibraryEntry, tombstoneAccountLibraryEntry } from "../_lib/accounts/library/repository";
-import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/auth";
+import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/authentication";
 
 interface Env {
   R2_BUCKET: R2Bucket;

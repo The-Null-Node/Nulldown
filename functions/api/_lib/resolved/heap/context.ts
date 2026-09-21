@@ -1,4 +1,4 @@
-import { resolveAuthenticatedAccountId } from "../../accounts/session/auth";
+import { resolveAuthenticatedAccountId } from "../../accounts/session/authentication";
 import { createBranchRepository } from "../../branches/storage/repository";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";

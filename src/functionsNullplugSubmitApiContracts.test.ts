@@ -4,7 +4,7 @@ import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../functions/api/nullplug/submit";
 import { onRequest as onResolvedQueryRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
 import { onRequest as onResolvedUpdateRequest } from "../functions/api/branches/[rootId]/[branchId]/resolved/update";
-import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
+import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/token";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../shared/drop/branch";
 import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../shared/drop/resolved/constants";
 import { nullplugUiResponseFactKey } from "../shared/nullplug/ui";

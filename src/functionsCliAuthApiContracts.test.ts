@@ -10,7 +10,7 @@ import {
   revokeCliCredentialResponse,
   type CliAuthEnvironment,
 } from "../functions/api/_lib/accounts/cliAuth/service";
-import { verifyAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
+import { verifyAccountSessionToken } from "../functions/api/_lib/accounts/session/token";
 import {
   generateCliDeviceKeyPair,
   decryptCliCredentialEnvelope,

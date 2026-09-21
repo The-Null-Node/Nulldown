@@ -9,7 +9,7 @@ import {
   canReadRoot,
   resolveRootReadAuthorization,
 } from "../../security/readAuthorization";
-import type { AccountAuthEnv } from "../../accounts/session/auth";
+import type { AccountAuthEnv } from "../../accounts/session/authentication";
 
 /** Environment required by the shared root-object read service. */
 export interface GetRootDropServiceEnv extends AccountAuthEnv {

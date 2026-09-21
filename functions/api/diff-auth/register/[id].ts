@@ -8,7 +8,7 @@ import {
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../_lib/accounts/session/auth";
+} from "../../_lib/accounts/session/authentication";
 import { resolveBranchForActor } from "../../_lib/branches/lifecycle/service";
 import { createDropIdentityRepository } from "../../_lib/drops/identity/id";
 import { createRequestLogger, serializeError, toLogRef } from "../../_lib/core/logging/logger";

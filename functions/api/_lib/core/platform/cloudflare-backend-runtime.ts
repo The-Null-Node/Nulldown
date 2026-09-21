@@ -35,7 +35,7 @@ import {
   createCloudflareSqlStore,
   createCloudflareRuntimeDataStore,
 } from "./cloudflare-storage-adapters";
-import type { AccountAuthRequest } from "../../accounts/session/auth";
+import type { AccountAuthRequest } from "../../accounts/session/authentication";
 
 /** Cloudflare bindings required to compose the server runtime. */
 export interface CloudflareBackendRuntimeBindings {

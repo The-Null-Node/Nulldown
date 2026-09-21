@@ -12,7 +12,7 @@ import {
   readNullplugUiResponseFact,
 } from "./facts/repository";
 import { createDropIdentityRepository } from "../drops/identity/id";
-import { resolveAuthenticatedAccountId } from "../accounts/session/auth";
+import { resolveAuthenticatedAccountId } from "../accounts/session/authentication";
 import { createBranchRepository } from "../branches/storage/repository";
 import { readBranchContent } from "../branches/content/replay";
 import { createBranchRuntimeFactLogRepository } from "../branches/storage/runtimeFactLogRepository";

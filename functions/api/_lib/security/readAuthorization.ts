@@ -5,7 +5,7 @@ import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
   type AccountAuthRequest,
-} from "../accounts/session/auth";
+} from "../accounts/session/authentication";
 
 /** Neutral ports required to authorize identifier-based root reads. */
 export interface RootReadAuthorizationPorts extends AccountAuthEnv {

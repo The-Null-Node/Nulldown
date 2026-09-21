@@ -32,7 +32,7 @@ import { handleNullplugResolveRequest } from "../../functions/api/_lib/nullplug/
 import { handleNullplugStateRequest } from "../../functions/api/_lib/nullplug/state-controller";
 import { handleNullplugResponseRequest } from "../../functions/api/_lib/nullplug/response-controller";
 import { createDropIdentityRepository } from "../../functions/api/_lib/drops/identity/id";
-import { resolveAuthenticatedAccountId } from "../../functions/api/_lib/accounts/session/auth";
+import { resolveAuthenticatedAccountId } from "../../functions/api/_lib/accounts/session/authentication";
 import {
   REMOTE_PUBLIC_DROP_INDEX_PREFIX,
   readPublicDropIndexEntryByKey,

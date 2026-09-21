@@ -4,7 +4,7 @@ import { verifyBearerToken } from "../../core/auth/bearer";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../accounts/session/auth";
+} from "../../accounts/session/authentication";
 import {
   backfillBranchToSnapshotHeap,
   resolveBranchForActor,

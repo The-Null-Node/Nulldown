@@ -23,11 +23,9 @@ import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDele
 import { serializeCanonicalJson } from "../../../../../shared/drop/types";
 import type { BlobObjectStore } from "../../../../../src/server/ports";
 import { sameEncryptionRecipientKey } from "../../crypto/envelopes/verification";
-import {
-  issueAccountSessionToken,
-  readAccountRecord,
-  sanitizeAccountId,
-} from "../session/auth";
+import { sanitizeAccountId } from "../identity/records";
+import { readAccountRecord } from "../identity/repository";
+import { issueAccountSessionToken } from "../session/token";
 import {
   isSameOriginOpenAuthRequest,
   resolveOpenAuthRequestIdentity,

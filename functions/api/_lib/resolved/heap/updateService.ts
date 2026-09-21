@@ -11,7 +11,7 @@ import {
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
 } from "../../../../../shared/drop/resolved/constants";
 import { hashBranchSnapshotSource } from "../../../../../shared/drop/resolved/hash";
-import { resolveAuthenticatedAccountId } from "../../accounts/session/auth";
+import { resolveAuthenticatedAccountId } from "../../accounts/session/authentication";
 import { canReadSensitiveBranch } from "../../security/readAuthorization";
 import { resolveReadableResolvedBranchTarget } from "./context";
 import { projectResolvedHeap } from "./projector";

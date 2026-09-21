@@ -6,7 +6,7 @@ import {
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequestPost } from "../functions/api/unlock/[id]";
-import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/auth";
+import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/token";
 import { providerCrypto } from "../functions/api/_lib/crypto/provider-crypto";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import {

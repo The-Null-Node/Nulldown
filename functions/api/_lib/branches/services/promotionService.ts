@@ -8,7 +8,7 @@ import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/serve
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../accounts/session/auth";
+} from "../../accounts/session/authentication";
 import { readBranchContent } from "../content/replay";
 import { createBranchRepository } from "../storage/repository";
 import {

@@ -5,15 +5,17 @@ import type {
 } from "@cloudflare/workers-types";
 import {
   canonicalizeAccountEncryptionRecipient,
-  issueAccountSessionToken,
+  sanitizeAccountId,
+} from "../_lib/accounts/identity/records";
+import {
   pinAccountEncryptionRecipient,
   putAccountRecord,
   readAccountRecord,
   reserveAccountRecord,
-  sanitizeAccountId,
-  verifyAccountProof,
-  type AccountAuthEnv,
-} from "../_lib/accounts/session/auth";
+} from "../_lib/accounts/identity/repository";
+import { verifyAccountProof } from "../_lib/accounts/identity/proof";
+import type { AccountAuthEnv } from "../_lib/accounts/session/authentication";
+import { issueAccountSessionToken } from "../_lib/accounts/session/token";
 
 interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;

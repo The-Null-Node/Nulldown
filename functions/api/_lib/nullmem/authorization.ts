@@ -1,7 +1,7 @@
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../accounts/session/auth";
+} from "../accounts/session/authentication";
 import { createBranchRepository } from "../branches/storage/repository";
 import { jsonErrorResponse, resolveParam } from "../core/http/responses";
 import { createDropIdentityRepository } from "../drops/identity/id";

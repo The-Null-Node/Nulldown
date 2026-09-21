@@ -19,7 +19,7 @@ import {
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../accounts/session/auth";
+} from "../../accounts/session/authentication";
 
 /** Environment required to verify `/api/diff/:id` request authentication. */
 export interface DiffRequestAuthEnv extends AccountAuthEnv {

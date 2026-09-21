@@ -21,7 +21,7 @@ import {
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../accounts/session/auth";
+} from "../../accounts/session/authentication";
 import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import {
   createBranchDiffRepository,
