@@ -7,9 +7,9 @@
       "@/*": ["./src/*"],
       "@thenullnode/nulldown/client": ["./src/client/nulldown-client.ts"],
       "@thenullnode/nulldown/drop/authoring": [
-        "./shared/drop/authoringCrypto.ts"
+        "./shared/drop/authoring-crypto.ts"
       ],
-      "@thenullnode/nulldown/auth/cliDevice": ["./shared/auth/cliDevice.ts"],
+      "@thenullnode/nulldown/auth/cliDevice": ["./shared/auth/cli-device.ts"],
       "@thenullnode/nulldown/auth/cliCredential": [
         "./src/cli/cli-credential.ts"
       ],

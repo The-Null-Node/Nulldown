@@ -62,7 +62,7 @@ import {
   createBranchDiffEventKey,
   createSnapshotKey,
 } from "../functions/api/_lib/branches/storage/keys";
-import { createMemoryVoidDataStore } from "./server/memoryDataStore";
+import { createMemoryRuntimeDataStore } from "./server/memory-data-store";
 import { createNullMemFreshnessWatermarkKey } from "./server/nulledit";
 
 interface MemoryR2Object {
@@ -1915,7 +1915,7 @@ describe("D1 metadata contracts", () => {
   it("uses freshness watermarks before falling back to branch heads", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
-    const data = createMemoryVoidDataStore();
+    const data = createMemoryRuntimeDataStore();
     const branch = createBranch({ headSnapshotId: 3 });
 
     await writeBranch(

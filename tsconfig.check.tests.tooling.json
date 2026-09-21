@@ -11,9 +11,9 @@
     "src/cli/**/*.test.ts",
     "src/cli/**/*.test.tsx",
     "src/cliSeed.test.ts",
-    "src/filesystemBlobStoreContracts.test.ts",
+    "src/filesystem-blob-store-contracts.test.ts",
     "src/localNulldownServerContracts.test.ts",
-    "src/memoryVoidDataStoreContracts.test.ts",
+    "src/memory-runtime-data-store-contracts.test.ts",
     "src/serverHttpContracts.test.ts",
     "src/types/jest-mock-compat.d.ts"
   ],

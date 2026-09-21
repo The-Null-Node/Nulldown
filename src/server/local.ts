@@ -57,8 +57,8 @@ import {
   createNullplugRuntime,
   type NullplugRuntimePolicy,
 } from "../../shared/nullplug/runtime";
-import { createMemoryVoidDataStore } from "./memoryDataStore";
-import { createFilesystemBlobStore } from "./filesystemBlobStore";
+import { createMemoryRuntimeDataStore } from "./memory-data-store";
+import { createFilesystemBlobStore } from "./filesystem-blob-store";
 import {
   createNulldownServer,
   type NulldownServer,
@@ -231,7 +231,7 @@ export const createLocalNulldownServer = ({
   dataDir,
   publicBaseUrl,
   sql,
-  data = createMemoryVoidDataStore(),
+  data = createMemoryRuntimeDataStore(),
   logLevel,
 }: CreateLocalNulldownServerOptions): NulldownServer => {
   const blobs = createFilesystemBlobStore({ rootDir: join(dataDir, "blobs") });

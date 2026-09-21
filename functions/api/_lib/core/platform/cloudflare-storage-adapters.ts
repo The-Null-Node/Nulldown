@@ -22,14 +22,14 @@ export interface CloudflareStorageBindings {
   DB?: D1Database;
 }
 
-interface CloudflareVoidDataEnvelope<T = unknown> {
+interface CloudflareRuntimeDataEnvelope<T = unknown> {
   key: VoidDataKey;
   value: T;
   indexes?: VoidDataIndexEntry[];
   updatedAt: number;
 }
 
-interface VoidDataRecordRow {
+interface RuntimeDataRecordRow {
   record_json: string;
 }
 
@@ -83,7 +83,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const parseEnvelope = <T>(
   value: string | null,
-): CloudflareVoidDataEnvelope<T> | null => {
+): CloudflareRuntimeDataEnvelope<T> | null => {
   if (value === null) return null;
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -94,14 +94,14 @@ const parseEnvelope = <T>(
     if (typeof key.namespace !== "string" || typeof key.id !== "string") {
       return null;
     }
-    return parsed as unknown as CloudflareVoidDataEnvelope<T>;
+    return parsed as unknown as CloudflareRuntimeDataEnvelope<T>;
   } catch {
     return null;
   }
 };
 
 const envelopeToListItem = <T>(
-  envelope: CloudflareVoidDataEnvelope<T>,
+  envelope: CloudflareRuntimeDataEnvelope<T>,
 ): VoidDataListItem<T> => ({
   key: envelope.key,
   value: envelope.value,
@@ -110,8 +110,8 @@ const envelopeToListItem = <T>(
 });
 
 const parseRecordRow = <T>(
-  row: VoidDataRecordRow | null | undefined,
-): CloudflareVoidDataEnvelope<T> | null =>
+  row: RuntimeDataRecordRow | null | undefined,
+): CloudflareRuntimeDataEnvelope<T> | null =>
   parseEnvelope<T>(
     typeof row?.record_json === "string" ? row.record_json : null,
   );
@@ -241,7 +241,7 @@ export const createCloudflareStorageServiceEnv = <
 const readEnvelopeFromD1 = async <T>(
   db: D1Database,
   key: VoidDataKey,
-): Promise<CloudflareVoidDataEnvelope<T> | null> => {
+): Promise<CloudflareRuntimeDataEnvelope<T> | null> => {
   const row = await db
     .prepare(
       `SELECT record_json
@@ -254,7 +254,7 @@ const readEnvelopeFromD1 = async <T>(
       resolveScopeKey(key.scope),
       key.id,
     )
-    .first<VoidDataRecordRow>();
+    .first<RuntimeDataRecordRow>();
   return parseRecordRow<T>(row);
 };
 
@@ -288,11 +288,11 @@ const listEnvelopesFromD1 = async <T>(
        LIMIT ? OFFSET ?`,
     )
     .bind(...params)
-    .all<VoidDataRecordRow>();
+    .all<RuntimeDataRecordRow>();
 
   const parsed = (rows.results ?? [])
     .map((row) => parseRecordRow<T>(row))
-    .filter((entry): entry is CloudflareVoidDataEnvelope<T> => Boolean(entry))
+    .filter((entry): entry is CloudflareRuntimeDataEnvelope<T> => Boolean(entry))
     .map(envelopeToListItem)
     .filter((item) => matchesListQuery(item, query));
 
@@ -338,7 +338,7 @@ const createPutStatements = <T>(
   options: VoidDataPutOptions | undefined,
   updatedAt: number,
 ): CloudflareSqlStatement[] => {
-  const envelope: CloudflareVoidDataEnvelope<T> = {
+  const envelope: CloudflareRuntimeDataEnvelope<T> = {
     key,
     value,
     indexes: options?.indexes,
@@ -434,7 +434,7 @@ const createPutStatements = <T>(
 };
 
 /** Creates the Cloudflare implementation of the generic Nulldown data-store port. */
-export const createCloudflareVoidDataStore = ({
+export const createCloudflareRuntimeDataStore = ({
   R2_BUCKET,
   DB,
 }: CloudflareStorageBindings): VoidDataStore => {
@@ -543,7 +543,7 @@ export const createCloudflareVoidDataStore = ({
             key,
             value: { token, createdAt: Date.now() },
             updatedAt: Date.now(),
-          } satisfies CloudflareVoidDataEnvelope<{
+          } satisfies CloudflareRuntimeDataEnvelope<{
             token: string;
             createdAt: number;
           }>),

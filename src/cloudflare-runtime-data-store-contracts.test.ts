@@ -1,6 +1,6 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { createHash } from "node:crypto";
-import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
+import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare-storage-adapters";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
 import { onRequestGet } from "../functions/api/branches/[rootId]/[branchId]/resolved/query";
@@ -292,12 +292,12 @@ class MemoryD1Database {
   }
 }
 
-describe("Cloudflare VoidDataStore contracts", () => {
+describe("Cloudflare runtime data store contracts", () => {
   it("connects a completed append snapshotter to the first and repeated Cloudflare query", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
     const env = { R2_BUCKET: bucket as unknown as R2Bucket, DB: db as unknown as D1Database };
-    const data = createCloudflareVoidDataStore(env);
+    const data = createCloudflareRuntimeDataStore(env);
     const rootDropId = "ProjectionRoot123";
     await bucket.put(rootDropId, JSON.stringify({ content: "", metadata: { ownerAccountId: "owner" } }));
     const { branch } = await resolveBranchForActor(env.R2_BUCKET, rootDropId, "owner", null);
@@ -343,7 +343,7 @@ describe("Cloudflare VoidDataStore contracts", () => {
     "rejects %s portable state and reuses the repaired legacy fallback",
     async (mismatch) => {
       const bucket = new MemoryR2Bucket();
-      const data = createCloudflareVoidDataStore({ R2_BUCKET: bucket as unknown as R2Bucket, DB: new MemoryD1Database() as unknown as D1Database });
+      const data = createCloudflareRuntimeDataStore({ R2_BUCKET: bucket as unknown as R2Bucket, DB: new MemoryD1Database() as unknown as D1Database });
       const source = { rootDropId: "ProjectionRoot123", branchId: "owner", snapshotId: 1, content: "# Current content" };
       const state = await heapifyResolvedDocument(source);
       const key = createResolvedHeapDataKey(state);
@@ -378,7 +378,7 @@ describe("Cloudflare VoidDataStore contracts", () => {
   it("reads and queries D1-backed records when R2 has no mirror", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();
-    const data = createCloudflareVoidDataStore({
+    const data = createCloudflareRuntimeDataStore({
       R2_BUCKET: bucket as unknown as R2Bucket,
       DB: db as unknown as D1Database,
     });
@@ -404,7 +404,7 @@ describe("Cloudflare VoidDataStore contracts", () => {
       expect.objectContaining({ objects: [] }),
     );
 
-    const d1Only = createCloudflareVoidDataStore({
+    const d1Only = createCloudflareRuntimeDataStore({
       R2_BUCKET: new MemoryR2Bucket() as unknown as R2Bucket,
       DB: db as unknown as D1Database,
     });
@@ -442,7 +442,7 @@ describe("Cloudflare VoidDataStore contracts", () => {
   });
 
   it("keeps different scope value types isolated", async () => {
-    const data = createCloudflareVoidDataStore({
+    const data = createCloudflareRuntimeDataStore({
       R2_BUCKET: new MemoryR2Bucket() as unknown as R2Bucket,
       DB: new MemoryD1Database() as unknown as D1Database,
     });
@@ -488,7 +488,7 @@ describe("Cloudflare VoidDataStore contracts", () => {
 
   it("batches putMany records through D1 batch", async () => {
     const db = new MemoryD1Database();
-    const data = createCloudflareVoidDataStore({
+    const data = createCloudflareRuntimeDataStore({
       R2_BUCKET: new MemoryR2Bucket() as unknown as R2Bucket,
       DB: db as unknown as D1Database,
     });
@@ -537,7 +537,7 @@ describe("Cloudflare VoidDataStore contracts", () => {
   });
 
   it("fails generic data operations clearly without D1", async () => {
-    const data = createCloudflareVoidDataStore({
+    const data = createCloudflareRuntimeDataStore({
       R2_BUCKET: new MemoryR2Bucket() as unknown as R2Bucket,
     });
     const key = {

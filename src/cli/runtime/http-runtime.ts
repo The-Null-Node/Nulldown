@@ -33,7 +33,7 @@ import {
   isDropDiffAppendResponse,
   type DropDiffAppendResponse,
 } from "../../../shared/drop/diff";
-import type { CliDevicePollResponse } from "../../../shared/auth/cliDevice";
+import type { CliDevicePollResponse } from "../../../shared/auth/cli-device";
 import {
   decodeCliCredentialBundle,
   decodeCliCredentialEnvelope,

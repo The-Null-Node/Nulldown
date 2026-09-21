@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../shared/auth/cli-device";
 import {
   decodeCliCredentialBundle,
   encodeCliCredentialBundle,

@@ -7,7 +7,7 @@ import {
   withBranchMutationLock,
 } from "../functions/api/_lib/branches/storage/mutationLock";
 import { createBranchLockKey } from "../functions/api/_lib/branches/storage/keys";
-import { createFilesystemBlobStore } from "./server/filesystemBlobStore";
+import { createFilesystemBlobStore } from "./server/filesystem-blob-store";
 import type { VoidBlobStore } from "./server/ports";
 
 describe("branch mutation lock", () => {

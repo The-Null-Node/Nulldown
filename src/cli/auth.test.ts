@@ -13,7 +13,7 @@ import {
 import type {
   CliCredentialBundle,
   CliCredentialEnvelope,
-} from "../../shared/auth/cliDevice";
+} from "../../shared/auth/cli-device";
 import {
   CLI_CREDENTIAL_ENVELOPE_KIND_V1,
   CLI_CREDENTIAL_KIND_V1,

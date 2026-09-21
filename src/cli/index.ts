@@ -20,7 +20,7 @@ import {
 } from "../../shared/drop/diffAuth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved/constants";
-import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../shared/auth/cli-device";
 import { decodeCliCredentialBundle } from "../../shared/auth/codecs/cli-device-v1";
 import { createAdminCommand } from "./commands/admin";
 import { createAuthCommand } from "./commands/auth";

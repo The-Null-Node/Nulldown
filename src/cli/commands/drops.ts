@@ -2,8 +2,8 @@ import { flagString, hasFlag } from "../core/args";
 import type { ParsedArgs } from "../core/args";
 import type { CliCommand } from "../core/command";
 import type { NulldownRuntime } from "../runtime/types";
-import type { CliCredentialBundle } from "../../../shared/auth/cliDevice";
-import { sealDropForAuthoring } from "../../../shared/drop/authoringCrypto";
+import type { CliCredentialBundle } from "../../../shared/auth/cli-device";
+import { sealDropForAuthoring } from "../../../shared/drop/authoring-crypto";
 import { isDropEncryptionPublicJwk } from "../../../shared/drop/codecs/device-delegation-v1";
 import type { DropEnvelope, DropVisibility } from "../../../shared/drop/types";
 import {

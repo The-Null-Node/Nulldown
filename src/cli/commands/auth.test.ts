@@ -5,7 +5,7 @@ import { parseArgs } from "../core/args";
 import type {
   CliCredentialBundle,
   CliCredentialEnvelope,
-} from "../../../shared/auth/cliDevice";
+} from "../../../shared/auth/cli-device";
 import {
   CLI_CREDENTIAL_ENVELOPE_KIND_V1,
   decodeCliCredentialEnvelope,

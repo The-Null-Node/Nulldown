@@ -10,7 +10,7 @@ import type {
   CliDeviceAuthoring,
   CliDeviceStartResponse,
   CliEncryptionPublicJwk,
-} from "../cliDevice";
+} from "../cli-device";
 
 export const CLI_DEVICE_SCHEMA_V1 = "nulldown.cli-device.v1" as const;
 export const CLI_CREDENTIAL_KIND_V1 = "nulldown.cli-credential.v1" as const;

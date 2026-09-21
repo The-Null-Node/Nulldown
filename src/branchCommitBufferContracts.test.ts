@@ -7,7 +7,7 @@ import {
   type BranchAcceptedCommit,
   type NulleditSnapshotter,
 } from "./server/nulledit";
-import { createMemoryVoidDataStore } from "./server/memoryDataStore";
+import { createMemoryRuntimeDataStore } from "./server/memory-data-store";
 
 const rootDropId = "buffer-root";
 const branchId = "owner";
@@ -204,7 +204,7 @@ describe("BranchCommitBuffer contracts", () => {
     buffer.appendAcceptedCommit(makeCommit(1));
     const result = await flushBranchCommitBufferSnapshotters({
       commitBuffer: buffer,
-      data: createMemoryVoidDataStore(),
+      data: createMemoryRuntimeDataStore(),
       rootDropId,
       branchId,
       reason: "explicit-query",

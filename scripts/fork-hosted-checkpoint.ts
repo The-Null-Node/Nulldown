@@ -10,7 +10,7 @@ import {
   type HostedCheckpointInputV1,
   type HostedCheckpointPlanV1,
   verifyHostedCheckpointPlan,
-} from "../src/cli/hostedCheckpoint";
+} from "../src/cli/hosted-checkpoint";
 import type { DropDiffPollResponse } from "../shared/drop/diff";
 import {
   createNulldownClient,

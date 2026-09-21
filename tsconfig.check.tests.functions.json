@@ -11,7 +11,7 @@
     "functions/**/*.test.tsx",
     "src/branchCommitBufferContracts.test.ts",
     "src/branchMutationLockContracts.test.ts",
-    "src/cloudflareVoidDataStoreContracts.test.ts",
+    "src/cloudflare-runtime-data-store-contracts.test.ts",
     "src/functions*.test.ts",
     "src/functions*.test.tsx",
     "src/types/cloudflare-crypto-test-compat.d.ts",

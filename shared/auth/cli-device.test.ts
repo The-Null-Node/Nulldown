@@ -12,7 +12,7 @@ import {
   isCliEncryptionPublicJwk,
   normalizeCliUserCode,
 } from "./codecs/cli-device-v1";
-import type { CliCredentialBundle } from "./cliDevice";
+import type { CliCredentialBundle } from "./cli-device";
 
 describe("CLI device authorization contract", () => {
   it("accepts the persisted v1 CLI authoring credential without changing delegated ownership", () => {

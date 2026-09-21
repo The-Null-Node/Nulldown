@@ -3,7 +3,7 @@ import {
   sealDropForAuthoring,
   type AccountEncryptionMaterial,
   type DelegateSigningMaterial,
-} from "./authoringCrypto";
+} from "./authoring-crypto";
 import {
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,

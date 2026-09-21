@@ -10,7 +10,7 @@ import {
   type CliCredentialFetch,
 } from "./cli-credential";
 import { generateCliDeviceKeyPair } from "./auth";
-import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../shared/auth/cli-device";
 import { encodeCliCredentialBundle } from "../../shared/auth/codecs/cli-device-v1";
 
 const createCredential = (

@@ -47,7 +47,7 @@ export const createServeCommand = <TConfig>(
     const sqliteEnabled = !hasFlag(args, "no-sqlite");
     const sqlite = sqliteEnabled
       ? await (async () => {
-          const module = await import("../../server/bunSqliteStore");
+          const module = await import("../../server/bun-sqlite-store");
           const sql = await module.createBunSqliteStore({
             databasePath: resolve(dataDir, "metadata.sqlite"),
           });

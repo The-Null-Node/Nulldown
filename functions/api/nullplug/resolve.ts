@@ -4,7 +4,7 @@ import { createCloudflareBackendRuntime } from "../_lib/core/platform/cloudflare
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../_lib/core/platform/cloudflarePorts";
+} from "../_lib/core/platform/cloudflare-storage-adapters";
 
 interface Env {
   R2_BUCKET: R2Bucket;

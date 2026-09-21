@@ -8,7 +8,7 @@ import {
   type ResolvedHeapEnv,
 } from "../../../../../_lib/resolved/heap/service";
 import { methodNotAllowedResponse } from "../../../../../_lib/core/http/responses";
-import { createCloudflareStorageServiceEnv } from "../../../../../_lib/core/platform/cloudflarePorts";
+import { createCloudflareStorageServiceEnv } from "../../../../../_lib/core/platform/cloudflare-storage-adapters";
 
 interface Env extends Omit<ResolvedHeapEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;

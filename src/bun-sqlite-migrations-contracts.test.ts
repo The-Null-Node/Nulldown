@@ -7,7 +7,7 @@ const runProductionFixture = (mode: string) => {
     import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from "node:fs/promises";
     import { tmpdir } from "node:os";
     import { join } from "node:path";
-    import { createBunSqliteStore, applySqliteMigrations } from ${JSON.stringify(resolve("src/server/bunSqliteStore.ts"))};
+    import { createBunSqliteStore, applySqliteMigrations } from ${JSON.stringify(resolve("src/server/bun-sqlite-store.ts"))};
     const mode = ${JSON.stringify(mode)};
     const directory = await mkdtemp(join(tmpdir(), "nulldown-production-migrations-"));
     const migrations = join(directory, "migrations");
@@ -93,7 +93,7 @@ it.each(["full", "partial", "missing-index"])("adopts the actual %s pre-ledger p
 it.each(["type", "default", "nullable", "constraint", "index", "table", "recipient", "rollback"])("rejects legacy schema mismatch (%s) without marking the migration or retaining partial changes", runProductionFixture);
 
 it("applies ALTER migrations once across restart and rolls back failed files before retry", () => {
-  const modulePath = resolve("src/server/bunSqliteStore.ts");
+  const modulePath = resolve("src/server/bun-sqlite-store.ts");
   const result = spawnSync("bun", ["--eval", `
     import { mkdtemp, writeFile, rm } from "node:fs/promises";
     import { tmpdir } from "node:os";

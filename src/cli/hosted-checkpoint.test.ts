@@ -20,7 +20,7 @@ import {
   type HostedCheckpointApi,
   type HostedCheckpointInputV1,
   verifyHostedCheckpointPlan,
-} from "./hostedCheckpoint";
+} from "./hosted-checkpoint";
 
 const targetAccountId = "new-account";
 const targetBranchId = `clone_account:${targetAccountId}`;

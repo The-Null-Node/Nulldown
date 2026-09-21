@@ -1,5 +1,5 @@
 import { runCli } from "../../src/cli";
-import { createMemoryVoidDataStore } from "../../src/server/memoryDataStore";
+import { createMemoryRuntimeDataStore } from "../../src/server/memory-data-store";
 import type {
   VoidDataPutRecord,
   VoidDataStore,
@@ -15,7 +15,7 @@ const isResolvedDocumentProjection = (records: VoidDataPutRecord[]): boolean => 
   );
 };
 
-const backing = createMemoryVoidDataStore();
+const backing = createMemoryRuntimeDataStore();
 let armed = true;
 
 const data: VoidDataStore = {

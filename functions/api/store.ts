@@ -3,7 +3,7 @@ import { createRequestLogger } from "./_lib/core/logging/logger";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "./_lib/core/platform/cloudflarePorts";
+} from "./_lib/core/platform/cloudflare-storage-adapters";
 import { storeDrop, type StoreServiceEnv } from "./_lib/drops/services/storeDrop";
 
 interface Env extends Omit<StoreServiceEnv, "blobs" | "sql"> {

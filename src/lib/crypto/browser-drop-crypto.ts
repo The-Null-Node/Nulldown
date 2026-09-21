@@ -20,7 +20,7 @@ import {
   type DropUnlockPolicy,
   type DropVisibility,
 } from "../../../shared/drop/types";
-import { sealDropForAuthoring } from "../../../shared/drop/authoringCrypto";
+import { sealDropForAuthoring } from "../../../shared/drop/authoring-crypto";
 import { getAccountAuthHeaders } from "../auth/accountSession";
 import { fromBase64 } from "./base64";
 import {

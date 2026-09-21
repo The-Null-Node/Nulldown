@@ -1,4 +1,4 @@
-import { createMemoryVoidDataStore } from "./server/memoryDataStore";
+import { createMemoryRuntimeDataStore } from "./server/memory-data-store";
 import {
   createNulleditResolvedDocumentSnapshotter,
   createResolvedHeapDataKey,
@@ -16,9 +16,9 @@ import type {
 const rootDropId = "memory-root";
 const branchId = "owner";
 
-describe("Memory VoidDataStore contracts", () => {
+describe("Memory runtime data store contracts", () => {
   it("stores, lists, queries, paginates, and deletes indexed records", async () => {
-    const data = createMemoryVoidDataStore();
+    const data = createMemoryRuntimeDataStore();
     const key = {
       namespace: "resolved",
       collection: "document_nodes",
@@ -75,7 +75,7 @@ describe("Memory VoidDataStore contracts", () => {
   });
 
   it("stores multiple records through putMany and preserves ifAbsent conflicts", async () => {
-    const data = createMemoryVoidDataStore();
+    const data = createMemoryRuntimeDataStore();
     const keyA = {
       namespace: "resolved",
       collection: "document_nodes",
@@ -123,7 +123,7 @@ describe("Memory VoidDataStore contracts", () => {
   });
 
   it("runs the resolved document snapshotter without Cloudflare test doubles", async () => {
-    const data = createMemoryVoidDataStore();
+    const data = createMemoryRuntimeDataStore();
     const branch: DropBranchRecord = {
       version: 1,
       branchId,

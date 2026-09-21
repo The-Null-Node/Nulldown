@@ -7,7 +7,7 @@ import {
   getBranchContent,
   type BranchRouteEnv,
 } from "../../../_lib/branches/services/routeService";
-import { createCloudflareStorageServiceEnv } from "../../../_lib/core/platform/cloudflarePorts";
+import { createCloudflareStorageServiceEnv } from "../../../_lib/core/platform/cloudflare-storage-adapters";
 
 interface Env extends Omit<BranchRouteEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;

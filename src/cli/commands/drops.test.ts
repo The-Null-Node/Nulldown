@@ -1,7 +1,7 @@
 import { webcrypto } from "node:crypto";
 import { jest } from "@jest/globals";
 
-import type { CliCredentialBundle } from "../../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../../shared/auth/cli-device";
 import { parseArgs } from "../core/args";
 import { createDropCommands } from "./drops";
 

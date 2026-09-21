@@ -2,7 +2,7 @@ import type {
   CliCredentialBundle,
   CliCredentialEnvelope,
   CliEncryptionPublicJwk,
-} from "../../shared/auth/cliDevice";
+} from "../../shared/auth/cli-device";
 import {
   decodeCliCredentialBundle,
   decodeCliCredentialEnvelope,

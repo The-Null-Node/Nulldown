@@ -6,8 +6,8 @@ import type {
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
 import {
   createCloudflareStorageServiceEnv,
-  createCloudflareVoidDataStore,
-} from "../../../../_lib/core/platform/cloudflarePorts";
+  createCloudflareRuntimeDataStore,
+} from "../../../../_lib/core/platform/cloudflare-storage-adapters";
 import {
   queryNullMem,
   type NullMemEnv,
@@ -24,7 +24,7 @@ export const onRequestGet: PagesFunction<Env, "rootId" | "branchId"> = ({
   request,
 }) =>
   queryNullMem(createCloudflareStorageServiceEnv(env), params, request, {
-    data: createCloudflareVoidDataStore(env),
+    data: createCloudflareRuntimeDataStore(env),
   });
 
 export const onRequest: PagesFunction<Env, "rootId" | "branchId"> = async (

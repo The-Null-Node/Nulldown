@@ -33,8 +33,8 @@ import { syncResolvedPriorityFactToD1 } from "../../resolved/heap/service";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-  createCloudflareVoidDataStore,
-} from "./cloudflarePorts";
+  createCloudflareRuntimeDataStore,
+} from "./cloudflare-storage-adapters";
 import type { AccountAuthRequest } from "../../accounts/session/auth";
 
 /** Cloudflare bindings required to compose the server runtime. */
@@ -256,7 +256,7 @@ const createCloudflareNulleditRuntime = (
 export const createCloudflareBackendRuntime = (
   bindings: CloudflareBackendRuntimeBindings,
 ): CloudflareBackendRuntime => {
-  const data = createCloudflareVoidDataStore(bindings);
+  const data = createCloudflareRuntimeDataStore(bindings);
   const blobs = resolveBlobStore(bindings.R2_BUCKET);
   const sql = resolveSqlStore(bindings.DB);
   const memory = createNullMemService({

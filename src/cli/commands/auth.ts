@@ -8,7 +8,7 @@ import {
   type CliDeviceKeyPair,
 } from "../auth";
 import { mergeCliCredentialAuthoring } from "../cli-credential";
-import type { CliCredentialBundle } from "../../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../../shared/auth/cli-device";
 import type { NulldownRuntime } from "../runtime/types";
 
 /** Dependencies used by modular auth commands. */

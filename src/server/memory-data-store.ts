@@ -107,7 +107,7 @@ const toListItem = <T>(record: MemoryRecord<T>): VoidDataListItem<T> => ({
 });
 
 /** Creates an in-memory `VoidDataStore` for portable server tests and local adapters. */
-export const createMemoryVoidDataStore = (): VoidDataStore => {
+export const createMemoryRuntimeDataStore = (): VoidDataStore => {
   const records = new Map<string, MemoryRecord>();
   const locks = new Map<string, Promise<void>>();
 

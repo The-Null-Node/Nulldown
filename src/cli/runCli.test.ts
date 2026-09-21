@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { runCli, type RunCliDependencies } from "./index";
 import { generateCliDeviceKeyPair } from "./auth";
 import { readCliCredential, writeCliCredential } from "./cli-credential";
-import type { CliCredentialBundle } from "../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../shared/auth/cli-device";
 import { encodeCliCredentialBundle } from "../../shared/auth/codecs/cli-device-v1";
 
 const captureOutput = (): {

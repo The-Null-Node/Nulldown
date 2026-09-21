@@ -12,7 +12,7 @@ import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/c
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../../../../_lib/core/platform/cloudflarePorts";
+} from "../../../../_lib/core/platform/cloudflare-storage-adapters";
 
 interface Env extends Omit<ResolvedHeapEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;
@@ -30,6 +30,7 @@ export const onRequestGet: PagesFunction<Env, "rootId" | "branchId"> = ({
     ...env,
     R2_BUCKET: createCloudflareBlobStore(env.R2_BUCKET),
     DB: createCloudflareSqlStore(env.DB),
+    resolvedDocumentData: getRuntime().data,
   };
 
   return queryResolvedHeap(serviceEnv, params, request, {

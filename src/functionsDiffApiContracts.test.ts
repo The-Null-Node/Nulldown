@@ -5,7 +5,7 @@ import { onRequest } from "../functions/api/diff/[id]";
 import { postDiffEvents } from "../functions/api/_lib/diffs/transport/service";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutationLock";
-import { createCloudflareVoidDataStore } from "../functions/api/_lib/core/platform/cloudflarePorts";
+import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare-storage-adapters";
 import { createCloudflareNulldownServerRuntime } from "../functions/api/_lib/core/platform/cloudflare-server-runtime";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
@@ -280,7 +280,7 @@ class MemoryR2Bucket {
   }
 }
 
-interface VoidDataRecordRow {
+interface RuntimeDataRecordRow {
   namespace: string;
   collection: string;
   scope_key: string;
@@ -316,7 +316,7 @@ class MemoryD1Statement {
 }
 
 class MemoryD1Database {
-  private readonly records = new Map<string, VoidDataRecordRow>();
+  private readonly records = new Map<string, RuntimeDataRecordRow>();
   private readonly branchEvents = new Map<
     string,
     {
@@ -2624,7 +2624,7 @@ describe("functions api diff contracts", () => {
     await Promise.all(waitUntilPromises);
     expect(db.batchCalls.some((count) => count > 8)).toBe(true);
 
-    const data = createCloudflareVoidDataStore({
+    const data = createCloudflareRuntimeDataStore({
       R2_BUCKET: bucket as unknown as R2Bucket,
       DB: db as unknown as D1Database,
     });

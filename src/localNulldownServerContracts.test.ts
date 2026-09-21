@@ -5,9 +5,9 @@ import { createBranchRepository } from "../functions/api/_lib/branches/storage/r
 import { hashMarkdownSource } from "../shared/drop/resolved/hash";
 import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../shared/nullplug/protocol";
 import { remoteNullplugLatestKey } from "../shared/nullplug/registry";
-import { createFilesystemBlobStore } from "./server/filesystemBlobStore";
+import { createFilesystemBlobStore } from "./server/filesystem-blob-store";
 import { createLocalNulldownServer } from "./server/local";
-import { createMemoryVoidDataStore } from "./server/memoryDataStore";
+import { createMemoryRuntimeDataStore } from "./server/memory-data-store";
 import { createNullMemFreshnessWatermarkKey } from "./server/nulledit";
 import type {
   VoidDataStore,
@@ -349,7 +349,7 @@ describe("createLocalNulldownServer", () => {
 
   it("uses local freshness data while filtering public remote capability catalogs", async () => {
     await seedLocalReadTarget(dataDir);
-    const storedData = createMemoryVoidDataStore();
+    const storedData = createMemoryRuntimeDataStore();
     await storedData.put(
       createNullMemFreshnessWatermarkKey(localRootDropId, localBranchId),
       {

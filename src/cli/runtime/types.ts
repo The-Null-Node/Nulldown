@@ -5,7 +5,7 @@ import type {
   CliDevicePollResponse,
   CliDeviceStartResponse,
   CliEncryptionPublicJwk,
-} from "../../../shared/auth/cliDevice";
+} from "../../../shared/auth/cli-device";
 
 /** Result returned by a drop read operation. */
 export interface DropReadResult {

@@ -7,7 +7,7 @@ import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/c
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../../../../_lib/core/platform/cloudflarePorts";
+} from "../../../../_lib/core/platform/cloudflare-storage-adapters";
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
 import {
   createNullMemProcedure,

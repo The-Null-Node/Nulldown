@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createFilesystemBlobStore } from "./server/filesystemBlobStore";
+import { createFilesystemBlobStore } from "./server/filesystem-blob-store";
 
 describe("createFilesystemBlobStore", () => {
   let rootDir: string;

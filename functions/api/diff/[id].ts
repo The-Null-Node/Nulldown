@@ -9,7 +9,7 @@ import { createCloudflareBackendRuntime } from "../_lib/core/platform/cloudflare
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
-} from "../_lib/core/platform/cloudflarePorts";
+} from "../_lib/core/platform/cloudflare-storage-adapters";
 import {
   pollDiffEvents,
   postDiffEvents,
