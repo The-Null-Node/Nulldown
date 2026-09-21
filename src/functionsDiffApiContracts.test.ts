@@ -6,7 +6,7 @@ import { postDiffEvents } from "../functions/api/_lib/diffs/transport/service";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
 import { BranchMutationLockError } from "../functions/api/_lib/branches/storage/mutationLock";
 import { createCloudflareRuntimeDataStore } from "../functions/api/_lib/core/platform/cloudflare-storage-adapters";
-import { createCloudflareNulldownServerRuntime } from "../functions/api/_lib/core/platform/cloudflare-server-runtime";
+import { createCloudflareBackendRuntime } from "../functions/api/_lib/core/platform/cloudflare-backend-runtime";
 import { appendEventsToBranch } from "../functions/api/_lib/nulledit/service";
 import { resolveBranchForActor } from "../functions/api/_lib/branches/lifecycle/service";
 import {
@@ -3134,10 +3134,10 @@ describe("functions api diff contracts", () => {
   it("runs server-runtime-registered snapshotters on future appends", async () => {
     const bucket = createSeededBucket();
     const db = new MemoryD1Database();
-    const serverRuntime = createCloudflareNulldownServerRuntime({
+    const serverRuntime = createCloudflareBackendRuntime({
       R2_BUCKET: bucket as unknown as R2Bucket,
       DB: db as unknown as D1Database,
-    });
+    }).serverRuntime;
     const { branch } = await resolveBranchForActor(
       bucket as unknown as R2Bucket,
       rootDropId,
