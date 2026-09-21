@@ -32,6 +32,7 @@ import { handleNullplugResolveRequest } from "../../functions/api/_lib/nullplug/
 import { handleNullplugStateRequest } from "../../functions/api/_lib/nullplug/state-controller";
 import { handleNullplugResponseRequest } from "../../functions/api/_lib/nullplug/response-controller";
 import { createDropIdentityRepository } from "../../functions/api/_lib/drops/identity/id";
+import { resolveAuthenticatedAccountId } from "../../functions/api/_lib/accounts/session/auth";
 import {
   REMOTE_PUBLIC_DROP_INDEX_PREFIX,
   readPublicDropIndexEntryByKey,
@@ -348,14 +349,22 @@ export const createLocalNulldownServer = ({
     {
       method: "POST",
       path: "/api/store",
-      handler: ({ request }) => {
+      handler: async ({ request }) => {
         const logger = createRequestLogger({
           request,
           env,
           route: "/api/store",
         });
         logger.logStart();
-        return storeDrop({ request, env: createStoreEnv(env), logger });
+        return storeDrop({
+          request,
+          env: createStoreEnv(env),
+          logger,
+          trustedPlaintextAccountId: await resolveAuthenticatedAccountId(
+            request,
+            env,
+          ),
+        });
       },
     },
     {

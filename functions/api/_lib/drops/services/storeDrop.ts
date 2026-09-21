@@ -37,7 +37,10 @@ import {
   projectAccountLibraryEnvelope,
   verifyAccountLibraryEnvelope,
 } from "../../accounts/library/service";
-import { readAccountLibraryEntry } from "../../accounts/library/repository";
+import {
+  readAccountLibraryEntry,
+  upsertAccountLibraryEntry,
+} from "../../accounts/library/repository";
 
 /** Environment required by the store route service. */
 export interface StoreServiceEnv extends ProviderSigningEnv {
@@ -51,6 +54,8 @@ export interface StoreDropInput {
   request: Request;
   env: StoreServiceEnv;
   logger: RequestLogger;
+  /** Account authority supplied by a trusted plaintext-capable adapter, such as `nd serve`. */
+  trustedPlaintextAccountId?: string | null;
 }
 
 interface StoreRequestBody {
@@ -242,6 +247,7 @@ export const storeDrop = async ({
   request,
   env,
   logger,
+  trustedPlaintextAccountId = null,
 }: StoreDropInput): Promise<Response> => {
   let rootMutationLock: RootMutationLock | null = null;
   try {
@@ -422,7 +428,11 @@ export const storeDrop = async ({
       );
     }
 
-    if (protectedRootOwnerAccountId !== null && payloadKind !== "drop_envelope") {
+    if (
+      protectedRootOwnerAccountId !== null &&
+      payloadKind !== "drop_envelope" &&
+      trustedPlaintextAccountId !== protectedRootOwnerAccountId
+    ) {
       logger.logEnd(403, {
         reason: "account_owned_envelope_required",
         requestedDropRef: toLogRef(requestedId),
@@ -604,12 +614,15 @@ export const storeDrop = async ({
       updatedAt,
       env.sql,
     );
+    const projectedAccountId =
+      verifiedAccountId ??
+      (payloadKind === "drop_envelope" ? null : trustedPlaintextAccountId);
     await upsertDropMetadata({
       db: env.sql,
       id,
       contentType: storedContentType,
       envelope: storedEnvelope,
-      verifiedAccountId,
+      verifiedAccountId: projectedAccountId,
       updatedAt,
     });
     if (verifiedAccountId && storedEnvelope && env.sql) {
@@ -620,6 +633,14 @@ export const storeDrop = async ({
         storedEnvelope,
         updatedAt,
       );
+    } else if (projectedAccountId && env.sql) {
+      await upsertAccountLibraryEntry(env.sql, {
+        dropId: id,
+        accountId: projectedAccountId,
+        visibility: "unlisted",
+        createdAt: updatedAt,
+        updatedAt,
+      });
     }
 
     if (payloadKind !== "drop_envelope") {
