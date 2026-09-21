@@ -6,10 +6,10 @@ import {
 } from "../../functions/api/_lib/core/logging/logger";
 import {
   getBranchContent,
-  listBranchesForDrop,
   listBranchSnapshots,
-  resolveBranchForRequest,
-} from "../../functions/api/_lib/branches/services/routeService";
+} from "../../functions/api/_lib/branches/http/read";
+import { listBranchesForDrop } from "../../functions/api/_lib/branches/http/list";
+import { resolveBranchForRequest } from "../../functions/api/_lib/branches/http/resolve";
 import {
   createNullMemFact,
   createNullMemProcedure,

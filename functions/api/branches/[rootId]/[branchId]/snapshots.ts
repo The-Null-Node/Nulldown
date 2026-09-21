@@ -3,10 +3,8 @@ import type {
   PagesFunction,
   R2Bucket,
 } from "@cloudflare/workers-types";
-import {
-  listBranchSnapshots,
-  type BranchRouteEnv,
-} from "../../../_lib/branches/services/routeService";
+import { listBranchSnapshots } from "../../../_lib/branches/http/read";
+import type { BranchRouteEnv } from "../../../_lib/branches/http/request-context";
 import { createCloudflareStorageServiceEnv } from "../../../_lib/core/platform/cloudflare-storage-adapters";
 
 interface Env extends Omit<BranchRouteEnv, "R2_BUCKET" | "DB"> {

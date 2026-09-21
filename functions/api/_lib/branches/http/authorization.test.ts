@@ -1,18 +1,18 @@
 import { describe, expect, it } from "@jest/globals";
 import type { PagesFunction } from "@cloudflare/workers-types";
-import { onRequestGet as listBranches } from "../functions/api/branches/[id]";
-import { onRequestGet as getContent } from "../functions/api/branches/[rootId]/[branchId]/content";
-import { onRequestGet as listSnapshots } from "../functions/api/branches/[rootId]/[branchId]/snapshots";
-import { onRequestPost as resolveBranch } from "../functions/api/branches/resolve/[id]";
-import { createBranchRepository } from "../functions/api/_lib/branches/storage/repository";
-import { canReadSensitiveBranch } from "../functions/api/_lib/security/readAuthorization";
-import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
+import { onRequestGet as listBranches } from "../../../branches/[id]";
+import { onRequestGet as getContent } from "../../../branches/[rootId]/[branchId]/content";
+import { onRequestGet as listSnapshots } from "../../../branches/[rootId]/[branchId]/snapshots";
+import { onRequestPost as resolveBranch } from "../../../branches/resolve/[id]";
+import { createBranchRepository } from "../storage/repository";
+import { canReadSensitiveBranch } from "../../security/readAuthorization";
+import { createRemoteAliasKey } from "../../drops/identity/id";
 import {
   createBranchKey,
   createCloneBranchId,
   createWriterBranchKey,
   createWriterKey,
-} from "../functions/api/_lib/branches/storage/keys";
+} from "../storage/keys";
 import type {
   BlobObjectBody,
   BlobObjectStore,
@@ -20,8 +20,8 @@ import type {
   SqlBindableValue,
   SqlStatement,
   SqlMetadataStore,
-} from "./server/ports";
-import type { DropBranchRecord } from "../shared/drop/branch";
+} from "../../../../../src/server/ports";
+import type { DropBranchRecord } from "../../../../../shared/drop/branch";
 
 interface StoredObject {
   value: string;
