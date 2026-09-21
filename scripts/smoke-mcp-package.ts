@@ -81,7 +81,15 @@ const main = (): void => {
     const mcpTarballPath = join(tempRoot, mcpPack.filename);
     run(
       "npm",
-      ["install", "--offline", "--no-audit", "--no-fund", baseTarballPath, mcpTarballPath],
+      [
+        "install",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--package-lock=false",
+        baseTarballPath,
+        mcpTarballPath,
+      ],
       installDir,
     );
 
