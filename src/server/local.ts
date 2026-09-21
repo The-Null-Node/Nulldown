@@ -41,8 +41,8 @@ import {
 import {
   storeDrop,
   type StoreServiceEnv,
-} from "../../functions/api/_lib/drops/services/storeDrop";
-import { getRootDrop } from "../../functions/api/_lib/drops/services/getRootDrop";
+} from "../../functions/api/_lib/drops/services/store-drop";
+import { getRootDrop } from "../../functions/api/_lib/drops/services/get-root-drop";
 import { appendEventsToBranch } from "../../functions/api/_lib/nulledit/service";
 import {
   createBuiltInNulleditSnapshotters,

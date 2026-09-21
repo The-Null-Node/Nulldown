@@ -13,7 +13,7 @@ import {
 import {
   getRootDrop,
   type GetRootDropServiceEnv,
-} from "../_lib/drops/services/getRootDrop";
+} from "../_lib/drops/services/get-root-drop";
 
 interface Env {
   R2_BUCKET: R2Bucket;

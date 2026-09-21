@@ -5,7 +5,7 @@ import {
 } from "../_lib/core/platform/cloudflare/storage";
 import { removePublicDropIndexEntry } from "../_lib/drops/index/repository";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
-import { acquireRootMutationLock } from "../_lib/drops/storage/mutationLock";
+import { acquireRootMutationLock } from "../_lib/drops/storage/mutation-lock";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import { readAccountLibraryEntry, tombstoneAccountLibraryEntry } from "../_lib/accounts/library/repository";
 import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/authentication";

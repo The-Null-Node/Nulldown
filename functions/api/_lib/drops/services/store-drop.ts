@@ -29,7 +29,7 @@ import {
 import {
   acquireRootMutationLock,
   type RootMutationLock,
-} from "../storage/mutationLock";
+} from "../storage/mutation-lock";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
 import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
 import {

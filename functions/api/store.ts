@@ -4,7 +4,7 @@ import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
 } from "./_lib/core/platform/cloudflare/storage";
-import { storeDrop, type StoreServiceEnv } from "./_lib/drops/services/storeDrop";
+import { storeDrop, type StoreServiceEnv } from "./_lib/drops/services/store-drop";
 
 interface Env extends Omit<StoreServiceEnv, "blobs" | "sql"> {
   R2_BUCKET: R2Bucket;
