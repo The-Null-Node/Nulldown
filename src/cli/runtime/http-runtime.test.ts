@@ -223,7 +223,7 @@ describe("HTTP drop runtime", () => {
 
     await expect(
       runtime.diffs.postEnvelope({ dropId: "drop-1", envelope }),
-    ).rejects.toThrow("did not acknowledge every submitted event");
+    ).rejects.toThrow("did not confirm every submitted event");
   });
 
   it("rejects a receipt for a different requested branch", async () => {
@@ -267,6 +267,6 @@ describe("HTTP drop runtime", () => {
         branchId: "branch-1",
         envelope,
       }),
-    ).rejects.toThrow("did not acknowledge the requested branch");
+    ).rejects.toThrow("did not confirm every submitted event");
   });
 });
