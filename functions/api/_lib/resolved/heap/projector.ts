@@ -7,7 +7,7 @@ import {
   RESOLVED_RUNTIME_REFS_RESOLVER_VERSION,
 } from "../../../../../shared/drop/resolved/constants";
 import { heapifyResolvedDocument } from "../../../../../shared/drop/resolved/heapify/document";
-import { heapifyResolvedRuntimeRefs } from "../../../../../shared/drop/resolved/heapify/runtimeRefs";
+import { heapifyResolvedRuntimeRefs } from "../../../../../shared/drop/resolved/heapify/runtime-refs";
 import type { ResolvedNulldownState } from "../../../../../shared/drop/resolved/types";
 import {
   isCurrentResolvedDocumentProjection,

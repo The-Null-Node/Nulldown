@@ -1,4 +1,4 @@
-import { heapifyResolvedRuntimeRefs } from "../../../../shared/drop/resolved/heapify/runtimeRefs";
+import { heapifyResolvedRuntimeRefs } from "../../../../shared/drop/resolved/heapify/runtime-refs";
 import {
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_VERSION,

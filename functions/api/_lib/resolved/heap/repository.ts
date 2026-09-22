@@ -12,7 +12,7 @@ import type {
   ResolvedPriorityFactListOptions,
   ResolvedPriorityScoring,
 } from "./priority-facts-repository";
-import { createResolvedHeapProjectionRepository } from "./projectionRepository";
+import { createResolvedHeapProjectionRepository } from "./projection-repository";
 
 /** Ports used by resolved heap repositories. */
 export interface ResolvedHeapRepositoryPorts {

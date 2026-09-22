@@ -11,4 +11,4 @@ export * from "./nulledit/snapshotters/nullmemFreshness";
 export * from "./nulledit/snapshotters/nullmem-observer";
 export * from "./nulledit/snapshotters/policy-observer";
 export * from "./nulledit/snapshotters/resolvedDocument";
-export * from "./nulledit/snapshotters/runtimeRefs";
+export * from "./nulledit/snapshotters/runtime-refs";
