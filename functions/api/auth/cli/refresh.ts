@@ -3,7 +3,7 @@ import type { PagesFunction } from "@cloudflare/workers-types";
 import {
   refreshCliCredentialResponse,
   type CliAuthEnvironment,
-} from "../../_lib/accounts/cliAuth/service";
+} from "../../_lib/accounts/cli-auth/service";
 
 export const onRequestPost: PagesFunction<CliAuthEnvironment> = ({ env, request }) =>
   refreshCliCredentialResponse(env, request);

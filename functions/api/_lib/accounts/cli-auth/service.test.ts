@@ -9,23 +9,23 @@ import {
   refreshCliCredentialResponse,
   revokeCliCredentialResponse,
   type CliAuthEnvironment,
-} from "../functions/api/_lib/accounts/cliAuth/service";
-import { verifyAccountSessionToken } from "../functions/api/_lib/accounts/session/token";
+} from "./service";
+import { verifyAccountSessionToken } from "../session/token";
 import {
   generateCliDeviceKeyPair,
   decryptCliCredentialEnvelope,
-} from "./cli/auth";
+} from "../../../../../src/cli/auth";
 import {
   CLI_CREDENTIAL_KIND_V1,
   decodeCliCredentialBundle,
   decodeCliDeviceStartResponse,
-} from "../shared/auth/codecs/cli-device-v1";
+} from "../../../../../shared/auth/codecs/cli-device-v1";
 import {
   encodeDropDeviceDelegation,
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
-} from "../shared/drop/codecs/device-delegation-v1";
-import type { DropDeviceDelegation } from "../shared/drop/deviceDelegation";
+} from "../../../../../shared/drop/codecs/device-delegation-v1";
+import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
 
 const appOrigin = "https://nulldown.app";
 const issuer = "https://issuer.test";
