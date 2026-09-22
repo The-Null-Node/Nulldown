@@ -1,12 +1,12 @@
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { onRequest, onRequestGet } from "../functions/api/get/[id]";
-import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
+import { onRequest, onRequestGet } from "../../../get/[id]";
+import { createRemoteAliasKey } from "../identity/id";
 import type {
   SqlBindableValue,
   SqlStatement,
   SqlMetadataStore,
-} from "./server/ports";
+} from "../../../../../src/server/ports";
 
 interface ProjectionRow {
   entry_seq: number;
