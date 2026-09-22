@@ -1,14 +1,11 @@
 import { describe, expect, it } from "@jest/globals";
-import {
-  createDropIdentityRepository,
-  createRemoteAliasKey,
-} from "../functions/api/_lib/drops/identity/id";
+import { createDropIdentityRepository, createRemoteAliasKey } from "./id";
 import type {
   BlobObjectStore,
   SqlBindableValue,
   SqlStatement,
   SqlMetadataStore,
-} from "./server/ports";
+} from "../../../../../src/server/ports";
 
 class AliasBlobStore implements BlobObjectStore {
   readonly values = new Map<string, string>();
@@ -21,14 +18,22 @@ class AliasBlobStore implements BlobObjectStore {
     const value = this.values.get(key);
     return value === undefined
       ? null
-      : { key, text: async () => value, json: async <T>() => JSON.parse(value) as T };
+      : {
+          key,
+          text: async () => value,
+          json: async <T>() => JSON.parse(value) as T,
+        };
   }
 
   async head() {
     return null;
   }
 
-  async put(key: string, value: string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null) {
+  async put(
+    key: string,
+    value:
+      string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null,
+  ) {
     this.puts += 1;
     this.values.set(key, await new Response(value as BodyInit | null).text());
     return { key };
@@ -82,7 +87,11 @@ describe("drop identity read-request resolution", () => {
     await expect(
       repository.resolveRemoteDropIdForReadRequest("IdentityFull01"),
     ).resolves.toBe("IdentityFull01");
-    expect({ blobGets: blobs.gets, sqlReads: sql.reads, sqlRuns: sql.runs }).toEqual({
+    expect({
+      blobGets: blobs.gets,
+      sqlReads: sql.reads,
+      sqlRuns: sql.runs,
+    }).toEqual({
       blobGets: 0,
       sqlReads: 0,
       sqlRuns: 0,
@@ -95,12 +104,12 @@ describe("drop identity read-request resolution", () => {
     const repository = createDropIdentityRepository({ blobs, sql });
     blobs.values.set(createRemoteAliasKey("Read01"), "IdentityAliasRead01");
 
-    await expect(repository.resolveRemoteDropIdForReadRequest("Read01")).resolves.toBe(
-      "IdentityAliasRead01",
-    );
-    await expect(repository.resolveRemoteDropIdForReadRequest("Read01")).resolves.toBe(
-      "IdentityAliasRead01",
-    );
+    await expect(
+      repository.resolveRemoteDropIdForReadRequest("Read01"),
+    ).resolves.toBe("IdentityAliasRead01");
+    await expect(
+      repository.resolveRemoteDropIdForReadRequest("Read01"),
+    ).resolves.toBe("IdentityAliasRead01");
     expect(sql.runs).toBe(0);
     expect(blobs.gets).toBe(1);
     expect(blobs.puts).toBe(0);
@@ -117,9 +126,9 @@ describe("drop identity read-request resolution", () => {
       blobs: new AliasBlobStore(),
       sql: new AliasDatabase(),
     });
-    await expect(repository.resolveRemoteDropIdForReadRequest("Miss01")).resolves.toBe(
-      "Miss01",
-    );
+    await expect(
+      repository.resolveRemoteDropIdForReadRequest("Miss01"),
+    ).resolves.toBe("Miss01");
   });
 
   it("keeps general resolution backfilling an R2-only alias into SQL", async () => {
