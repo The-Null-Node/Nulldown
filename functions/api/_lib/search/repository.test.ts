@@ -3,7 +3,7 @@ import {
   SearchDatabase,
   createSearchDatabase,
   type SearchDatabaseStore,
-} from "./searchDatabase";
+} from "./repository";
 
 class MemorySearchDb {
   private rows: Map<string, Record<string, unknown>> = new Map();

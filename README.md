@@ -39,6 +39,8 @@ Choose the surface that fits your work:
 | Run a local API | [Self-hosting](#self-host) |
 | Understand the model | [Nulldown documentation](https://nulldown.app/d/vjdL1x) |
 
+For public discovery, see the [search API reference](docs/NULDOWN_API.md#get-apisearch). Its backend controller and repository live in `functions/api/_lib/search/`.
+
 ## What Exists Today
 
 | Area                 | Current capability                                                                                                                                      |

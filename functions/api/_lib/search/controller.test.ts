@@ -1,5 +1,7 @@
-import { describe, expect, it } from "@jest/globals";
-import { onRequestGet } from "../functions/api/search";
+import { describe, expect, it, jest } from "@jest/globals";
+import { onRequest, onRequestGet } from "../../search";
+import type { SqlMetadataStore } from "../../../../src/server/ports";
+import { handleSearchRequest } from "./controller";
 
 interface SearchRow {
   id: string;
@@ -88,13 +90,19 @@ class SearchD1Fake {
         params = values;
         return {
           all: async () => ({ results: this.execute(sql, params, true) }),
-          first: async () => ({ total: this.execute(sql, params, false).length }),
+          first: async () => ({
+            total: this.execute(sql, params, false).length,
+          }),
         };
       },
     };
   }
 
-  private execute(sql: string, params: unknown[], paginate: boolean): SearchRow[] {
+  private execute(
+    sql: string,
+    params: unknown[],
+    paginate: boolean,
+  ): SearchRow[] {
     this.executedSql.push(sql);
     let paramIndex = 0;
     let matches = [...rows];
@@ -104,7 +112,9 @@ class SearchD1Fake {
       const term = String(params[paramIndex]).slice(1, -1).toLowerCase();
       paramIndex += 2;
       matches = matches.filter((row) =>
-        `${row.title || ""}\n${row.content_preview || ""}`.toLowerCase().includes(term),
+        `${row.title || ""}\n${row.content_preview || ""}`
+          .toLowerCase()
+          .includes(term),
       );
     }
 
@@ -149,6 +159,69 @@ const search = async (query: string, db = new SearchD1Fake()) => {
 };
 
 describe("GET /api/search public contracts", () => {
+  it.each([
+    ["", 20, 0],
+    ["?limit=bad&offset=bad", 20, 0],
+    ["?limit=0&offset=-2", 1, 0],
+    ["?limit=101&offset=2tail", 100, 2],
+    ["?limit=3tail&offset=1", 3, 1],
+  ])("preserves pagination parsing for %s", async (query, limit, offset) => {
+    const response = await handleSearchRequest(
+      new Request(`https://nulldown.test/api/search${query}`),
+      {
+        DB: new SearchD1Fake() as unknown as SqlMetadataStore,
+        LOG_LEVEL: "error",
+      },
+    );
+    expect(await response.json()).toMatchObject({ limit, offset });
+  });
+
+  it("forwards logger configuration for rejected methods", async () => {
+    const info = jest.spyOn(console, "info").mockImplementation(() => {});
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await onRequest({
+        request: new Request("https://nulldown.test/api/search", {
+          method: "POST",
+        }),
+        env: { LOG_LEVEL: "error" },
+      } as unknown as Parameters<typeof onRequest>[0]);
+      expect(response.status).toBe(405);
+      await expect(response.text()).resolves.toBe("Method Not Allowed");
+      expect(info).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it("preserves database errors and structured error logs", async () => {
+    const error = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await handleSearchRequest(
+        new Request("https://nulldown.test/api/search"),
+        {
+          DB: {
+            prepare: () => {
+              throw new Error("search failed");
+            },
+          },
+          LOG_LEVEL: "error",
+        },
+      );
+      expect(response.status).toBe(500);
+      await expect(response.text()).resolves.toBe(
+        "Failed to search: search failed",
+      );
+      expect(
+        error.mock.calls.map(([payload]) => JSON.parse(String(payload)).event),
+      ).toEqual(["search.unhandled_error", "request.end"]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("returns and counts only public rows for an empty paginated search", async () => {
     const { response, body, db } = await search("?limit=1&offset=1");
 
@@ -175,14 +248,18 @@ describe("GET /api/search public contracts", () => {
       offset: 1,
     });
     expect(db.executedSql).toHaveLength(2);
-    expect(db.executedSql.every((sql) => sql.includes("visibility IN (?)"))).toBe(true);
+    expect(
+      db.executedSql.every((sql) => sql.includes("visibility IN (?)")),
+    ).toBe(true);
     expect(db.executedSql.some((sql) => sql.includes("COUNT(*)"))).toBe(true);
   });
 
   it("does not discover matching unlisted or private previews", async () => {
     const { body, db } = await search("?q=needle");
 
-    expect(body.records.map((record) => record.dropId)).toEqual(["drop-public-alice"]);
+    expect(body.records.map((record) => record.dropId)).toEqual([
+      "drop-public-alice",
+    ]);
     expect(body.total).toBe(1);
     expect(db.executedSql).toHaveLength(2);
     expect(db.executedSql.every((sql) => sql.includes("LIKE ?"))).toBe(true);
@@ -191,10 +268,14 @@ describe("GET /api/search public contracts", () => {
   it.each(["unlisted", "private", "public,unlisted,private"])(
     "accepts but ignores visibility=%s",
     async (visibility) => {
-      const { response, body } = await search(`?q=needle&visibility=${visibility}`);
+      const { response, body } = await search(
+        `?q=needle&visibility=${visibility}`,
+      );
 
       expect(response.status).toBe(200);
-      expect(body.records.map((record) => record.dropId)).toEqual(["drop-public-alice"]);
+      expect(body.records.map((record) => record.dropId)).toEqual([
+        "drop-public-alice",
+      ]);
       expect(body.total).toBe(1);
     },
   );
@@ -202,7 +283,9 @@ describe("GET /api/search public contracts", () => {
   it("intersects the owner filter with public visibility", async () => {
     const { body } = await search("?owner=alice");
 
-    expect(body.records.map((record) => record.dropId)).toEqual(["drop-public-alice"]);
+    expect(body.records.map((record) => record.dropId)).toEqual([
+      "drop-public-alice",
+    ]);
     expect(body.total).toBe(1);
   });
 
@@ -213,6 +296,8 @@ describe("GET /api/search public contracts", () => {
     } as unknown as Parameters<typeof onRequestGet>[0]);
 
     expect(response.status).toBe(500);
-    await expect(response.text()).resolves.toBe("Database binding is required.");
+    await expect(response.text()).resolves.toBe(
+      "Database binding is required.",
+    );
   });
 });

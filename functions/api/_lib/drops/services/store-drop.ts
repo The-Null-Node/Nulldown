@@ -31,7 +31,7 @@ import {
   type RootMutationLock,
 } from "../storage/mutation-lock";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
-import { createSearchDatabase } from "../../../../../src/lib/db/searchDatabase";
+import { createSearchDatabase } from "../../search/repository";
 import {
   AccountLibraryError,
   projectAccountLibraryEnvelope,

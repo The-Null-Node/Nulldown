@@ -1,8 +1,9 @@
-import type { D1Database } from "@cloudflare/workers-types";
-import type { SqlMetadataStore } from "../../server/ports";
+import type { SqlMetadataStore } from "../../../../src/server/ports";
 
-export type SearchDatabaseStore = D1Database | SqlMetadataStore;
+/** Portable SQL dependency retained for the lifetime of a search repository. */
+export type SearchDatabaseStore = SqlMetadataStore;
 
+/** Persisted search projection read and written by the backend search repository. */
 export interface SearchIndexRecord {
   id: string;
   dropId: string;
@@ -16,6 +17,7 @@ export interface SearchIndexRecord {
   metadata: Record<string, unknown> | null;
 }
 
+/** Filters and pagination for one repository search operation. */
 export interface SearchQuery {
   query: string;
   ownerAccountId?: string | null;
@@ -24,11 +26,13 @@ export interface SearchQuery {
   offset?: number;
 }
 
+/** Search projection rows and unpaginated count returned by one query. */
 export interface SearchResult {
   records: SearchIndexRecord[];
   total: number;
 }
 
+/** Backend search projection repository bound to a caller-owned portable SQL store. */
 export class SearchDatabase {
   private db: SearchDatabaseStore;
 
@@ -89,12 +93,10 @@ export class SearchDatabase {
       return this.listAll({ ownerAccountId, visibility, limit, offset });
     }
 
-    const terms = query
-      .split(/\s+/)
-      .filter((term) => term.length > 0);
+    const terms = query.split(/\s+/).filter((term) => term.length > 0);
 
-    const likeClauses = terms.map(() =>
-      "(si.title LIKE ? OR si.content_preview LIKE ?)",
+    const likeClauses = terms.map(
+      () => "(si.title LIKE ? OR si.content_preview LIKE ?)",
     );
     const params: (string | number)[] = [];
     for (const term of terms) {
@@ -229,6 +231,7 @@ export class SearchDatabase {
   }
 }
 
+/** Creates a backend search repository for the supplied SQL store's lifetime. */
 export function createSearchDatabase(db: SearchDatabaseStore): SearchDatabase {
   return new SearchDatabase(db);
 }

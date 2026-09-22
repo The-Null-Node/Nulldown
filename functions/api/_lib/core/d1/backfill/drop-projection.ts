@@ -3,7 +3,7 @@ import { decodeDropEnvelope } from "../../../../../../shared/drop/codecs/envelop
 import { isDropIdToken, toShortDropId } from "../../../../../../shared/drop/id";
 import type { DropEnvelope } from "../../../../../../shared/drop/types";
 import type { SqlMetadataStore } from "../../../../../../src/server/ports";
-import { createSearchDatabase } from "../../../../../../src/lib/db/searchDatabase";
+import { createSearchDatabase } from "../../../search/repository";
 import { verifyAccountLibraryEnvelopeOwnership } from "../../../accounts/library/service";
 import { upsertAccountLibraryEntry } from "../../../accounts/library/repository";
 import { createDropIdentityRepository } from "../../../drops/identity/id";

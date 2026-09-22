@@ -468,7 +468,7 @@ Response:
 }
 ```
 
-Implementation: `functions/api/search.ts`, `src/lib/db/searchDatabase.ts`.
+Implementation: `functions/api/search.ts`, `functions/api/_lib/search/controller.ts`, `functions/api/_lib/search/repository.ts`.
 
 ### POST /api/auth/session
 

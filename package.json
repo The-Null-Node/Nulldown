@@ -57,7 +57,6 @@
     "functions/api/nullplug/state.ts",
     "functions/api/nullplug/submit.ts",
     "migrations/",
-    "src/lib/db/searchDatabase.ts",
     "shared/drop/",
     "shared/nullmem/",
     "shared/auth/",
