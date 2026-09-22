@@ -1,112 +1,15 @@
 import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { onRequest } from "../functions/api/nullplug/state";
-import { NULLDOWN_ACCOUNT_ID_HEADER } from "../shared/drop/branch";
+import { onRequest } from "../../nullplug/state";
+import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../../shared/drop/branch";
 import {
   nullplugUiRuntimeFactId,
   nullplugUiStatePatchFactKey,
-} from "../shared/nullplug/ui";
-import {
-  createBranchKey,
-  createCheckpointKey,
-} from "../functions/api/_lib/branches/storage/keys";
-import { createBranchRuntimeFactLogRepository } from "../functions/api/_lib/branches/storage/runtime-fact-log";
-
-interface StoredObject {
-  value: string;
-  contentType: string;
-  etag: string;
-  uploaded: Date;
-}
-
-class MemoryR2Bucket {
-  private readonly objects = new Map<string, StoredObject>();
-
-  seed(key: string, value: string, contentType = "application/json"): void {
-    const uploaded = new Date();
-    this.objects.set(key, {
-      value,
-      contentType,
-      etag: createHash("sha1").update(`${key}:${value}`).digest("hex"),
-      uploaded,
-    });
-  }
-
-  async get(key: string): Promise<any> {
-    const existing = this.objects.get(key);
-    if (!existing) return null;
-    return {
-      body: new Response(existing.value).body,
-      httpMetadata: { contentType: existing.contentType },
-      httpEtag: existing.etag,
-      uploaded: existing.uploaded,
-      etag: existing.etag,
-      key,
-      size: existing.value.length,
-      checksums: {
-        md5: undefined,
-        sha1: undefined,
-        sha256: undefined,
-        sha384: undefined,
-        sha512: undefined,
-      },
-      version: "v1",
-      writeHttpMetadata: () => {},
-      writeChecksums: () => {},
-      arrayBuffer: async () =>
-        new TextEncoder().encode(existing.value).buffer as ArrayBuffer,
-      text: async () => existing.value,
-      json: async <T>() => JSON.parse(existing.value) as T,
-      blob: async () => new Blob([existing.value]),
-    };
-  }
-
-  async put(key: string, value: string, options?: any): Promise<any> {
-    const existing = this.objects.get(key);
-    if (options?.onlyIf?.etagDoesNotMatch === "*" && existing) {
-      return null;
-    }
-
-    const uploaded = new Date();
-    const next: StoredObject = {
-      value,
-      contentType: options?.httpMetadata?.contentType ?? "text/plain",
-      etag: createHash("sha1").update(`${key}:${value}`).digest("hex"),
-      uploaded,
-    };
-    this.objects.set(key, next);
-    return { key, etag: next.etag, uploaded };
-  }
-
-  async delete(keys: string | string[]): Promise<void> {
-    (Array.isArray(keys) ? keys : [keys]).forEach((key) =>
-      this.objects.delete(key),
-    );
-  }
-
-  async list(
-    options: { prefix?: string; cursor?: string; limit?: number } = {},
-  ): Promise<any> {
-    const prefix = options.prefix ?? "";
-    const keys = [...this.objects.keys()]
-      .filter((key) => key.startsWith(prefix))
-      .sort();
-    return {
-      objects: keys.map((key) => {
-        const object = this.objects.get(key)!;
-        return {
-          key,
-          etag: object.etag,
-          httpEtag: object.etag,
-          uploaded: object.uploaded,
-          size: object.value.length,
-        };
-      }),
-      truncated: false,
-    };
-  }
-}
+} from "../../../../shared/nullplug/ui";
+import { createBranchKey, createCheckpointKey } from "../branches/storage/keys";
+import { createBranchRuntimeFactLogRepository } from "../branches/storage/runtime-fact-log";
+import { MemoryR2Bucket } from "./testing/storage-fixture";
 
 const rootDropId = "RootDrop1122";
 const branchId = "clone_author";
@@ -116,7 +19,10 @@ const rootContentHash = `sha256:${createHash("sha256")
   .update(`nulldown.source-content.v1\n${rootContent}`)
   .digest("base64url")}`;
 
-const createStateRequest = (body: unknown, requestAccountId = accountId): Request =>
+const createStateRequest = (
+  body: unknown,
+  requestAccountId = accountId,
+): Request =>
   new Request("https://nulldown.test/api/nullplug/state", {
     method: "POST",
     headers: {
@@ -213,9 +119,9 @@ describe("functions api nullplug state contracts", () => {
     expect(response.status).toBe(200);
     expect(body.stored).toBe(true);
     expect(body.key).toBe(nullplugUiStatePatchFactKey(fact));
-    await expect(bucket.get(body.key).then((object) => object?.json())).resolves.toEqual(
-      body.fact,
-    );
+    await expect(
+      bucket.get(body.key).then((object) => object?.json()),
+    ).resolves.toEqual(body.fact);
   });
 
   it("repairs duplicate state facts and keeps same ids distinct by call", async () => {
@@ -230,8 +136,11 @@ describe("functions api nullplug state contracts", () => {
       },
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
-    const storedObject = await bucket.get(createBranchKey(rootDropId, branchId));
-    const storedBranch = await storedObject?.json() as Record<string, unknown> | undefined;
+    const storedObject = await bucket.get(
+      createBranchKey(rootDropId, branchId),
+    );
+    const storedBranch = (await storedObject?.json()) as
+      Record<string, unknown> | undefined;
     bucket.seed(
       createBranchKey(rootDropId, branchId),
       JSON.stringify({ ...storedBranch, status: "archived" }),
@@ -299,7 +208,10 @@ describe("functions api nullplug state contracts", () => {
     const fact = createPatchFact();
 
     const invalid = await onRequest({
-      request: createStateRequest({ ...fact, patch: [{ op: "delete", path: [] }] }),
+      request: createStateRequest({
+        ...fact,
+        patch: [{ op: "delete", path: [] }],
+      }),
       env: {
         R2_BUCKET: bucket as unknown as R2Bucket,
         ALLOW_INSECURE_ACCOUNT_HEADER: "1",
