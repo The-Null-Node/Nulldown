@@ -31,7 +31,7 @@ import {
   resolveOpenAuthRequestIdentity,
   type OpenAuthBffEnvironment,
   type OpenAuthRequestIdentity,
-} from "../openAuth/service";
+} from "../open-auth/service";
 import { readAccountBinding } from "../binding/repository";
 import {
   approveCliDeviceTicket,

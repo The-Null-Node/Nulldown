@@ -18,7 +18,7 @@ import {
   isSameOriginOpenAuthRequest,
   resolveOpenAuthRequestIdentity,
   type OpenAuthBffEnvironment,
-} from "../openAuth/service";
+} from "../open-auth/service";
 
 export class AccountPreferencesError extends Error {
   constructor(

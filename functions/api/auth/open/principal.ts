@@ -1,6 +1,6 @@
 import type { PagesFunction } from "@cloudflare/workers-types";
 
-import { readOpenAuthPrincipal, type OpenAuthBffEnvironment } from "../../_lib/accounts/openAuth/service";
+import { readOpenAuthPrincipal, type OpenAuthBffEnvironment } from "../../_lib/accounts/open-auth/service";
 
 export const onRequestGet: PagesFunction<OpenAuthBffEnvironment> = ({ env, request }) =>
   readOpenAuthPrincipal(env, request);

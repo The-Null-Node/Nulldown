@@ -22,7 +22,7 @@ import { listAccountBindingsForUser } from "../binding/repository";
 import {
   resolveOpenAuthRequestIdentity,
   type OpenAuthBffEnvironment,
-} from "../openAuth/service";
+} from "../open-auth/service";
 
 export interface AccountLibraryEnv extends Omit<AccountAuthEnv, "R2_BUCKET"> {
   DB?: SqlMetadataStore;

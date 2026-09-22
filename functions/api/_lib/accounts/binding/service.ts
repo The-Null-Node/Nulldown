@@ -12,7 +12,7 @@ import {
   resolveOpenAuthRequestIdentity,
   type OpenAuthBffEnvironment,
   type OpenAuthRequestIdentity,
-} from "../openAuth/service";
+} from "../open-auth/service";
 import {
   consumeAccountBindingChallenge,
   createAccountBindingChallenge,

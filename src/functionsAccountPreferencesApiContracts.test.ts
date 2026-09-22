@@ -9,7 +9,7 @@ import {
 const isSameOriginOpenAuthRequest = jest.fn();
 const resolveOpenAuthRequestIdentity = jest.fn();
 
-jest.unstable_mockModule("../functions/api/_lib/accounts/openAuth/service", () => ({
+jest.unstable_mockModule("../functions/api/_lib/accounts/open-auth/service", () => ({
   isSameOriginOpenAuthRequest,
   resolveOpenAuthRequestIdentity,
 }));
