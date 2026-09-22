@@ -12,7 +12,7 @@ import type { AccountAuthRequest } from "../../accounts/session/authentication";
 import {
   canReadRoot,
   resolveRootReadAuthorization,
-} from "../../security/readAuthorization";
+} from "../../security/read-authorization";
 
 /** Cloudflare bindings needed to read a provider-readable drop payload. */
 export interface CloudflareProviderPayloadBindings {

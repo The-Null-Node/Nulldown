@@ -8,7 +8,7 @@ import { toLogRef, type RequestLogger } from "../../core/logging/logger";
 import {
   canReadRoot,
   resolveRootReadAuthorization,
-} from "../../security/readAuthorization";
+} from "../../security/read-authorization";
 import type { AccountAuthEnv } from "../../accounts/session/authentication";
 
 /** Environment required by the shared root-object read service. */

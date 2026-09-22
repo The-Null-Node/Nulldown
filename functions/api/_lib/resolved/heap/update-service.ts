@@ -12,7 +12,7 @@ import {
 } from "../../../../../shared/drop/resolved/constants";
 import { hashBranchSnapshotSource } from "../../../../../shared/drop/resolved/hash";
 import { resolveAuthenticatedAccountId } from "../../accounts/session/authentication";
-import { canReadSensitiveBranch } from "../../security/readAuthorization";
+import { canReadSensitiveBranch } from "../../security/read-authorization";
 import { resolveReadableResolvedBranchTarget } from "./context";
 import { projectResolvedHeap } from "./projector";
 import { parseResolvedUpdateBody } from "./request";

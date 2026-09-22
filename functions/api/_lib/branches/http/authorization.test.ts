@@ -5,7 +5,7 @@ import { onRequestGet as getContent } from "../../../branches/[rootId]/[branchId
 import { onRequestGet as listSnapshots } from "../../../branches/[rootId]/[branchId]/snapshots";
 import { onRequestPost as resolveBranch } from "../../../branches/resolve/[id]";
 import { createBranchRepository } from "../storage/repository";
-import { canReadSensitiveBranch } from "../../security/readAuthorization";
+import { canReadSensitiveBranch } from "../../security/read-authorization";
 import { createRemoteAliasKey } from "../../drops/identity/id";
 import {
   createBranchKey,

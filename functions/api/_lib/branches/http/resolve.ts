@@ -5,7 +5,7 @@ import { resolveParam } from "../../core/http/responses";
 import {
   canReadRoot,
   resolveRootReadAuthorization,
-} from "../../security/readAuthorization";
+} from "../../security/read-authorization";
 import { resolveBranchForActor } from "../lifecycle";
 import type { BranchRootParams, BranchRouteEnv } from "./request-context";
 

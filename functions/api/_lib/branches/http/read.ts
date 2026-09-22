@@ -1,7 +1,7 @@
 import {
   canReadBranch,
   resolveRootReadAuthorization,
-} from "../../security/readAuthorization";
+} from "../../security/read-authorization";
 import { readBranchContent } from "../content/replay";
 import {
   createBranchRouteRepository,

@@ -37,7 +37,7 @@ import {
   canReadBranch,
   canReadSensitiveBranch,
   resolveRootReadAuthorization,
-} from "../../security/readAuthorization";
+} from "../../security/read-authorization";
 import type { NulldownServerRuntime } from "../../../../../src/server/runtime";
 import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { createRequestLogger, toLogRef } from "../../core/logging/logger";

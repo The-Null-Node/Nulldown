@@ -6,7 +6,7 @@ import { providerCrypto } from "../_lib/crypto/provider-crypto";
 import {
   canReadRoot,
   resolveRootReadAuthorization,
-} from "../_lib/security/readAuthorization";
+} from "../_lib/security/read-authorization";
 
 interface Env {
   R2_BUCKET: R2Bucket;

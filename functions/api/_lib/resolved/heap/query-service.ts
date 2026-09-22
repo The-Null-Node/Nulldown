@@ -19,7 +19,7 @@ import {
   queryResolvedDocumentNodes,
 } from "../../../../../shared/drop/resolved/query/document";
 import { queryResolvedRuntimeNodes } from "../../../../../shared/drop/resolved/query/runtime";
-import { canReadSensitiveBranch } from "../../security/readAuthorization";
+import { canReadSensitiveBranch } from "../../security/read-authorization";
 import { resolveReadableResolvedBranchTarget } from "./context";
 import { ensureResolvedHeapProjection } from "./projector";
 import { createResolvedHeapRepository } from "./repository";

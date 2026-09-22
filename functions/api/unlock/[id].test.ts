@@ -5,21 +5,21 @@ import {
 } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { onRequestPost } from "../functions/api/unlock/[id]";
-import { issueAccountSessionToken } from "../functions/api/_lib/accounts/session/token";
-import { providerCrypto } from "../functions/api/_lib/crypto/provider-crypto";
-import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
+import { onRequestPost } from "./[id]";
+import { issueAccountSessionToken } from "../_lib/accounts/session/token";
+import { providerCrypto } from "../_lib/crypto/provider-crypto";
+import { createRemoteAliasKey } from "../_lib/drops/identity/id";
 import {
   canReadRoot,
   type RootReadAuthorizationDecision,
-} from "../functions/api/_lib/security/readAuthorization";
-import { encodeDropEnvelope } from "../shared/drop/codecs/envelope-v1";
-import type { DropEnvelope } from "../shared/drop/types";
+} from "../_lib/security/read-authorization";
+import { encodeDropEnvelope } from "../../../shared/drop/codecs/envelope-v1";
+import type { DropEnvelope } from "../../../shared/drop/types";
 import type {
   SqlBindableValue,
   SqlStatement,
   SqlMetadataStore,
-} from "./server/ports";
+} from "../../../src/server/ports";
 
 interface StoredObject {
   value: string;

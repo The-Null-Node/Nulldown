@@ -1,4 +1,4 @@
-import { resolveRootReadAuthorization } from "../../security/readAuthorization";
+import { resolveRootReadAuthorization } from "../../security/read-authorization";
 import {
   createBranchRouteRepository,
   resolveRootDropIdForReadRequest,

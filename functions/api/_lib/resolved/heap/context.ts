@@ -7,7 +7,7 @@ import {
   canReadBranch,
   canReadSensitiveBranch,
   resolveRootReadAuthorization,
-} from "../../security/readAuthorization";
+} from "../../security/read-authorization";
 import type {
   ResolvedBranchTarget,
   ResolvedHeapEnv,

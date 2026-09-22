@@ -16,7 +16,7 @@ import {
   canReadSensitiveBranch,
   resolveRootReadAuthorization,
   type RootReadAuthorizationPorts,
-} from "../security/readAuthorization";
+} from "../security/read-authorization";
 import type { BlobObjectStore } from "../../../../src/server/ports";
 import {
   jsonErrorResponse,
