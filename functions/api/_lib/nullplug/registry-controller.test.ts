@@ -1,13 +1,13 @@
 import { createHash, createHmac } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { onRequest } from "../functions/api/nullplug/registry";
+import { onRequest } from "../../nullplug/registry";
 import {
   NULLPLUG_INVOKE_CONTENT_TYPE,
   NULLPLUG_MANIFEST_SIGNATURE_PREFIX,
   serializeRemoteNullplugManifestForSignature,
   type RemoteNullplugManifest,
-} from "../shared/nullplug/registry";
+} from "../../../../shared/nullplug/registry";
 
 interface StoredObject {
   value: string;
@@ -72,13 +72,20 @@ class MemoryR2Bucket {
       .sort(([left], [right]) => left.localeCompare(right))
       .slice(0, limit)
       .map(([key, value]) => ({ key, size: value.value.length }));
-    return { objects, truncated: false, cursor: undefined, delimitedPrefixes: [] };
+    return {
+      objects,
+      truncated: false,
+      cursor: undefined,
+      delimitedPrefixes: [],
+    };
   }
 }
 
 const signatureSecret = "registry-secret";
 
-const signManifest = (manifest: RemoteNullplugManifest): RemoteNullplugManifest => ({
+const signManifest = (
+  manifest: RemoteNullplugManifest,
+): RemoteNullplugManifest => ({
   ...manifest,
   signature: `${NULLPLUG_MANIFEST_SIGNATURE_PREFIX}${createHmac(
     "sha256",
@@ -103,7 +110,11 @@ const createManifest = (): RemoteNullplugManifest =>
     description: "Summarizes a linked drop.",
   });
 
-const createRequest = (method: "GET" | "POST", body?: unknown, accountId?: string) =>
+const createRequest = (
+  method: "GET" | "POST",
+  body?: unknown,
+  accountId?: string,
+) =>
   new Request("https://nulldown.test/api/nullplug/registry", {
     method,
     headers: {
@@ -117,8 +128,7 @@ const envFor = (bucket: MemoryR2Bucket) => ({
   R2_BUCKET: bucket as unknown as R2Bucket,
   ALLOW_INSECURE_ACCOUNT_HEADER: "1",
   NULLPLUG_REGISTRY_SIGNATURE_SECRET: signatureSecret,
-  NULLPLUG_REGISTRY_ALLOWED_HOSTS:
-    "plugins.nulldown.test,api.nulldown.test",
+  NULLPLUG_REGISTRY_ALLOWED_HOSTS: "plugins.nulldown.test,api.nulldown.test",
 });
 
 describe("functions api nullplug registry contracts", () => {
@@ -149,7 +159,10 @@ describe("functions api nullplug registry contracts", () => {
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
 
-    const body = (await response.json()) as { registered: boolean; record: unknown };
+    const body = (await response.json()) as {
+      registered: boolean;
+      record: unknown;
+    };
     expect(response.status).toBe(200);
     expect(body.registered).toBe(true);
 
@@ -159,7 +172,9 @@ describe("functions api nullplug registry contracts", () => {
       params: {},
     } as unknown as Parameters<typeof onRequest>[0]);
 
-    const listBody = (await listed.json()) as { items: RemoteNullplugManifest[] };
+    const listBody = (await listed.json()) as {
+      items: RemoteNullplugManifest[];
+    };
     expect(listed.status).toBe(200);
     expect(listBody.items).toHaveLength(1);
     expect(listBody.items[0].id).toBe("remote.summary");
