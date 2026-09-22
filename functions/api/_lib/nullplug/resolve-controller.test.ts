@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import { onRequest } from "../functions/api/nullplug/resolve";
-import { NULLDOWN_ACCOUNT_ID_HEADER } from "../shared/drop/branch";
+import { onRequest } from "../../nullplug/resolve";
+import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../../shared/drop/branch";
 import {
   NULLPLUG_INVOKE_CONTENT_TYPE,
   remoteNullplugLatestKey,
-} from "../shared/nullplug/registry";
-import { createBranchKey } from "../functions/api/_lib/branches/storage/keys";
-import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";
+} from "../../../../shared/nullplug/registry";
+import { createBranchKey } from "../branches/storage/keys";
+import { createRemoteAliasKey } from "../drops/identity/id";
 
 interface StoredObject {
   value: string;
