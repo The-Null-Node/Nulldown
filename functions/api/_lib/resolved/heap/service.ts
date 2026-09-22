@@ -2,8 +2,8 @@ export {
   createResolvedPriorityFact,
   deleteResolvedPriorityFact,
   listResolvedPriorityFacts,
-} from "./priorityFactService";
-export { queryResolvedHeap } from "./queryService";
+} from "./priority-fact-service";
+export { queryResolvedHeap } from "./query-service";
 export { updateResolvedHeap } from "./updateService";
 export {
   ensureResolvedHeapProjection,
@@ -11,7 +11,7 @@ export {
   projectResolvedHeap,
   projectResolvedRuntimeRefsHeap,
 } from "./projector";
-export { syncResolvedPriorityFactToD1 } from "./priorityFactsRepository";
+export { syncResolvedPriorityFactToD1 } from "./priority-facts-repository";
 export { syncResolvedStateToD1 } from "./projectionRepository";
 export { createResolvedHeapRepository } from "./repository";
 export type {
@@ -21,7 +21,7 @@ export type {
 export type {
   ResolvedPriorityFactListOptions,
   ResolvedPriorityScoring,
-} from "./priorityFactsRepository";
+} from "./priority-facts-repository";
 export type {
   ResolvedHeapProjectionRead,
   ResolvedHeapProjectionSource,

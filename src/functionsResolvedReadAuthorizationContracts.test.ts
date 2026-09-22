@@ -1,6 +1,6 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { queryResolvedHeap } from "../functions/api/_lib/resolved/heap/queryService";
+import { queryResolvedHeap } from "../functions/api/_lib/resolved/heap/query-service";
 import { updateResolvedHeap } from "../functions/api/_lib/resolved/heap/updateService";
 import { createBranchRepository } from "../functions/api/_lib/branches/storage/repository";
 import { createRemoteAliasKey } from "../functions/api/_lib/drops/identity/id";

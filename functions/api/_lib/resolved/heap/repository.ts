@@ -7,11 +7,11 @@ import {
   readBranchResolvedPriorityFactFromD1,
   readResolvedPriorityScoring,
   writeResolvedPriorityFactToD1,
-} from "./priorityFactsRepository";
+} from "./priority-facts-repository";
 import type {
   ResolvedPriorityFactListOptions,
   ResolvedPriorityScoring,
-} from "./priorityFactsRepository";
+} from "./priority-facts-repository";
 import { createResolvedHeapProjectionRepository } from "./projectionRepository";
 
 /** Ports used by resolved heap repositories. */
