@@ -12,12 +12,12 @@ import type {
   DropBranchContentResponse,
   DropBranchRecord,
 } from "../../../../shared/drop/branch";
-import { createBranchApiClient } from "../../../../shared/drop/branchApi";
+import { createBranchApiClient } from "../../../../shared/drop/branch-api";
 import {
   getBranchWriterLabel,
   groupBranchActivity,
   summarizeBranchTextComparison,
-} from "../../../lib/branchActivity";
+} from "../../../lib/branch-activity";
 
 interface BranchActivityDialogProps {
   open: boolean;

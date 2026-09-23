@@ -21,17 +21,17 @@ interface DoctorDiffAuthBundle {
 }
 
 /** Dependencies required by the modular doctor command. */
-export interface DoctorCommandDependencies {
+export interface DoctorCommandDependencies<TConfig extends DoctorConfig> {
   /** Reads the local diff-auth bundle from the active CLI config. */
-  readDiffAuthBundle(config: DoctorConfig): Promise<DoctorDiffAuthBundle>;
+  readDiffAuthBundle(config: TConfig): Promise<DoctorDiffAuthBundle>;
   /** Prints the command output using the active CLI output policy. */
-  print(config: DoctorConfig, value: unknown, human?: string): void;
+  print(config: TConfig, value: unknown, human?: string): void;
 }
 
 /** Creates the self-contained doctor command for the CLI registry bridge. */
-export const createDoctorCommand = (
-  dependencies: DoctorCommandDependencies,
-): CliCommand<DoctorConfig> => ({
+export const createDoctorCommand = <TConfig extends DoctorConfig>(
+  dependencies: DoctorCommandDependencies<TConfig>,
+): CliCommand<TConfig> => ({
   name: "doctor",
   async run({ config }) {
     const diffAuthBundle = await dependencies.readDiffAuthBundle(config);

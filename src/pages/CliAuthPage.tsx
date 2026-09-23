@@ -6,10 +6,14 @@ import {
   getOpenAuthSessionState,
   type OpenAuthPrincipal,
   type OpenAuthSessionState,
-} from "@/lib/auth/openAuthClient";
-import { getAccountSyncState } from "@/lib/auth/accountSyncClient";
-import { signLocalDeviceDelegation } from "@/lib/void/vault/passkeyVault";
-import { normalizeCliUserCode } from "../../shared/auth/cliDevice";
+} from "@/lib/auth/open-auth-client";
+import { getAccountSyncState } from "@/lib/auth/account-sync-client";
+import { signLocalDeviceDelegation } from "@/lib/auth/vault/passkey-vault";
+import {
+  formatCliUserCode,
+  normalizeCliUserCode,
+} from "../../shared/auth/codecs/cli-device-v1";
+import { encodeDropDeviceDelegation } from "../../shared/drop/codecs/device-delegation-v1";
 
 interface PreparedAuthoringTicket {
   credentialId: string;
@@ -147,7 +151,9 @@ const CliAuthPage: React.FC = () => {
         body: JSON.stringify({
           userCode: normalizedUserCode,
           accountId: prepared.accountId,
-          ...(delegation ? { delegation } : {}),
+          ...(delegation
+            ? { delegation: encodeDropDeviceDelegation(delegation) }
+            : {}),
         }),
       });
       const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
@@ -225,7 +231,12 @@ const CliAuthPage: React.FC = () => {
                 id="cli-user-code"
                 value={userCode}
                 onChange={(event) => {
-                  setUserCode(event.target.value);
+                  const normalized = normalizeCliUserCode(event.target.value);
+                  setUserCode(
+                    normalized
+                      ? formatCliUserCode(normalized)
+                      : event.target.value,
+                  );
                   setPrepared(null);
                 }}
                 placeholder="ABCD-EFGH-JKLM"

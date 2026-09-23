@@ -6,7 +6,7 @@ import type {
   DropMetadata,
   DropPayload,
 } from "../../../../shared/drop/types";
-import { getMarkdownTitle } from "../../markdownText";
+import { getMarkdownTitle } from "../../markdown-text";
 import { nullplug } from "../registry";
 import type { NullplugContext, NullplugHandler, PluginBlock } from "../types";
 

@@ -14,8 +14,8 @@ import {
   getOpenAuthPrincipal,
   logoutOpenAuth,
   type OpenAuthPrincipal,
-} from "@/lib/auth/openAuthClient";
-import { clearAccountSession } from "@/lib/auth/accountSession";
+} from "@/lib/auth/open-auth-client";
+import { clearAccountSession } from "@/lib/auth/account-session";
 import {
   AccountSyncUploadUncertainError,
   RecoveryPackageMismatchError,
@@ -25,11 +25,11 @@ import {
   restoreAccountSync,
   setupAccountSync,
   type AccountSyncState,
-} from "@/lib/auth/accountSyncClient";
+} from "@/lib/auth/account-sync-client";
 import {
   LOCAL_ACCOUNT_VAULT_CHANGED_EVENT,
   setActiveVaultUser,
-} from "@/lib/void/vault/passkeyVault";
+} from "@/lib/auth/vault/passkey-vault";
 
 const controlClassName = "border-border text-muted hover:text-foreground";
 

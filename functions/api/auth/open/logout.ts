@@ -1,6 +1,6 @@
 import type { PagesFunction } from "@cloudflare/workers-types";
 
-import { logoutOpenAuth, type OpenAuthBffEnvironment } from "../../_lib/accounts/openAuth/service";
+import { logoutOpenAuth, type OpenAuthBffEnvironment } from "../../_lib/accounts/open-auth/service";
 
 export const onRequestPost: PagesFunction<OpenAuthBffEnvironment> = ({ env, request }) =>
   logoutOpenAuth(env, request);

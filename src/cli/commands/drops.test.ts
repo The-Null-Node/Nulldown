@@ -1,12 +1,12 @@
 import { webcrypto } from "node:crypto";
 import { jest } from "@jest/globals";
 
-import type { CliCredentialBundleV1 } from "../../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../../shared/auth/cli-device";
 import { parseArgs } from "../core/args";
 import { createDropCommands } from "./drops";
 
 const createAuthoringCredential = async (): Promise<{
-  credential: CliCredentialBundleV1;
+  credential: CliCredentialBundle;
   providerPublicJwk: JsonWebKey & { kid?: string };
 }> => {
   const [accountEncryptionPair, delegateSigningPair, providerEncryptionPair] =
@@ -42,8 +42,6 @@ const createAuthoringCredential = async (): Promise<{
     ]);
   return {
     credential: {
-      kind: "nulldown.cli-credential.v1",
-      version: 1,
       baseUrl: "https://nulldown.test",
       userId: "user-1",
       accountId: "account-1",
@@ -58,8 +56,6 @@ const createAuthoringCredential = async (): Promise<{
         signingPublicJwk,
         signingPrivateJwk,
         deviceDelegation: {
-          schema: "nulldown.drop-device-delegation.v1",
-          version: 1,
           accountId: "account-1",
           credentialId: "credential-1",
           delegateSigningPublicJwk: signingPublicJwk,
@@ -138,8 +134,6 @@ describe("drop authoring commands", () => {
       shouldResolveSeedBranch: () => false,
     });
     const credential = {
-      kind: "nulldown.cli-credential.v1",
-      version: 1,
       baseUrl: "https://nulldown.test",
       userId: "user-1",
       accountId: "account-1",
@@ -149,7 +143,7 @@ describe("drop authoring commands", () => {
       accessExpiresAt: Date.now() + 60_000,
       credentialExpiresAt: Date.now() + 86_400_000,
       createdAt: Date.now(),
-    } satisfies CliCredentialBundleV1;
+    } satisfies CliCredentialBundle;
 
     await expect(commands[0]!.run({
       config: { token: credential.accessToken, authCredential: credential },

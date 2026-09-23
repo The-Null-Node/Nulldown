@@ -7,7 +7,7 @@ import {
 import {
   filterNullplugInvokeResponse,
   type NullplugResultPolicyOptions,
-} from "../../../shared/nullplug/resultPolicy";
+} from "../../../shared/nullplug/result-policy";
 import type { PluginBlock, RenderableDiff, RenderablePatch } from "./types";
 
 export interface NormalizedNullplugRuntimeResult {

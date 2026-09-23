@@ -1,5 +1,5 @@
-import type { AccountAuthEnv } from "../../accounts/session/auth";
-import {
+import type { AccountAuthEnv } from "../../accounts/session/authentication";
+import type {
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
 } from "../../../../../shared/drop/resolved/constants";
@@ -11,17 +11,21 @@ import type {
   NullplugUiStateSnapshot,
 } from "../../../../../shared/nullplug/ui";
 import type {
-  VoidBlobStore,
-  VoidDataStore,
-  VoidSqlStore,
+  NulleditNextRequest,
+  NulleditNextResult,
+} from "../../../../../src/server/nulledit/types";
+import type {
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 
 /** Environment required by resolved heap route services. */
 export interface ResolvedHeapEnv extends AccountAuthEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
   /** Trusted runtime snapshotter storage; never populated from request payloads. */
-  resolvedDocumentData?: Pick<VoidDataStore, "get">;
+  resolvedDocumentData?: Pick<RuntimeDataStore, "get">;
 }
 
 /** Route parameters for branch resolved heap operations. */
@@ -67,6 +71,11 @@ export interface ResolvedHeapQueryOptions {
   ) => Promise<void> | void;
   /** Observes repair failures without failing the query. */
   onRepairError?: (error: unknown, target: ResolvedHeapQueryRepairTarget) => void;
+  /** Dispatches an authorized non-document snapshotter query. */
+  querySnapshotter?: (
+    snapshotterId: string,
+    request: NulleditNextRequest,
+  ) => NulleditNextResult | Promise<NulleditNextResult> | undefined;
 }
 
 /** Parsed request payload for rebuilding one or more resolved heap projections. */

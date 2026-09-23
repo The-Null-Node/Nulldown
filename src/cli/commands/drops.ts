@@ -2,10 +2,10 @@ import { flagString, hasFlag } from "../core/args";
 import type { ParsedArgs } from "../core/args";
 import type { CliCommand } from "../core/command";
 import type { NulldownRuntime } from "../runtime/types";
-import type { CliCredentialBundleV1 } from "../../../shared/auth/cliDevice";
-import { sealDropForAuthoring } from "../../../shared/drop/authoringCrypto";
-import { isDropEncryptionPublicJwk } from "../../../shared/drop/deviceDelegation";
-import type { DropEnvelopeV1, DropVisibility } from "../../../shared/drop/types";
+import type { CliCredentialBundle } from "../../../shared/auth/cli-device";
+import { sealDropForAuthoring } from "../../../shared/drop/authoring-crypto";
+import { isDropEncryptionPublicJwk } from "../../../shared/drop/codecs/device-delegation-v1";
+import type { DropEnvelope, DropVisibility } from "../../../shared/drop/types";
 import {
   buildSeedCreateOutput,
   buildSeedDropContent,
@@ -34,7 +34,7 @@ const LEGACY_PLAINTEXT_WARNING =
 
 interface DropAuthoringConfig {
   token?: string | null;
-  authCredential?: CliCredentialBundleV1 | null;
+  authCredential?: CliCredentialBundle | null;
 }
 
 const resolveVisibility = (args: ParsedArgs): DropVisibility => {
@@ -80,11 +80,11 @@ const getProviderEncryption = async (): Promise<
 };
 
 const sealAccountDrop = async (
-  credential: CliCredentialBundleV1 | null | undefined,
+  credential: CliCredentialBundle | null | undefined,
   content: string,
   metadata: Record<string, unknown>,
   visibility: DropVisibility,
-): Promise<DropEnvelopeV1> => {
+): Promise<DropEnvelope> => {
   const authoring = credential?.authoring;
   if (!credential || !authoring) throw new Error(AUTHORING_REENROLL_MESSAGE);
   const accountEncryption = authoring.deviceDelegation.encryptionPublicJwk;

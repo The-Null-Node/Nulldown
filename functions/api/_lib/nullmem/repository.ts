@@ -1,13 +1,13 @@
 import { parseJsonColumn } from "../core/d1/metadata";
 import { nullMemRecordText } from "../../../../shared/nullmem/capsule";
-import { isNullMemRecord } from "../../../../shared/nullmem/schemas";
-import type { NullMemRecord } from "../../../../shared/nullmem/types";
-import type { VoidSqlStore } from "../../../../src/server/ports";
+import type { NullMemRecord } from "../../../../shared/nullmem/records";
+import { isNullMemRecord } from "../../../../shared/nullmem/validation";
+import type { SqlMetadataStore } from "../../../../src/server/ports";
 
 /** Ports used by the branch-scoped NullMem repository. */
 export interface NullMemRepositoryPorts {
   /** SQL metadata store containing persisted memory records. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository for persisted branch-scoped NullMem records. */
@@ -31,7 +31,7 @@ export interface NullMemRepository {
 const recordLabels = (record: NullMemRecord): string[] => record.labels ?? [];
 
 const writeNullMemRecordToD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   record: NullMemRecord,
 ): Promise<void> => {
   const rootDropId = "rootDropId" in record ? (record.rootDropId ?? "") : "";
@@ -87,7 +87,7 @@ const writeNullMemRecordToD1 = async (
 };
 
 const deleteNullMemRecordFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   recordId: string,
@@ -102,7 +102,7 @@ const deleteNullMemRecordFromD1 = async (
 };
 
 const readNullMemRecordsFromD1 = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   rootDropId: string,
   branchId: string,
   kind?: NullMemRecord["kind"],
@@ -138,7 +138,7 @@ const readNullMemRecordsFromD1 = async (
 export const createNullMemRepository = ({
   sql,
 }: NullMemRepositoryPorts): NullMemRepository => {
-  const requireSql = (): VoidSqlStore => {
+  const requireSql = (): SqlMetadataStore => {
     if (!sql) {
       throw new Error("SQL metadata store is required to use memory.");
     }

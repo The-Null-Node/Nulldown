@@ -12,14 +12,14 @@ import type { ResolvedPriorityFactRecord } from "../../../shared/drop/resolved/t
 import type {
   NullMemFactRecord,
   NullMemProcedureRecord,
-  NullMemSourceRef,
-} from "../../../shared/nullmem/types";
+} from "../../../shared/nullmem/records";
+import type { NullMemSourceRef } from "../../../shared/nullmem/source-reference";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
   NullplugUiStateSnapshot,
 } from "../../../shared/nullplug/ui";
-import type { VoidDataStore } from "../ports";
+import type { RuntimeDataStore } from "../ports";
 
 /** Branch text frame passed to Nulledit snapshotters after accepted edits. */
 export interface NulleditFrame {
@@ -108,7 +108,7 @@ export interface NulleditPolicyDecisionFactRecord {
 /** Context supplied to built-in and extended Nulledit snapshotters. */
 export interface NulleditSnapshotContext {
   /** Functional persistence, indexing, caching, and locking boundary. */
-  data: VoidDataStore;
+  data: RuntimeDataStore;
   /** Root drop id whose branch was snapshotted. */
   rootDropId: string;
   /** Branch id that accepted the diff events. */
@@ -415,7 +415,7 @@ export interface NulleditSnapshotterDispatchOptions {
 export interface BranchCommitSnapshotterDispatchOptions
   extends NulleditSnapshotterDispatchOptions {
   /** Functional datastore used by derived snapshotters. */
-  data: VoidDataStore;
+  data: RuntimeDataStore;
 }
 
 /** Options for flushing a `BranchCommitBuffer` into derived snapshotters. */

@@ -1,23 +1,18 @@
-import type { D1Database } from "@cloudflare/workers-types";
-
+import type { AccountBindingChallenge } from "../../../../../shared/auth/account-binding";
 import {
-  ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
-  ACCOUNT_BINDING_OPERATION_V1,
-  parseAccountBindingChallenge,
+  decodeAccountBindingChallenge,
+  encodeAccountBindingChallenge,
   serializeAccountBindingChallenge,
-  type AccountBindingChallengeV1,
-} from "../../../../../shared/auth/accountBinding";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
-import {
-  readAccountRecord,
-  resolveAuthenticatedAccountId,
-} from "../session/auth";
+} from "../../../../../shared/auth/codecs/account-binding-v1";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
+import { readAccountRecord } from "../identity/repository";
+import { resolveAuthenticatedAccountId } from "../session/authentication";
 import {
   isSameOriginOpenAuthRequest,
   resolveOpenAuthRequestIdentity,
   type OpenAuthBffEnvironment,
   type OpenAuthRequestIdentity,
-} from "../openAuth/service";
+} from "../open-auth/service";
 import {
   consumeAccountBindingChallenge,
   createAccountBindingChallenge,
@@ -30,7 +25,7 @@ const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const textEncoder = new TextEncoder();
 
 export interface AccountBindingEnvironment extends OpenAuthBffEnvironment {
-  R2_BUCKET?: VoidBlobStore;
+  R2_BUCKET?: BlobObjectStore;
   ACCOUNT_AUTH_SECRET?: string;
   ACCOUNT_AUTH_TOKEN_TTL_MS?: string;
   ALLOW_INSECURE_ACCOUNT_HEADER?: string;
@@ -92,7 +87,7 @@ const resolveDualAuthority = async (
   env: AccountBindingEnvironment,
   request: Request,
 ): Promise<
-  | { identity: OpenAuthRequestIdentity; accountId: string; bucket: VoidBlobStore }
+  | { identity: OpenAuthRequestIdentity; accountId: string; bucket: BlobObjectStore }
   | Response
 > => {
   const identity = await resolveOpenAuthRequestIdentity(env, request);
@@ -126,7 +121,7 @@ export const createBindingChallengeResponse = async (
   const account = await readAccountRecord(
     bucket,
     accountId,
-    identity.db as unknown as VoidSqlStore,
+    identity.db as unknown as SqlMetadataStore,
   );
   if (!account) return responseJson({ error: "account_not_registered" }, 409, identity);
 
@@ -138,10 +133,7 @@ export const createBindingChallengeResponse = async (
   }
 
   const issuedAt = Date.now();
-  const challenge: AccountBindingChallengeV1 = {
-    schema: ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
-    version: 1,
-    operation: ACCOUNT_BINDING_OPERATION_V1,
+  const challenge: AccountBindingChallenge = {
     challengeId: randomToken(),
     nonce: randomToken(),
     userId: identity.userId,
@@ -162,7 +154,7 @@ export const createBindingChallengeResponse = async (
     expires_at: challenge.expiresAt,
     consumed_at: null,
   });
-  return responseJson({ bound: false, challenge }, 201, identity);
+  return responseJson({ bound: false, challenge: encodeAccountBindingChallenge(challenge) }, 201, identity);
 };
 
 export const verifyAccountSignature = async (
@@ -210,7 +202,7 @@ export const bindAccountResponse = async (
     return responseJson({ error: "invalid_binding_request" }, 400, identity);
   }
   const requestBody = body as Record<string, unknown>;
-  const challenge = parseAccountBindingChallenge(requestBody.challenge);
+  const challenge = decodeAccountBindingChallenge(requestBody.challenge);
   const signature = requestBody.signature;
   if (!challenge || typeof signature !== "string" || Object.keys(requestBody).length !== 2) {
     return responseJson({ error: "invalid_binding_request" }, 400, identity);
@@ -245,7 +237,7 @@ export const bindAccountResponse = async (
   const account = await readAccountRecord(
     bucket,
     accountId,
-    identity.db as unknown as VoidSqlStore,
+    identity.db as unknown as SqlMetadataStore,
   );
   if (
     !account ||

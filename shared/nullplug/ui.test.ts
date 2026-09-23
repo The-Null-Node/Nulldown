@@ -60,9 +60,9 @@ describe("atomic nullplug UI DTOs", () => {
         actions: [{ kind: "action", id: "retry", label: "Retry" }],
       }),
     ).toBe(true);
-    expect(isNullplugUiPrimitive({ kind: "form", id: "bad", fields: [{}] })).toBe(
-      false,
-    );
+    expect(
+      isNullplugUiPrimitive({ kind: "form", id: "bad", fields: [{}] }),
+    ).toBe(false);
   });
 
   it("validates UI response facts with optional proposed diffs", () => {
@@ -111,7 +111,10 @@ describe("atomic nullplug UI DTOs", () => {
       metadata: { actor: "human" },
     });
     expect(() =>
-      nullplugUiResponseFactToYield({ ...fact, data: { approved: undefined } }),
+      nullplugUiResponseFactToYield({
+        ...fact,
+        data: { approved: undefined } as never,
+      }),
     ).toThrow("Invalid nullplug UI response fact.");
   });
 
@@ -155,7 +158,10 @@ describe("atomic nullplug UI DTOs", () => {
       ),
     ).toEqual({ form: { open: true } });
     expect(
-      isNullplugUiStatePatchFact({ ...patchFact, patch: [{ op: "delete", path: [] }] }),
+      isNullplugUiStatePatchFact({
+        ...patchFact,
+        patch: [{ op: "delete", path: [] }],
+      }),
     ).toBe(false);
   });
 });

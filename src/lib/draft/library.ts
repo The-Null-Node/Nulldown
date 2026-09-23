@@ -1,4 +1,4 @@
-import { getMarkdownTitle } from "../markdownText";
+import { getMarkdownTitle } from "../markdown-text";
 
 export const DRAFT_LIBRARY_INDEX_KEY = "nulldown_draft_index_v1";
 export const DRAFT_STORAGE_PREFIX = "nulldown_draft_";

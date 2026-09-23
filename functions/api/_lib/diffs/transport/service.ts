@@ -7,35 +7,39 @@ branch credentials, an environment webhook secret, or unauthenticated local deve
 import { z } from "zod";
 import {
   type DropDiffAppendResponse,
-  type DropDiffEvent,
   type DropDiffPollResponse,
 } from "../../../../../shared/drop/diff";
 import {
   DIFF_TOKEN_MAX_LENGTH,
-  DropDiffEnvelopeSchema,
-} from "../../../../../shared/drop/diffSchemas";
+  DropDiffAppendEnvelopeSchema,
+} from "../../../../../shared/drop/codecs/diff-v1";
 import { sanitizeDiffAuthToken } from "../credentials/repository";
 import {
   verifyDiffRequestAuth,
   type DiffRequestAuthSuccess,
-} from "../credentials/requestAuth";
+} from "../credentials/request-auth";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../accounts/session/auth";
+} from "../../accounts/session/authentication";
 import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import {
   createBranchDiffRepository,
-} from "../../branches/storage/diffLogRepository";
+} from "../../branches/storage/diff-log";
 import {
   createBranchRuntimeFactLogRepository,
-} from "../../branches/storage/runtimeFactLogRepository";
-import { BranchMutationLockError } from "../../branches/storage/mutationLock";
-import { resolveBranchForActor } from "../../branches/lifecycle/service";
+} from "../../branches/storage/runtime-fact-log";
+import { BranchMutationLockError } from "../../branches/storage/mutation-lock";
+import { resolveBranchForActor } from "../../branches/lifecycle";
 import { createBranchRepository } from "../../branches/storage/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
-import type { VoidProvider } from "../../../../../src/server/provider";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import {
+  canReadBranch,
+  canReadSensitiveBranch,
+  resolveRootReadAuthorization,
+} from "../../security/read-authorization";
+import type { NulldownServerRuntime } from "../../../../../src/server/runtime";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
 import { createRequestLogger, toLogRef } from "../../core/logging/logger";
 import {
   apiHttpErrorResponse,
@@ -50,8 +54,8 @@ import {
 
 /** Environment required by the diff transport service. */
 export interface DiffTransportEnv extends AccountAuthEnv {
-  R2_BUCKET: VoidBlobStore;
-  DB?: VoidSqlStore;
+  R2_BUCKET: BlobObjectStore;
+  DB?: SqlMetadataStore;
   DIFF_WEBHOOK_SECRET?: string;
   DIFF_AUTH_MAX_SKEW_MS?: string;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
@@ -64,8 +68,8 @@ export interface DiffTransportParams {
 
 /** Composed runtime services required by diff POST transport. */
 export interface DiffTransportServices {
-  /** App-facing provider facade used to append and snapshot branch diffs. */
-  voidProvider: VoidProvider;
+  /** Backend server runtime used to append and snapshot branch diffs. */
+  serverRuntime: NulldownServerRuntime;
   /** Optional platform scheduler for async snapshotter work. */
   waitUntil?: (promise: Promise<void>) => void;
 }
@@ -141,18 +145,6 @@ const parseDiffPollQuery = (request: Request): DiffPollQuery => {
     diffPollQuerySchema,
     query,
     "Invalid diff poll query.",
-  );
-};
-
-const canReadRuntimeFacts = async (
-  env: DiffTransportEnv,
-  request: Request,
-  branch: DropBranchRecord,
-): Promise<boolean> => {
-  const accountId = await resolveAuthenticatedAccountId(request, env);
-  return Boolean(
-    accountId &&
-      (accountId === branch.ownerAccountId || accountId === branch.writerAccountId),
   );
 };
 
@@ -258,7 +250,7 @@ export const postDiffEvents = async (
 
     const parsed = parseJsonTextWithSchema(
       rawBody,
-      DropDiffEnvelopeSchema,
+      DropDiffAppendEnvelopeSchema,
       "Invalid diff envelope.",
     );
 
@@ -288,7 +280,7 @@ export const postDiffEvents = async (
       });
     }
 
-    const appended = await services.voidProvider.nulledit.appendDiffEvents({
+    const appended = await services.serverRuntime.nulledit.appendDiffEvents({
       branch,
       events: parsed.events,
       waitUntil: services.waitUntil,
@@ -363,6 +355,15 @@ export const postDiffEvents = async (
       );
     }
 
+    if (message === "diff_sequence_exhausted") {
+      logger.logEnd(409, { reason: message });
+      return jsonErrorResponse(
+        409,
+        message,
+        "Branch diff sequence capacity is exhausted. Start a new branch.",
+      );
+    }
+
     if (message === "diff_event_id_reused") {
       logger.logEnd(409, { reason: message });
       return new Response(
@@ -430,7 +431,7 @@ export const pollDiffEvents = async (
       blobs: env.R2_BUCKET,
       sql: env.DB,
     });
-    const id = await dropIdentityRepository.resolveRemoteDropId(
+    const id = await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
       requestedId,
       logger,
     );
@@ -439,25 +440,34 @@ export const pollDiffEvents = async (
       return new Response("Drop ID is required.", { status: 400 });
     }
 
+    const authorization = await resolveRootReadAuthorization(request, env, id);
+    if (authorization.kind === "denied") {
+      logger.logEnd(404, {
+        reason: "branch_not_found",
+        dropRef: toLogRef(id),
+      });
+      return new Response("Branch not found.", { status: 404 });
+    }
+
     const query = parseDiffPollQuery(request);
     const cursorParam = query.cursor;
     const factCursorParam = query.factCursor;
-    const branchDiffRepository = createBranchDiffRepository({
-      blobs: env.R2_BUCKET,
-      sql: env.DB,
-    });
-    const branchRuntimeFactRepository = createBranchRuntimeFactLogRepository({
-      blobs: env.R2_BUCKET,
-      sql: env.DB,
-    });
     const branch = await resolveBranchForDiffRequest(env, id, request, {
       mode: "none",
       branchId: resolveRequestedBranchId(request),
       clientId: sanitizeDiffAuthToken(query.excludeClient ?? null),
     });
+    if (!canReadBranch(authorization, branch)) {
+      logger.logEnd(404, {
+        reason: "branch_not_found",
+        dropRef: toLogRef(id),
+      });
+      return new Response("Branch not found.", { status: 404 });
+    }
+
     if (
       factCursorParam !== undefined &&
-      !(await canReadRuntimeFacts(env, request, branch))
+      !(await canReadSensitiveBranch(request, env, id, branch))
     ) {
       logger.logEnd(403, {
         reason: "runtime_fact_read_forbidden",
@@ -469,6 +479,15 @@ export const pollDiffEvents = async (
         { status: 403 },
       );
     }
+
+    const branchDiffRepository = createBranchDiffRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
+    const branchRuntimeFactRepository = createBranchRuntimeFactLogRepository({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    });
 
     if (cursorParam === "__latest__") {
       // The editor handshake asks for the current cursor only so it can start tailing fresh events.

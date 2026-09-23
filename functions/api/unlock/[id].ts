@@ -1,13 +1,20 @@
 import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { isDropEnvelopeV1 } from "../../../shared/drop/types";
+import { decodeDropEnvelope } from "../../../shared/drop/codecs/envelope-v1";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { createRequestLogger, serializeError, toLogRef } from "../_lib/core/logging/logger";
-import { serverVoidCrypto } from "../_lib/crypto/void/serverVoidCrypto";
+import { providerCrypto } from "../_lib/crypto/provider-crypto";
+import {
+  canReadRoot,
+  resolveRootReadAuthorization,
+} from "../_lib/security/read-authorization";
 
 interface Env {
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
+  ACCOUNT_AUTH_SECRET?: string;
+  ACCOUNT_AUTH_TOKEN_TTL_MS?: string;
+  ALLOW_INSECURE_ACCOUNT_HEADER?: string;
 }
 
 interface UnlockRequestBody {
@@ -46,24 +53,11 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("R2 bucket binding is required.", { status: 500 });
     }
 
-    if (!env.PROVIDER_ENCRYPTION_PRIVATE_JWK) {
-      logger.error("unlock.provider_key_missing", {
-        requestedDropRef: toLogRef(requestedId),
-      });
-      logger.logEnd(501, {
-        reason: "provider_key_missing",
-        requestedDropRef: toLogRef(requestedId),
-      });
-      return new Response("Provider escrow key is not configured.", {
-        status: 501,
-      });
-    }
-
     const dropIdentityRepository = createDropIdentityRepository({
       blobs: env.R2_BUCKET,
       sql: env.DB,
     });
-    const id = await dropIdentityRepository.resolveRemoteDropId(
+    const id = await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
       requestedId,
       logger,
     );
@@ -79,6 +73,31 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     }
 
     const canonicalDropRef = toLogRef(id);
+
+    const authorization = await resolveRootReadAuthorization(request, env, id);
+    if (!canReadRoot(authorization)) {
+      logger.warn("unlock.drop_not_found", {
+        requestedDropRef: toLogRef(requestedId),
+      });
+      logger.logEnd(404, {
+        reason: "drop_not_found",
+        requestedDropRef: toLogRef(requestedId),
+      });
+      return new Response("Drop not found.", { status: 404 });
+    }
+
+    if (!env.PROVIDER_ENCRYPTION_PRIVATE_JWK) {
+      logger.error("unlock.provider_key_missing", {
+        requestedDropRef: toLogRef(requestedId),
+      });
+      logger.logEnd(501, {
+        reason: "provider_key_missing",
+        requestedDropRef: toLogRef(requestedId),
+      });
+      return new Response("Provider escrow key is not configured.", {
+        status: 501,
+      });
+    }
 
     let body: UnlockRequestBody;
 
@@ -142,7 +161,8 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("Drop payload is not JSON.", { status: 400 });
     }
 
-    if (!isDropEnvelopeV1(parsed)) {
+    const envelope = decodeDropEnvelope(parsed);
+    if (!envelope) {
       logger.warn("unlock.stored_payload_not_envelope", {
         requestedDropRef: toLogRef(requestedId),
         canonicalDropRef,
@@ -157,18 +177,18 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       });
     }
 
-    if (parsed.unlockPolicy !== "provider-escrow" || !parsed.providerEscrow) {
+    if (envelope.unlockPolicy !== "provider-escrow" || !envelope.providerEscrow) {
       logger.warn("unlock.policy_forbidden", {
         requestedDropRef: toLogRef(requestedId),
         canonicalDropRef,
-        unlockPolicy: parsed.unlockPolicy,
-        hasProviderEscrow: Boolean(parsed.providerEscrow),
+        unlockPolicy: envelope.unlockPolicy,
+        hasProviderEscrow: Boolean(envelope.providerEscrow),
       });
       logger.logEnd(403, {
         reason: "policy_forbidden",
         requestedDropRef: toLogRef(requestedId),
         canonicalDropRef,
-        unlockPolicy: parsed.unlockPolicy,
+        unlockPolicy: envelope.unlockPolicy,
       });
       return new Response("Drop does not allow provider escrow unlock.", {
         status: 403,
@@ -178,7 +198,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     let providerPrivateKey: CryptoKey;
 
     try {
-      providerPrivateKey = await serverVoidCrypto.importProviderPrivateKey(
+      providerPrivateKey = await providerCrypto.importProviderPrivateKey(
         env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
       );
     } catch (error) {
@@ -198,7 +218,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     let requesterPublicKey: CryptoKey;
 
     try {
-      requesterPublicKey = await serverVoidCrypto.importRequesterPublicKey(
+      requesterPublicKey = await providerCrypto.importRequesterPublicKey(
         body.requesterPublicJwk,
       );
     } catch (error) {
@@ -215,13 +235,13 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
       return new Response("requesterPublicJwk is invalid.", { status: 400 });
     }
 
-    const rawContentKey = await serverVoidCrypto.decryptProviderWrappedContentKey(
+    const rawContentKey = await providerCrypto.decryptProviderWrappedContentKey(
       providerPrivateKey,
-      parsed.providerEscrow.wrappedKey,
+      envelope.providerEscrow.wrappedKey,
     );
 
     const requesterWrappedKey =
-      await serverVoidCrypto.wrapRawContentKeyWithRequesterPublicKey(
+      await providerCrypto.wrapRawContentKeyWithRequesterPublicKey(
         requesterPublicKey,
         rawContentKey,
       );
@@ -229,7 +249,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     logger.logEnd(200, {
       requestedDropRef: toLogRef(requestedId),
       canonicalDropRef,
-      unlockPolicy: parsed.unlockPolicy,
+      unlockPolicy: envelope.unlockPolicy,
     });
 
     return new Response(
@@ -247,12 +267,11 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     logger.logError("unlock.unhandled_error", error, {
       requestedDropRef: toLogRef(requestedId),
     });
-    const message = error instanceof Error ? error.message : String(error);
     logger.logEnd(500, {
       reason: "unhandled_error",
       requestedDropRef: toLogRef(requestedId),
     });
-    return new Response(`Failed to unlock drop: ${message}`, { status: 500 });
+    return new Response("Failed to unlock drop.", { status: 500 });
   }
 };
 

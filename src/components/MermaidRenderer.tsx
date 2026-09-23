@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, memo } from 'react';
 import mermaid from 'mermaid';
-import { useTheme } from '../theme/themeContext';
+import { useTheme } from '../theme/theme-context';
 
 interface MermaidRendererProps {
   chart: string;

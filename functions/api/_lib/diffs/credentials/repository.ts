@@ -1,6 +1,6 @@
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 
 /** R2 prefix for branch diff credential records. */
@@ -27,9 +27,9 @@ export interface DiffAuthCredentialRecord {
 /** Ports used by diff credential repositories. */
 export interface DiffCredentialRepositoryPorts {
   /** Blob store containing branch diff credential fallback records. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** Optional SQL store containing queryable diff credential records. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository for branch diff credential records. */
@@ -99,11 +99,11 @@ export const toBase64 = (value: ArrayBuffer): string => {
 
 /** Reads a persisted branch diff credential. */
 export const readDiffAuthCredential = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   dropId: string,
   clientId: string,
   kid: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DiffAuthCredentialRecord | null> => {
   if (db) {
     const row = await db
@@ -149,9 +149,9 @@ export const readDiffAuthCredential = async (
 
 /** Stores a branch diff credential record. */
 export const putDiffAuthCredential = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   record: DiffAuthCredentialRecord,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   if (db) {
     await db

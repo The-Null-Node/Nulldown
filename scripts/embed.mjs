@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 const DIST = "dist";
 const OUT = "src/__embedded.ts";
 
+/** @param {string} dir @returns {Promise<string[]>} */
 async function walk(dir) {
   const out = [];
   for (const name of await readdir(dir)) {
@@ -18,7 +19,7 @@ async function walk(dir) {
 
 const files = await walk(DIST);
 const entries = await Promise.all(
-  files.map(async (p) => {
+  files.map(async (/** @type {string} */ p) => {
     const rel = relative(DIST, p).replaceAll("\\", "/");
     const b64 = (await readFile(p)).toString("base64");
     return { rel, b64 };

@@ -18,7 +18,12 @@ describe("runtime policy helpers", () => {
         "youtube.com/path",
         "not a valid host !!!",
       ]),
-    ).toEqual(["www.youtube.com", "player.vimeo.com", "youtu.be", "youtube.com"]);
+    ).toEqual([
+      "www.youtube.com",
+      "player.vimeo.com",
+      "youtu.be",
+      "youtube.com",
+    ]);
 
     expect(
       resolveRootRuntimePolicy({
@@ -65,7 +70,11 @@ describe("runtime policy helpers", () => {
       conditionalGrants: [
         {
           id: "approve-agent-patch",
-          trigger: { kind: "ui.response", responseOf: "approval", field: "approved" },
+          trigger: {
+            kind: "ui.response",
+            responseOf: "approval",
+            field: "approved",
+          },
           evaluator: { kind: "builtin.nullplug", id: "approval-policy" },
           maxGrant: { kind: "drop.diff.apply", scope: "branch" },
           onError: "deny",
@@ -99,7 +108,10 @@ describe("runtime policy helpers", () => {
     expect(
       isRuntimeGrantWithinMaxGrant(
         { kind: "nullplug.invoke", capabilities: ["render"] },
-        { kind: "nullplug.invoke", capabilities: ["render", "policy.evaluate"] },
+        {
+          kind: "nullplug.invoke",
+          capabilities: ["render", "policy.evaluate"],
+        },
       ),
     ).toBe(true);
     expect(
@@ -118,8 +130,8 @@ describe("runtime policy helpers", () => {
         reason: "approved",
       }),
     ).toBe(true);
-    expect(isPolicyDecisionValue({ decision: "allow", grant: { kind: "bad" } })).toBe(
-      false,
-    );
+    expect(
+      isPolicyDecisionValue({ decision: "allow", grant: { kind: "bad" } }),
+    ).toBe(false);
   });
 });

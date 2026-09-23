@@ -1,5 +1,5 @@
 import createEditor from "./editor";
-import useEditorStore from "../../stores/editorStore";
+import useEditorStore from "../../stores/editor-store";
 import { nullplug, parseNullplugBlocks } from "../nullplug";
 import { computeDiffOps } from "../../../shared/nulledit/textDiff";
 
@@ -135,7 +135,7 @@ describe("nulledit editor", () => {
             kind: "action",
             id: `action-${invocation}`,
             label: "Act",
-            source: { callId: "stale-call" },
+            source: { callId: "stale-call", rootDropId: "root" },
           },
         ],
       };

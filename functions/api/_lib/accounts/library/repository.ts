@@ -1,8 +1,8 @@
-import type { VoidSqlStore } from "../../../../../src/server/ports";
+import type { SqlMetadataStore } from "../../../../../src/server/ports";
 import type {
   AccountLibraryEntry,
   AccountLibraryVisibility,
-} from "../../../../../shared/auth/accountLibrary";
+} from "../../../../../shared/auth/account-library";
 
 interface AccountLibraryRow {
   entry_seq: number;
@@ -32,7 +32,7 @@ const mapRow = (row: AccountLibraryRow): AccountLibraryEntry =>
 
 /** Adds or revives the verified ownership projection for a sealed remote drop. */
 export const upsertAccountLibraryEntry = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   input: {
     dropId: string;
     accountId: string;
@@ -64,7 +64,7 @@ export const upsertAccountLibraryEntry = async (
 
 /** Marks an owned remote drop deleted without losing its convergence identity. */
 export const tombstoneAccountLibraryEntry = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   dropId: string,
   deletedAt: number,
 ): Promise<void> => {
@@ -80,7 +80,7 @@ export const tombstoneAccountLibraryEntry = async (
 
 /** Reads one trusted account-library projection by canonical drop id. */
 export const readAccountLibraryEntry = (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   dropId: string,
 ): Promise<AccountLibraryRow | null> =>
   db
@@ -93,7 +93,7 @@ export const readAccountLibraryEntry = (
 
 /** Reads stable account-scoped pages using an immutable sequence watermark. */
 export const listAccountLibraryEntries = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   accountIds: string[],
   limit: number,
   cursor: AccountLibraryCursor | null,

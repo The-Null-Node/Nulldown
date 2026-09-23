@@ -1,0 +1,10 @@
+{
+  "extends": "./functions/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": ["functions/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useTheme, useThemeCatalog } from "../theme/themeContext";
+import { useTheme, useThemeCatalog } from "../theme/theme-context";
 
 const ThemePicker = () => {
   const { themeId, setThemeId } = useTheme();

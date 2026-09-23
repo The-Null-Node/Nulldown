@@ -1,0 +1,12 @@
+{
+  "extends": "./packages/nulldown-openauth/tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "types": ["@cloudflare/workers-types"],
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": ["packages/nulldown-openauth/src/**/*.ts", "shared/auth/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]
+}

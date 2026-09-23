@@ -43,7 +43,7 @@ interface RunningProcess {
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const canaryToken = "package-smoke-canary-token";
 
-const assert = (condition: unknown, message: string): asserts condition => {
+const assert: (condition: unknown, message: string) => asserts condition = (condition, message) => {
   if (!condition) throw new Error(message);
 };
 

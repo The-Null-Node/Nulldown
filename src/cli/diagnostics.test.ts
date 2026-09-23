@@ -1,5 +1,5 @@
 import { jest } from "@jest/globals";
-import { runCli, type RunCliDependencies } from "./index";
+import { runCli, type CliFetch, type RunCliDependencies } from "./index";
 
 const captureOutput = (
   dependencies: RunCliDependencies = {},
@@ -24,7 +24,7 @@ const captureOutput = (
 describe("CLI diagnostics", () => {
   it("verbose logs correlate requests without leaking canary secrets", async () => {
     const secret = "canary-token-value";
-    const fetchImpl = jest.fn<typeof fetch>(async (_input, init) => {
+    const fetchImpl = jest.fn<CliFetch>(async (_input, init) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe(
         `Bearer ${secret}`,
       );

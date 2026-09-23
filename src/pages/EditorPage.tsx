@@ -12,14 +12,14 @@ import React, {
   useState,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import useEditorStore, { type EditorState } from "../stores/editorStore";
-import useStorageStore from "../stores/storageStore";
+import useEditorStore, { type EditorState } from "../stores/editor-store";
+import useStorageStore from "../stores/storage-store";
 import useDropStore, {
   isOfflineDropId,
   type OwnedDropRecord,
-} from "../stores/dropStore";
-import { normalizeNetworkAllowlist } from "../lib/networkAllowlist";
-import { useDraftStorage } from "../hooks/useLocalStorage";
+} from "../stores/drop-store";
+import { normalizeNetworkAllowlist } from "../lib/network-allowlist";
+import { useDraftStorage } from "../hooks/use-local-storage";
 import EditorToolbar from "./editor/components/EditorToolbar";
 import ErrorBanner from "./editor/components/ErrorBanner";
 import EditorPane from "./editor/components/EditorPane";
@@ -29,15 +29,15 @@ import SettingsModal from "./editor/components/SettingsModal";
 import LibraryPalette from "./editor/components/LibraryPalette";
 import BranchActivityDialog from "./editor/components/BranchActivityDialog";
 import BranchSyncBanner from "./editor/components/BranchSyncBanner";
-import { useShareDrop } from "./editor/hooks/useShareDrop";
-import { usePreviewToggle } from "./editor/hooks/usePreviewToggle";
-import { useDiffChannel } from "./editor/hooks/useDiffChannel";
+import { useShareDrop } from "./editor/hooks/use-share-drop";
+import { usePreviewToggle } from "./editor/hooks/use-preview-toggle";
+import { useDiffChannel } from "./editor/sync/use-channel";
 import {
   listRecentExternalDrops,
   type RecentExternalDropRecord,
-} from "../lib/drop/recentExternalDrops";
+} from "../lib/drop/recent-external-drops";
 import createEditor from "../lib/nulledit/editor";
-import { buildDraftPackFromSnapshot } from "../lib/nulledit/draftPack";
+import { buildDraftPackFromSnapshot } from "../lib/nulledit/draft-pack";
 import { computeDiffOps } from "../../shared/nulledit/textDiff";
 import {
   createDraftStorageKey,
@@ -51,25 +51,28 @@ import {
   type SearchableGroup,
 } from "../lib/search/searchable";
 import { toShortDropId } from "../../shared/drop/id";
-import { toUserFacingDropError } from "../lib/drop/userErrors";
-import { getUnlockedVault } from "../lib/void/vault/passkeyVault";
-import { createBranchApiClient } from "../../shared/drop/branchApi";
-import { getAccountSessionToken } from "../lib/auth/accountSession";
-import { fetchAccountLibrary } from "../lib/auth/accountLibraryClient";
-import type { AccountLibraryEntry } from "../../shared/auth/accountLibrary";
+import { toUserFacingDropError } from "../lib/drop/user-errors";
+import { getUnlockedVault } from "../lib/auth/vault/passkey-vault";
+import { createBranchApiClient } from "../../shared/drop/branch-api";
+import { getAccountSessionToken } from "../lib/auth/account-session";
+import { fetchAccountLibrary } from "../lib/auth/account-library-client";
+import type { AccountLibraryEntry } from "../../shared/auth/account-library";
 import {
   clearBranchPromotionIntent,
   readBranchPromotionIntent,
   writeBranchPromotionIntent,
   type BranchPromotionIntent,
-} from "../lib/branch/promotionIntent";
+} from "../lib/branch/promotion-intent";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
 } from "../../shared/nullplug/ui";
-import { getDefaultRemoteNullplugRuntime } from "../lib/nullplug/providerRuntime";
+import {
+  createBrowserNullplugClient,
+  type BrowserNullplugClient,
+} from "../lib/nullplug/browser-client";
 import { resolveRootRuntimePolicy } from "../../shared/nullplug/policy";
-import { useAccountPreferencesStore } from "../stores/accountPreferencesStore";
+import { useAccountPreferencesStore } from "../stores/account-preferences-store";
 
 type PaletteAction =
   | { kind: "open-drop"; id: string; source: "owned" | "external" | "remote" }
@@ -116,10 +119,15 @@ const formatTimestamp = (timestamp: number) => {
 };
 
 const EditorPage: React.FC = () => {
+  const nullplugClientRef = useRef<BrowserNullplugClient | null>(null);
+  if (!nullplugClientRef.current) {
+    nullplugClientRef.current = createBrowserNullplugClient();
+  }
+  const nullplugClient = nullplugClientRef.current;
   const editorRef = useRef<ReturnType<typeof createEditor> | null>(null);
   if (!editorRef.current) {
     editorRef.current = createEditor({
-      nullplugRuntime: getDefaultRemoteNullplugRuntime(),
+      nullplugRuntime: nullplugClient,
     });
   }
   const editor = editorRef.current;
@@ -1230,15 +1238,17 @@ const EditorPage: React.FC = () => {
         );
       }
 
-      const branchClient = createBranchApiClient({
-        baseUrl: "",
-        accountId: activeBranchSession.accountId,
-        clientId: activeBranchSession.clientId,
-        authTokenProvider,
-      });
-      await branchClient.submitNullplugResponse(fact);
+      await nullplugClient.submitResponse(
+        {
+          rootDropId: activeBranchSession.rootDropId,
+          branchId: activeBranchSession.branchId,
+          accountId: activeBranchSession.accountId,
+          clientId: activeBranchSession.clientId,
+        },
+        fact,
+      );
     },
-    [activeBranchSession, authTokenProvider],
+    [activeBranchSession, nullplugClient],
   );
 
   const handleSubmitNullplugState = useCallback(
@@ -1253,15 +1263,17 @@ const EditorPage: React.FC = () => {
         throw new Error("The UI state does not match the active branch.");
       }
 
-      const branchClient = createBranchApiClient({
-        baseUrl: "",
-        accountId: activeBranchSession.accountId,
-        clientId: activeBranchSession.clientId,
-        authTokenProvider,
-      });
-      await branchClient.submitNullplugState(fact);
+      await nullplugClient.submitState(
+        {
+          rootDropId: activeBranchSession.rootDropId,
+          branchId: activeBranchSession.branchId,
+          accountId: activeBranchSession.accountId,
+          clientId: activeBranchSession.clientId,
+        },
+        fact,
+      );
     },
-    [activeBranchSession, authTokenProvider],
+    [activeBranchSession, nullplugClient],
   );
 
   if (successUrl) {

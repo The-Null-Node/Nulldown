@@ -1,52 +1,78 @@
 import {
   NULDOWN_USER_SUBJECT_TYPE,
-  createNulldownUserPrincipal,
-  createNulldownUserSubject,
-  parseNulldownIdentity,
-  parseNulldownUserPrincipal,
-  parseNulldownUserSubject,
+  type NulldownIdentity,
+  type NulldownUserPrincipal,
+  type NulldownUserSubject,
+  type NulldownUser,
 } from "./subjects";
+import {
+  createNulldownUserSubject,
+  decodeNulldownIdentity,
+  decodeNulldownUser,
+  decodeNulldownUserPrincipal,
+  decodeNulldownUserSubject,
+  encodeNulldownIdentity,
+  encodeNulldownUser,
+  encodeNulldownUserPrincipal,
+  encodeNulldownUserSubject,
+} from "./codecs/user-subject-v1";
+
+const subjectFixture: NulldownUserSubject = { userId: "user_01" };
+const userFixture: NulldownUser = { userId: "user_01" };
+const identityFixture: NulldownIdentity = {
+  identityId: "identity_01",
+  userId: "user_01",
+};
 
 describe("Nulldown recoverable-user subjects", () => {
   it("parses only the exact v1 user subject", () => {
-    expect(parseNulldownUserSubject({ version: 1, userId: "user_01" })).toEqual({
-      version: 1,
-      userId: "user_01",
-    });
-    expect(parseNulldownUserSubject({ version: 2, userId: "user_01" })).toBeNull();
-    expect(parseNulldownUserSubject({ version: 1, userId: " user_01 " })).toBeNull();
+    expect(createNulldownUserSubject("user_01")).toEqual(subjectFixture);
+    expect(decodeNulldownUserSubject(encodeNulldownUserSubject(subjectFixture))).toEqual(
+      subjectFixture,
+    );
     expect(
-      parseNulldownUserSubject({ version: 1, userId: "user_01", email: "a@b.test" }),
+      decodeNulldownUserSubject({ version: 2, userId: "user_01" }),
+    ).toBeNull();
+    expect(
+      decodeNulldownUserSubject({ version: 1, userId: " user_01 " }),
+    ).toBeNull();
+    expect(
+      decodeNulldownUserSubject({
+        version: 1,
+        userId: "user_01",
+        email: "a@b.test",
+      }),
     ).toBeNull();
   });
 
-  it("normalizes a verified principal to its stable v1 shape", () => {
-    const principal = createNulldownUserPrincipal("user_01");
-
-    expect(principal).toEqual({
+  it("round-trips a verified principal to its canonical shape", () => {
+    const principal: NulldownUserPrincipal = {
       type: NULDOWN_USER_SUBJECT_TYPE,
-      properties: { version: 1, userId: "user_01" },
-    });
-    expect(parseNulldownUserPrincipal(principal)).toEqual(principal);
+      properties: subjectFixture,
+    };
+
+    expect(decodeNulldownUserPrincipal(encodeNulldownUserPrincipal(principal))).toEqual(
+      principal,
+    );
     expect(
-      parseNulldownUserPrincipal({
-        ...principal,
-        properties: { ...principal.properties, accountId: "legacy-account" },
+      decodeNulldownUserPrincipal({
+        type: NULDOWN_USER_SUBJECT_TYPE,
+        properties: {
+          ...encodeNulldownUserSubject(subjectFixture),
+          accountId: "legacy-account",
+        },
       }),
     ).toBeNull();
   });
 
   it("rejects unstable identifiers rather than silently rewriting them", () => {
     expect(() => createNulldownUserSubject("user id")).toThrow(TypeError);
+    expect(decodeNulldownUser(encodeNulldownUser(userFixture))).toEqual(userFixture);
+    expect(decodeNulldownIdentity(encodeNulldownIdentity(identityFixture))).toEqual(
+      identityFixture,
+    );
     expect(
-      parseNulldownIdentity({
-        version: 1,
-        identityId: "identity_01",
-        userId: "user_01",
-      }),
-    ).toEqual({ version: 1, identityId: "identity_01", userId: "user_01" });
-    expect(
-      parseNulldownIdentity({
+      decodeNulldownIdentity({
         version: 1,
         identityId: "identity_01",
         userId: "user_01",

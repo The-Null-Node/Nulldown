@@ -1,11 +1,11 @@
 import type { DropDiffEnvelope } from "../../../shared/drop/diff";
-import type { DropEnvelopeV1 } from "../../../shared/drop/types";
+import type { DropEnvelope } from "../../../shared/drop/types";
 import type {
-  CliCredentialBundleV1,
+  CliCredentialBundle,
   CliDevicePollResponse,
   CliDeviceStartResponse,
   CliEncryptionPublicJwk,
-} from "../../../shared/auth/cliDevice";
+} from "../../../shared/auth/cli-device";
 
 /** Result returned by a drop read operation. */
 export interface DropReadResult {
@@ -30,7 +30,7 @@ export interface DropCreateRequest {
   /** Optional drop metadata. */
   metadata?: Record<string, unknown> | null;
   /** Optional account-owned envelope to send instead of plaintext fields. */
-  envelope?: DropEnvelopeV1;
+  envelope?: DropEnvelope;
 }
 
 /** Result returned after creating a drop. */
@@ -52,7 +52,7 @@ export interface DropUpdateRequest {
   /** Optional expected root revision for optimistic concurrency. */
   expectedRevision?: string | null;
   /** Optional account-owned envelope to send instead of plaintext fields. */
-  envelope?: DropEnvelopeV1;
+  envelope?: DropEnvelope;
 }
 
 /** Result returned after updating a drop. */
@@ -188,6 +188,8 @@ export interface AuthDeviceRequest {
   publicKey: CliEncryptionPublicJwk;
   /** Optional human-readable CLI/device name. */
   clientName?: string | null;
+  /** Optional delegated authoring public key for this CLI enrollment. */
+  delegateSigningPublicJwk?: JsonWebKey;
 }
 
 /** Request for polling a pending CLI authorization. */
@@ -217,7 +219,7 @@ export interface AuthRuntime {
   /** Polls browser-mediated CLI authorization. */
   poll(request: AuthDevicePollRequest): Promise<CliDevicePollResponse | null>;
   /** Rotates a CLI refresh credential. */
-  refresh(request: AuthRefreshRequest): Promise<CliCredentialBundleV1 | null>;
+  refresh(request: AuthRefreshRequest): Promise<CliCredentialBundle | null>;
   /** Revokes a CLI refresh credential. */
   revoke(request: AuthRevokeRequest): Promise<unknown | null>;
 }

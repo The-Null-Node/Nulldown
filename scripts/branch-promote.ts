@@ -1,12 +1,18 @@
-import { createBranchApiClient } from "../shared/drop/branchApi";
-import { getArgValue, resolveBaseUrl } from "./diffAuthUtil";
+import { createBranchApiClient } from "../shared/drop/branch-api";
+import { getArgValue, resolveBaseUrl } from "./diff-auth-util";
 
 const main = async () => {
   const dropId = getArgValue("drop") || getArgValue("id");
   const branchId = getArgValue("branch");
   const expectedSnapshotId = Number(getArgValue("expected-snapshot"));
   const idempotencyKey = getArgValue("idempotency-key");
-  if (!dropId || !branchId || !Number.isSafeInteger(expectedSnapshotId) || expectedSnapshotId < 0 || !idempotencyKey) {
+  if (
+    !dropId ||
+    !branchId ||
+    !Number.isSafeInteger(expectedSnapshotId) ||
+    expectedSnapshotId < 0 ||
+    !idempotencyKey
+  ) {
     throw new Error(
       "Missing required args. Use --drop <dropId> --branch <branchId> --expected-snapshot <n> --idempotency-key <key>.",
     );

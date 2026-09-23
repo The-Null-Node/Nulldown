@@ -1,12 +1,10 @@
 import type {
-  VoidBlobObject,
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObject,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
-import {
-  isDropEnvelopeV1,
-  type DropEnvelopeV1,
-} from "../../../../../shared/drop/types";
+import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
+import type { DropEnvelope } from "../../../../../shared/drop/types";
 
 /** R2 key prefix for public drop index entries. */
 export const REMOTE_PUBLIC_DROP_INDEX_PREFIX = "__drop_public_index__/";
@@ -53,7 +51,7 @@ const mapPublicDropRow = (row: {
 });
 
 const readPublicDropIndexEntryFromD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   id: string,
 ): Promise<DropPublicIndexEntry | null> => {
   if (!db) return null;
@@ -73,7 +71,7 @@ export const isRemotePublicDropIndexKey = (key: string): boolean =>
   key.startsWith(REMOTE_PUBLIC_DROP_INDEX_PREFIX);
 
 const parsePublicIndexEntryFromObject = async (
-  object: VoidBlobObject | null,
+  object: BlobObject | null,
 ): Promise<DropPublicIndexEntry | null> => {
   if (!object?.body) {
     return null;
@@ -91,9 +89,9 @@ const parsePublicIndexEntryFromObject = async (
 
 /** Reads the public index entry for a canonical drop id. */
 export const readPublicDropIndexEntry = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropPublicIndexEntry | null> => {
   const d1Entry = await readPublicDropIndexEntryFromD1(db, id);
   if (d1Entry) return d1Entry;
@@ -109,7 +107,7 @@ export const readPublicDropIndexEntry = async (
 
 /** Reads a public index entry by its full R2 key. */
 export const readPublicDropIndexEntryByKey = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   key: string,
 ): Promise<DropPublicIndexEntry | null> => {
   const object = await bucket.get(key);
@@ -118,10 +116,10 @@ export const readPublicDropIndexEntryByKey = async (
 
 /** Creates or updates the public index entry for a drop. */
 export const upsertPublicDropIndexEntry = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
   updatedAt = Date.now(),
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropPublicIndexEntry> => {
   const existing = await readPublicDropIndexEntry(bucket, id, db);
   const entry: DropPublicIndexEntry = {
@@ -151,9 +149,9 @@ export const upsertPublicDropIndexEntry = async (
 
 /** Removes the public index entry for a drop. */
 export const removePublicDropIndexEntry = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   await bucket.delete(createRemotePublicDropIndexKey(id));
   if (db) {
@@ -163,11 +161,11 @@ export const removePublicDropIndexEntry = async (
 
 /** Synchronizes public index state from a stored drop envelope. */
 export const syncPublicDropIndexForEnvelope = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
-  envelope: DropEnvelopeV1 | null,
+  envelope: DropEnvelope | null,
   updatedAt = Date.now(),
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   if (envelope && (envelope.visibility ?? "unlisted") === "public") {
     await upsertPublicDropIndexEntry(bucket, id, updatedAt, db);
@@ -179,14 +177,15 @@ export const syncPublicDropIndexForEnvelope = async (
 
 /** Synchronizes public index state from any stored drop payload. */
 export const syncPublicDropIndexForPayload = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
   payload: unknown,
   updatedAt = Date.now(),
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
-  if (isDropEnvelopeV1(payload)) {
-    await syncPublicDropIndexForEnvelope(bucket, id, payload, updatedAt, db);
+  const envelope = decodeDropEnvelope(payload);
+  if (envelope) {
+    await syncPublicDropIndexForEnvelope(bucket, id, envelope, updatedAt, db);
     return;
   }
 
@@ -195,7 +194,7 @@ export const syncPublicDropIndexForPayload = async (
 
 /** Lists public drop index entries from D1 in updated-at order. */
 export const listPublicDropIndexEntries = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   limit: number,
   cursor?: string,
 ): Promise<{ items: DropPublicIndexEntry[]; cursor: string | null }> => {

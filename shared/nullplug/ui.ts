@@ -7,7 +7,7 @@ import {
   NullplugUiStatePatchFactSchema,
   NullplugUiStatePatchOperationSchema,
   NullplugUiStateSnapshotSchema,
-} from "./uiSchemas";
+} from "./ui-schemas";
 
 export const NULLPLUG_UI_RESPONSE_FACT_KEY_PREFIX =
   "__nullplug_ui_response_fact__/";
@@ -27,11 +27,7 @@ export interface NullplugUiSource {
 }
 
 export type NullplugUiFieldType =
-  | "text"
-  | "textarea"
-  | "number"
-  | "boolean"
-  | "select";
+  "text" | "textarea" | "number" | "boolean" | "select";
 
 export interface NullplugUiFieldOption {
   label: string;
@@ -81,9 +77,7 @@ export interface NullplugCardPrimitive {
 }
 
 export type NullplugUiPrimitive =
-  | NullplugFormPrimitive
-  | NullplugActionPrimitive
-  | NullplugCardPrimitive;
+  NullplugFormPrimitive | NullplugActionPrimitive | NullplugCardPrimitive;
 
 export interface NullplugUiResponseFact {
   version: 1;
@@ -129,9 +123,7 @@ export interface NullplugUiStateSnapshot {
 
 /** Immutable UI facts that can be synchronized across a branch runtime. */
 export type NullplugUiRuntimeFact =
-  | NullplugUiResponseFact
-  | NullplugUiStatePatchFact
-  | NullplugUiStateSnapshot;
+  NullplugUiResponseFact | NullplugUiStatePatchFact | NullplugUiStateSnapshot;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

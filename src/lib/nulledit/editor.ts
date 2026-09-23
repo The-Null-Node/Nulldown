@@ -4,8 +4,8 @@ progressive markdown rendering. The key invariant is that renders are always tie
 snapshot id so stale async flushes cannot overwrite newer typing.
 */
 
-import useEditorStore, { type EditorState } from "../../stores/editorStore";
-import useDropStore from "../../stores/dropStore";
+import useEditorStore, { type EditorState } from "../../stores/editor-store";
+import useDropStore from "../../stores/drop-store";
 import {
   RenderCancelledError,
   renderMarkdownWithNullplugState,
@@ -20,7 +20,7 @@ import type {
   SnapshotId,
 } from "../../../shared/nulledit/types";
 import type { NullplugCaller } from "../../../shared/nullplug/types";
-import type { VoidNullplugRuntime } from "../../../shared/nullplug/runtime";
+import type { NullplugRuntime } from "../../../shared/nullplug/runtime";
 import type { RootRuntimePolicy } from "../../../shared/nullplug/policy";
 
 export interface IEditor {
@@ -48,8 +48,8 @@ const collectNullplugCallIds = (result: RenderPipelineResult): string[] =>
 
 /** Runtime dependencies used by the browser Nulledit editor. */
 export interface CreateEditorOptions {
-  /** Optional provider runtime used after trusted local nullplug resolution. */
-  nullplugRuntime?: VoidNullplugRuntime;
+  /** Optional Nullplug runtime used after trusted local resolution. */
+  nullplugRuntime?: NullplugRuntime;
 }
 
 export default function createEditor(

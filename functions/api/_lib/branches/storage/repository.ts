@@ -6,8 +6,8 @@ import {
 } from "../../../../../shared/drop/branch";
 import type { DropDiffEvent } from "../../../../../shared/drop/diff";
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import { booleanToSqlite, parseJsonColumn } from "../../core/d1/metadata";
 import {
@@ -22,9 +22,9 @@ import {
 /** Ports used by branch storage repositories. */
 export interface BranchRepositoryPorts {
   /** Blob store containing canonical branch records and fallback objects. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** Optional SQL store containing queryable branch metadata. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository for branch records, snapshots, checkpoints, and listings. */
@@ -106,7 +106,7 @@ export const readR2Text = async (
 
 /** Reads and validates a JSON blob object. */
 export const readR2Json = async <T>(
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   key: string,
   guard: (value: unknown) => value is T,
 ): Promise<T | null> => {
@@ -127,7 +127,7 @@ export const readR2Json = async <T>(
 
 /** Writes a JSON value to blob storage. */
 export const writeR2Json = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   key: string,
   value: unknown,
 ): Promise<void> => {
@@ -138,7 +138,7 @@ export const writeR2Json = async (
 
 /** Writes a JSON value only when the target blob key is absent. */
 export const writeR2JsonIfAbsent = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   key: string,
   value: unknown,
 ): Promise<boolean> => {
@@ -151,10 +151,10 @@ export const writeR2JsonIfAbsent = async (
 
 /** Reads a branch record by root and branch id. */
 export const readBranch = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropBranchRecord | null> => {
   const canonical = await readR2Json(
     bucket,
@@ -181,7 +181,7 @@ export const readBranch = async (
 
 /** Reads a canonical R2 branch record with the ETag required for fenced publication. */
 export const readBranchWithEtag = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
 ): Promise<{ branch: DropBranchRecord; etag: string } | null> => {
@@ -198,9 +198,9 @@ export const readBranchWithEtag = async (
 
 /** Writes a branch record to D1 and its canonical R2 fallback key. */
 export const writeBranch = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   branch: DropBranchRecord,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
   expectedEtag?: string,
 ): Promise<boolean> => {
   const written = await bucket.put(
@@ -262,11 +262,11 @@ export const writeBranch = async (
 
 /** Reads a snapshot record by root, branch, and snapshot id. */
 export const readSnapshot = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   snapshotId: number,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropSnapshotRecord | null> => {
   const validate = (value: unknown): value is DropSnapshotRecord => {
     const valid = isDropSnapshotRecord(value);
@@ -304,9 +304,9 @@ export const readSnapshot = async (
 
 /** Writes a snapshot record to D1 and its canonical R2 fallback key. */
 export const writeSnapshot = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   snapshot: DropSnapshotRecord,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   await writeR2Json(
     bucket,
@@ -366,7 +366,7 @@ export const resolveSnapshotCheckpointKey = (
 
 /** Reads a branch snapshot checkpoint body. */
 export const readSnapshotCheckpoint = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   snapshotId: number,
@@ -380,7 +380,7 @@ export const readSnapshotCheckpoint = async (
 
 /** Writes a branch snapshot checkpoint body. */
 export const writeSnapshotCheckpoint = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   snapshotId: number,
@@ -398,7 +398,7 @@ export const writeSnapshotCheckpoint = async (
 
 /** Writes the legacy full branch diff log. */
 export const writeBranchDiffLog = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
   events: DropDiffEvent[],
@@ -412,10 +412,10 @@ export const writeBranchDiffLog = async (
 
 /** Lists snapshot records for a branch, sorted by snapshot id. */
 export const listSnapshotsForBranch = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   branchId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropSnapshotRecord[]> => {
   const snapshots: DropSnapshotRecord[] = [];
   let cursor: string | undefined;
@@ -442,9 +442,9 @@ export const listSnapshotsForBranch = async (
 
 /** Lists branch records for a root drop, sorted by creation time. */
 export const listBranchesForRoot = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<DropBranchRecord[]> => {
   const listed = await bucket.list({
     prefix: `${BRANCH_KEY_PREFIX}${rootDropId}/`,
@@ -463,11 +463,11 @@ export const listBranchesForRoot = async (
 
 /** Paged branch-record listing for root-level maintenance jobs. */
 export const listBranchesForRootPage = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   rootDropId: string,
   limit: number,
   cursor?: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<{
   branches: DropBranchRecord[];
   cursor: string | null;

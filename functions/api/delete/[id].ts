@@ -1,9 +1,14 @@
 import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import {
+  createCloudflareBlobStore,
+  createCloudflareSqlStore,
+} from "../_lib/core/platform/cloudflare/storage";
 import { removePublicDropIndexEntry } from "../_lib/drops/index/repository";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
+import { acquireRootMutationLock } from "../_lib/drops/storage/mutation-lock";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import { readAccountLibraryEntry, tombstoneAccountLibraryEntry } from "../_lib/accounts/library/repository";
-import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/auth";
+import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/authentication";
 
 interface Env {
   R2_BUCKET: R2Bucket;
@@ -34,6 +39,14 @@ const jsonErrorResponse = (
 
 const resolveId = (id: string | string[] | undefined) =>
   typeof id === "string" ? id : Array.isArray(id) ? id[0] : "";
+
+const normalizeRevision = (revision: string | null | undefined): string | null => {
+  const value = revision?.trim();
+  if (!value) return null;
+  return value.length >= 2 && value.startsWith('"') && value.endsWith('"')
+    ? value.slice(1, -1)
+    : value;
+};
 
 export const onRequestDelete: PagesFunction<Env, "id"> = async ({
   env,
@@ -68,9 +81,34 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       );
     }
 
+    const accountId = await resolveAuthenticatedAccountId(request, env);
+    if (!accountId) {
+      logger.logEnd(401, { reason: "account_auth_required" });
+      return jsonErrorResponse(
+        401,
+        "account_auth_required",
+        "An authenticated account session is required.",
+      );
+    }
+
+    if (!env.DB) {
+      logger.logEnd(503, { reason: "account_library_unavailable" });
+      return jsonErrorResponse(
+        503,
+        "account_library_unavailable",
+        "Account-library storage is required to delete a drop.",
+      );
+    }
+
+    const blobs = createCloudflareBlobStore(env.R2_BUCKET);
+    const sql = createCloudflareSqlStore(env.DB);
+    if (!sql) {
+      throw new Error("Account-library storage is required.");
+    }
+
     const dropIdentityRepository = createDropIdentityRepository({
-      blobs: env.R2_BUCKET,
-      sql: env.DB,
+      blobs,
+      sql,
     });
     const id = await dropIdentityRepository.resolveRemoteDropId(
       requestedId,
@@ -88,19 +126,35 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       return jsonErrorResponse(400, "invalid_drop_id", "Drop ID is required.");
     }
 
-    const ownedEntry = env.DB ? await readAccountLibraryEntry(env.DB, id) : null;
-    // Preserve legacy private deletion behavior until backfill can prove the owner.
-    if (ownedEntry) {
-      const accountId = await resolveAuthenticatedAccountId(request, env);
-      if (!accountId || !ownedEntry || ownedEntry.account_id !== accountId || ownedEntry.deleted_at !== null) {
-        logger.logEnd(404, { reason: "owned_drop_not_found", canonicalDropRef: toLogRef(id) });
+    const rootMutationLock = await acquireRootMutationLock(blobs, id);
+    try {
+      const ownedEntry = await readAccountLibraryEntry(sql, id);
+      if (
+        !ownedEntry ||
+        ownedEntry.account_id !== accountId ||
+        ownedEntry.deleted_at !== null
+      ) {
+        logger.logEnd(404, {
+          reason: "owned_drop_not_found",
+          canonicalDropRef: toLogRef(id),
+        });
         return jsonErrorResponse(404, "drop_not_found", "Drop not found.");
       }
-    }
 
-    const expectedRevisionHeader = request.headers.get("If-Match")?.trim() || null;
-    if (expectedRevisionHeader) {
-      const object = await env.R2_BUCKET.get(id);
+      const expectedRevision = normalizeRevision(request.headers.get("If-Match"));
+      if (!expectedRevision) {
+        logger.logEnd(428, {
+          reason: "revision_precondition_required",
+          canonicalDropRef: toLogRef(id),
+        });
+        return jsonErrorResponse(
+          428,
+          "revision_precondition_required",
+          "An If-Match drop revision is required to delete this drop.",
+        );
+      }
+
+      const object = await env.R2_BUCKET.head(id);
       if (!object) {
         logger.logEnd(404, {
           reason: "drop_not_found",
@@ -113,7 +167,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
         });
       }
 
-      if (object.httpEtag !== expectedRevisionHeader) {
+      if (normalizeRevision(object.etag ?? object.httpEtag) !== expectedRevision) {
         logger.warn("delete.revision_precondition_failed", {
           requestedDropRef: toLogRef(requestedId),
           canonicalDropRef: toLogRef(id),
@@ -133,17 +187,21 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
           },
         );
       }
-    }
 
-    await env.R2_BUCKET.delete(id);
-    await Promise.all([
-      dropIdentityRepository.removeRemoteAliasIfMatch(id, logger),
-      removePublicDropIndexEntry(env.R2_BUCKET, id, env.DB),
-      env.DB
-        ? env.DB.prepare("DELETE FROM drops WHERE id = ?").bind(id).run()
-        : Promise.resolve(),
-      env.DB ? tombstoneAccountLibraryEntry(env.DB, id, Date.now()) : Promise.resolve(),
-    ]);
+      // Tombstone first so a later physical cleanup failure never leaves an active root.
+      await rootMutationLock.beginCommit();
+      await tombstoneAccountLibraryEntry(sql, id, Date.now());
+      await rootMutationLock.beginCommit();
+      await dropIdentityRepository.removeRemoteAliasIfMatch(id, logger);
+      await rootMutationLock.beginCommit();
+      await removePublicDropIndexEntry(blobs, id, sql);
+      await rootMutationLock.beginCommit();
+      await sql.prepare("DELETE FROM drops WHERE id = ?").bind(id).run();
+      await rootMutationLock.beginCommit();
+      await env.R2_BUCKET.delete(id);
+    } finally {
+      await rootMutationLock.release();
+    }
 
     logger.logEnd(204, {
       requestedDropRef: toLogRef(requestedId),
@@ -155,7 +213,6 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
     logger.logError("delete.unhandled_error", error, {
       requestedDropRef: toLogRef(requestedId),
     });
-    const message = error instanceof Error ? error.message : String(error);
     logger.logEnd(500, {
       reason: "unhandled_error",
       requestedDropRef: toLogRef(requestedId),
@@ -163,7 +220,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
     return jsonErrorResponse(
       500,
       "unhandled_error",
-      `Failed to delete drop: ${message}`,
+      "Failed to delete drop.",
     );
   }
 };

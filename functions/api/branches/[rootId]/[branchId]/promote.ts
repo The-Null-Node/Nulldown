@@ -2,7 +2,7 @@ import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import {
   promoteBranchSnapshot,
   type BranchPromotionEnv,
-} from "../../../_lib/branches/services/promotionService";
+} from "../../../_lib/branches/promotion";
 
 interface Env extends BranchPromotionEnv {
   R2_BUCKET: R2Bucket;

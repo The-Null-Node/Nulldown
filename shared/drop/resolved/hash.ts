@@ -8,7 +8,10 @@ const toBase64Url = (bytes: Uint8Array): string => {
   bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 };
 
 export const isNulldownSourceHash = (
@@ -29,13 +32,16 @@ export const buildBranchSnapshotSourceHashKey = ({
 export const hashNulldownSourceContent = async (
   content: string,
 ): Promise<NulldownSourceHash> => {
-  const bytes = new TextEncoder().encode(`nulldown.source-content.v1\n${content}`);
+  const bytes = new TextEncoder().encode(
+    `nulldown.source-content.v1\n${content}`,
+  );
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `${NULLDOWN_SOURCE_HASH_PREFIX}${toBase64Url(new Uint8Array(digest))}`;
 };
 
-export const hashMarkdownSource = (content: string): Promise<NulldownSourceHash> =>
-  hashNulldownSourceContent(content);
+export const hashMarkdownSource = (
+  content: string,
+): Promise<NulldownSourceHash> => hashNulldownSourceContent(content);
 
 export const hashBranchSnapshotSource = ({
   content,

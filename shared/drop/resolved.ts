@@ -1,12 +1,12 @@
 export * from "./resolved/constants";
-export * from "./resolved/contextToken";
+export * from "./resolved/context-token";
 export * from "./resolved/hash";
 export * from "./resolved/heapify/document";
-export * from "./resolved/heapify/runtimeRefs";
-export * from "./resolved/nodeRefs";
+export * from "./resolved/heapify/runtime-refs";
+export * from "./resolved/node-refs";
 export * from "./resolved/query/document";
 export * from "./resolved/query/runtime";
-export * from "./resolved/resolutionPlan";
+export * from "./resolved/resolution-plan";
 export * from "./resolved/storage";
 export type * from "./resolved/types";
 export * from "./resolved/validators";

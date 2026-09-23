@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { VoidDataStore } from "../../server/ports";
+import type { RuntimeDataStore } from "../../server/ports";
 import { flagString, hasFlag } from "../core/args";
 import type { CliCommand } from "../core/command";
 
@@ -17,7 +17,7 @@ export interface ServeCommandDependencies {
   /** Prints command output using the active CLI output policy. */
   print(value: unknown, human?: string): void;
   /** Optional programmatic store used by embedded local-server hosts. */
-  data?: VoidDataStore;
+  data?: RuntimeDataStore;
 }
 
 /** Creates the modular local server command. */
@@ -47,7 +47,7 @@ export const createServeCommand = <TConfig>(
     const sqliteEnabled = !hasFlag(args, "no-sqlite");
     const sqlite = sqliteEnabled
       ? await (async () => {
-          const module = await import("../../server/bunSqliteStore");
+          const module = await import("../../server/bun-sqlite-store");
           const sql = await module.createBunSqliteStore({
             databasePath: resolve(dataDir, "metadata.sqlite"),
           });

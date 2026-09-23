@@ -4,7 +4,7 @@ import { runCli } from "./index";
 
 describe("CLI version", () => {
   it("prints the package version without resolving configuration", async () => {
-    const log = jest.spyOn(console, "log").mockImplementation();
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
 
     const result = await runCli(["--version"]);
 

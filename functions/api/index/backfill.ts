@@ -1,7 +1,7 @@
 import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { isDropIdToken } from "../../../shared/drop/id";
-import { isDropEnvelopeV1 } from "../../../shared/drop/types";
+import { decodeDropEnvelope } from "../../../shared/drop/codecs/envelope-v1";
 import {
   isRemotePublicDropIndexKey,
   removePublicDropIndexEntry,
@@ -185,7 +185,8 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
         continue;
       }
 
-      if (isDropEnvelopeV1(parsed) && (parsed.visibility ?? "unlisted") === "public") {
+      const envelope = decodeDropEnvelope(parsed);
+      if (envelope && (envelope.visibility ?? "unlisted") === "public") {
         await upsertPublicDropIndexEntry(
           env.R2_BUCKET,
           entry.key,

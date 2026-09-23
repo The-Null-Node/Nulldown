@@ -1,13 +1,13 @@
+import type {
+  CallToolResult,
+  TextContent,
+} from "@modelcontextprotocol/sdk/types.js";
+
 /** Text content item returned by Nulldown MCP tools. */
-export interface NulldownMcpTextContent {
-  /** MCP content item type. */
-  type: "text";
-  /** Serialized tool response text. */
-  text: string;
-}
+export type NulldownMcpTextContent = TextContent;
 
 /** Standard Nulldown MCP tool response shape. */
-export interface NulldownMcpToolResponse {
+export interface NulldownMcpToolResponse extends CallToolResult {
   /** MCP content returned to the caller. */
   content: NulldownMcpTextContent[];
 }
@@ -93,6 +93,8 @@ export const asCompact = (
   const compact = fmt === "compact";
   const serialized = serialize(value, compact);
   const text =
-    serialized.length > max * 4 ? truncate(serialized, max, compact) : serialized;
+    serialized.length > max * 4
+      ? truncate(serialized, max, compact)
+      : serialized;
   return { content: [{ type: "text", text }] };
 };

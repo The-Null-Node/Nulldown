@@ -1,8 +1,8 @@
 import type {
   AccountPreferenceField,
   AccountPreferenceValues,
-} from "../../../../../shared/auth/accountPreferences";
-import type { VoidSqlStore } from "../../../../../src/server/ports";
+} from "../../../../../shared/auth/account-preferences";
+import type { SqlMetadataStore } from "../../../../../src/server/ports";
 
 export interface AccountPreferenceRow {
   preference_key: AccountPreferenceField;
@@ -13,7 +13,7 @@ export interface AccountPreferenceRow {
 
 /** Reads the durable preference rows for one OpenAuth user. */
 export const listAccountPreferenceRows = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   userId: string,
 ): Promise<AccountPreferenceRow[]> => {
   const rows = await db
@@ -28,7 +28,7 @@ export const listAccountPreferenceRows = async (
 
 /** Reads one field after a conditional write resolves. */
 export const readAccountPreferenceRow = (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   userId: string,
   field: AccountPreferenceField,
 ): Promise<AccountPreferenceRow | null> =>
@@ -42,7 +42,7 @@ export const readAccountPreferenceRow = (
 
 /** Advances exactly one preference when its field-local revision matches. */
 export const advanceAccountPreferenceField = async <F extends AccountPreferenceField>(
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   input: {
     userId: string;
     field: F;

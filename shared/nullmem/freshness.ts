@@ -1,14 +1,72 @@
-import type {
-  NullMemCapsule,
-  NullMemFactRecord,
-  NullMemFreshnessInput,
-  NullMemFreshnessOptions,
-  NullMemFreshnessQueryResult,
-  NullMemFreshnessReport,
-  NullMemFreshnessResult,
-  NullMemFreshnessStatus,
-  NullMemRecord,
-} from "./types";
+import type { NullMemCapsule } from "./capsule";
+import type { NullMemQuery } from "./query";
+import type { NullMemFactRecord, NullMemRecord } from "./records";
+import type { NullMemProcedureStepProjection } from "./procedure";
+
+/** Freshness status for a NullMem record relative to its cited sources. */
+export type NullMemFreshnessStatus =
+  | "fresh"
+  | "explicit-stale"
+  | "superseded"
+  | "snapshot-outdated"
+  | "source-missing"
+  | "needs-review"
+  | "unverifiable";
+
+/** Report describing the freshness evaluation for a single memory record. */
+export interface NullMemFreshnessReport {
+  recordId: string;
+  status: NullMemFreshnessStatus;
+  reason: string;
+  currentSnapshotId?: number;
+  outdatedSnapshotRefs?: number[];
+  supersededBy?: string[];
+  hasStaleLabel: boolean;
+  hasSourceRefs: boolean;
+}
+
+/** Options controlling a freshness evaluation. */
+export interface NullMemFreshnessOptions {
+  currentSnapshotId?: number;
+  snapshotHeads?: Record<string, number>;
+  knownSupersedingIds?: string[];
+}
+
+/** Input bundle used to evaluate freshness for a batch of records. */
+export interface NullMemFreshnessInput {
+  records: NullMemRecord[];
+  currentSnapshotId?: number;
+  snapshotHeads?: Record<string, number>;
+  knownSupersedingIds?: string[];
+}
+
+/** Result of a batch freshness evaluation. */
+export interface NullMemFreshnessResult {
+  reports: NullMemFreshnessReport[];
+  byRecordId: Record<string, NullMemFreshnessReport>;
+}
+
+/** Request accepted when evaluating freshness for a branch memory query. */
+export interface NullMemFreshnessQueryRequest {
+  rootDropId: string;
+  branchId: string;
+  q?: string;
+  kind?: NullMemRecord["kind"];
+  labels?: string[];
+  limit?: number;
+  includeRecords?: boolean;
+}
+
+/** Result returned for a freshness query. */
+export interface NullMemFreshnessQueryResult {
+  rootDropId: string;
+  branchId: string;
+  query: NullMemQuery;
+  reports: NullMemFreshnessReport[];
+  records?: NullMemRecord[];
+  capsules?: NullMemCapsule[];
+  procedureSteps?: NullMemProcedureStepProjection[];
+}
 
 /** Extracts explicit superseding record ids from a record's labels. */
 export const extractSupersedesFromLabels = (labels?: string[]): string[] =>
@@ -59,7 +117,12 @@ export const evaluateNullMemFreshness = (
           typeof ref.snapshotId === "number" &&
           ref.snapshotId === sid,
       ) as
-        | { kind: "snapshot" | "heap"; rootDropId: string; branchId: string; snapshotId: number }
+        | {
+            kind: "snapshot" | "heap";
+            rootDropId: string;
+            branchId: string;
+            snapshotId: number;
+          }
         | undefined;
       if (matchingRef) {
         const key = `${matchingRef.rootDropId}:${matchingRef.branchId}`;
@@ -83,7 +146,10 @@ export const evaluateNullMemFreshness = (
   if (hasStale) {
     status = "explicit-stale";
     reason = "Record carries an explicit stale-memory label.";
-  } else if (superseded.length > 0 || superseded.some((id) => knownSupersedes.has(id))) {
+  } else if (
+    superseded.length > 0 ||
+    superseded.some((id) => knownSupersedes.has(id))
+  ) {
     status = "superseded";
     reason = `Record is superseded by ${superseded.join(", ") || "a later record"}.`;
   } else if (outdated.length > 0) {
@@ -91,10 +157,12 @@ export const evaluateNullMemFreshness = (
     reason = `Record cites snapshot(s) ${outdated.join(", ")} older than current head ${current ?? "?"}.`;
   } else if (!hasAnySource) {
     status = "source-missing";
-    reason = "Record has no source refs or target identifiers to evaluate against.";
+    reason =
+      "Record has no source refs or target identifiers to evaluate against.";
   } else if (typeof current !== "number" && Object.keys(heads).length === 0) {
     status = "unverifiable";
-    reason = "No current snapshot head was provided; freshness cannot be verified.";
+    reason =
+      "No current snapshot head was provided; freshness cannot be verified.";
   } else {
     status = "fresh";
     reason = "Record sources are at or ahead of the current snapshot heads.";
@@ -151,8 +219,7 @@ export const filterStaleRecords = (
 /** Converts a freshness report into a compact human summary. */
 export const formatNullMemFreshnessSummary = (
   report: NullMemFreshnessReport,
-): string =>
-  `${report.recordId} [${report.status}] ${report.reason}`;
+): string => `${report.recordId} [${report.status}] ${report.reason}`;
 
 /** Converts a freshness query result into a CLI-friendly object. */
 export const nullMemFreshnessToCli = (result: NullMemFreshnessQueryResult) => ({

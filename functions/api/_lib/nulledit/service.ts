@@ -9,23 +9,21 @@ import type {
 import { serializeCanonicalJson } from "../../../../shared/drop/types";
 import { hashNulldownSourceContent } from "../../../../shared/drop/resolved/hash";
 import type {
-  VoidBlobStore,
-  VoidDataKey,
-  VoidDataListQuery,
-  VoidDataPutOptions,
-  VoidDataQuery,
-  VoidDataStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  RuntimeDataStore,
+  SqlMetadataStore,
 } from "../../../../src/server/ports";
 import {
   dispatchNulleditSnapshottersForCommit,
   flushBranchCommitBufferSnapshotters,
-  type BranchAcceptedCommit,
-  type BranchCommitBuffer,
-  type BranchCommitBufferDecision,
-  type NulleditSnapshotter,
-  type NulleditSnapshotterDispatchOptions,
-} from "../../../../src/server/nulledit";
+} from "../../../../src/server/nulledit/dispatch";
+import type {
+  BranchAcceptedCommit,
+  BranchCommitBuffer,
+  BranchCommitBufferDecision,
+  NulleditSnapshotter,
+  NulleditSnapshotterDispatchOptions,
+} from "../../../../src/server/nulledit/types";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
   createBranchDiffEventIdKey,
@@ -34,9 +32,9 @@ import {
   applyBranchDiffEvents,
   readBranchContent,
 } from "../branches/content/replay";
-import { ensureBranchHeapV2ForMutation } from "../branches/lifecycle/service";
-import { withBranchMutationLock } from "../branches/storage/mutationLock";
-import { createBranchDiffRepository } from "../branches/storage/diffLogRepository";
+import { ensureBranchHeapV2ForMutation } from "../branches/lifecycle";
+import { withBranchMutationLock } from "../branches/storage/mutation-lock";
+import { createBranchDiffRepository } from "../branches/storage/diff-log";
 import {
   createBranchRepository,
   resolveSnapshotCheckpointKey,
@@ -45,7 +43,7 @@ import {
 /** Options controlling Nulledit snapshotter dispatch for a branch append operation. */
 export interface BranchAppendOptions extends NulleditSnapshotterDispatchOptions {
   /** Functional datastore used by snapshotters; Cloudflare bindings are adapted when omitted. */
-  data?: VoidDataStore;
+  data?: RuntimeDataStore;
   /** Snapshotters fired after diff events are accepted and snapshotted. */
   snapshotters?: NulleditSnapshotter[];
   /** Optional policy that can buffer or skip derived snapshotter work. */
@@ -64,27 +62,19 @@ export interface BranchAppendResult {
   totalStored: number;
 }
 
-const unavailableDataStore = (): VoidDataStore => {
+const unavailableDataStore = (): RuntimeDataStore => {
   const fail = (): never => {
     throw new Error("void_data_store_required");
   };
   return {
-    get: async <T = unknown>(_key: VoidDataKey): Promise<T | null> => fail(),
-    put: async <T = unknown>(
-      _key: VoidDataKey,
-      _value: T,
-      _options?: VoidDataPutOptions,
-    ): Promise<void> => fail(),
+    get: async <T = unknown>(): Promise<T | null> => fail(),
+    put: async (): Promise<void> => fail(),
     putMany: async (): Promise<void> => fail(),
-    delete: async (_key: VoidDataKey): Promise<void> => fail(),
-    list: async (_query: VoidDataListQuery) => fail(),
-    query: async <T = unknown>(_query: VoidDataQuery): Promise<T[]> => fail(),
-    tx: async <T>(_work: (data: VoidDataStore) => Promise<T>): Promise<T> =>
-      fail(),
-    lock: async <T>(
-      _key: VoidDataKey,
-      _work: (data: VoidDataStore) => Promise<T>,
-    ): Promise<T> => fail(),
+    delete: async (): Promise<void> => fail(),
+    list: async () => fail(),
+    query: async <T = unknown>(): Promise<T[]> => fail(),
+    tx: async <T>(): Promise<T> => fail(),
+    lock: async <T>(): Promise<T> => fail(),
   };
 };
 
@@ -258,11 +248,11 @@ const committedAcknowledgementFor = async (
 
 /** Appends deduplicated events to a branch and creates the next branch snapshot. */
 export const appendEventsToBranch = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   branch: DropBranchRecord,
   events: DropDiffEvent[],
   options?: BranchAppendOptions,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<BranchAppendResult> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const branchDiffRepository = createBranchDiffRepository({
@@ -311,6 +301,16 @@ export const appendEventsToBranch = async (
         typeof upgradedBranch.headEventSeq === "number"
           ? upgradedBranch.headEventSeq
           : -1;
+
+      if (
+        !Number.isSafeInteger(headSeq) ||
+        headSeq < -1 ||
+        headSeq >= Number.MAX_SAFE_INTEGER ||
+        !Number.isSafeInteger(upgradedBranch.headSnapshotId) ||
+        upgradedBranch.headSnapshotId < 0
+      ) {
+        throw new Error("diff_sequence_exhausted");
+      }
 
       for (const event of events) {
         const priorInput = seenEvents.get(event.eventId);
@@ -406,6 +406,14 @@ export const appendEventsToBranch = async (
               Boolean(acknowledgement),
           );
       };
+
+      if (
+        acceptedInput.length > 0 &&
+        (upgradedBranch.headSnapshotId >= Number.MAX_SAFE_INTEGER ||
+          !Number.isSafeInteger(headSeq + acceptedInput.length + 1))
+      ) {
+        throw new Error("diff_sequence_exhausted");
+      }
 
       if (acceptedInput.length === 0) {
         const headSeq =

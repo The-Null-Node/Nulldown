@@ -1,7 +1,12 @@
 module.exports = {
   preset: "ts-jest/presets/default-esm",
   testEnvironment: "node",
-  roots: ["<rootDir>/src", "<rootDir>/shared"],
+  roots: [
+    "<rootDir>/src",
+    "<rootDir>/shared",
+    "<rootDir>/functions",
+    "<rootDir>/packages/nulldown-mcp/src",
+  ],
   testMatch: ["**/*.test.ts", "**/*.test.tsx"],
   extensionsToTreatAsEsm: [".ts", ".tsx"],
   transform: {
@@ -16,11 +21,16 @@ module.exports = {
   moduleNameMapper: {
     "^(\\.{1,2}/.*)\\.js$": "$1",
     "^@/(.*)$": "<rootDir>/src/$1",
-    "^@thenullnode/nulldown/client$": "<rootDir>/src/client/nulldownClient.ts",
-    "^@thenullnode/nulldown/drop/authoring$": "<rootDir>/shared/drop/authoringCrypto.ts",
-    "^@thenullnode/nulldown/auth/cliCredential$": "<rootDir>/src/cli/cliCredential.ts",
+    "^@thenullnode/nulldown/client$": "<rootDir>/src/client/nulldown-client.ts",
+    "^@thenullnode/nulldown/drop/authoring$":
+      "<rootDir>/shared/drop/authoring-crypto.ts",
+    "^@thenullnode/nulldown/auth/cliDevice$":
+      "<rootDir>/shared/auth/cli-device.ts",
+    "^@thenullnode/nulldown/auth/cliCredential$":
+      "<rootDir>/src/cli/cli-credential.ts",
     "^@thenullnode/nulldown/drop/diff$": "<rootDir>/shared/drop/diff.ts",
-    "^@thenullnode/nulldown/nulledit/types$": "<rootDir>/shared/nulledit/types.ts",
+    "^@thenullnode/nulldown/nulledit/types$":
+      "<rootDir>/shared/nulledit/types.ts",
   },
   clearMocks: true,
 };

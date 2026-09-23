@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
-const fail = (message: string, details: Record<string, unknown> = {}): never => {
+const fail = (
+  message: string,
+  details: Record<string, unknown> = {},
+): never => {
   console.error(message);
   console.error(JSON.stringify(details, null, 2));
   process.exit(1);
@@ -11,7 +14,10 @@ const run = (command: string, args: string[]) => {
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, ND_BASE_URL: process.env.ND_BASE_URL ?? "https://nulldown.app" },
+    env: {
+      ...process.env,
+      ND_BASE_URL: process.env.ND_BASE_URL ?? "https://nulldown.app",
+    },
   });
   if (result.status !== 0) {
     fail("Command failed.", {
@@ -27,9 +33,11 @@ const run = (command: string, args: string[]) => {
 
 const cliPath = "dist/nulldown";
 const mcpPath = "dist/nulldown-mcp";
-const packageVersion = (JSON.parse(readFileSync("package.json", "utf8")) as {
-  version: string;
-}).version;
+const packageVersion = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    version: string;
+  }
+).version;
 
 if (!existsSync(cliPath) || !existsSync(mcpPath)) {
   fail("Compiled binaries are missing. Run bun run bin:build:current first.", {
@@ -58,10 +66,14 @@ const query = run(cliPath, [
   "1",
   "--json",
 ]);
-const parsed = JSON.parse(query.stdout) as { rootDropId?: string; nodes?: unknown[] };
+const parsed = JSON.parse(query.stdout) as {
+  rootDropId?: string;
+  nodes?: unknown[];
+};
 if (parsed.rootDropId !== "1wrhjx8Wzk67" || !Array.isArray(parsed.nodes)) {
   fail("Compiled CLI branch query returned unexpected payload.", { parsed });
 }
+const nodes = parsed.nodes as unknown[];
 
 run("bun", ["run", "scripts/smoke-mcp-stdio.ts", `./${mcpPath}`]);
 
@@ -70,7 +82,7 @@ console.log(
     {
       cliPath,
       mcpPath,
-      cliBranchQueryNodes: parsed.nodes.length,
+      cliBranchQueryNodes: nodes.length,
     },
     null,
     2,

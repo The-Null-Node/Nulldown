@@ -10,9 +10,12 @@ import { literal, object, string } from "valibot";
 
 import {
   NULDOWN_USER_SUBJECT_TYPE,
-  NULDOWN_USER_SUBJECT_VERSION_V1,
-  createNulldownUserSubject,
 } from "../../../shared/auth/subjects";
+import {
+  createNulldownUserSubject,
+  encodeNulldownUserSubject,
+  NULDOWN_USER_SUBJECT_VERSION_V1,
+} from "../../../shared/auth/codecs/user-subject-v1";
 
 const ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const CLIENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~-]{2,127}$/u;
@@ -330,7 +333,7 @@ export const createNulldownOpenAuthApplication = (
       const userId = await options.userIdResolver.resolveUserId({ address });
       return response.subject(
         NULDOWN_USER_SUBJECT_TYPE,
-        createNulldownUserSubject(userId),
+        encodeNulldownUserSubject(createNulldownUserSubject(userId)),
       );
     },
   });

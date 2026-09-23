@@ -1,13 +1,22 @@
-import type { PagesFunction, R2Bucket } from "@cloudflare/workers-types";
-import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/cloudflareBackendRuntime";
+import type {
+  D1Database,
+  PagesFunction,
+  R2Bucket,
+} from "@cloudflare/workers-types";
+import { createCloudflareBackendRuntime } from "../../../../_lib/core/platform/cloudflare/runtime/composition";
+import {
+  createCloudflareBlobStore,
+  createCloudflareSqlStore,
+} from "../../../../_lib/core/platform/cloudflare/storage";
 import { methodNotAllowedResponse } from "../../../../_lib/core/http/responses";
 import {
   deleteNullMemRecord,
   type NullMemEnv,
-} from "../../../../_lib/nullmem/service";
+} from "../../../../_lib/nullmem/http";
 
-interface Env extends NullMemEnv {
+interface Env extends Omit<NullMemEnv, "R2_BUCKET" | "DB"> {
   R2_BUCKET: R2Bucket;
+  DB?: D1Database;
 }
 
 export const onRequestDelete: PagesFunction<
@@ -15,7 +24,16 @@ export const onRequestDelete: PagesFunction<
   "rootId" | "branchId" | "recordId"
 > = ({ env, params, request }) => {
   const runtime = createCloudflareBackendRuntime(env);
-  return deleteNullMemRecord(env, params, request, { memory: runtime.memory });
+  return deleteNullMemRecord(
+    {
+      ...env,
+      R2_BUCKET: createCloudflareBlobStore(env.R2_BUCKET),
+      DB: createCloudflareSqlStore(env.DB),
+    },
+    params,
+    request,
+    { memory: runtime.memory },
+  );
 };
 
 export const onRequest: PagesFunction<

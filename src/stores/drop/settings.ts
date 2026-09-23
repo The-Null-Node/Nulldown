@@ -1,17 +1,17 @@
-import type { VoidProviderScope } from "../../lib/void/provider";
-import { PASSKEY_PROTECTION_STORAGE_KEY } from "../../lib/void/vault/passkeyVault";
+import type { DropProviderPortScope } from "../../lib/drop/provider";
+import { PASSKEY_PROTECTION_STORAGE_KEY } from "../../lib/auth/vault/passkey-vault";
 import {
   getKvItem,
   getKvValue,
-  isIndexedDbSupported,
   setKvItem,
   setKvValue,
-} from "../../lib/indexedDb";
+} from "../../lib/indexed-db/key-value";
+import { isIndexedDbSupported } from "../../lib/indexed-db/database";
 import {
   DEFAULT_NETWORK_ALLOWLIST,
   normalizeNetworkAllowlist,
   parseNetworkAllowlistInput,
-} from "../../lib/networkAllowlist";
+} from "../../lib/network-allowlist";
 import type {
   DropDraftDiffPolicy,
   DropUnlockPolicy,
@@ -91,7 +91,9 @@ const normalizeSyntaxMode = (value: string): EditorSyntaxMode =>
 export const parseLegacyUnlockPolicy = (value: string | null): DropUnlockPolicy =>
   value === "provider-escrow" ? "provider-escrow" : "vault-only";
 
-export const parseSyncTargetProvider = (value: string | null): VoidProviderScope =>
+export const parseSyncTargetProvider = (
+  value: string | null,
+): DropProviderPortScope =>
   value === "local" ? "local" : "remote";
 
 export const parseModeFromStoredValue = (
@@ -151,7 +153,7 @@ export const serializeBoolean = (enabled: boolean) => (enabled ? "1" : "0");
 export const serializeAllowedUrls = (urls: readonly string[]): string =>
   JSON.stringify(normalizeNetworkAllowlist(urls));
 
-export const deriveSyncTargetProvider = (mode: DropMode): VoidProviderScope =>
+export const deriveSyncTargetProvider = (mode: DropMode): DropProviderPortScope =>
   mode === "offline" ? "local" : "remote";
 
 export const deriveUnlockPolicy = (

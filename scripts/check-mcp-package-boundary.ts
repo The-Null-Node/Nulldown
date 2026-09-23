@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 interface PackFile {
@@ -19,6 +19,8 @@ interface PackageJson {
 const packageDir = fileURLToPath(
   new URL("../packages/nulldown-mcp/", import.meta.url),
 );
+const legacyRootEntrypoint = new URL("../bin/nulldown-mcp.ts", import.meta.url);
+const legacyRootSourceDir = new URL("../src/mcp/", import.meta.url);
 
 const fail = (message: string, details: Record<string, unknown>): never => {
   console.error(message);
@@ -76,27 +78,43 @@ const requiredFiles = [
   "README.md",
   "bin/nulldown-mcp",
   "bin/nulldown-mcp.ts",
-    "src/diffSchemas.ts",
-    "src/cliCredential.ts",
-    "src/logging.ts",
+  "src/diff-schemas.ts",
+  "src/logging.ts",
   "src/server.ts",
   "src/tooling.ts",
-  "src/tools/branchTools.ts",
-  "src/tools/dropTools.ts",
+  "src/tools/branch-tools.ts",
+  "src/tools/drop-tools.ts",
   "src/tools/index.ts",
-  "src/tools/memoryTools.ts",
-  "src/tools/strategyTools.ts",
+  "src/tools/memory-tools.ts",
+  "src/tools/strategy-tools.ts",
 ];
 const missingFiles = requiredFiles.filter((file) => !files.has(file));
-const credentialAdapter = readFileSync(
-  new URL("../packages/nulldown-mcp/src/cliCredential.ts", import.meta.url),
-  "utf8",
+const privateCredentialPath = new URL(
+  "../packages/nulldown-mcp/src/cliCredential.ts",
+  import.meta.url,
 );
+const hasPrivateCredentialSource = existsSync(privateCredentialPath);
+const packsPrivateCredentialSource = files.has("src/cliCredential.ts");
+const hasLegacyRootEntrypoint = existsSync(legacyRootEntrypoint);
+const hasLegacyRootSourceDir = existsSync(legacyRootSourceDir);
 const packageTooling = readFileSync(
   new URL("../packages/nulldown-mcp/src/tooling.ts", import.meta.url),
   "utf8",
 );
-const preservesAuthoringOnRefresh = credentialAdapter.includes("mergeCliCredentialAuthoring");
+const credentialImport = packageTooling.match(
+  /import\s*\{([^}]*)\}\s*from\s*"@thenullnode\/nulldown\/auth\/cliCredential";/u,
+);
+const credentialImports = new Set(
+  credentialImport?.[1].split(",").map((name) => name.trim()).filter(Boolean) ?? [],
+);
+const requiredCredentialImports = [
+  "createFileCliCredentialTokenProvider",
+  "normalizeCliCredentialBaseUrl",
+  "readCliCredential",
+];
+const missingCredentialImports = requiredCredentialImports.filter(
+  (name) => !credentialImports.has(name),
+);
 const usesAuthoringExport = packageTooling.includes(
   'from "@thenullnode/nulldown/drop/authoring"',
 );
@@ -115,7 +133,11 @@ if (
   missingDependencies.length ||
   !requiresAuthoringExport ||
   missingFiles.length ||
-  !preservesAuthoringOnRefresh ||
+  hasPrivateCredentialSource ||
+  packsPrivateCredentialSource ||
+  hasLegacyRootEntrypoint ||
+  hasLegacyRootSourceDir ||
+  missingCredentialImports.length ||
   !usesAuthoringExport ||
   hasLocalAuthoringImplementation
 ) {
@@ -127,7 +149,11 @@ if (
     missingDependencies,
     requiresAuthoringExport,
     missingFiles,
-    preservesAuthoringOnRefresh,
+    hasPrivateCredentialSource,
+    packsPrivateCredentialSource,
+    hasLegacyRootEntrypoint,
+    hasLegacyRootSourceDir,
+    missingCredentialImports,
     usesAuthoringExport,
     hasLocalAuthoringImplementation,
   });
@@ -143,6 +169,10 @@ console.log(
       fileCount: files.size,
       checked: {
         requiredFiles,
+        requiredCredentialImports,
+        privateCredentialSourceAbsent: true,
+        legacyRootEntrypointAbsent: true,
+        legacyRootSourceDirAbsent: true,
       },
     },
     null,

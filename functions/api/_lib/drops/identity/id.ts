@@ -1,6 +1,6 @@
 import type {
-  VoidBlobStore,
-  VoidSqlStore,
+  BlobObjectStore,
+  SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import {
   DROP_LINK_ID_LENGTH,
@@ -21,15 +21,16 @@ interface AliasCacheEntry {
 }
 
 const aliasCache = new Map<string, AliasCacheEntry>();
+const aliasesNeedingD1Backfill = new Set<string>();
 
 type DropIdLogger = Pick<RequestLogger, "debug" | "info" | "warn">;
 
 /** Ports used by drop identity repositories. */
 export interface DropIdentityRepositoryPorts {
   /** Blob store containing drop alias fallback records. */
-  blobs: VoidBlobStore;
+  blobs: BlobObjectStore;
   /** Optional SQL store containing queryable drop alias rows. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository for resolving and maintaining canonical remote drop ids. */
@@ -50,6 +51,11 @@ export interface DropIdentityRepository {
   ): Promise<void>;
   /** Resolves a user-supplied full or short drop id to a canonical remote drop id. */
   resolveRemoteDropId(id: string, logger?: DropIdLogger): Promise<string | null>;
+  /** Resolves a read-request full or short drop id without persistent writes. */
+  resolveRemoteDropIdForReadRequest(
+    id: string,
+    logger?: DropIdLogger,
+  ): Promise<string | null>;
 }
 
 const readAliasCache = (shortId: string): string | null => {
@@ -60,6 +66,7 @@ const readAliasCache = (shortId: string): string | null => {
 
   if (cached.expiresAt <= Date.now()) {
     aliasCache.delete(shortId);
+    aliasesNeedingD1Backfill.delete(shortId);
     return null;
   }
 
@@ -75,6 +82,7 @@ const writeAliasCache = (shortId: string, fullId: string): void => {
 
 const removeAliasCache = (shortId: string): void => {
   aliasCache.delete(shortId);
+  aliasesNeedingD1Backfill.delete(shortId);
 };
 
 const readObjectText = async (
@@ -89,7 +97,7 @@ const readObjectText = async (
 };
 
 const readRemoteAliasFromD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   shortId: string,
 ): Promise<string | null> => {
   if (!db) return null;
@@ -102,7 +110,7 @@ const readRemoteAliasFromD1 = async (
 
 /** Writes a short-link alias row into D1 metadata storage. */
 export const writeRemoteAliasToD1 = async (
-  db: VoidSqlStore | undefined,
+  db: SqlMetadataStore | undefined,
   shortId: string,
   fullId: string,
 ): Promise<void> => {
@@ -119,6 +127,7 @@ export const writeRemoteAliasToD1 = async (
     )
     .bind(shortId, fullId, now, now)
     .run();
+  aliasesNeedingD1Backfill.delete(shortId);
 };
 
 /** Builds the R2 key for a short-link alias. */
@@ -127,9 +136,42 @@ export const createRemoteAliasKey = (shortId: string) =>
 
 /** Reads a short-link alias from memory, D1, or R2 fallback. */
 export const readRemoteAlias = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   shortId: string,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
+): Promise<string | null> => {
+  const cached = readAliasCache(shortId);
+  if (cached) {
+    if (db && aliasesNeedingD1Backfill.has(shortId)) {
+      await writeRemoteAliasToD1(db, shortId, cached);
+      aliasesNeedingD1Backfill.delete(shortId);
+    }
+    return cached;
+  }
+
+  const d1Value = await readRemoteAliasFromD1(db, shortId);
+  if (d1Value) {
+    writeAliasCache(shortId, d1Value);
+    aliasesNeedingD1Backfill.delete(shortId);
+    return d1Value;
+  }
+
+  const object = await bucket.get(createRemoteAliasKey(shortId));
+  const value = await readObjectText(object);
+  if (value) {
+    writeAliasCache(shortId, value);
+    if (!db) {
+      aliasesNeedingD1Backfill.add(shortId);
+    }
+    await writeRemoteAliasToD1(db, shortId, value);
+  }
+  return value;
+};
+
+const readRemoteAliasWithoutPersistentWrites = async (
+  bucket: BlobObjectStore,
+  shortId: string,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   const cached = readAliasCache(shortId);
   if (cached) {
@@ -139,6 +181,7 @@ export const readRemoteAlias = async (
   const d1Value = await readRemoteAliasFromD1(db, shortId);
   if (d1Value) {
     writeAliasCache(shortId, d1Value);
+    aliasesNeedingD1Backfill.delete(shortId);
     return d1Value;
   }
 
@@ -146,17 +189,17 @@ export const readRemoteAlias = async (
   const value = await readObjectText(object);
   if (value) {
     writeAliasCache(shortId, value);
-    await writeRemoteAliasToD1(db, shortId, value);
+    aliasesNeedingD1Backfill.add(shortId);
   }
   return value;
 };
 
 /** Reserves the short-link alias for a full drop id if it is still available. */
 export const reserveRemoteAlias = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fullId: string,
   logger?: DropIdLogger,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<"reserved" | "already-registered" | "conflict"> => {
   const shortId = toShortDropId(fullId);
   const existing = await readRemoteAlias(bucket, shortId, db);
@@ -194,6 +237,9 @@ export const reserveRemoteAlias = async (
       dropRef: toLogRef(fullId),
     });
     writeAliasCache(shortId, fullId);
+    if (!db) {
+      aliasesNeedingD1Backfill.add(shortId);
+    }
     await writeRemoteAliasToD1(db, shortId, fullId);
     return "reserved";
   }
@@ -223,10 +269,10 @@ export const reserveRemoteAlias = async (
 
 /** Removes a short-link alias only when it still points to the expected drop id. */
 export const removeRemoteAliasIfMatch = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   fullId: string,
   logger?: DropIdLogger,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<void> => {
   const shortId = toShortDropId(fullId);
   const aliasKey = createRemoteAliasKey(shortId);
@@ -257,10 +303,10 @@ export const removeRemoteAliasIfMatch = async (
 
 /** Resolves a user-supplied full or short drop id to a canonical remote drop id. */
 export const resolveRemoteDropId = async (
-  bucket: VoidBlobStore,
+  bucket: BlobObjectStore,
   id: string,
   logger?: DropIdLogger,
-  db?: VoidSqlStore,
+  db?: SqlMetadataStore,
 ): Promise<string | null> => {
   const candidate = id.trim();
   if (!candidate || !isDropIdToken(candidate)) {
@@ -292,6 +338,47 @@ export const resolveRemoteDropId = async (
   return candidate;
 };
 
+/** Resolves a read-request full or short drop id without persistent writes. */
+export const resolveRemoteDropIdForReadRequest = async (
+  bucket: BlobObjectStore,
+  id: string,
+  logger?: DropIdLogger,
+  db?: SqlMetadataStore,
+): Promise<string | null> => {
+  const candidate = id.trim();
+  if (!candidate || !isDropIdToken(candidate)) {
+    logger?.warn("drop.id.resolve_invalid", {
+      providedLength: id.length,
+    });
+    return null;
+  }
+
+  if (candidate.length !== DROP_LINK_ID_LENGTH) {
+    logger?.debug("drop.id.resolve_full_id", {
+      dropRef: toLogRef(candidate),
+    });
+    return candidate;
+  }
+
+  const aliased = await readRemoteAliasWithoutPersistentWrites(
+    bucket,
+    candidate,
+    db,
+  );
+  if (aliased) {
+    logger?.debug("drop.id.resolve_alias_hit", {
+      shortIdRef: toLogRef(candidate),
+      dropRef: toLogRef(aliased),
+    });
+    return aliased;
+  }
+
+  logger?.debug("drop.id.resolve_alias_miss", {
+    shortIdRef: toLogRef(candidate),
+  });
+  return candidate;
+};
+
 /** Creates a drop identity repository bound to composed blob and SQL ports. */
 export const createDropIdentityRepository = ({
   blobs,
@@ -306,4 +393,6 @@ export const createDropIdentityRepository = ({
     removeRemoteAliasIfMatch(blobs, fullId, logger, sql),
   resolveRemoteDropId: (id, logger) =>
     resolveRemoteDropId(blobs, id, logger, sql),
+  resolveRemoteDropIdForReadRequest: (id, logger) =>
+    resolveRemoteDropIdForReadRequest(blobs, id, logger, sql),
 });

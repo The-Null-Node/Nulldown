@@ -1,0 +1,20 @@
+{
+  "extends": "./functions/tsconfig.json",
+  "compilerOptions": {
+    "types": ["jest", "node", "@cloudflare/workers-types"],
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": [
+    "functions/**/*.test.ts",
+    "functions/**/*.test.tsx",
+    "src/branchMutationLockContracts.test.ts",
+    "src/cloudflare-runtime-data-store-contracts.test.ts",
+    "src/functions*.test.ts",
+    "src/functions*.test.tsx",
+    "src/types/cloudflare-crypto-test-compat.d.ts",
+    "src/types/jest-mock-compat.d.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

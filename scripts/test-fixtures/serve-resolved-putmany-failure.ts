@@ -1,12 +1,12 @@
 import { runCli } from "../../src/cli";
-import { createMemoryVoidDataStore } from "../../src/server/memoryDataStore";
+import { createMemoryRuntimeDataStore } from "../../src/server/memory-data-store";
 import type {
-  VoidDataPutRecord,
-  VoidDataStore,
+  RuntimeDataPutRecord,
+  RuntimeDataStore,
 } from "../../src/server/ports";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved/constants";
 
-const isResolvedDocumentProjection = (records: VoidDataPutRecord[]): boolean => {
+const isResolvedDocumentProjection = (records: RuntimeDataPutRecord[]): boolean => {
   const heap = records[0]?.key;
   return (
     heap?.namespace === "resolved" &&
@@ -15,10 +15,10 @@ const isResolvedDocumentProjection = (records: VoidDataPutRecord[]): boolean => 
   );
 };
 
-const backing = createMemoryVoidDataStore();
+const backing = createMemoryRuntimeDataStore();
 let armed = true;
 
-const data: VoidDataStore = {
+const data: RuntimeDataStore = {
   ...backing,
   async putMany(records) {
     if (armed && isResolvedDocumentProjection(records)) {

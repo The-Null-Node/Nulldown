@@ -128,8 +128,8 @@ Updated:
 
 - `shared/drop/diff.ts`
 - `shared/drop/diffSchemas.ts`
-- `src/lib/diff/diffChannel.ts`
-- `src/pages/editor/hooks/useDiffChannel.ts`
+- `src/lib/diff/channel.ts` and its local/remote implementations
+- `src/pages/editor/sync/use-channel.ts`
 - `src/cli/index.ts`
 - `functions/api/diff/[id].ts`
 

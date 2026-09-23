@@ -1,11 +1,11 @@
 import { createHmac, randomUUID } from "node:crypto";
 import {
   DIFF_CLIENT_ID_HEADER,
+  decodeDiffAuthRegisterResponse,
   DIFF_SECRET_KID_HEADER,
   DIFF_SIGNATURE_HEADER,
   DIFF_TIMESTAMP_HEADER,
-  type DiffAuthRegisterResponse,
-} from "../shared/drop/diffAuth";
+} from "../shared/drop/diff-auth";
 import type { DropDiffEnvelope } from "../shared/drop/diff";
 import {
   keysFilePath,
@@ -13,7 +13,7 @@ import {
   resolveBaseUrl,
   signDiffPayload,
   type DiffClientKeysRecord,
-} from "./diffAuthUtil";
+} from "./diff-auth-util";
 
 interface RequestJsonResult<T = unknown> {
   response: Response;
@@ -110,7 +110,7 @@ const registerProviderAuth = async (dropId: string): Promise<RegisterContext | n
     return null;
   }
 
-  const { response, text, json } = await requestJson<DiffAuthRegisterResponse>(
+  const { response, text, json } = await requestJson(
     `${BASE_URL}/api/diff-auth/register/${encodeURIComponent(dropId)}`,
     {
       method: "POST",
@@ -128,15 +128,19 @@ const registerProviderAuth = async (dropId: string): Promise<RegisterContext | n
     throw new Error(`registerProviderAuth failed: ${response.status} ${text}`);
   }
 
-  assert(json !== null, "registerProviderAuth response is empty");
-  if (!json) {
-    throw new Error("registerProviderAuth response is empty");
+  const registration = decodeDiffAuthRegisterResponse(json);
+  assert(registration !== null, "registerProviderAuth response is invalid");
+  if (!registration) {
+    throw new Error("registerProviderAuth response is invalid");
   }
 
-  const secret = await unwrapSecret(json.wrappedSecret, keys.encryptionPrivateJwk);
+  const secret = await unwrapSecret(
+    registration.wrappedSecret,
+    keys.encryptionPrivateJwk,
+  );
   return {
-    clientId: json.clientId,
-    kid: json.kid,
+    clientId: registration.clientId,
+    kid: registration.kid,
     secret,
   };
 };

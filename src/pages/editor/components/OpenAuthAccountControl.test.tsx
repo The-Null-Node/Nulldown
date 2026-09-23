@@ -6,7 +6,7 @@ import OpenAuthAccountControl from "./OpenAuthAccountControl";
 import {
   LOCAL_ACCOUNT_VAULT_CHANGED_EVENT,
   setActiveVaultUser,
-} from "@/lib/void/vault/passkeyVault";
+} from "@/lib/auth/vault/passkey-vault";
 
 const originalFetchDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,

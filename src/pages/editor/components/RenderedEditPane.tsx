@@ -10,7 +10,7 @@ import LoadingFallback from "./LoadingFallback";
 import {
   mapMarkdownIndexToPlainTextOffset,
   mapPlainTextOffsetToMarkdownIndex,
-} from "../../../lib/markdownText";
+} from "../../../lib/markdown-text";
 
 const EnhancedMarkdown = lazy(
   () => import("../../../components/EnhancedMarkdown"),

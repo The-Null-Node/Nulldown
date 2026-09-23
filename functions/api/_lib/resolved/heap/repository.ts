@@ -1,23 +1,23 @@
 import type { ResolvedPriorityFactRecord } from "../../../../../shared/drop/resolved/types";
 import type { ResolvedNulldownState } from "../../../../../shared/drop/resolved/types";
-import type { VoidSqlStore } from "../../../../../src/server/ports";
+import type { SqlMetadataStore } from "../../../../../src/server/ports";
 import {
   deleteBranchResolvedPriorityFactFromD1,
   listBranchResolvedPriorityFactsFromD1,
   readBranchResolvedPriorityFactFromD1,
   readResolvedPriorityScoring,
   writeResolvedPriorityFactToD1,
-} from "./priorityFactsRepository";
+} from "./priority-facts-repository";
 import type {
   ResolvedPriorityFactListOptions,
   ResolvedPriorityScoring,
-} from "./priorityFactsRepository";
-import { createResolvedHeapProjectionRepository } from "./projectionRepository";
+} from "./priority-facts-repository";
+import { createResolvedHeapProjectionRepository } from "./projection-repository";
 
 /** Ports used by resolved heap repositories. */
 export interface ResolvedHeapRepositoryPorts {
   /** Optional SQL metadata store containing resolved heap projections. */
-  sql?: VoidSqlStore;
+  sql?: SqlMetadataStore;
 }
 
 /** Repository facade for compact resolved heap projections and priority facts. */
@@ -64,7 +64,7 @@ export const createResolvedHeapRepository = ({
   sql,
 }: ResolvedHeapRepositoryPorts): ResolvedHeapRepository => {
   const projectionRepository = createResolvedHeapProjectionRepository({ sql });
-  const requireSql = (): VoidSqlStore => {
+  const requireSql = (): SqlMetadataStore => {
     if (!sql) {
       throw new Error("SQL metadata store is required to use resolved heaps.");
     }

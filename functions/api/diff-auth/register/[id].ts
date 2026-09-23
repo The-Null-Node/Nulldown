@@ -8,15 +8,15 @@ import {
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
-} from "../../_lib/accounts/session/auth";
-import { resolveBranchForActor } from "../../_lib/branches/lifecycle/service";
+} from "../../_lib/accounts/session/authentication";
+import { resolveBranchForActor } from "../../_lib/branches/lifecycle";
 import { createDropIdentityRepository } from "../../_lib/drops/identity/id";
 import { createRequestLogger, serializeError, toLogRef } from "../../_lib/core/logging/logger";
 import type {
   DiffAuthRegisterRequest,
   DiffAuthRegisterResponse,
-} from "../../../../shared/drop/diffAuth";
-import { serverVoidCrypto } from "../../_lib/crypto/void/serverVoidCrypto";
+} from "../../../../shared/drop/diff-auth";
+import { providerCrypto } from "../../_lib/crypto/provider-crypto";
 
 interface Env extends AccountAuthEnv {
   R2_BUCKET: R2Bucket;
@@ -136,7 +136,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     const secret = generateDiffSecret();
 
     try {
-      wrappedSecret = await serverVoidCrypto.wrapTextForRequester(
+      wrappedSecret = await providerCrypto.wrapTextForRequester(
         body.requesterPublicJwk,
         secret,
       );

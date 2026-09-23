@@ -1,8 +1,5 @@
+import type { DropDiffEventMetadata, JsonValue } from "../diff";
 import type {
-  DropDiffEventMetadata,
-  JsonValue,
-} from "../diff";
-import {
   NULLDOWN_SOURCE_HASH_PREFIX,
   RESOLVED_HEAP_DELTA_RECORD_VERSION,
   RESOLVED_NODE_REF_RECORD_VERSION,
@@ -16,13 +13,11 @@ import type {
   NullplugUiStateSnapshot,
 } from "../../nullplug/ui";
 
-export type NulldownSourceHash = `${typeof NULLDOWN_SOURCE_HASH_PREFIX}${string}`;
+export type NulldownSourceHash =
+  `${typeof NULLDOWN_SOURCE_HASH_PREFIX}${string}`;
 
 export type NulldownContextQueryKind =
-  | "checklist.next"
-  | "plan.status"
-  | "dependency.edges"
-  | "policy.pending";
+  "checklist.next" | "plan.status" | "dependency.edges" | "policy.pending";
 
 export interface NulldownContextQueryHint {
   dropId: string;
@@ -87,10 +82,7 @@ export interface ResolvedUiResponseRef {
 }
 
 export type ResolvedRuntimeNodeKind =
-  | "nullplug.ref"
-  | "ui.primitive"
-  | "ui.state"
-  | "ui.response";
+  "nullplug.ref" | "ui.primitive" | "ui.state" | "ui.response";
 
 export interface ResolvedRuntimeNode {
   id: string;
@@ -390,8 +382,10 @@ export interface NulldownSequenceResolutionPlan {
 }
 
 /** Inline materialization plan for a single small resolved item. */
-export interface NulldownInlineResolutionPlan
-  extends Omit<NulldownSequenceResolutionPlan, "mode"> {
+export interface NulldownInlineResolutionPlan extends Omit<
+  NulldownSequenceResolutionPlan,
+  "mode"
+> {
   /** Materialization mode for exactly one small item. */
   mode: "inline";
   /** Inline payload supplied by the resolver for the single-small-item fast path. */
@@ -400,8 +394,7 @@ export interface NulldownInlineResolutionPlan
 
 /** Resolution output: inline only for one small item, otherwise an ordered sequence. */
 export type NulldownResolutionPlan =
-  | NulldownInlineResolutionPlan
-  | NulldownSequenceResolutionPlan;
+  NulldownInlineResolutionPlan | NulldownSequenceResolutionPlan;
 
 /** Persisted priority overlay that agents can attach to diffs, nodes, or heaps. */
 export interface ResolvedPriorityFactRecord {

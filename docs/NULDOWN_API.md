@@ -22,6 +22,35 @@ Local Pages Functions normally run behind Wrangler or a deployed Pages URL. The 
 
 The repo ships a Bun-native `nd`/`nulldown` CLI in `bin/nulldown.ts`. Use it for normal agent and operator workflows; use raw HTTP only when building another client or debugging the wire contract.
 
+## 0.1 package API migration
+
+The 0.1 package cleanup changes the backend composition entrypoint. This export
+rename does not change persisted-envelope, signature, or credential formats.
+Deprecated aliases are intentionally not shipped.
+
+| Before                                  | 0.1 replacement                        | Notes                                                                    |
+| --------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------ |
+| `@thenullnode/nulldown/server/provider` | `@thenullnode/nulldown/server/runtime` | Backend application composition now has an explicit runtime owner.       |
+| `VoidProvider`                          | `NulldownServerRuntime`                | This is the backend service aggregate, not a browser provider facade.    |
+| `CreateVoidProviderOptions`             | `CreateNulldownServerRuntimeOptions`   | Dependency object for backend runtime composition.                       |
+| `createVoidProvider(...)`               | `createNulldownServerRuntime(...)`     | Composes injected data, Nulledit, memory, Nullplug, and policy services. |
+| `VoidProviderNulledit`                  | `ServerNulleditService`                | Backend Nulledit append and snapshot dispatch service.                   |
+| `VoidMemory`                            | `BranchMemoryService`                  | Branch-scoped memory query and mutation service.                         |
+| `VoidNullplugRuntime`                   | `NullplugRuntime`                      | Portable Nullplug invocation capability.                                 |
+| `VoidRuntimePolicy`                     | `NullplugRuntimePolicy`                | Portable policy evaluation capability used by the Nullplug runtime.      |
+| `createMemoryVoidDataStore(...)`        | `createMemoryRuntimeDataStore(...)`    | In-memory implementation exported by `server/memory-data-store`.         |
+| `VoidSqlStore`                          | `SqlMetadataStore`                     | Portable SQL metadata boundary for D1, SQLite, and test adapters.        |
+| `VoidBlobStore`                         | `BlobObjectStore`                      | Opaque object-storage boundary used by backend services.                 |
+| `VoidDataStore`                         | `RuntimeDataStore`                     | Functional persistence, indexing, caching, and locking boundary.         |
+| `VoidBackgroundTasks`                   | `BackgroundTaskScheduler`              | Platform-specific background lifetime management.                        |
+
+Supporting `VoidSql*`, `VoidBlob*`, and `VoidData*` value types follow the
+same responsibility-based families: `Sql*`, `Blob*`, and `RuntimeData*`.
+
+The `@thenullnode/nulldown/client`, `auth/cliCredential`, and
+`auth/cliDevice` package subpaths remain unchanged. Their source modules moved
+to kebab-case filenames, which does not affect package consumers.
+
 Run from the repo:
 
 ```bash
@@ -61,25 +90,25 @@ bun run nd -- branch promote <rootId> <branchId> --json
 
 Useful global flags and environment variables:
 
-| CLI | Env | Notes |
-| --- | --- | --- |
-| `--base <url>` | `ND_BASE_URL` | Defaults to `https://nulldown.app`. |
-| `--token <token>` | `ND_TOKEN` | Account bearer token. |
-| `--account <id>` | `ND_ACCOUNT_ID` | Development account header. |
-| `--client <id>` | `ND_CLIENT_ID` | Stable branch/diff client ID. |
-| `--config-dir <dir>` | `ND_CONFIG_DIR` | Defaults to `~/.config/nulldown`. |
-| `--diff-auth-token <token>` | `ND_DIFF_AUTH_TOKEN` | Inline `ndauth.v1` base64url diff auth bundle. |
+| CLI                             | Env                       | Notes                                             |
+| ------------------------------- | ------------------------- | ------------------------------------------------- |
+| `--base <url>`                  | `ND_BASE_URL`             | Defaults to `https://nulldown.app`.               |
+| `--token <token>`               | `ND_TOKEN`                | Account bearer token.                             |
+| `--account <id>`                | `ND_ACCOUNT_ID`           | Development account header.                       |
+| `--client <id>`                 | `ND_CLIENT_ID`            | Stable branch/diff client ID.                     |
+| `--config-dir <dir>`            | `ND_CONFIG_DIR`           | Defaults to `~/.config/nulldown`.                 |
+| `--diff-auth-token <token>`     | `ND_DIFF_AUTH_TOKEN`      | Inline `ndauth.v1` base64url diff auth bundle.    |
 | `--diff-auth-token-file <file>` | `ND_DIFF_AUTH_TOKEN_FILE` | Defaults to `~/.config/nulldown/diff-auth.token`. |
-| `--json` | none | Stable machine-readable output. |
+| `--json`                        | none                      | Stable machine-readable output.                   |
 
 ## Mental Model
 
 Nulldown has two related write paths:
 
-| Path | Use | Mutability | Notes |
-| --- | --- | --- | --- |
-| Drop object | Shared document body or encrypted envelope | Replace/upsert | Stored in R2 under a canonical 12-character ID. |
-| Branch diff stream | Editable branch rooted at a drop | Append-only events | Used for atomic edits, snapshots, and promotion. |
+| Path               | Use                                        | Mutability         | Notes                                            |
+| ------------------ | ------------------------------------------ | ------------------ | ------------------------------------------------ |
+| Drop object        | Shared document body or encrypted envelope | Replace/upsert     | Stored in R2 under a canonical 12-character ID.  |
+| Branch diff stream | Editable branch rooted at a drop           | Append-only events | Used for atomic edits, snapshots, and promotion. |
 
 Short links use the first 6 characters of the canonical ID. APIs accept either short or full IDs, but responses expose the canonical ID where relevant.
 
@@ -103,11 +132,11 @@ flowchart LR
 
 ## IDs And Revisions
 
-| Concept | Shape | Source |
-| --- | --- | --- |
-| Canonical drop ID | 12 characters | `id` in `/api/store` response or `X-Drop-Canonical-Id`. |
-| Short drop ID | first 6 characters | Used in `/d/:id` links. |
-| Revision | R2 ETag string | `ETag` and `X-Drop-Revision` from `GET /api/get/:id`. |
+| Concept           | Shape              | Source                                                  |
+| ----------------- | ------------------ | ------------------------------------------------------- |
+| Canonical drop ID | 12 characters      | `id` in `/api/store` response or `X-Drop-Canonical-Id`. |
+| Short drop ID     | first 6 characters | Used in `/d/:id` links.                                 |
+| Revision          | R2 ETag string     | `ETag` and `X-Drop-Revision` from `GET /api/get/:id`.   |
 
 Use exact revision strings, including quotes if the header includes them.
 
@@ -137,14 +166,23 @@ Agents and CLIs should read metadata before content when they need state.
 
 ## Authentication
 
-| Mechanism | Headers | Used By |
-| --- | --- | --- |
-| Account session token | `Authorization: Bearer <token>` | Branch resolve, promote, authenticated account flows. |
-| Insecure account header | `x-nulldown-account-id: <id>` | Development only when `ALLOW_INSECURE_ACCOUNT_HEADER=1` or no `ACCOUNT_AUTH_SECRET`. |
-| Diff credential HMAC | `x-nulldown-client-id`, `x-nulldown-secret-kid`, `x-nulldown-timestamp`, `x-nulldown-signature` | Provider-authorized diff writes. |
-| Admin bearer token | `Authorization: Bearer <token>` | Backfill endpoints. |
+| Mechanism               | Headers                                                                                         | Used By                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Account session token   | `Authorization: Bearer <token>`                                                                 | Branch resolve, promote, authenticated account flows.    |
+| Insecure account header | `x-nulldown-account-id: <id>`                                                                   | Development only when `ALLOW_INSECURE_ACCOUNT_HEADER=1`. |
+| Diff credential HMAC    | `x-nulldown-client-id`, `x-nulldown-secret-kid`, `x-nulldown-timestamp`, `x-nulldown-signature` | Provider-authorized diff writes.                         |
+| Admin bearer token      | `Authorization: Bearer <token>`                                                                 | Backfill endpoints.                                      |
 
 Never log tokens, private keys, wrapped keys, or decrypted plaintext.
+
+The account header is never enabled implicitly: a missing `ACCOUNT_AUTH_SECRET`
+does not authorize it. When an `Authorization: Bearer` header is present but
+invalid, authentication fails without falling back to the development header,
+even when `ALLOW_INSECURE_ACCOUNT_HEADER=1`.
+
+For the branch, diff-poll, resolved-query, and NullMem GET routes documented
+below, short aliases are resolved without persistent writes. General resolution
+used by write and maintenance paths may backfill an R2-only alias into SQL.
 
 ## Error Format
 
@@ -162,15 +200,15 @@ Some older endpoints still return plain text errors. Robust clients should handl
 
 Common codes:
 
-| Code | Meaning | Recovery |
-| --- | --- | --- |
-| `invalid_json` | Request body was not parseable JSON. | Fix payload. |
-| `unsupported_payload` | JSON did not match `DropPayload` or `DropEnvelopeV1`. | Send `{ content, metadata? }` or `{ envelope }`. |
-| `alias_conflict` | Requested ID short alias is already owned by another full ID. | Use a different ID. |
-| `object_conflict` | Drop ID already exists and `upsert` was false. | Use `upsert` or new ID. |
-| `revision_precondition_failed` | `expectedRevision` or `If-Match` did not match. | Re-fetch and retry deliberately. |
-| `validation_failed` | Zod validation failed. | Inspect `details`. |
-| `body_too_large` | Diff body exceeds limit. | Split event batches. |
+| Code                           | Meaning                                                               | Recovery                                         |
+| ------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------ |
+| `invalid_json`                 | Request body was not parseable JSON.                                  | Fix payload.                                     |
+| `unsupported_payload`          | JSON did not match `DropPayload` or the v1 drop-envelope wire schema. | Send `{ content, metadata? }` or `{ envelope }`. |
+| `alias_conflict`               | Requested ID short alias is already owned by another full ID.         | Use a different ID.                              |
+| `object_conflict`              | Drop ID already exists and `upsert` was false.                        | Use `upsert` or new ID.                          |
+| `revision_precondition_failed` | `expectedRevision` or `If-Match` did not match.                       | Re-fetch and retry deliberately.                 |
+| `validation_failed`            | Zod validation failed.                                                | Inspect `details`.                               |
+| `body_too_large`               | Diff body exceeds limit.                                              | Split event batches.                             |
 
 ## Drop Payloads
 
@@ -194,7 +232,7 @@ Relevant shared contracts live in:
 shared/drop/types.ts
 shared/drop/diff.ts
 shared/drop/branch.ts
-shared/drop/diffAuth.ts
+shared/drop/diff-auth.ts
 shared/nullplug/types.ts
 shared/nullplug/ui.ts
 ```
@@ -228,10 +266,10 @@ Create or upsert a drop.
 
 Request content types:
 
-| Content-Type | Body |
-| --- | --- |
-| `text/plain` | Raw markdown text. |
-| `application/json` | `DropPayload`, `DropEnvelopeV1`, or wrapper object. |
+| Content-Type       | Body                                                                     |
+| ------------------ | ------------------------------------------------------------------------ |
+| `text/plain`       | Raw markdown text.                                                       |
+| `application/json` | `DropPayload`, a v1 drop envelope (`nmdn.drop.v1`), or a wrapper object. |
 
 JSON wrapper shape:
 
@@ -302,16 +340,24 @@ Implementation: `functions/api/store.ts`.
 
 Fetch a drop object by short or canonical ID.
 
+Public and unlisted projected roots are readable anonymously by identifier, as are
+legacy roots with no account-library projection. A projected private root requires
+authentication as its canonical projected owner; branch writer or branch metadata
+does not grant access. Tombstoned projections and malformed or unknown projected
+visibility return the same exact `404 Drop not found.` as an absent object, before
+the root object or its body is read. Short aliases are resolved without SQL backfill.
+An invalid bearer credential never falls back to the development account header.
+
 Response headers:
 
-| Header | Meaning |
-| --- | --- |
-| `Content-Type` | Stored content type. |
-| `ETag` | Revision token. |
-| `X-Drop-Revision` | Same revision token for app clients. |
-| `X-Drop-Canonical-Id` | Resolved canonical ID. |
+| Header                | Meaning                              |
+| --------------------- | ------------------------------------ |
+| `Content-Type`        | Stored content type.                 |
+| `ETag`                | Revision token.                      |
+| `X-Drop-Revision`     | Same revision token for app clients. |
+| `X-Drop-Canonical-Id` | Resolved canonical ID.               |
 
-Response body is either raw text, a plaintext `DropPayload`, or encrypted `DropEnvelopeV1`.
+Response body is either raw text, a plaintext `DropPayload`, or an encrypted v1 drop envelope (`nmdn.drop.v1`).
 
 CLI example:
 
@@ -361,10 +407,10 @@ List public drops from the public drop index.
 
 Query parameters:
 
-| Name | Default | Notes |
-| --- | --- | --- |
-| `limit` | `200` | Clamped to `1..1000`. |
-| `cursor` | none | R2 pagination cursor. |
+| Name     | Default | Notes                 |
+| -------- | ------- | --------------------- |
+| `limit`  | `200`   | Clamped to `1..1000`. |
+| `cursor` | none    | R2 pagination cursor. |
 
 Response:
 
@@ -383,17 +429,19 @@ Implementation: `functions/api/list.ts` and `functions/api/_lib/dropIndex.ts`.
 
 ### GET /api/search
 
-Search the D1 search index.
+Search the public records in the D1 search index. Anonymous search results and totals
+always include only records with `visibility: "public"`; caller credentials do not
+widen that visibility.
 
 Query parameters:
 
-| Name | Default | Notes |
-| --- | --- | --- |
-| `q` | empty | Empty query lists records. |
-| `owner` | none | Filters `ownerAccountId`. |
-| `visibility` | none | Comma-separated visibilities. |
-| `limit` | `20` | Clamped to `1..100`. |
-| `offset` | `0` | Clamped to `>= 0`. |
+| Name         | Default | Notes                                                                |
+| ------------ | ------- | -------------------------------------------------------------------- |
+| `q`          | empty   | Empty query lists records.                                           |
+| `owner`      | none    | Filters `ownerAccountId`.                                            |
+| `visibility` | ignored | Accepted for wire compatibility; cannot widen public search results. |
+| `limit`      | `20`    | Clamped to `1..100`.                                                 |
+| `offset`     | `0`     | Clamped to `>= 0`.                                                   |
 
 Response:
 
@@ -420,7 +468,7 @@ Response:
 }
 ```
 
-Implementation: `functions/api/search.ts`, `src/lib/db/searchDatabase.ts`.
+Implementation: `functions/api/search.ts`, `functions/api/_lib/search/controller.ts`, `functions/api/_lib/search/repository.ts`.
 
 ### POST /api/auth/session
 
@@ -461,6 +509,14 @@ Implementation: `functions/api/auth/session.ts`, `functions/api/_lib/accountAuth
 
 Provider escrow unlock. The server decrypts the provider-wrapped content key and re-wraps it to the requester public key. It does not return plaintext content.
 
+Unlock is a sensitive root read. Public and unlisted roots are readable by identifier;
+a projected private root requires authentication as its canonical projected owner.
+Branch writer status does not grant unlock access. Deleted projections and malformed or
+unknown projected visibility return the same generic `404` as an absent drop, before the
+request body, provider key configuration, stored object, or cryptographic material is
+examined. Projection-absent roots retain legacy identifier-readable behavior. Short IDs
+are resolved without persistent alias backfill.
+
 Request:
 
 ```json
@@ -479,11 +535,12 @@ Response:
 
 Requirements:
 
-| Requirement | Notes |
-| --- | --- |
-| `PROVIDER_ENCRYPTION_PRIVATE_JWK` | Must be configured. |
-| Drop must be `DropEnvelopeV1` | Plain payloads cannot be unlocked. |
-| `unlockPolicy: "provider-escrow"` | Vault-only drops reject this path. |
+| Requirement                                           | Notes                                        |
+| ----------------------------------------------------- | -------------------------------------------- |
+| `PROVIDER_ENCRYPTION_PRIVATE_JWK`                     | Must be configured.                          |
+| Private projected drop                                | Canonical owner account session is required. |
+| Drop must use the v1 envelope schema (`nmdn.drop.v1`) | Plain payloads cannot be unlocked.           |
+| `unlockPolicy: "provider-escrow"`                     | Vault-only drops reject this path.           |
 
 Implementation: `functions/api/unlock/[id].ts`.
 
@@ -545,14 +602,14 @@ bun run nd -- diff poll <dropId> --branch <branchId> --cursor -1 --json
 
 Query parameters:
 
-| Name | Required | Notes |
-| --- | --- | --- |
-| `cursor` | no | `__latest__`, integer string, or omitted. |
-| `excludeClient` | no | Client ID to filter out. |
-| `limit` | no | Default `50`, max `200`. |
-| `branchId` | no | Explicit branch ID. |
-| `factCursor` | no | Enables branch runtime-fact polling. Accepts `__latest__` or an integer string and requires the authenticated branch owner or writer. |
-| `factLimit` | no | Runtime-fact page size. Default `50`, max `200`. |
+| Name            | Required | Notes                                                                                                                                                    |
+| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cursor`        | no       | `__latest__`, integer string, or omitted.                                                                                                                |
+| `excludeClient` | no       | Client ID to filter out.                                                                                                                                 |
+| `limit`         | no       | Default `50`, max `200`.                                                                                                                                 |
+| `branchId`      | no       | Explicit branch ID.                                                                                                                                      |
+| `factCursor`    | no       | Enables branch runtime-fact polling. Accepts `__latest__` or an integer string and requires the canonical projected owner or exact target branch writer. |
+| `factLimit`     | no       | Runtime-fact page size. Default `50`, max `200`.                                                                                                         |
 
 Response:
 
@@ -566,10 +623,23 @@ Response:
 ```
 
 `cursor=__latest__` returns no events and sets the cursor to the current branch head.
+Public and unlisted roots are readable by identifier. For a projected private root,
+ordinary event polling requires either the canonical projected owner or the target
+branch's explicit `writerAccountId`; other callers receive the same generic `404` as
+an absent branch. Projection-absent roots retain legacy identifier-readable behavior,
+while deleted projections and malformed or unknown projected visibility fail closed
+with that generic `404`. This policy applies equally to `cursor=__latest__`, ordinary
+event pages, and requests that also ask for runtime facts.
+
 When requested, `factCursor` advances independently through immutable `ui.response`,
 `ui.state.patch`, and `ui.state.snapshot` facts. It is tail-only during the
 `__latest__` handshake, matching the event channel; clients begin receiving
-facts written after they connect.
+facts written after they connect. Runtime-fact polling additionally requires the
+authenticated canonical projected owner or exact writer of the resolved branch, including on public and
+unlisted roots; that stricter capability denial remains `403`. A root-policy denial
+takes precedence and returns the generic `404` without reading branch events or facts.
+Root authorization also precedes poll-query validation, so malformed polling input
+cannot reveal a denied root.
 
 Implementation: `functions/api/diff/[id].ts`.
 
@@ -651,21 +721,21 @@ same `DropDiffEnvelope` shape as `nd diff event`, but requires an explicit
 
 Limits:
 
-| Limit | Value |
-| --- | --- |
-| Request body | 2,000,000 bytes |
-| Events per envelope | 100 |
-| Ops per event | 1000 |
+| Limit                 | Value           |
+| --------------------- | --------------- |
+| Request body          | 2,000,000 bytes |
+| Events per envelope   | 100             |
+| Ops per event         | 1000            |
 | Legacy op text length | 1,000,000 chars |
 | Native op data length | 1,500,000 chars |
 
 Auth modes:
 
-| Mode | Requirement |
-| --- | --- |
-| Provider credential | Diff auth headers. |
-| Env webhook | `DIFF_WEBHOOK_SECRET` and valid signature. |
-| None | Only when no webhook secret is configured. |
+| Mode                | Requirement                                |
+| ------------------- | ------------------------------------------ |
+| Provider credential | Diff auth headers.                         |
+| Env webhook         | `DIFF_WEBHOOK_SECRET` and valid signature. |
+| None                | Only when no webhook secret is configured. |
 
 Diff signing payload:
 
@@ -678,11 +748,19 @@ Diff signing payload:
 
 Signature header value is `sha256=<hex-hmac>`. Timestamp skew defaults to 5 minutes.
 
-Implementation: `functions/api/diff/[id].ts`, `shared/drop/diffAuth.ts`.
+Implementation: `functions/api/diff/[id].ts`, `shared/drop/diff-auth.ts`.
 
 ### GET /api/branches/:id
 
 List branches for a root drop.
+
+Public and unlisted roots are readable by identifier without authentication. For a
+trusted private account-library projection, the projected owner sees every branch;
+an authenticated branch writer sees only branches whose `writerAccountId` matches
+that account. Other callers receive the same generic `404` as an absent branch.
+Roots without a projection retain legacy identifier-readable behavior. A present
+deleted projection or one with malformed or unknown visibility fails closed with the
+same generic `404`, including for authenticated callers.
 
 Response:
 
@@ -707,11 +785,11 @@ bun run nd -- branch resolve <id> --json
 
 Headers:
 
-| Header | Notes |
-| --- | --- |
-| `Authorization: Bearer <token>` | Preferred account auth. |
-| `x-nulldown-account-id` | Development fallback only. |
-| `x-nulldown-client-id` | Optional stable client ID. |
+| Header                          | Notes                      |
+| ------------------------------- | -------------------------- |
+| `Authorization: Bearer <token>` | Preferred account auth.    |
+| `x-nulldown-account-id`         | Development fallback only. |
+| `x-nulldown-client-id`          | Optional stable client ID. |
 
 Response:
 
@@ -732,6 +810,13 @@ Implementation: `functions/api/branches/resolve/[id].ts`.
 ### GET /api/branches/:rootId/:branchId/content
 
 Read materialized branch content at the branch head.
+
+Public and unlisted roots are readable by identifier. A projected private root is
+readable only by its canonical projected owner or the target branch's explicit
+`writerAccountId`; denied reads return a generic `404`. Branch owner fields and
+stored drop/envelope metadata do not grant read authority. Projection-absent roots
+retain legacy identifier-readable behavior; deleted projections and malformed or
+unknown projected visibility fail closed with the same generic `404`.
 
 CLI example:
 
@@ -755,6 +840,12 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/content.ts`.
 ### GET /api/branches/:rootId/:branchId/snapshots
 
 List stored snapshots for a branch.
+
+Snapshot visibility follows the same root and target-branch policy as branch
+content: public, unlisted, and projection-absent legacy roots are identifier-readable;
+projected private roots require the canonical projected owner or matching explicit
+branch writer, with denied reads returning a generic `404`. A present projection that
+is deleted or has malformed or unknown visibility also returns that generic `404`.
 
 CLI example:
 
@@ -789,27 +880,22 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/snapshots.ts`.
 
 ### GET /api/branches/:rootId/:branchId/resolved/query
 
-Root plaintext-read permissions are checked before cache access, projection repair,
-or content replay. Private and account-vault-only envelopes require the root owner's
-authenticated session. Public plaintext roots remain accountless; runtime-reference
-queries additionally require the branch owner or writer.
-
-Query top resolved heap nodes for a branch snapshot. The default document resolver indexes titles, headings, sections, paragraphs, list/checklist items, code blocks, nullplug refs, and links. `resolverId=nulldown.resolved.runtime-refs` queries runtime nodes for `nullplug.ref`, `ui.primitive`, `ui.response`, and `ui.state`. If a supported heap is missing or stale, the endpoint rebuilds it from authoritative branch content and stored nullplug UI facts.
+Query top resolved heap nodes for a branch snapshot. The default document resolver indexes titles, headings, sections, paragraphs, list/checklist items, code blocks, nullplug refs, and links. Its ordinary reads, including the canonical document snapshotter, follow the branch content policy above. Priority facts are sensitive overlays: scoring and `priority-fact` reasons are applied only for the authenticated canonical projected owner or exact target branch writer. Public and unlisted document readers without that authority still receive ordinary document results, with no priority overlay or priority-fact read. `resolverId=nulldown.resolved.runtime-refs` queries runtime nodes for `nullplug.ref`, `ui.primitive`, `ui.response`, and `ui.state`; it and every non-document snapshotter additionally require the canonical projected owner or the exact branch writer. After ordinary root and branch access succeeds, missing sensitive authority returns `403`. Denied roots and branches return the generic `404`, and authorization happens before repair, heap materialization, content/event/fact reads, or snapshotter dispatch. Once authorized, a supported missing or stale heap is rebuilt from authoritative branch content and stored nullplug UI facts.
 
 Query params:
 
-| Param | Default | Notes |
-| --- | --- | --- |
-| `snapshotId` | `latest` | Use `latest` or a numeric snapshot id. |
-| `resolverId` | `nulldown.resolved.document` | Use `nulldown.resolved.runtime-refs` for runtime/UI fact nodes. |
-| `q` / `query` | none | Lexical query text. |
-| `k` / `top` | `10` | Max top nodes, capped server-side. |
-| `kind` | all | Comma-separated document kinds such as `section,heading,nullplug.ref` or runtime kinds such as `ui.primitive,ui.response,ui.state`. |
-| `fromSeq` / `toSeq` | none | Diff event sequence range used for changed-range boosts and event refs. |
-| `changedOnly` | false | Return only nodes overlapping changed ranges. |
-| `includeAncestors` | false | Include heading/section ancestors for context. |
-| `includeEventMetadata` | true | Set `false` to strip event metadata refs. |
-| `pluginId` / `callId` / `primitiveId` | none | Runtime resolver filters. |
+| Param                                 | Default                      | Notes                                                                                                                               |
+| ------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `snapshotId`                          | `latest`                     | Use `latest` or a numeric snapshot id.                                                                                              |
+| `resolverId`                          | `nulldown.resolved.document` | Use `nulldown.resolved.runtime-refs` for runtime/UI fact nodes.                                                                     |
+| `q` / `query`                         | none                         | Lexical query text.                                                                                                                 |
+| `k` / `top`                           | `10`                         | Max top nodes, capped server-side.                                                                                                  |
+| `kind`                                | all                          | Comma-separated document kinds such as `section,heading,nullplug.ref` or runtime kinds such as `ui.primitive,ui.response,ui.state`. |
+| `fromSeq` / `toSeq`                   | none                         | Diff event sequence range used for changed-range boosts and event refs.                                                             |
+| `changedOnly`                         | false                        | Return only nodes overlapping changed ranges.                                                                                       |
+| `includeAncestors`                    | false                        | Include heading/section ancestors for context.                                                                                      |
+| `includeEventMetadata`                | true                         | Set `false` to strip event metadata refs.                                                                                           |
+| `pluginId` / `callId` / `primitiveId` | none                         | Runtime resolver filters.                                                                                                           |
 
 CLI example:
 
@@ -855,8 +941,12 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/query.ts`.
 
 ### GET /api/branches/:rootId/:branchId/resolved/priority
 
-List branch-scoped priority overlay facts. The authenticated account must own or
-write the branch.
+List branch-scoped priority overlay facts. Priority facts are sensitive: the
+authenticated account must be the canonical projected root owner or the exact
+target branch writer. This applies even when a public or unlisted root permits
+ordinary document reads by identifier. A private, tombstoned, or malformed root
+denial remains the generic `404`; after ordinary root and branch access succeeds,
+missing sensitive authority returns `403`.
 
 Optional query parameters:
 
@@ -916,7 +1006,12 @@ Request:
 
 `targetKind` can be `node`, `heap`, or `diff`. `node` and `diff` facts require
 `targetId`; `heap` facts can omit it and the server will derive a branch/resolver
-target id. The authenticated account must own or write the branch.
+target id. The authenticated account must be the trusted canonical projected root
+owner or the exact target branch writer; a branch `ownerAccountId` is not authority.
+On public, unlisted, or projection-absent legacy roots, a request with no credential
+returns `401 account_required`. A denied private root, tombstoned projection, or
+malformed projected visibility returns the generic `404` before body validation,
+branch reads, or priority storage access.
 
 CLI example:
 
@@ -947,7 +1042,12 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority.ts
 ### DELETE /api/branches/:rootId/:branchId/resolved/priority/:factId
 
 Delete one branch-scoped priority overlay fact. The authenticated account must
-own or write the branch.
+be the trusted canonical projected root owner or the exact target branch writer;
+a branch `ownerAccountId` is not authority. On public, unlisted, or
+projection-absent legacy roots, a request with no credential returns
+`401 account_required`. A denied private root, tombstoned projection, or malformed
+projected visibility returns the generic `404` before fact-id parsing, branch reads,
+or priority storage access.
 
 CLI example:
 
@@ -972,8 +1072,13 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority/[f
 
 Query branch-scoped NullMem capsules. NullMem is optional memory over facts,
 procedures, capabilities, themes, tools, nullplugs, and future MCP calls. It is
-not authoritative for branch replay. The authenticated account must own or write
-the branch.
+not authoritative for branch replay. Ordinary root and branch visibility applies
+first: denied roots return the generic `404` before branch, memory, capability
+catalog, or freshness reads. The canonical projected owner and exact branch writer
+receive the full query. Other readers of an identifier-readable root receive only
+records labeled `public-memory` and cannot enumerate the remote capability catalog.
+Freshness queries still use the derived watermark when available. SQL metadata
+storage is required for every query.
 
 Optional query parameters:
 
@@ -1105,6 +1210,28 @@ path.
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/update.ts`.
 
+### POST /api/nullplug/resolve
+
+Invoke a built-in or registered remote nullplug for an active caller branch. The
+request requires an authenticated canonical projected root owner or the exact
+caller branch `writerAccountId`; `ownerAccountId` stored on a branch is not
+authority. A root without an account-library projection admits only its exact
+branch writer. Caller aliases are resolved without D1 backfill, and private,
+tombstoned, or malformed caller-root denials use the same generic `404` without
+reading branch or payload state.
+
+The built-in `nd` resolver separately authorizes its target as a root read using
+the same request identity. Public, unlisted, and projection-absent legacy targets
+remain identifier-readable. A projected private target requires its canonical
+owner; caller-branch authority and target-branch writer status do not grant that
+access. Private, tombstoned, malformed, absent, or internally unreadable targets
+are exposed only as the generic `404 drop_not_found`, before unauthorized object
+or envelope access. Remote plugins retain their manifest and root-policy request
+behavior; arbitrary plugin arguments do not create server-side read authority.
+
+Implementation: `functions/api/nullplug/resolve.ts`,
+`functions/api/_lib/nullplug/runtime.ts`.
+
 ### POST /api/nullplug/state
 
 Store immutable nullplug-owned UI state facts. This endpoint accepts `ui.state.patch` and `ui.state.snapshot` facts and stores them under the canonical root drop. These facts are consumed by the runtime resolved heap and do not directly mutate branch markdown.
@@ -1186,10 +1313,10 @@ Auth: `Authorization: Bearer <BRANCH_HEAP_BACKFILL_TOKEN>`.
 
 Query:
 
-| Name | Default | Max |
-| --- | --- | --- |
-| `limit` | `100` | `1000` |
-| `cursor` | none | R2 cursor |
+| Name     | Default | Max       |
+| -------- | ------- | --------- |
+| `limit`  | `100`   | `1000`    |
+| `cursor` | none    | R2 cursor |
 
 Response includes stats and optional cursor.
 
@@ -1203,10 +1330,10 @@ Auth: `Authorization: Bearer <DROP_INDEX_BACKFILL_TOKEN>`.
 
 Query:
 
-| Name | Default | Max |
-| --- | --- | --- |
-| `limit` | `200` | `1000` |
-| `cursor` | none | R2 cursor |
+| Name     | Default | Max       |
+| -------- | ------- | --------- |
+| `limit`  | `200`   | `1000`    |
+| `cursor` | none    | R2 cursor |
 
 Response includes scan/index stats and optional cursor.
 
@@ -1244,10 +1371,14 @@ bun run nd -- branch content <rootId> <branchId> --json
 
 ## Security Notes
 
-- `/api/get/:id` returns stored objects; encrypted drops remain encrypted.
+- `/api/get/:id` authorizes from the trusted root projection before returning the
+  stored object; encrypted drops remain encrypted and plaintext remains plaintext.
 - Provider escrow unlock re-wraps a key and does not return plaintext.
 - Branch content can contain plaintext if a branch was initialized from provider escrow or plaintext payloads.
-- Do not use branch endpoints as an authorization boundary until the caller model is explicitly enforced for your use case.
+- Branch list, content, snapshot, and diff-event reads enforce trusted private-root projections;
+  malformed projected visibility fails closed, while projection absence retains legacy
+  identifier-readable behavior. Runtime facts, runtime resolved queries, non-document
+  snapshotters, and full NullMem queries add the sensitive authority rules above.
 - Use revision preconditions for root upserts and deletes.
 - Use append-only diffs for atomic branch edits.
 

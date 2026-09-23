@@ -14,7 +14,7 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3";
-import { useTheme } from "../theme/themeContext";
+import { useTheme } from "../theme/theme-context";
 
 interface GraphNode {
   id: string;

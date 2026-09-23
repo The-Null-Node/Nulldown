@@ -16,12 +16,12 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import MermaidRenderer from "./MermaidRenderer";
 import NullplugGraph from "./NullplugGraph";
 import "katex/dist/katex.min.css";
-import { useTheme } from "../theme/themeContext";
-import { syntaxThemeStyles } from "../theme/syntaxThemes";
+import { useTheme } from "../theme/theme-context";
+import { syntaxThemeStyles } from "../theme/syntax-themes";
 import {
   DEFAULT_NETWORK_ALLOWLIST,
   normalizeNetworkAllowlist,
-} from "../lib/networkAllowlist";
+} from "../lib/network-allowlist";
 
 export interface MarkdownRenderCallbacks {
   onLinkClick?: (
@@ -54,6 +54,12 @@ interface EnhancedMarkdownProps {
   modules?: readonly MarkdownRendererModule[];
   allowedUrls?: readonly string[];
 }
+
+type MarkdownDivProps = React.ComponentPropsWithoutRef<"div"> & {
+  node: unknown;
+  dataHost?: unknown;
+  dataGraph?: unknown;
+};
 
 const asList = (value: unknown): string[] =>
   Array.isArray(value)
@@ -267,12 +273,14 @@ const EnhancedMarkdown: React.FC<EnhancedMarkdownProps> = React.memo(
           dataGraph,
           children,
           ...props
-        }) => {
-          const classes = typeof divClass === "string" ? divClass.split(/\s+/) : [];
+        }: MarkdownDivProps) => {
+          const classes =
+            typeof divClass === "string" ? divClass.split(/\s+/) : [];
           const graphData =
             typeof dataGraph === "string"
               ? dataGraph
-              : typeof (props as Record<string, unknown>)["data-graph"] === "string"
+              : typeof (props as Record<string, unknown>)["data-graph"] ===
+                  "string"
                 ? ((props as Record<string, unknown>)["data-graph"] as string)
                 : null;
           if (classes.includes("nulldown-graph") && graphData) {

@@ -3,11 +3,11 @@ import {
   isRemoteNullplugManifest,
   isRemoteNullplugManifestAllowed,
   isRemoteNullplugRegistryRecord,
-  readLatestRemoteNullplugManifest,
   readRemoteNullplugManifest,
   remoteNullplugLatestKey,
   remoteNullplugManifestKey,
   sanitizeNullplugRegistryKeyPart,
+  serializeRemoteNullplugManifestForSignature,
   writeRemoteNullplugManifest,
   type NullplugRegistryJsonStore,
   type RemoteNullplugRegistryRecord,
@@ -61,6 +61,39 @@ const record: RemoteNullplugRegistryRecord = {
 };
 
 describe("remote nullplug registry helpers", () => {
+  it("preserves canonical signing bytes and input while omitting signatures", () => {
+    const manifest = {
+      id: "remote.fixture",
+      version: "1.0.0",
+      endpoint: "https://plugins.nulldown.test/fixture",
+      contentType: NULLPLUG_INVOKE_CONTENT_TYPE,
+      inputSchema: {},
+      outputSchema: {},
+      permissions: [],
+      extension: { z: 2, a: 1 },
+    };
+    const expected =
+      '{"contentType":"application/vnd.nulldown.nullplug.invoke+json;version=1","endpoint":"https://plugins.nulldown.test/fixture","extension":{"a":1,"z":2},"id":"remote.fixture","inputSchema":{},"outputSchema":{},"permissions":[],"version":"1.0.0"}';
+
+    for (const input of [
+      manifest,
+      { ...manifest, signature: "sha256=fixture" },
+      { ...manifest, signature: undefined },
+    ]) {
+      const before = JSON.parse(JSON.stringify(input));
+      const descriptors = Object.getOwnPropertyDescriptors(input);
+      Object.freeze(input);
+      expect(serializeRemoteNullplugManifestForSignature(input)).toBe(expected);
+      expect(JSON.parse(JSON.stringify(input))).toEqual(before);
+      expect(Object.keys(input)).toEqual(Object.keys(descriptors));
+      for (const [key, descriptor] of Object.entries(descriptors)) {
+        expect(Object.getOwnPropertyDescriptor(input, key)?.value).toBe(
+          descriptor.value,
+        );
+      }
+    }
+  });
+
   it("validates manifests and registry records", () => {
     expect(isRemoteNullplugManifest(record.manifest)).toBe(true);
     expect(isRemoteNullplugRegistryRecord(record)).toBe(true);

@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { getCaretPosition } from "../utils/getCaretPosition";
+import { getCaretPosition } from "../utils/get-caret-position";
 import {
   createAnchorState,
   getAnchorKeysFromEventKey,
@@ -14,7 +14,7 @@ import {
   updateAnchorState,
   type AnchorState,
   type ShortcutDefinition,
-} from "../utils/shortcutEngine";
+} from "../utils/shortcut-engine";
 
 interface EditorPaneProps {
   visible?: boolean;

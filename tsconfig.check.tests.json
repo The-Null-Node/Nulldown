@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.check.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["jest", "node", "vite/client"],
+    "noEmit": true,
+    "incremental": false
+  },
+  "references": [],
+  "include": [
+    "src/client/**/*.test.ts",
+    "src/client/**/*.test.tsx",
+    "src/lib/**/*.test.ts",
+    "src/lib/**/*.test.tsx",
+    "src/pages/**/*.test.ts",
+    "src/pages/**/*.test.tsx",
+    "src/stores/**/*.test.ts",
+    "src/stores/**/*.test.tsx",
+    "src/theme/**/*.test.ts",
+    "src/theme/**/*.test.tsx",
+    "src/**/*.d.ts",
+    "lib/**/*.d.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

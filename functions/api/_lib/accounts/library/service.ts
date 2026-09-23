@@ -1,18 +1,18 @@
-import type { DropEnvelopeV1, DropVisibility } from "../../../../../shared/drop/types";
-import type { VoidBlobStore, VoidSqlStore } from "../../../../../src/server/ports";
+import type { DropEnvelope, DropVisibility } from "../../../../../shared/drop/types";
+import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
+import { readAccountRecord } from "../identity/repository";
 import {
-  readAccountRecord,
   resolveAuthenticatedAccountId,
-  verifyAccountSessionToken,
   type AccountAuthRequest,
   type AccountAuthEnv,
-} from "../session/auth";
+} from "../session/authentication";
+import { verifyAccountSessionToken } from "../session/token";
 import {
   sameDeviceSigningKey,
   sameEncryptionRecipientKey,
   verifyDropDeviceDelegationSignature,
   verifyDropEnvelopeDeviceSignature,
-} from "../../crypto/void/envelopes/verification";
+} from "../../crypto/envelopes/verification";
 import {
   listAccountLibraryEntries,
   upsertAccountLibraryEntry,
@@ -22,14 +22,14 @@ import { listAccountBindingsForUser } from "../binding/repository";
 import {
   resolveOpenAuthRequestIdentity,
   type OpenAuthBffEnvironment,
-} from "../openAuth/service";
+} from "../open-auth/service";
 
 export interface AccountLibraryEnv extends Omit<AccountAuthEnv, "R2_BUCKET"> {
-  DB?: VoidSqlStore;
+  DB?: SqlMetadataStore;
 }
 
 interface AccountLibraryProjectionEnv extends AccountLibraryEnv {
-  R2_BUCKET?: VoidBlobStore;
+  R2_BUCKET?: BlobObjectStore;
 }
 
 export class AccountLibraryError extends Error {
@@ -83,19 +83,23 @@ const parseLimit = (value: string | null): number => {
   return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 100) : 50;
 };
 
+const bearerToken = (request: AccountAuthRequest): string | null => {
+  const match = /^Bearer\s+(.+)$/i.exec(request.headers.get("Authorization") || "");
+  return match?.[1]?.trim() || null;
+};
+
 const hasBearer = (request: AccountAuthRequest): boolean =>
-  request.headers.get("Authorization")?.startsWith("Bearer ") ?? false;
+  /^Bearer(?:\s|$)/i.test(request.headers.get("Authorization") || "");
 
 const resolveAuthenticatedAccountClaims = async (
   request: AccountAuthRequest,
   env: AccountAuthEnv,
 ): Promise<{ accountId: string | null; credentialId: string | null }> => {
-  const authorization = request.headers.get("Authorization") || "";
-  if (!authorization.startsWith("Bearer ")) {
+  const token = bearerToken(request);
+  if (!token) {
     return { accountId: await resolveAuthenticatedAccountId(request, env), credentialId: null };
   }
-  const token = authorization.slice("Bearer ".length).trim();
-  const payload = token ? await verifyAccountSessionToken(token, env) : null;
+  const payload = await verifyAccountSessionToken(token, env);
   return {
     accountId: payload?.accountId ?? null,
     credentialId: payload?.credentialId ?? null,
@@ -108,7 +112,7 @@ const isVisibility = (value: string | undefined): value is DropVisibility =>
 /** Validates direct or delegated envelope ownership before its metadata is projected. */
 export const verifyAccountLibraryEnvelopeOwnership = async (
   env: AccountLibraryProjectionEnv,
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
   authenticatedAccountId: string | null,
   authenticatedCredentialId: string | null,
 ): Promise<AccountLibraryVerification> => {
@@ -181,10 +185,12 @@ export const verifyAccountLibraryEnvelopeOwnership = async (
 export const verifyAccountLibraryEnvelope = async (
   request: AccountAuthRequest,
   env: AccountLibraryProjectionEnv,
-  envelope: DropEnvelopeV1,
+  envelope: DropEnvelope,
+  options?: { requireAccount?: boolean },
 ): Promise<string | null> => {
   const authenticated = await resolveAuthenticatedAccountClaims(request, env);
-  const requiresAccount = hasBearer(request) || envelope.visibility === "private";
+  const requiresAccount =
+    options?.requireAccount === true || hasBearer(request) || envelope.visibility === "private";
   if (!requiresAccount) return null;
   if (!authenticated.accountId) {
     throw new AccountLibraryError(401, "account_auth_required", "An authenticated account session is required.");
@@ -210,10 +216,10 @@ export const verifyAccountLibraryEnvelope = async (
 
 /** Persists the verified, metadata-only ownership projection for an authenticated envelope. */
 export const projectAccountLibraryEnvelope = async (
-  db: VoidSqlStore,
+  db: SqlMetadataStore,
   dropId: string,
   accountId: string | null,
-  envelope: DropEnvelopeV1 | null,
+  envelope: DropEnvelope | null,
   updatedAt: number,
 ): Promise<void> => {
   if (!accountId || !envelope) return;

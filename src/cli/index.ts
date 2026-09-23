@@ -16,12 +16,12 @@ import {
   DIFF_SIGNATURE_HEADER,
   DIFF_SIGNATURE_PREFIX,
   DIFF_TIMESTAMP_HEADER,
-  type DiffAuthRegisterResponse,
-} from "../../shared/drop/diffAuth";
+  decodeDiffAuthRegisterResponse,
+} from "../../shared/drop/diff-auth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved/constants";
-import type { CliCredentialBundleV1 } from "../../shared/auth/cliDevice";
-import { isCliCredentialBundle } from "../../shared/auth/cliDevice";
+import type { CliCredentialBundle } from "../../shared/auth/cli-device";
+import { decodeCliCredentialBundle } from "../../shared/auth/codecs/cli-device-v1";
 import { createAdminCommand } from "./commands/admin";
 import { createAuthCommand } from "./commands/auth";
 import { createBranchCommand } from "./commands/branches";
@@ -33,20 +33,20 @@ import {
   type ServeCommandDependencies,
 } from "./commands/serve";
 import { createSmokeCommand } from "./commands/smoke";
-import { mergeCliCredentialAuthoring } from "./cliCredential";
 import {
   clearCliCredential,
   isCliCredentialForBaseUrl,
   readCliCredential,
   writeCliCredential,
 } from "./auth";
+import { mergeCliCredentialAuthoring } from "./cli-credential";
 import { flagString, hasFlag, parseArgs, type ParsedArgs } from "./core/args";
 import { findCliCommand, type CliCommand } from "./core/command";
 import {
   createCliDiagnostics,
   type CliDiagnostics,
 } from "./core/diagnostics";
-import { createHttpNulldownRuntime } from "./runtime/httpRuntime";
+import { createHttpNulldownRuntime } from "./runtime/http-runtime";
 import type {
   AdminBackfillTarget,
   DiffEnvelopeHeadersRequest,
@@ -62,14 +62,6 @@ export {
   resolveSeedTitle,
 } from "./seed";
 
-type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
-
 interface CliConfig {
   baseUrl: string;
   token: string | null;
@@ -80,7 +72,7 @@ interface CliConfig {
   diffAuthToken: string | null;
   diffAuthTokenPath: string;
   authFilePath: string;
-  authCredential: CliCredentialBundleV1 | null;
+  authCredential: CliCredentialBundle | null;
   authRefreshPromise: Promise<boolean> | null;
   json: boolean;
   quiet: boolean;
@@ -94,6 +86,12 @@ export interface CliExitResult {
   exitCode: number;
 }
 
+/** Portable HTTP request operation accepted by the CLI runtime. */
+export type CliFetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 /** Injectable process and transport boundaries used by `runCli`. */
 export interface RunCliDependencies {
   /** Writes one complete stdout value. */
@@ -101,7 +99,7 @@ export interface RunCliDependencies {
   /** Writes one complete stderr value. */
   stderr?(text: string): void;
   /** Performs outbound HTTP requests. */
-  fetch?: typeof globalThis.fetch;
+  fetch?: CliFetch;
   /** Reads stdin when a command uses `-`. */
   readStdin?(): Promise<string>;
   /** Generates a correlation id for one outbound request. */
@@ -117,7 +115,7 @@ export interface RunCliDependencies {
 interface ResolvedRunCliDependencies {
   stdout(text: string): void;
   stderr(text: string): void;
-  fetch: typeof globalThis.fetch;
+  fetch: CliFetch;
   readStdin(): Promise<string>;
   createRequestId(): string;
   now(): number;
@@ -509,9 +507,9 @@ const refreshStoredCliCredential = async (
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken: current.refreshToken }),
       }, dependencies, diagnostics);
-      const parsed = response.data;
+      const parsed = decodeCliCredentialBundle(response.data);
       if (
-        !isCliCredentialBundle(parsed) ||
+        !parsed ||
         !isCliCredentialForBaseUrl(parsed, config.baseUrl)
       ) {
         return false;
@@ -1014,7 +1012,7 @@ const createRegisteredCommands = (
         : process.env.BRANCH_HEAP_BACKFILL_TOKEN) ||
     null;
   return [
-    createDoctorCommand({
+    createDoctorCommand<CliConfig>({
       readDiffAuthBundle,
       print: (activeConfig, value, human) =>
         print(activeConfig, dependencies, value, human),
@@ -1050,7 +1048,7 @@ const createRegisteredCommands = (
       encodeDiffAuthToken,
       decodeDiffAuthToken,
       async registerDiffAuth(dropId, keys) {
-        const response = await request<DiffAuthRegisterResponse>(
+        const response = await request(
           config,
           `/api/diff-auth/register/${encodeURIComponent(dropId)}`,
           {
@@ -1064,10 +1062,11 @@ const createRegisteredCommands = (
           dependencies,
           diagnostics,
         );
-        if (!response.data) {
-          throw new CliError("Diff auth registration returned no body.");
+        const registration = decodeDiffAuthRegisterResponse(response.data);
+        if (!registration) {
+          throw new CliError("Diff auth registration returned an invalid body.");
         }
-        return response.data;
+        return registration;
       },
       unwrapSecret,
       writeCredential: (entry) => writeCredential(config, entry),

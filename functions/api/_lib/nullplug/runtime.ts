@@ -13,8 +13,8 @@ import {
   NullplugRuntimeError,
   type NullplugRuntimeInvoker,
   type NullplugRuntimeResolver,
-  type VoidNullplugRuntime,
-  type VoidRuntimePolicy,
+  type NullplugRuntime,
+  type NullplugRuntimePolicy,
 } from "../../../../shared/nullplug/runtime";
 import {
   isNullplugInvokeResponse,
@@ -22,18 +22,17 @@ import {
   type NullplugInvokeResponse,
 } from "../../../../shared/nullplug/types";
 import { normalizeAllowedHosts } from "../../../../shared/nullplug/policy";
-import { createDropIdentityRepository } from "../drops/identity/id";
-import { readProviderDropPayload } from "../drops/services/providerPayload";
-import {
-  createCloudflareBlobStore,
-  createCloudflareSqlStore,
-} from "../core/platform/cloudflarePorts";
+import { readProviderDropPayload } from "../drops/services/provider-payload";
+import type { AccountAuthRequest } from "../accounts/session/authentication";
 
 const REMOTE_NULLPLUG_RESPONSE_MAX_BYTES = 1_000_000;
 const REMOTE_NULLPLUG_TIMEOUT_MS = 10_000;
 const textEncoder = new TextEncoder();
+const anonymousReadRequest: AccountAuthRequest = {
+  headers: { get: () => null },
+};
 
-/** Cloudflare capabilities required by the provider-owned nullplug runtime. */
+/** Cloudflare capabilities required by the server Nullplug runtime. */
 export interface CloudflareNullplugRuntimeBindings {
   /** Canonical drop and remote manifest storage. */
   R2_BUCKET: R2Bucket;
@@ -45,6 +44,14 @@ export interface CloudflareNullplugRuntimeBindings {
   NULLPLUG_REGISTRY_ALLOWED_HOSTS?: string;
   /** Optional fetch implementation for tests and alternate runtimes. */
   fetchImpl?: typeof fetch;
+  /** Secret used to validate account bearer sessions for target reads. */
+  ACCOUNT_AUTH_SECRET?: string;
+  /** Optional account session lifetime configuration. */
+  ACCOUNT_AUTH_TOKEN_TTL_MS?: string;
+  /** Explicit development-only account-header opt-in. */
+  ALLOW_INSECURE_ACCOUNT_HEADER?: string;
+  /** Authenticated request used to authorize separately targeted built-in reads. */
+  nullplugReadRequest?: AccountAuthRequest;
 }
 
 const parseAllowedHosts = (value: string | undefined): string[] =>
@@ -104,21 +111,21 @@ const createNdInvoker = (
     );
   }
 
-  const dropIdentityRepository = createDropIdentityRepository({
-    blobs: createCloudflareBlobStore(bindings.R2_BUCKET),
-    sql: createCloudflareSqlStore(bindings.DB),
-  });
-  const resolvedDropId = await dropIdentityRepository.resolveRemoteDropId(target);
-  if (!resolvedDropId) {
+  let providerDrop;
+  try {
+    providerDrop = await readProviderDropPayload(
+      bindings,
+      target,
+      {
+        kind: "request",
+        request: bindings.nullplugReadRequest ?? anonymousReadRequest,
+      },
+    );
+  } catch {
     throw new NullplugRuntimeError("drop_not_found", "Drop not found.");
   }
-
-  const providerDrop = await readProviderDropPayload(bindings, resolvedDropId);
   if (!providerDrop) {
-    throw new NullplugRuntimeError(
-      "drop_unreadable",
-      "Provider could not read the requested drop.",
-    );
+    throw new NullplugRuntimeError("drop_not_found", "Drop not found.");
   }
 
   const title = extractTitle(providerDrop.payload.content);
@@ -140,7 +147,7 @@ const createNdInvoker = (
     diagnostics: [
       {
         level: "info",
-        message: "Resolved built-in nd nullplug through provider runtime.",
+        message: "Resolved built-in nd nullplug through the server runtime.",
       },
     ],
   } satisfies NullplugInvokeResponse;
@@ -269,8 +276,8 @@ const readRemoteRecord = (
 /** Creates the Cloudflare resolver chain for trusted built-ins and remote HTTP manifests. */
 export const createCloudflareNullplugRuntime = (
   bindings: CloudflareNullplugRuntimeBindings,
-  policy: VoidRuntimePolicy,
-): VoidNullplugRuntime => {
+  policy: NullplugRuntimePolicy,
+): NullplugRuntime => {
   const allowedHosts = parseAllowedHosts(
     bindings.NULLPLUG_REGISTRY_ALLOWED_HOSTS,
   );
