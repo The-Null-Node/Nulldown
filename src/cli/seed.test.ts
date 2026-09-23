@@ -4,7 +4,7 @@ import {
   buildSeedNextCommands,
   isSeedCreateArgs,
   resolveSeedTitle,
-} from "./cli/index";
+} from "./seed";
 
 describe("CLI semantic seed helpers", () => {
   it("builds a tiny branch-first seed body", () => {

@@ -1,4 +1,4 @@
-import { createNulldownServer } from "./server/http";
+import { createNulldownServer } from "./http";
 
 describe("createNulldownServer", () => {
   it("dispatches Web requests by method and path params", async () => {

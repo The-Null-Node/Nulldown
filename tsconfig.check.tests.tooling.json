@@ -10,15 +10,16 @@
   "include": [
     "src/cli/**/*.test.ts",
     "src/cli/**/*.test.tsx",
-    "src/cliSeed.test.ts",
-    "src/filesystem-blob-store-contracts.test.ts",
+    "src/cli/seed.test.ts",
+    "src/server/bun-sqlite-store.migrations.test.ts",
+    "src/server/filesystem-blob-store.test.ts",
     "src/server/local.integration.test.ts",
     "src/server/memory-data-store.test.ts",
     "src/server/nulledit/commitBuffer.test.ts",
     "src/server/nulledit/registry.test.ts",
     "src/server/nulledit/dispatch.test.ts",
     "src/server/nulledit/snapshotters/resolvedDocument.test.ts",
-    "src/serverHttpContracts.test.ts",
+    "src/server/http.test.ts",
     "src/types/jest-mock-compat.d.ts"
   ],
   "exclude": ["node_modules", "dist"]
