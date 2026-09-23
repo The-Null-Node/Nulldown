@@ -2,7 +2,7 @@
 
 `@thenullnode/nulldown-mcp` is the stdio MCP server for Nulldown's deterministic Markdown structure. It gives agents structured access to drops, branches, diff events, resolved queries, and NullMem without requiring shell commands.
 
-Nulldown turns Markdown into deterministic structure. This server lets an MCP client retrieve the smallest relevant branch structure, follow source references, apply attributable diffs, and retain reusable facts or procedures near their evidence. An agent can also describe a change while writing it, preserving intent, priority, confidence, labels, and references with the event that performed the edit.
+Nulldown turns Markdown into deterministic structure. This server lets an MCP client retrieve the smallest relevant branch structure, follow source references, apply attributable diffs, and retain reusable facts or procedures near their evidence.
 
 ## Install
 
@@ -60,44 +60,6 @@ For an exact `diff_apply` retry, provide `eventId` and `createdAt` together with
 the original operations and metadata. The tool rejects partial identities before
 network I/O and treats a missing or mismatched acknowledgement as unconfirmed.
 
-## Write The Change And Its Meaning
-
-`diff_apply` accepts action context alongside the Markdown operations:
-
-Calculate every operation range from current full branch content; the offsets
-below are illustrative.
-
-```json
-{
-  "dropId": "<root-id>",
-  "branchId": "<branch-id>",
-  "ops": [
-    {
-      "type": "insert",
-      "start": 42,
-      "end": 42,
-      "text": "Tier eligibility remains unresolved.\n"
-    }
-  ],
-  "metadata": {
-    "kind": "agent.edit",
-    "intent": "Record the unresolved eligibility question",
-    "args": { "priority": 4 },
-    "labels": ["exports", "open-question"],
-    "confidence": 0.55,
-    "resultRef": "source:S1"
-  }
-}
-```
-
-The operations determine current Markdown. The remaining fields describe the
-action. Confidence is a writer-declared signal, not a correctness guarantee.
-An explicit numeric `args.priority` can produce a priority fact linked to the
-diff event. To apply that diff priority during document retrieval, query the
-acknowledged event sequence with matching `fromSeq` and `toSeq`. Authorized
-results can then include `priority-fact`, `changed-range-overlap`, and the event
-reference that explains the score.
-
 ## Tool Groups
 
 | Group          | Purpose                                                                                        |
@@ -145,7 +107,7 @@ Compactness is a transport guard, not a substitute for correct retrieval. Agents
 
 ## Learn More
 
-- [Nulldown documentation](https://nulldown.app/d/UN8IYp)
-- [Why Nulldown](https://nulldown.app/d/Nyy1tn)
+- [Nulldown documentation](https://nulldown.app/d/vjdL1x)
+- [Deterministic structure for Markdown](https://nulldown.app/d/q2BylK)
 - [Agents, retrieval, and memory](https://nulldown.app/d/TwPp4l)
 - [Build with Nulldown](https://nulldown.app/d/hCPw9B)
