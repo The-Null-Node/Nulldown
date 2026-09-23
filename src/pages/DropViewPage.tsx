@@ -3,20 +3,20 @@ import { Maximize2, Minimize2 } from "lucide-react";
 import { useParams, Link, type LinkProps } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import EnhancedMarkdown from "../components/EnhancedMarkdown";
-import { useTheme } from "../theme/themeContext";
-import useDropStore from "../stores/dropStore";
-import { getMarkdownTitle } from "../lib/markdownText";
+import { useTheme } from "../theme/theme-context";
+import useDropStore from "../stores/drop-store";
+import { getMarkdownTitle } from "../lib/markdown-text";
 import {
   RenderCancelledError,
   renderMarkdownWithNullplug,
 } from "../lib/nullplug";
-import { toUserFacingDropError } from "../lib/drop/userErrors";
+import { toUserFacingDropError } from "../lib/drop/user-errors";
 import {
   DEFAULT_NETWORK_ALLOWLIST,
   resolveNetworkAllowlist,
-} from "../lib/networkAllowlist";
+} from "../lib/network-allowlist";
 import { toShortDropId } from "../../shared/drop/id";
-import { upsertRecentExternalDrop } from "../lib/drop/recentExternalDrops";
+import { upsertRecentExternalDrop } from "../lib/drop/recent-external-drops";
 
 function useDocumentTitle(title: string) {
   useEffect(() => {

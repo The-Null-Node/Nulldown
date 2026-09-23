@@ -4,8 +4,8 @@ progressive markdown rendering. The key invariant is that renders are always tie
 snapshot id so stale async flushes cannot overwrite newer typing.
 */
 
-import useEditorStore, { type EditorState } from "../../stores/editorStore";
-import useDropStore from "../../stores/dropStore";
+import useEditorStore, { type EditorState } from "../../stores/editor-store";
+import useDropStore from "../../stores/drop-store";
 import {
   RenderCancelledError,
   renderMarkdownWithNullplugState,

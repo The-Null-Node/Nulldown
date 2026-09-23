@@ -3,20 +3,20 @@ import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 import EditorPage from "./pages/EditorPage";
 import DropViewPage from "./pages/DropViewPage";
 import CliAuthPage from "./pages/CliAuthPage";
-import { ThemeProvider } from "./theme/themeContext";
+import { ThemeProvider } from "./theme/theme-context";
 import {
   getOpenAuthSessionState,
   OPEN_AUTH_LOGOUT_STORAGE_KEY,
   type OpenAuthPrincipal,
-} from "./lib/auth/openAuthClient";
+} from "./lib/auth/open-auth-client";
 import {
   cancelAccountSyncOperations,
   getAccountSyncState,
-} from "./lib/auth/accountSyncClient";
-import { clearAccountSession } from "./lib/auth/accountSession";
+} from "./lib/auth/account-sync-client";
+import { clearAccountSession } from "./lib/auth/account-session";
 import { setActiveVaultUser } from "./lib/auth/vault/passkey-vault";
 import OpenAuthAccountControl from "./pages/editor/components/OpenAuthAccountControl";
-import { useAccountPreferencesSync } from "./lib/auth/useAccountPreferencesSync";
+import { useAccountPreferencesSync } from "./lib/auth/use-account-preferences-sync";
 
 // A simple 404 component
 const NotFoundPage: React.FC = () => {

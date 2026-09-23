@@ -1,5 +1,5 @@
 import createEditor from "./editor";
-import useEditorStore from "../../stores/editorStore";
+import useEditorStore from "../../stores/editor-store";
 import { nullplug, parseNullplugBlocks } from "../nullplug";
 import { computeDiffOps } from "../../../shared/nulledit/textDiff";
 

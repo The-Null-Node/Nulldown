@@ -6,7 +6,7 @@ import React, {
   useState,
 } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
-import useEditorStore from "../../stores/editorStore";
+import useEditorStore from "../../stores/editor-store";
 import type {
   JsonValue,
   NullplugMutation,
@@ -34,7 +34,7 @@ import {
   type NullplugRenderStatus,
   type NullplugRuntimeSelection,
   type NullplugStatePathOptions,
-} from "./reactRuntime";
+} from "./react-runtime";
 
 export interface NullplugProviderRuntime {
   submitResponse?: (fact: NullplugUiResponseFact) => Promise<void>;

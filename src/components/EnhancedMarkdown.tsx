@@ -16,12 +16,12 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import MermaidRenderer from "./MermaidRenderer";
 import NullplugGraph from "./NullplugGraph";
 import "katex/dist/katex.min.css";
-import { useTheme } from "../theme/themeContext";
-import { syntaxThemeStyles } from "../theme/syntaxThemes";
+import { useTheme } from "../theme/theme-context";
+import { syntaxThemeStyles } from "../theme/syntax-themes";
 import {
   DEFAULT_NETWORK_ALLOWLIST,
   normalizeNetworkAllowlist,
-} from "../lib/networkAllowlist";
+} from "../lib/network-allowlist";
 
 export interface MarkdownRenderCallbacks {
   onLinkClick?: (

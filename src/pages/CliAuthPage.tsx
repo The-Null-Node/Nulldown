@@ -6,8 +6,8 @@ import {
   getOpenAuthSessionState,
   type OpenAuthPrincipal,
   type OpenAuthSessionState,
-} from "@/lib/auth/openAuthClient";
-import { getAccountSyncState } from "@/lib/auth/accountSyncClient";
+} from "@/lib/auth/open-auth-client";
+import { getAccountSyncState } from "@/lib/auth/account-sync-client";
 import { signLocalDeviceDelegation } from "@/lib/auth/vault/passkey-vault";
 import {
   formatCliUserCode,

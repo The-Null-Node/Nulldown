@@ -5,7 +5,7 @@ import {
 import { isDropPayload } from "../../../../shared/drop/codecs/draft-pack-v1";
 import type { DropEnvelope } from "../../../../shared/drop/types";
 import { createHttpErrorFromResponse } from "../provider/errors";
-import { getAccountAuthHeaders } from "../../auth/accountSession";
+import { getAccountAuthHeaders } from "../../auth/account-session";
 import type {
   DropCrudRecord,
   StoredDropRecord,

@@ -10,7 +10,7 @@ import {
 import type { DropEnvelope } from "../../../shared/drop/types";
 
 const getAccountAuthHeaders = jest.fn();
-jest.unstable_mockModule("../auth/accountSession", () => ({
+jest.unstable_mockModule("../auth/account-session", () => ({
   getAccountAuthHeaders,
 }));
 

@@ -14,7 +14,7 @@ import {
   type NullplugInvokeRequest,
   type NullplugRuntimeResolution,
 } from "../../../shared/nullplug/types";
-import { getAccountSessionToken } from "../auth/accountSession";
+import { getAccountSessionToken } from "../auth/account-session";
 
 /** Browser HTTP dependencies for remote Nullplug resolution. */
 export interface CreateRemoteNullplugRuntimeOptions {

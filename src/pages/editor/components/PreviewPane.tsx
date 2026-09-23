@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useRef } from "react";
 import LoadingFallback from "./LoadingFallback";
-import { mapPlainTextOffsetToMarkdownIndex } from "../../../lib/markdownText";
+import { mapPlainTextOffsetToMarkdownIndex } from "../../../lib/markdown-text";
 import {
   NullplugPrimitivePanel,
   NullplugProvider,

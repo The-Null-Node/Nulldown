@@ -4,7 +4,7 @@ import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
 } from "../../../shared/nullplug/ui";
-import { getAccountSessionToken } from "../auth/accountSession";
+import { getAccountSessionToken } from "../auth/account-session";
 import { createRemoteNullplugRuntime } from "./remote-runtime";
 
 /** Branch and actor context required when the browser submits a nullplug fact. */

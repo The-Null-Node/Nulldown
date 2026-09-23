@@ -17,7 +17,7 @@ import {
 } from "../../../shared/drop/diff";
 import { DropDiffAppendEnvelopeSchema } from "../../../shared/drop/codecs/diff-v1";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../../shared/drop/branch";
-import { emitEvent } from "../events/eventBus";
+import { emitEvent } from "../events/event-bus";
 import {
   createDiffChannelClientId,
   createDiffChannelEventId,

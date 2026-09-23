@@ -1,7 +1,7 @@
 import { nullplug } from "../registry";
 import type { NullplugContext, NullplugHandler, PluginBlock } from "../types";
 import { isDropIdToken } from "../../../../shared/drop/id";
-import { getMarkdownTitle } from "../../markdownText";
+import { getMarkdownTitle } from "../../markdown-text";
 
 interface GraphNode {
   id: string;

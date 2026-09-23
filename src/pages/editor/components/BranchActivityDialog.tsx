@@ -17,7 +17,7 @@ import {
   getBranchWriterLabel,
   groupBranchActivity,
   summarizeBranchTextComparison,
-} from "../../../lib/branchActivity";
+} from "../../../lib/branch-activity";
 
 interface BranchActivityDialogProps {
   open: boolean;

@@ -3,14 +3,14 @@ import {
   useTheme,
   useThemeCatalog,
   useTypefaceCatalog,
-} from "../../../theme/themeContext";
+} from "../../../theme/theme-context";
 import type {
   TypefaceDefinition,
   TypefaceId,
-} from "../../../theme/typefaceCatalog";
+} from "../../../theme/typeface-catalog";
 import useDropStore, {
   type EditorSyntaxMode,
-} from "../../../stores/dropStore";
+} from "../../../stores/drop-store";
 import {
   Dialog,
   DialogContent,
@@ -32,9 +32,9 @@ import {
   DEFAULT_NETWORK_ALLOWLIST,
   normalizeNetworkAllowlist,
   parseNetworkAllowlistInput,
-} from "../../../lib/networkAllowlist";
+} from "../../../lib/network-allowlist";
 import { isAccountPreferenceValue } from "../../../../shared/auth/codecs/account-preferences-v1";
-import { useAccountPreferencesStore } from "../../../stores/accountPreferencesStore";
+import { useAccountPreferencesStore } from "../../../stores/account-preferences-store";
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;

@@ -1,4 +1,4 @@
-import { renderMarkdownWithNullplugState } from "../renderPipeline";
+import { renderMarkdownWithNullplugState } from "../render-pipeline";
 
 describe("approval nullplug", () => {
   it("renders a branch-scoped non-mutating approval form", async () => {

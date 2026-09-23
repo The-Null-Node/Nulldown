@@ -11,7 +11,7 @@ import {
   DEFAULT_NETWORK_ALLOWLIST,
   normalizeNetworkAllowlist,
   parseNetworkAllowlistInput,
-} from "../../lib/networkAllowlist";
+} from "../../lib/network-allowlist";
 import type {
   DropDraftDiffPolicy,
   DropUnlockPolicy,

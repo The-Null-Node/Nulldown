@@ -7,7 +7,7 @@ export {
   type RenderChunkStatus,
   type RenderPipelineOptions,
   type RenderPipelineResult,
-} from "./renderPipeline";
+} from "./render-pipeline";
 export {
   parseNullplugBlocks,
   parseNullplugArguments,
