@@ -1,20 +1,20 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBranchRepository } from "../functions/api/_lib/branches/storage/repository";
-import { hashMarkdownSource } from "../shared/drop/resolved/hash";
-import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../shared/nullplug/protocol";
-import { remoteNullplugLatestKey } from "../shared/nullplug/registry";
-import { createFilesystemBlobStore } from "./server/filesystem-blob-store";
-import { createLocalNulldownServer } from "./server/local";
-import { createMemoryRuntimeDataStore } from "./server/memory-data-store";
-import { createNullMemFreshnessWatermarkKey } from "./server/nulledit";
+import { createBranchRepository } from "../../functions/api/_lib/branches/storage/repository";
+import { hashMarkdownSource } from "../../shared/drop/resolved/hash";
+import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../shared/nullplug/protocol";
+import { remoteNullplugLatestKey } from "../../shared/nullplug/registry";
+import { createFilesystemBlobStore } from "./filesystem-blob-store";
+import { createLocalNulldownServer } from "./local";
+import { createMemoryRuntimeDataStore } from "./memory-data-store";
+import { createNullMemFreshnessWatermarkKey } from "./nulledit";
 import type {
   RuntimeDataStore,
   SqlBindableValue,
   SqlStatement,
   SqlMetadataStore,
-} from "./server/ports";
+} from "./ports";
 
 const localRootDropId = "LocalAdapterRoot";
 const localBranchId = "writer";

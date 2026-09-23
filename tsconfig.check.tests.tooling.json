@@ -12,7 +12,7 @@
     "src/cli/**/*.test.tsx",
     "src/cliSeed.test.ts",
     "src/filesystem-blob-store-contracts.test.ts",
-    "src/localNulldownServerContracts.test.ts",
+    "src/server/local.integration.test.ts",
     "src/server/memory-data-store.test.ts",
     "src/server/nulledit/commitBuffer.test.ts",
     "src/server/nulledit/registry.test.ts",
