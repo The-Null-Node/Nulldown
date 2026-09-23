@@ -4,7 +4,7 @@ import {
   DIFF_SECRET_KID_HEADER,
   DIFF_SIGNATURE_HEADER,
   DIFF_TIMESTAMP_HEADER,
-} from "../shared/drop/diffAuth";
+} from "../shared/drop/diff-auth";
 import {
   credentialsFilePath,
   getArgValue,

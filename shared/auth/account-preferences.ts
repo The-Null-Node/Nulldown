@@ -1,4 +1,4 @@
-import type { staticThemeIds } from "../themeCatalog";
+import type { staticThemeIds } from "../theme-catalog";
 
 export const ACCOUNT_PREFERENCE_FIELDS = [
   "theme",

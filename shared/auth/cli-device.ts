@@ -1,4 +1,4 @@
-import type { DropDeviceDelegation } from "../drop/deviceDelegation";
+import type { DropDeviceDelegation } from "../drop/device-delegation";
 
 /** Public RSA key used to encrypt the one-time CLI credential response. */
 export interface CliEncryptionPublicJwk {

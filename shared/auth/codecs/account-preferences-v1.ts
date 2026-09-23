@@ -1,11 +1,11 @@
-import { staticThemeIds } from "../../themeCatalog";
+import { staticThemeIds } from "../../theme-catalog";
 import type {
   AccountPreferenceField,
   AccountPreferenceMutation,
   AccountPreferenceTypeface,
   AccountPreferenceValues,
   AccountPreferences,
-} from "../accountPreferences";
+} from "../account-preferences";
 
 export const ACCOUNT_PREFERENCES_SCHEMA_V1 =
   "nulldown.account-preferences.v1" as const;

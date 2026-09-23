@@ -10,7 +10,7 @@ import {
 import type {
   ResolvedDocumentNodeQueryResult,
   ResolvedRuntimeNodeQueryResult,
-} from "./resolved";
+} from "./resolved/types";
 import type {
   NullplugUiPrimitive,
   NullplugUiResponseFact,

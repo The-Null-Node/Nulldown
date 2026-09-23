@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import { isAccountLibraryPage } from "./accountLibrary";
+import { isAccountLibraryPage } from "./account-library";
 
 describe("isAccountLibraryPage", () => {
   it("accepts metadata-only active and deleted entries", () => {

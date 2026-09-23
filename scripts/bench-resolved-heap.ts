@@ -1,7 +1,5 @@
-import {
-  heapifyResolvedDocument,
-  queryResolvedDocumentNodes,
-} from "../shared/drop/resolved";
+import { heapifyResolvedDocument } from "../shared/drop/resolved/heapify/document";
+import { queryResolvedDocumentNodes } from "../shared/drop/resolved/query/document";
 
 const parseSizes = (): number[] => {
   const sizes = process.argv.slice(2).map(Number).filter(Number.isFinite);

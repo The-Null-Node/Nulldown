@@ -17,7 +17,7 @@ import {
   DIFF_SIGNATURE_PREFIX,
   DIFF_TIMESTAMP_HEADER,
   decodeDiffAuthRegisterResponse,
-} from "../../shared/drop/diffAuth";
+} from "../../shared/drop/diff-auth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../shared/drop/resolved/constants";
 import type { CliCredentialBundle } from "../../shared/auth/cli-device";

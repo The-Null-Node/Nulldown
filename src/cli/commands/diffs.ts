@@ -11,7 +11,7 @@ import {
   DIFF_SIGNATURE_HEADER,
   DIFF_TIMESTAMP_HEADER,
   type DiffAuthRegisterResponse,
-} from "../../../shared/drop/diffAuth";
+} from "../../../shared/drop/diff-auth";
 import { DropDiffEventIdSchema } from "../../../shared/drop/codecs/diff-v1";
 import { computeDiffOps } from "../../../shared/nulledit/textDiff";
 import { flagString, hasFlag, type ParsedArgs } from "../core/args";

@@ -53,10 +53,10 @@ import {
 import { toShortDropId } from "../../shared/drop/id";
 import { toUserFacingDropError } from "../lib/drop/userErrors";
 import { getUnlockedVault } from "../lib/auth/vault/passkey-vault";
-import { createBranchApiClient } from "../../shared/drop/branchApi";
+import { createBranchApiClient } from "../../shared/drop/branch-api";
 import { getAccountSessionToken } from "../lib/auth/accountSession";
 import { fetchAccountLibrary } from "../lib/auth/accountLibraryClient";
-import type { AccountLibraryEntry } from "../../shared/auth/accountLibrary";
+import type { AccountLibraryEntry } from "../../shared/auth/account-library";
 import {
   clearBranchPromotionIntent,
   readBranchPromotionIntent,

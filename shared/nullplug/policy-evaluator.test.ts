@@ -2,7 +2,7 @@ import {
   evaluateConditionalGrant,
   normalizePolicyEvaluatorReturn,
   type PolicyEvaluatorCallable,
-} from "./policyEvaluator";
+} from "./policy-evaluator";
 import type { ConditionalGrant, GrantEvaluationRequest } from "./policy";
 
 const grant: ConditionalGrant = {

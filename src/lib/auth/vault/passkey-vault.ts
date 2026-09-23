@@ -17,7 +17,7 @@ import {
   encodeAccountRecoveryPayload,
 } from "../../../../shared/auth/codecs/account-recovery-v1";
 import { fromBase64, toBase64 } from "../../crypto/base64";
-import { type DropDeviceDelegation } from "../../../../shared/drop/deviceDelegation";
+import { type DropDeviceDelegation } from "../../../../shared/drop/device-delegation";
 import {
   isDropDelegateSigningPublicJwk,
   serializeDropDeviceDelegationForSignature,

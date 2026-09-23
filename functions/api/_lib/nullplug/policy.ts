@@ -3,7 +3,7 @@ import {
   resolveRootRuntimePolicy,
   type RootRuntimePolicy,
 } from "../../../../shared/nullplug/policy";
-import { filterNullplugInvokeResponse } from "../../../../shared/nullplug/resultPolicy";
+import { filterNullplugInvokeResponse } from "../../../../shared/nullplug/result-policy";
 import {
   NullplugRuntimeError,
   type NullplugRuntimePolicy,

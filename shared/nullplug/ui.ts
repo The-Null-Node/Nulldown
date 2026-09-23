@@ -7,7 +7,7 @@ import {
   NullplugUiStatePatchFactSchema,
   NullplugUiStatePatchOperationSchema,
   NullplugUiStateSnapshotSchema,
-} from "./uiSchemas";
+} from "./ui-schemas";
 
 export const NULLPLUG_UI_RESPONSE_FACT_KEY_PREFIX =
   "__nullplug_ui_response_fact__/";

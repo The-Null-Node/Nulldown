@@ -11,7 +11,7 @@ import {
   type DropUnlockPolicy,
   type DropVisibility,
 } from "./types";
-import type { DropDeviceDelegation } from "./deviceDelegation";
+import type { DropDeviceDelegation } from "./device-delegation";
 
 /** Public account vault material used to wrap a newly generated content key. */
 export interface AccountEncryptionMaterial {

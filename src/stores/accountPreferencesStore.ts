@@ -5,7 +5,7 @@ import {
   type AccountPreferenceValues,
   type AccountPreferences,
   type VersionedAccountPreference,
-} from "../../shared/auth/accountPreferences";
+} from "../../shared/auth/account-preferences";
 import {
   createAccountPreferenceMutation,
   createDefaultAccountPreferences,

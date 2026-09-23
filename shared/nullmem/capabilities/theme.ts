@@ -1,7 +1,7 @@
 import {
   staticThemeCatalog,
   type StaticThemeCatalogEntry,
-} from "../../themeCatalog";
+} from "../../theme-catalog";
 import {
   NULLMEM_RECORD_VERSION,
   type NullMemCapabilityRecord,

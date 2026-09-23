@@ -1,7 +1,7 @@
 import type {
   AccountPreferenceField,
   AccountPreferenceValues,
-} from "../../../../../shared/auth/accountPreferences";
+} from "../../../../../shared/auth/account-preferences";
 import type { SqlMetadataStore } from "../../../../../src/server/ports";
 
 export interface AccountPreferenceRow {

@@ -1,1 +1,1 @@
-export { staticThemeCatalog, staticThemeIds } from "../../shared/themeCatalog";
+export { staticThemeCatalog, staticThemeIds } from "../../shared/theme-catalog";

@@ -1,6 +1,6 @@
 import {
   type AccountBindingChallenge,
-} from "./accountBinding";
+} from "./account-binding";
 import {
   ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1,
   ACCOUNT_BINDING_OPERATION_V1,

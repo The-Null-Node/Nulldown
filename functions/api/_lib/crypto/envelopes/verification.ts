@@ -8,7 +8,7 @@ import {
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
 } from "../../../../../shared/drop/codecs/device-delegation-v1";
-import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
+import type { DropDeviceDelegation } from "../../../../../shared/drop/device-delegation";
 
 const textEncoder = new TextEncoder();
 

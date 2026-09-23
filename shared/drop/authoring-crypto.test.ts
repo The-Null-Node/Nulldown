@@ -8,7 +8,7 @@ import {
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
 } from "./codecs/device-delegation-v1";
-import type { DropDeviceDelegation } from "./deviceDelegation";
+import type { DropDeviceDelegation } from "./device-delegation";
 import {
   serializeDropEnvelopeForDeviceSignature,
   toDropEnvelopeSignable,

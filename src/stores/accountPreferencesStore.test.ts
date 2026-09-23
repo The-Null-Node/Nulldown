@@ -4,7 +4,7 @@ import { jest } from "@jest/globals";
 import type {
   AccountPreferenceMutation,
   AccountPreferences,
-} from "../../shared/auth/accountPreferences";
+} from "../../shared/auth/account-preferences";
 import {
   createAccountPreferenceMutation,
   createDefaultAccountPreferences,

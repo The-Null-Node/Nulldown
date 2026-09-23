@@ -1,4 +1,4 @@
-import type { AccountBindingChallenge } from "../../../../../shared/auth/accountBinding";
+import type { AccountBindingChallenge } from "../../../../../shared/auth/account-binding";
 import {
   decodeAccountBindingChallenge,
   encodeAccountBindingChallenge,

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "@jest/globals";
-import { staticThemeIds } from "../themeCatalog";
+import { staticThemeIds } from "../theme-catalog";
 import {
   ACCOUNT_PREFERENCE_FIELDS,
   type AccountPreferenceField,
   type AccountPreferenceValues,
-} from "./accountPreferences";
+} from "./account-preferences";
 import {
   ACCOUNT_PREFERENCE_MUTATION_SCHEMA_V1,
   createAccountPreferenceMutation,

@@ -1,40 +1,54 @@
 import { createHash } from "crypto";
 import {
   NULLDOWN_CONTEXT_TOKEN_PREFIX,
-  applyResolvedNodeDeltaOps,
-  buildBranchSnapshotSourceHashKey,
-  buildMarkdownSourceHashKey,
-  changedRangesFromDropDiffEvents,
-  createNulldownResolutionPlan,
-  createResolvedHeapDeltaRecord,
-  createResolvedNodeRefRecords,
-  decodeNulldownContextToken,
-  diffResolvedNodeRefs,
-  encodeNulldownContextToken,
-  getNextResolvedChecklistItem,
-  heapifyResolvedDocument,
-  heapifyResolvedRuntimeRefs,
-  heapifyResolvedChecklist,
-  hashBranchSnapshotSource,
-  hashMarkdownSource,
-  queryResolvedDocumentNodes,
-  queryResolvedRuntimeNodes,
-  readResolvedNulldownState,
-  writeResolvedNulldownState,
-  isNulldownContextToken,
-  isNulldownSourceHash,
-  isResolvedHeapDeltaRecord,
-  isResolvedNodeDeltaOp,
-  isResolvedNodeRefRecord,
-  isResolvedNulldownState,
-  isResolvedPriorityFactRecord,
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_DOCUMENT_RESOLVER_VERSION,
   RESOLVED_HEAP_DELTA_RECORD_VERSION,
   RESOLVED_NODE_REF_RECORD_VERSION,
   RESOLVED_PRIORITY_FACT_RECORD_VERSION,
-  type NulldownContextToken,
-} from "./resolved";
+} from "./resolved/constants";
+import {
+  applyResolvedNodeDeltaOps,
+  createResolvedHeapDeltaRecord,
+  createResolvedNodeRefRecords,
+  diffResolvedNodeRefs,
+} from "./resolved/node-refs";
+import {
+  buildBranchSnapshotSourceHashKey,
+  buildMarkdownSourceHashKey,
+  hashBranchSnapshotSource,
+  hashMarkdownSource,
+  isNulldownSourceHash,
+} from "./resolved/hash";
+import {
+  changedRangesFromDropDiffEvents,
+  queryResolvedDocumentNodes,
+} from "./resolved/query/document";
+import { createNulldownResolutionPlan } from "./resolved/resolution-plan";
+import {
+  decodeNulldownContextToken,
+  encodeNulldownContextToken,
+} from "./resolved/context-token";
+import {
+  getNextResolvedChecklistItem,
+  heapifyResolvedDocument,
+  heapifyResolvedChecklist,
+} from "./resolved/heapify/document";
+import { heapifyResolvedRuntimeRefs } from "./resolved/heapify/runtime-refs";
+import { queryResolvedRuntimeNodes } from "./resolved/query/runtime";
+import {
+  readResolvedNulldownState,
+  writeResolvedNulldownState,
+} from "./resolved/storage";
+import {
+  isNulldownContextToken,
+  isResolvedHeapDeltaRecord,
+  isResolvedNodeDeltaOp,
+  isResolvedNodeRefRecord,
+  isResolvedNulldownState,
+  isResolvedPriorityFactRecord,
+} from "./resolved/validators";
+import type { NulldownContextToken } from "./resolved/types";
 
 const createMemoryStore = () => {
   const values = new Map<string, string>();

@@ -15,7 +15,7 @@ import { createRequestLogger, serializeError, toLogRef } from "../../_lib/core/l
 import type {
   DiffAuthRegisterRequest,
   DiffAuthRegisterResponse,
-} from "../../../../shared/drop/diffAuth";
+} from "../../../../shared/drop/diff-auth";
 import { providerCrypto } from "../../_lib/crypto/provider-crypto";
 
 interface Env extends AccountAuthEnv {

@@ -1,7 +1,7 @@
 import type {
   DropDeviceDelegation,
   DropDeviceDelegationSignable,
-} from "../deviceDelegation";
+} from "../device-delegation";
 import { serializeCanonicalJson, type DropDetachedSignature } from "../types";
 
 /** Persisted schema for a V1 account-signed delegated device certificate. */

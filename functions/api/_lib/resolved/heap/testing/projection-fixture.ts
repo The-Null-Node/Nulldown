@@ -1,6 +1,6 @@
 import { expect } from "@jest/globals";
 import { createResolvedHeapProjectionRepository } from "../projection-repository";
-import { createResolvedHeapDeltaRecord } from "../../../../../../shared/drop/resolved/nodeRefs";
+import { createResolvedHeapDeltaRecord } from "../../../../../../shared/drop/resolved/node-refs";
 import type {
   ResolvedHeapDeltaRecord,
   ResolvedNulldownState,

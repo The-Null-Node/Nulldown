@@ -5,7 +5,7 @@ import {
   buildDiffSigningPayload,
   decodeDiffAuthRegisterResponse,
   DIFF_SIGNATURE_PREFIX,
-} from "../shared/drop/diffAuth";
+} from "../shared/drop/diff-auth";
 
 export interface DiffClientKeysRecord {
   version: 1;

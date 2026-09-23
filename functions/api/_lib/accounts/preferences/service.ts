@@ -2,7 +2,7 @@ import {
   type AccountPreferenceField,
   type AccountPreferences,
   type VersionedAccountPreference,
-} from "../../../../../shared/auth/accountPreferences";
+} from "../../../../../shared/auth/account-preferences";
 import {
   createDefaultAccountPreferences,
   decodeAccountPreferenceMutation,

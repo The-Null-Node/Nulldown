@@ -2,7 +2,7 @@
 
 **Nulldown turns Markdown into deterministic structure.**
 
-Markdown is the shared language of people and agents. Nulldown makes it addressable, replayable, queryable, attributable, composable, and renderable, so one source can power documents, shared state, agent memory, targeted retrieval, workflows, and interfaces.
+Markdown is the shared language of people and agents. Nulldown makes it addressable, replayable, queryable, attributable, composable, and renderable, so one source can power documents, shared state, agent memory, targeted retrieval, workflows, and interfaces. An agent can write a Markdown change and preserve its intent, importance, confidence, labels, and references in the same attributed event.
 
 ```mermaid
 flowchart LR
@@ -15,6 +15,8 @@ flowchart LR
 ```
 
 Most systems repeatedly translate the same work between documents, prompts, databases, memory, and component state. Nulldown keeps those uses connected to readable Markdown and inspectable state.
+
+That makes ranking part of the write loop rather than an unrelated annotation step. Explicit priority can influence authorized retrieval for the affected event, while the remaining metadata explains what the agent did and why. These signals improve retrieval and provenance; they do not establish that a claim is true.
 
 ## Start In A Minute
 
@@ -31,15 +33,17 @@ nd get <id-from-create> --raw
 
 Choose the surface that fits your work:
 
-| Need | Start with |
-| --- | --- |
-| Read and author documents | [nulldown.app](https://nulldown.app) |
-| Automate documents and branches | [CLI and API guide](docs/NULDOWN_API.md) |
-| Connect an agent | [MCP server](packages/nulldown-mcp/README.md) |
-| Run a local API | [Self-hosting](#self-host) |
-| Understand the model | [Nulldown documentation](https://nulldown.app/d/vjdL1x) |
+| Need                            | Start with                                              |
+| ------------------------------- | ------------------------------------------------------- |
+| Read and author documents       | [nulldown.app](https://nulldown.app)                    |
+| Automate documents and branches | [CLI and API guide](docs/NULDOWN_API.md)                |
+| Connect an agent                | [MCP server](packages/nulldown-mcp/README.md)           |
+| Run a local API                 | [Self-hosting](#self-host)                              |
+| Understand the model            | [Nulldown documentation](https://nulldown.app/d/UN8IYp) |
 
 For public discovery, see the [search API reference](docs/NULDOWN_API.md#get-apisearch). Its backend controller and repository live in `functions/api/_lib/search/`.
+
+Portable contracts and codecs live under `shared/`. Public package imports are defined by the export map in `package.json` and can differ from source filenames.
 
 ## What Exists Today
 
@@ -142,13 +146,15 @@ bun install -g @thenullnode/nulldown-mcp
 
 `nulldown-mcp` is a stdio server configured by an MCP client, not an interactive terminal program. Configure `ND_BASE_URL`, `ND_TOKEN`, and `ND_CLIENT_ID` in the MCP client environment as needed. `ND_ACCOUNT_ID` is a development-only alternative accepted only when the target API explicitly enables its insecure account header; an invalid bearer credential never falls back to it. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
 
+`diff_apply` accepts event metadata alongside the Markdown operations. Use `intent`, `labels`, `confidence`, and references to preserve action context. An explicit numeric `args.priority` can create a diff-linked priority fact; include the acknowledged event sequence in a later `branch_query` range when that priority should participate in document ranking.
+
 ## Documentation
 
 The canonical conceptual documentation lives in Nulldown:
 
-- [Documentation index](https://nulldown.app/d/vjdL1x)
-- [Why Nulldown: deterministic structure for Markdown](https://nulldown.app/d/q2BylK)
-- [State model](https://nulldown.app/d/H305WE)
+- [Documentation index](https://nulldown.app/d/UN8IYp)
+- [Why Nulldown: shared Markdown state](https://nulldown.app/d/Nyy1tn)
+- [State model](https://nulldown.app/d/dRyB6W)
 - [Agents, retrieval, and memory](https://nulldown.app/d/TwPp4l)
 - [Documents as interfaces](https://nulldown.app/d/SqO1St)
 - [Privacy and trust boundaries](https://nulldown.app/d/9a7WcT)

@@ -2,7 +2,7 @@ import type { SqlMetadataStore } from "../../../../../src/server/ports";
 import type {
   AccountLibraryEntry,
   AccountLibraryVisibility,
-} from "../../../../../shared/auth/accountLibrary";
+} from "../../../../../shared/auth/account-library";
 
 interface AccountLibraryRow {
   entry_seq: number;

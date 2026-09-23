@@ -1,7 +1,7 @@
 import {
   isAccountLibraryPage,
   type AccountLibraryPage,
-} from "../../../shared/auth/accountLibrary";
+} from "../../../shared/auth/account-library";
 import { getAccountAuthHeaders } from "./accountSession";
 
 /** Fetches account-library metadata without reading remote encrypted payloads. */

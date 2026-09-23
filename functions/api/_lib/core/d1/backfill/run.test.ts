@@ -9,7 +9,7 @@ import {
   toDropDeviceDelegationSignable,
 } from "../../../../../../shared/drop/codecs/device-delegation-v1";
 import type { DropEnvelope } from "../../../../../../shared/drop/types";
-import type { DropDeviceDelegation } from "../../../../../../shared/drop/deviceDelegation";
+import type { DropDeviceDelegation } from "../../../../../../shared/drop/device-delegation";
 import { toShortDropId } from "../../../../../../shared/drop/id";
 import { dropResolvedHeapKey } from "../../../../../../shared/drop/sidecar";
 import { RESOLVED_DOCUMENT_RESOLVER_ID } from "../../../../../../shared/drop/resolved/constants";

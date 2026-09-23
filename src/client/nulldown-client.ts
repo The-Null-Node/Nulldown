@@ -6,9 +6,9 @@ import {
   DIFF_SIGNATURE_PREFIX,
   DIFF_TIMESTAMP_HEADER,
   buildDiffSigningPayload,
-} from "../../shared/drop/diffAuth";
+} from "../../shared/drop/diff-auth";
 import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
-import type { BranchResolvedQueryResponse } from "../../shared/drop/branchApi";
+import type { BranchResolvedQueryResponse } from "../../shared/drop/branch-api";
 import {
   decodeDropEnvelope,
   encodeDropEnvelope,

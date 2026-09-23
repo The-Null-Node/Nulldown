@@ -4,7 +4,7 @@ Parent tracker: [NullProvider, Nullplug, Snapshotter, And Null.Call](https://nul
 
 Checklist: [Nulldown runtime implementation checklist](https://nulldown.app/d/aN8B4B)
 
-Status: Shared runtime policy contracts, legacy `allowedUrls` normalization into `runtimePolicy.network.allowedHosts`, conditional grant DTOs, policy decision values, max-grant validation helpers, and callable policy evaluator normalization are implemented in `shared/nullplug/policy.ts` and `shared/nullplug/policyEvaluator.ts`.
+Status: Shared runtime policy contracts, legacy `allowedUrls` normalization into `runtimePolicy.network.allowedHosts`, conditional grant DTOs, policy decision values, max-grant validation helpers, and callable policy evaluator normalization are implemented in `shared/nullplug/policy.ts` and `shared/nullplug/policy-evaluator.ts`.
 
 ## Core Idea
 

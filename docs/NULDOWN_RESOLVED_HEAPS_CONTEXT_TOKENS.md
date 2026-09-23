@@ -139,7 +139,7 @@ General branch query:
 bun run nd -- branch query <rootId> <branchId> --query "policy mutation" --top 10 --from-seq 18 --to-seq 20 --include-ancestors --json
 ```
 
-The branch query fuses structural document nodes with diff event metadata. Without `--query`, it returns important/open/structural nodes. With `--from-seq` and `--to-seq`, it boosts nodes overlapping changed ranges and returns event metadata refs for later agent fetches.
+The branch query fuses structural document nodes with diff event metadata. Without `--query`, it returns important/open/structural nodes. With `--from-seq` and `--to-seq`, it boosts nodes overlapping changed ranges and returns event metadata refs for later agent fetches. For authorized callers, explicit priority facts can also affect scoring. A diff-linked priority applies when the selected event range associates that event with a returned node; node and heap priorities are read as broader overlays.
 
 ## Heapify Rules
 

@@ -3,7 +3,7 @@ import { serializeCanonicalJson } from "../drop/types";
 import {
   RemoteNullplugManifestSchema,
   RemoteNullplugRegistryRecordSchema,
-} from "./registrySchemas";
+} from "./registry-schemas";
 import type { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";
 
 export { NULLPLUG_INVOKE_CONTENT_TYPE } from "./protocol";

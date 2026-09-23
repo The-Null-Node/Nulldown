@@ -10,7 +10,7 @@ import {
   isDropDiffRenderableRef,
   dropDiffOpToDiff,
 } from "./diff";
-import { decodeDiffAuthRegisterResponse } from "./diffAuth";
+import { decodeDiffAuthRegisterResponse } from "./diff-auth";
 import { DropDiffAppendEnvelopeSchema } from "./codecs/diff-v1";
 import { DiffOp } from "../nulledit/types";
 

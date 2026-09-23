@@ -19,7 +19,7 @@ import {
   serializeDropDeviceDelegationForSignature,
   toDropDeviceDelegationSignable,
 } from "../../../../../shared/drop/codecs/device-delegation-v1";
-import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
+import type { DropDeviceDelegation } from "../../../../../shared/drop/device-delegation";
 import { serializeCanonicalJson } from "../../../../../shared/drop/types";
 import type { BlobObjectStore } from "../../../../../src/server/ports";
 import { sameEncryptionRecipientKey } from "../../crypto/envelopes/verification";

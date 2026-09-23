@@ -4,7 +4,7 @@ import {
   applyResolvedNodeDeltaOps,
   createResolvedHeapDeltaRecord,
   createResolvedNodeRefRecords,
-} from "../../../../../shared/drop/resolved/nodeRefs";
+} from "../../../../../shared/drop/resolved/node-refs";
 import type {
   ResolvedDocumentNode,
   ResolvedDocumentNodeKind,

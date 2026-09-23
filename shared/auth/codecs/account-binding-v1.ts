@@ -1,4 +1,4 @@
-import type { AccountBindingChallenge } from "../accountBinding";
+import type { AccountBindingChallenge } from "../account-binding";
 
 export const ACCOUNT_BINDING_CHALLENGE_SCHEMA_V1 =
   "nulldown.account-binding-challenge.v1" as const;

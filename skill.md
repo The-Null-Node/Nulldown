@@ -20,7 +20,7 @@ Operate Nulldown safely. Prefer small, reversible, revision-aware changes. Use m
 1. Stay on the selected surface: direct MCP tools for MCP agents, `nd` for CLI workflows, and raw HTTP only as a fallback.
 2. Always fetch before mutating.
 3. Read canonical IDs, revisions, payload shape, and metadata before editing.
-4. Store document state in `metadata`, not in markdown fences.
+4. Keep readable document content in Markdown. Use drop metadata for document-level state and diff event metadata for action context; do not hide either in ad hoc Markdown fences.
 5. Use revision-safe root upserts through `nd update` unless the user explicitly accepts last-write-wins.
 6. On the CLI surface, prefer append-only branch diffs through `nd diff replace` or `nd diff apply`; on MCP, use `diff_apply` directly.
 7. Never assume `nd get` or `/api/get/:id` returns plaintext. It may return an encrypted `nmdn.drop.v1` envelope.
@@ -178,6 +178,24 @@ Metadata example:
   "confidence": 0.9
 }
 ```
+
+For an agent edit, metadata can preserve what the writer knew at write time:
+
+```json
+{
+  "kind": "agent.edit",
+  "intent": "record an unresolved deployment blocker",
+  "args": { "priority": 3 },
+  "labels": ["deployment", "blocker"],
+  "confidence": 0.7,
+  "resultRef": "check:staging-smoke"
+}
+```
+
+The operations change Markdown. Intent, labels, confidence, and references
+explain the action. A numeric `args.priority` can become a diff-linked priority
+fact; include the acknowledged event sequence in a later branch query range when
+that priority should influence document ranking.
 
 Apply a small explicit edit:
 

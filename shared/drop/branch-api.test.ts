@@ -1,4 +1,4 @@
-import { createBranchApiClient } from "./branchApi";
+import { createBranchApiClient } from "./branch-api";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,

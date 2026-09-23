@@ -232,7 +232,7 @@ Relevant shared contracts live in:
 shared/drop/types.ts
 shared/drop/diff.ts
 shared/drop/branch.ts
-shared/drop/diffAuth.ts
+shared/drop/diff-auth.ts
 shared/nullplug/types.ts
 shared/nullplug/ui.ts
 ```
@@ -647,7 +647,12 @@ Implementation: `functions/api/diff/[id].ts`.
 
 Append diff events to the resolved branch. Diff events are the normal edit
 primitive: accepted writes advance the branch snapshot, and branch query lazily
-materializes resolved heaps from that snapshot when needed.
+materializes resolved heaps from that snapshot when needed. Event metadata lets
+the writer preserve action context such as intent, labels, confidence, result or
+policy references, and sequencing alongside the text operations. A finite numeric
+`metadata.args.priority` is additionally projected as a diff-linked priority fact.
+The other metadata fields remain explanatory signals and do not independently
+increase query scores.
 
 CLI examples:
 
@@ -748,7 +753,7 @@ Diff signing payload:
 
 Signature header value is `sha256=<hex-hmac>`. Timestamp skew defaults to 5 minutes.
 
-Implementation: `functions/api/diff/[id].ts`, `shared/drop/diffAuth.ts`.
+Implementation: `functions/api/diff/[id].ts`, `shared/drop/diff-auth.ts`.
 
 ### GET /api/branches/:id
 
@@ -880,7 +885,7 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/snapshots.ts`.
 
 ### GET /api/branches/:rootId/:branchId/resolved/query
 
-Query top resolved heap nodes for a branch snapshot. The default document resolver indexes titles, headings, sections, paragraphs, list/checklist items, code blocks, nullplug refs, and links. Its ordinary reads, including the canonical document snapshotter, follow the branch content policy above. Priority facts are sensitive overlays: scoring and `priority-fact` reasons are applied only for the authenticated canonical projected owner or exact target branch writer. Public and unlisted document readers without that authority still receive ordinary document results, with no priority overlay or priority-fact read. `resolverId=nulldown.resolved.runtime-refs` queries runtime nodes for `nullplug.ref`, `ui.primitive`, `ui.response`, and `ui.state`; it and every non-document snapshotter additionally require the canonical projected owner or the exact branch writer. After ordinary root and branch access succeeds, missing sensitive authority returns `403`. Denied roots and branches return the generic `404`, and authorization happens before repair, heap materialization, content/event/fact reads, or snapshotter dispatch. Once authorized, a supported missing or stale heap is rebuilt from authoritative branch content and stored nullplug UI facts.
+Query top resolved heap nodes for a branch snapshot. The default document resolver indexes titles, headings, sections, paragraphs, list/checklist items, code blocks, nullplug refs, and links. Its ordinary reads, including the canonical document snapshotter, follow the branch content policy above. Ranking combines structural importance, lexical query matches, optional changed-range overlap, and permitted priority overlays. Diff-linked priority participates when the query's `fromSeq`/`toSeq` range loads the matching event reference. Priority facts are sensitive overlays: scoring and `priority-fact` reasons are applied only for the authenticated canonical projected owner or exact target branch writer. Public and unlisted document readers without that authority still receive ordinary document results, with no priority overlay or priority-fact read. `resolverId=nulldown.resolved.runtime-refs` queries runtime nodes for `nullplug.ref`, `ui.primitive`, `ui.response`, and `ui.state`; it and every non-document snapshotter additionally require the canonical projected owner or the exact branch writer. After ordinary root and branch access succeeds, missing sensitive authority returns `403`. Denied roots and branches return the generic `404`, and authorization happens before repair, heap materialization, content/event/fact reads, or snapshotter dispatch. Once authorized, a supported missing or stale heap is rebuilt from authoritative branch content and stored nullplug UI facts.
 
 Query params:
 
@@ -986,7 +991,8 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority.ts
 Create a branch-scoped priority overlay fact. Priority facts do not mutate branch
 markdown or rewrite heap deltas; they are D1-backed overlays read by
 `resolved/query`. Node and heap facts affect current query scoring. Diff facts
-are persisted for future diff-target scoring and retrieval. Node facts should
+affect nodes associated with matching event references, which document queries
+load through the requested sequence range. Node facts should
 include a resolver id when the node id is resolver-specific; the CLI defaults
 node facts to the document resolver.
 

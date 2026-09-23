@@ -2,7 +2,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 
 import type { CliEncryptionPublicJwk } from "../../../../../shared/auth/cli-device";
 import { encodeDropDeviceDelegation } from "../../../../../shared/drop/codecs/device-delegation-v1";
-import type { DropDeviceDelegation } from "../../../../../shared/drop/deviceDelegation";
+import type { DropDeviceDelegation } from "../../../../../shared/drop/device-delegation";
 
 export interface CliDeviceTicketRow {
   ticket_id: string;

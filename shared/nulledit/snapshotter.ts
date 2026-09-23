@@ -4,7 +4,7 @@ it to build draft packs and to correlate rendered output with the text snapshot 
 produced it, without persisting every intermediate keystroke forever.
 */
 
-import MaxPriorityQueue from "./priorityQueue";
+import MaxPriorityQueue from "./priority-queue";
 import type { Snapshot, SnapshotDiff, SnapshotId } from "./types";
 
 type SnapshotUpdate = Partial<

@@ -7,7 +7,7 @@ import {
   DIFF_SIGNATURE_PREFIX,
   DIFF_TIMESTAMP_HEADER,
   isTimestampFresh,
-} from "../../../../../shared/drop/diffAuth";
+} from "../../../../../shared/drop/diff-auth";
 import type {
   BlobObjectStore,
   SqlMetadataStore,

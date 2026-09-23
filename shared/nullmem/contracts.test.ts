@@ -1,21 +1,26 @@
+import { NULLMEM_RECORD_VERSION } from "./records";
 import {
-  NULLMEM_RECORD_VERSION,
   createBuiltInMcpCapabilityRecords,
   createBuiltInNullMemCapabilities,
   createCliOperationalCapabilityRecords,
-  createRemoteNullplugCapabilityRecord,
+} from "./capabilities/built-ins";
+import { createRemoteNullplugCapabilityRecord } from "./capabilities/remote-nullplug";
+import {
   createThemeCatalogCapabilityRecord,
   createThemeCatalogCapabilityRecords,
+} from "./capabilities/theme";
+import {
   isNullMemCapabilityRecord,
   isNullMemFactRecord,
   isNullMemProcedureRecord,
-  nullMemRecordText,
-  nullMemRecordToCapsule,
+} from "./validation";
+import { nullMemRecordText, nullMemRecordToCapsule } from "./capsule";
+import {
   evaluateNullMemFreshnessBatch,
   hasStaleMemoryLabel,
   extractSupersedesFromLabels,
   collectSnapshotSourceIds,
-} from "../nullmem";
+} from "./freshness";
 import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../nullplug/registry";
 
 describe("NullMem contracts", () => {

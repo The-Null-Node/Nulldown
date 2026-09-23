@@ -1,4 +1,4 @@
-import type { DropDeviceDelegation } from "./deviceDelegation";
+import type { DropDeviceDelegation } from "./device-delegation";
 
 /*
 This file is the canonical drop contract shared by the browser and Pages Functions.
