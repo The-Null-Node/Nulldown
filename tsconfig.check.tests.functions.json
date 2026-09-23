@@ -9,7 +9,6 @@
   "include": [
     "functions/**/*.test.ts",
     "functions/**/*.test.tsx",
-    "src/branchCommitBufferContracts.test.ts",
     "src/branchMutationLockContracts.test.ts",
     "src/cloudflare-runtime-data-store-contracts.test.ts",
     "src/functions*.test.ts",
