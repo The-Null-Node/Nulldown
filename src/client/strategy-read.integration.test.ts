@@ -1,7 +1,7 @@
 import {
   createCliDurabilityHarness,
   type CliProcessResult,
-} from "../cli/testHarness";
+} from "../cli/test-harness";
 import { createNulldownClient } from "./nulldown-client";
 
 const jsonResult = <T>(result: CliProcessResult): T => {

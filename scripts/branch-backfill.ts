@@ -1,4 +1,4 @@
-import { getArgValue, resolveBaseUrl } from "./diffAuthUtil";
+import { getArgValue, resolveBaseUrl } from "./diff-auth-util";
 
 interface BackfillResponse {
   stats: {

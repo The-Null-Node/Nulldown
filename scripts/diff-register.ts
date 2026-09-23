@@ -6,7 +6,7 @@ import {
   resolveBaseUrl,
   type DiffClientKeysRecord,
   upsertCredential,
-} from "./diffAuthUtil";
+} from "./diff-auth-util";
 const main = async () => {
   const dropId = getArgValue("drop") || getArgValue("id");
   if (!dropId) {

@@ -6,7 +6,7 @@ import {
   readJsonFile,
   type DiffClientKeysRecord,
   writeJsonFile,
-} from "./diffAuthUtil";
+} from "./diff-auth-util";
 
 const createClientId = () => {
   const explicit = getArgValue("client");

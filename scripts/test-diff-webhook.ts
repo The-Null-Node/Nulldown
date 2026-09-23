@@ -13,7 +13,7 @@ import {
   resolveBaseUrl,
   signDiffPayload,
   type DiffClientKeysRecord,
-} from "./diffAuthUtil";
+} from "./diff-auth-util";
 
 interface RequestJsonResult<T = unknown> {
   response: Response;

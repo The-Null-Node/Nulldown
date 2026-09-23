@@ -4,7 +4,7 @@ import {
   createCliDurabilityHarness,
   type CliDurabilityHarness,
   type CliProcessResult,
-} from "./testHarness";
+} from "./test-harness";
 
 jest.setTimeout(120_000);
 

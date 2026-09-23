@@ -12,7 +12,7 @@ import {
   resolveBaseUrl,
   signDiffPayload,
   type DiffCredentialStore,
-} from "./diffAuthUtil";
+} from "./diff-auth-util";
 
 const readBody = async (): Promise<string> => {
   const inline = getArgValue("body");

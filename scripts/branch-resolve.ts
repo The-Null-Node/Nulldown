@@ -1,5 +1,5 @@
 import { createBranchApiClient } from "../shared/drop/branch-api";
-import { getArgValue, resolveBaseUrl } from "./diffAuthUtil";
+import { getArgValue, resolveBaseUrl } from "./diff-auth-util";
 
 const main = async () => {
   const dropId = getArgValue("drop") || getArgValue("id");
