@@ -3,7 +3,7 @@ import {
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_VERSION,
 } from "../../../../shared/drop/resolved/constants";
-import { putResolvedDocumentState } from "../dataKeys/resolved";
+import { putResolvedDocumentState } from "../data-keys/resolved";
 import type {
   NulleditNextRequest,
   NulleditNextResult,

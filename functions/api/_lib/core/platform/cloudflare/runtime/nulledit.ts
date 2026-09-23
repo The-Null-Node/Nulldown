@@ -1,8 +1,6 @@
 import type { NulldownServerRuntime } from "../../../../../../../src/server/runtime";
-import {
-  createInMemoryBranchCommitBuffer,
-  flushBranchCommitBufferSnapshotters,
-} from "../../../../../../../src/server/nulledit";
+import { createInMemoryBranchCommitBuffer } from "../../../../../../../src/server/nulledit/commit-buffer";
+import { flushBranchCommitBufferSnapshotters } from "../../../../../../../src/server/nulledit/dispatch";
 import type { RuntimeDataStore } from "../../../../../../../src/server/ports";
 import { appendEventsToBranch } from "../../../../nulledit/service";
 import {

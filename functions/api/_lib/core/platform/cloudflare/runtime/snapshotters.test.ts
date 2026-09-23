@@ -12,7 +12,7 @@ import {
 } from "../../../../diffs/testing/storage-fixture";
 import { createCloudflareRuntimeDataStore } from "../runtime-data/store";
 import { createNulleditPolicyDecisionFactDataKey } from "../../../../../../../src/server/nulledit/snapshotters/policy-observer";
-import { createResolvedHeapDataKey } from "../../../../../../../src/server/nulledit/dataKeys/resolved";
+import { createResolvedHeapDataKey } from "../../../../../../../src/server/nulledit/data-keys/resolved";
 import type {
   NulleditPolicyDecisionFactRecord,
   NulleditSnapshotDiffRefRecord,

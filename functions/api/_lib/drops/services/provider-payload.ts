@@ -2,7 +2,7 @@ import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { decodeDropEnvelope } from "../../../../../shared/drop/codecs/envelope-v1";
 import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
 import type { DropPayload } from "../../../../../shared/drop/types";
-import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/providerEscrow";
+import { decryptProviderEscrowEnvelope } from "../../crypto/envelopes/provider-escrow";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,

@@ -6,7 +6,7 @@ import {
 } from "../../../../shared/nullplug/registry";
 import { writeBranch } from "../branches/storage/repository";
 import { createMemoryRuntimeDataStore } from "../../../../src/server/memory-data-store";
-import { createNullMemFreshnessWatermarkKey } from "../../../../src/server/nulledit";
+import { createNullMemFreshnessWatermarkKey } from "../../../../src/server/nulledit/snapshotters/nullmem-freshness";
 import {
   createNullMemFact,
   createNullMemProcedure,

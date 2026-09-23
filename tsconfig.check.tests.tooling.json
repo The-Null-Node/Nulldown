@@ -15,10 +15,10 @@
     "src/server/filesystem-blob-store.test.ts",
     "src/server/local.integration.test.ts",
     "src/server/memory-data-store.test.ts",
-    "src/server/nulledit/commitBuffer.test.ts",
+    "src/server/nulledit/commit-buffer.test.ts",
     "src/server/nulledit/registry.test.ts",
     "src/server/nulledit/dispatch.test.ts",
-    "src/server/nulledit/snapshotters/resolvedDocument.test.ts",
+    "src/server/nulledit/snapshotters/resolved-document.test.ts",
     "src/server/http.test.ts",
     "src/types/jest-mock-compat.d.ts"
   ],

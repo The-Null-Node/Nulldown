@@ -12,7 +12,7 @@ import type { NullplugInvokeRequest } from "../../../../shared/nullplug/types";
 import {
   readProviderDropPayload,
   type CloudflareProviderPayloadBindings,
-} from "../drops/services/providerPayload";
+} from "../drops/services/provider-payload";
 
 /** Dependencies used to create Cloudflare root-policy enforcement. */
 export interface CreateCloudflareRuntimePolicyOptions {

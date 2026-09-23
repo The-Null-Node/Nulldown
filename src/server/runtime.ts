@@ -10,7 +10,7 @@ import type {
   NulleditSnapshotter,
   NulleditSnapshotterDispatchOptions,
   NulleditSnapshotterUnsubscribe,
-} from "./nulledit";
+} from "./nulledit/types";
 import type { NulleditNextRequest, NulleditNextResult } from "./nulledit/types";
 import type { RuntimeDataStore } from "./ports";
 import type { NullMemCapsule } from "../../shared/nullmem/capsule";

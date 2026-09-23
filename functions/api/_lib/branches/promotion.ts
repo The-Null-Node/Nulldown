@@ -36,7 +36,7 @@ import {
   createReservedRemoteJsonDrop,
   releaseReservedRemoteJsonDropId,
   reserveRemoteJsonDropId,
-} from "../drops/storage/remoteCreate";
+} from "../drops/storage/remote-create";
 
 const PROMOTION_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/;
 const PROMOTION_REQUEST_MAX_BYTES = 1024;

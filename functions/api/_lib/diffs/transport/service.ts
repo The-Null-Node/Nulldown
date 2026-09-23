@@ -17,7 +17,7 @@ import { sanitizeDiffAuthToken } from "../credentials/repository";
 import {
   verifyDiffRequestAuth,
   type DiffRequestAuthSuccess,
-} from "../credentials/requestAuth";
+} from "../credentials/request-auth";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,

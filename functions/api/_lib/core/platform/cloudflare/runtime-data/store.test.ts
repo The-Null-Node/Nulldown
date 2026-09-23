@@ -6,8 +6,8 @@ import { resolveBranchForActor } from "../../../../branches/lifecycle";
 import { onRequestGet } from "../../../../../branches/[rootId]/[branchId]/resolved/query";
 import { ensureResolvedHeapProjection } from "../../../../resolved/heap/projector";
 import { readResolvedHeapState } from "../../../../resolved/heap/state";
-import { createNulleditResolvedDocumentSnapshotter } from "../../../../../../../src/server/nulledit/snapshotters/resolvedDocument";
-import { createResolvedHeapDataKey } from "../../../../../../../src/server/nulledit/dataKeys/resolved";
+import { createNulleditResolvedDocumentSnapshotter } from "../../../../../../../src/server/nulledit/snapshotters/resolved-document";
+import { createResolvedHeapDataKey } from "../../../../../../../src/server/nulledit/data-keys/resolved";
 import { heapifyResolvedDocument } from "../../../../../../../shared/drop/resolved/heapify/document";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,

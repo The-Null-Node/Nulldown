@@ -6,7 +6,7 @@ import { createRemoteAliasKey } from "../drops/identity/id";
 import { queryNullMem } from "./http";
 import { NULLPLUG_REGISTRY_LATEST_KEY_PREFIX } from "../../../../shared/nullplug/registry";
 import { NULLPLUG_INVOKE_CONTENT_TYPE } from "../../../../shared/nullplug/protocol";
-import { createNullMemFreshnessWatermarkKey } from "../../../../src/server/nulledit";
+import { createNullMemFreshnessWatermarkKey } from "../../../../src/server/nulledit/snapshotters/nullmem-freshness";
 import type { DropBranchRecord } from "../../../../shared/drop/branch";
 import type { NullMemRecord } from "../../../../shared/nullmem/records";
 import type {

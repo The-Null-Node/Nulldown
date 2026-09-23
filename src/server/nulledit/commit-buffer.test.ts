@@ -1,5 +1,5 @@
-import { createInMemoryBranchCommitBuffer } from "./commitBuffer";
-import { branchId, makeCommit, rootDropId } from "./commitBuffer.fixtures";
+import { createInMemoryBranchCommitBuffer } from "./commit-buffer";
+import { branchId, makeCommit, rootDropId } from "./commit-buffer.fixtures";
 
 describe("BranchCommitBuffer contracts", () => {
   it("writes through cold commits and buffers once a branch is hot", () => {

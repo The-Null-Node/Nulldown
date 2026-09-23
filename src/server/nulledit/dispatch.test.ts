@@ -1,6 +1,6 @@
 import { createMemoryRuntimeDataStore } from "../memory-data-store";
-import { createInMemoryBranchCommitBuffer } from "./commitBuffer";
-import { branchId, makeCommit, rootDropId } from "./commitBuffer.fixtures";
+import { createInMemoryBranchCommitBuffer } from "./commit-buffer";
+import { branchId, makeCommit, rootDropId } from "./commit-buffer.fixtures";
 import { flushBranchCommitBufferSnapshotters } from "./dispatch";
 
 describe("Nulledit snapshotter flush dispatch contracts", () => {

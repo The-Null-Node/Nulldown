@@ -1,14 +1,14 @@
 import type { NulldownServerRuntime } from "../../../../../../../src/server/runtime";
+import { createBuiltInNulleditSnapshotters } from "../../../../../../../src/server/nulledit/snapshotters/built-ins";
+import { createNulleditDiffPrioritySnapshotter } from "../../../../../../../src/server/nulledit/snapshotters/diff-priority";
 import {
-  createBuiltInNulleditSnapshotters,
-  createNulleditDiffPrioritySnapshotter,
   createNullMemFreshnessWatermarkKey,
   createNulleditNullMemFreshnessSnapshotter,
-  createNulleditNullMemObserverSnapshotter,
-  createNulleditResolvedRuntimeRefsSnapshotter,
-  createNulleditSnapshotterRegistry,
-  type NulleditSnapshotter,
-} from "../../../../../../../src/server/nulledit";
+} from "../../../../../../../src/server/nulledit/snapshotters/nullmem-freshness";
+import { createNulleditNullMemObserverSnapshotter } from "../../../../../../../src/server/nulledit/snapshotters/nullmem-observer";
+import { createNulleditResolvedRuntimeRefsSnapshotter } from "../../../../../../../src/server/nulledit/snapshotters/runtime-refs";
+import { createNulleditSnapshotterRegistry } from "../../../../../../../src/server/nulledit/registry";
+import type { NulleditSnapshotter } from "../../../../../../../src/server/nulledit/types";
 import type {
   NulleditNextRequest,
   NulleditNextResult,

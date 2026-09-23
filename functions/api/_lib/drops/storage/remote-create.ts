@@ -2,7 +2,7 @@ import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/serve
 import { DROP_ID_LENGTH, generateDropId } from "../../../../../shared/drop/id";
 import { syncPublicDropIndexForPayload } from "../index/repository";
 import { createDropIdentityRepository } from "../identity/id";
-import { createDropObjectRepository } from "./objectRepository";
+import { createDropObjectRepository } from "./object-repository";
 
 const MAX_ID_ALLOCATION_ATTEMPTS = 64;
 

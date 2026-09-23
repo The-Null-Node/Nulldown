@@ -22,7 +22,7 @@ import {
   type NullplugInvokeResponse,
 } from "../../../../shared/nullplug/types";
 import { normalizeAllowedHosts } from "../../../../shared/nullplug/policy";
-import { readProviderDropPayload } from "../drops/services/providerPayload";
+import { readProviderDropPayload } from "../drops/services/provider-payload";
 import type { AccountAuthRequest } from "../accounts/session/authentication";
 
 const REMOTE_NULLPLUG_RESPONSE_MAX_BYTES = 1_000_000;

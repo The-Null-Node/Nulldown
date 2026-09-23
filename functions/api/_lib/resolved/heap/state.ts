@@ -5,7 +5,7 @@ import {
 import type { ResolvedNulldownState } from "../../../../../shared/drop/resolved/types";
 import { createResolvedHeapRepository } from "./repository";
 import type { ResolvedHeapEnv } from "./types";
-import { createResolvedHeapDataKey } from "../../../../../src/server/nulledit/dataKeys/resolved";
+import { createResolvedHeapDataKey } from "../../../../../src/server/nulledit/data-keys/resolved";
 import { isResolvedNulldownState } from "../../../../../shared/drop/resolved/validators";
 import {
   RESOLVED_DOCUMENT_RESOLVER_ID,

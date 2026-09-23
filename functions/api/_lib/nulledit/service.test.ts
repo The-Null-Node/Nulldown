@@ -7,7 +7,7 @@ import {
   makeEvent,
   rootDropId,
 } from "../diffs/testing/storage-fixture";
-import { createInMemoryBranchCommitBuffer } from "../../../../src/server/nulledit/commitBuffer";
+import { createInMemoryBranchCommitBuffer } from "../../../../src/server/nulledit/commit-buffer";
 import type {
   BranchCommitBuffer,
   NulleditSnapshotter,

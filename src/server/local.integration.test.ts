@@ -8,7 +8,7 @@ import { remoteNullplugLatestKey } from "../../shared/nullplug/registry";
 import { createFilesystemBlobStore } from "./filesystem-blob-store";
 import { createLocalNulldownServer } from "./local";
 import { createMemoryRuntimeDataStore } from "./memory-data-store";
-import { createNullMemFreshnessWatermarkKey } from "./nulledit";
+import { createNullMemFreshnessWatermarkKey } from "./nulledit/snapshotters/nullmem-freshness";
 import type {
   RuntimeDataStore,
   SqlBindableValue,

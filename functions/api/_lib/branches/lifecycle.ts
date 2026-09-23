@@ -8,7 +8,7 @@ import type {
   BlobObjectStore,
   SqlMetadataStore,
 } from "../../../../src/server/ports";
-import { decryptProviderEscrowEnvelope } from "../crypto/envelopes/providerEscrow";
+import { decryptProviderEscrowEnvelope } from "../crypto/envelopes/provider-escrow";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
   OWNER_BRANCH_ID,

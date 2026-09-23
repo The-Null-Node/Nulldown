@@ -25,7 +25,7 @@ import { createDropIdentityRepository } from "../identity/id";
 import {
   createDropObjectRepository,
   type PutDropObjectResult,
-} from "../storage/objectRepository";
+} from "../storage/object-repository";
 import {
   acquireRootMutationLock,
   type RootMutationLock,

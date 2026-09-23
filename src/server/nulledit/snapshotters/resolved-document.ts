@@ -3,7 +3,7 @@ import {
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_DOCUMENT_RESOLVER_VERSION,
 } from "../../../../shared/drop/resolved/constants";
-import { putResolvedDocumentState } from "../dataKeys/resolved";
+import { putResolvedDocumentState } from "../data-keys/resolved";
 import type { NulleditSnapshotter, NulleditNextRequest, NulleditNextResult } from "../types";
 
 const sourceSeqRangeForBranch = (headEventSeq: number | null | undefined) =>

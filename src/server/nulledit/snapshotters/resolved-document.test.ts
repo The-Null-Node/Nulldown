@@ -1,6 +1,6 @@
 import { createMemoryRuntimeDataStore } from "../../memory-data-store";
-import { createNulleditResolvedDocumentSnapshotter } from "./resolvedDocument";
-import { createResolvedHeapDataKey } from "../dataKeys/resolved";
+import { createNulleditResolvedDocumentSnapshotter } from "./resolved-document";
+import { createResolvedHeapDataKey } from "../data-keys/resolved";
 import type {
   DropBranchRecord,
   DropSnapshotRecord,

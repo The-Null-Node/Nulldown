@@ -16,12 +16,14 @@ import type {
 import {
   dispatchNulleditSnapshottersForCommit,
   flushBranchCommitBufferSnapshotters,
-  type BranchAcceptedCommit,
-  type BranchCommitBuffer,
-  type BranchCommitBufferDecision,
-  type NulleditSnapshotter,
-  type NulleditSnapshotterDispatchOptions,
-} from "../../../../src/server/nulledit";
+} from "../../../../src/server/nulledit/dispatch";
+import type {
+  BranchAcceptedCommit,
+  BranchCommitBuffer,
+  BranchCommitBufferDecision,
+  NulleditSnapshotter,
+  NulleditSnapshotterDispatchOptions,
+} from "../../../../src/server/nulledit/types";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
   createBranchDiffEventIdKey,
