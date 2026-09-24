@@ -252,6 +252,34 @@ bun run package:check-cli
 bun run package:check-mcp
 ```
 
+### Local MemoryAgentBench native gateway
+
+Run `bun --no-env-file scripts/memory-agent-bench-mcp-bridge.ts` from the checkout.
+The bridge accepts sequential JSON lines and emits one
+`@@NULLDOWN_MEMORY_AGENT_BENCH@@`-prefixed JSON response per command. It creates
+disposable local storage and starts the packaged MCP server through the SDK's
+stdio transport in a clean environment.
+
+Host lifecycle: `start`, `ingest` (`index`, `chunk`), `finalize`, then `list_tools`.
+Before each question the host must send `{"op":"begin_question"}`. Expose only
+the returned model tools: `branch_query` (`query`, `top`, 1–50) and `source_read`
+(`capability`). Invoke them with `{"op":"call_tool","name":"branch_query",
+"arguments":{"query":"search terms","top":3}}`. The host-only `retrieve`
+operation (`query`, `topK`) is an alias for the same budgeted query.
+
+Query `result.items` contain source references, a `previewOnly` preview, and an
+opaque capability. Only `source_read` returns the exact original decoded `chunk`;
+its capability is bound to that node, range, content hash, root, branch and final
+snapshot. Route overrides and extra fields are rejected. Each question has six
+total tool attempts, including invalid calls, and resetting the question expires
+all earlier capabilities. Truncated MCP responses fail closed: narrow the query
+or reduce `top`. The Python planner owns the final evidence limit of ten.
+
+Host-only `trace` returns sanitized timings, budgets, source refs and errors.
+Send `dispose` (also automatic on stdin EOF) to close the MCP child before local
+SQLite/storage cleanup. Lifecycle and reset operations must never become model
+tools. The original `memory-agent-bench-bridge.ts` remains the official-arm entry.
+
 ## Contributing
 
 Repository rules live in [AGENTS.md](AGENTS.md). Nulldown-hosted plans, documentation, and agent memory are updated with branch diffs and verified through resolved queries. The local [`docs/`](docs/README.md) directory retains source-coupled references and migration material; the hosted documentation graph is the public conceptual source of truth.
