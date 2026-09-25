@@ -1,6 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { createServer as createHttpServer } from "node:http";
 
 const expectedTools = [
   "strategy_search",
@@ -62,203 +61,6 @@ const requireInputValidationError = (
   }
 };
 
-const createMemoryApi = async () => {
-  const records = new Map<string, Record<string, unknown>>();
-  let requestCount = 0;
-  let generatedId = 0;
-  const server = createHttpServer(async (request, response) => {
-    requestCount += 1;
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const match = url.pathname.match(
-      /^\/api\/branches\/([^/]+)\/([^/]+)\/memory\/(facts|procedures|query)$/,
-    );
-    if (!match) {
-      response.writeHead(404).end();
-      return;
-    }
-    const rootDropId = decodeURIComponent(match[1]);
-    const branchId = decodeURIComponent(match[2]);
-    const action = match[3];
-    response.setHeader("Content-Type", "application/json");
-
-    if (request.method === "GET" && action === "query") {
-      const kind = url.searchParams.get("kind");
-      const selected = [...records.values()].filter(
-        (record) => !kind || record.kind === kind,
-      );
-      response.end(JSON.stringify({ rootDropId, branchId, records: selected }));
-      return;
-    }
-
-    if (request.method !== "POST" || (action !== "facts" && action !== "procedures")) {
-      response.writeHead(405).end();
-      return;
-    }
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-    const kind = action === "facts" ? "fact" : "procedure";
-    const prefix = kind === "fact" ? "memfact" : "memproc";
-    const recordId = typeof body.recordId === "string"
-      ? body.recordId
-      : `${prefix}:generated-${++generatedId}`;
-    const sourceRefs = body.sourceRefs ?? [{ kind: "branch", rootDropId, branchId }];
-    const record = {
-      version: 1,
-      kind,
-      ...body,
-      recordId,
-      rootDropId,
-      branchId,
-      sourceRefs,
-      createdAt: Date.now(),
-    };
-    records.set(`${kind}:${recordId}`, record);
-    response.writeHead(201).end(JSON.stringify({ rootDropId, branchId, record }));
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Memory API failed to listen.");
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    requestCount: () => requestCount,
-    close: async () => {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
-      );
-      server.closeAllConnections();
-    },
-  };
-};
-
-const verifyMemoryContract = async (
-  client: Client,
-  listed: Awaited<ReturnType<Client["listTools"]>>,
-  api: Awaited<ReturnType<typeof createMemoryApi>>,
-) => {
-  for (const name of ["memory_fact", "memory_procedure"]) {
-    const schema = listed.tools.find((tool) => tool.name === name)?.inputSchema as {
-      properties?: Record<string, { type?: string }>;
-    } | undefined;
-    if (
-      schema?.properties?.recordId?.type !== "string" ||
-      schema.properties.sourceRefs?.type !== "array"
-    ) {
-      fail("Installed MCP did not advertise deterministic memory inputs.", { name, schema });
-    }
-  }
-
-  const sourceRefs = [
-    { kind: "snapshot", rootDropId: "source", branchId: "source-branch", snapshotId: 7 },
-    { kind: "mcp", toolId: "installed-package-smoke" },
-  ];
-  const writes = [
-    {
-      name: "memory_fact",
-      kind: "fact",
-      recordId: "memfact:installed-retry",
-      payload: { text: "Installed deterministic fact." },
-    },
-    {
-      name: "memory_procedure",
-      kind: "procedure",
-      recordId: "memproc:installed-retry",
-      payload: { goal: "Retry safely", summary: "Reuse one procedure id.", steps: [] },
-    },
-  ] as const;
-
-  for (const write of writes) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = await client.callTool({
-        name: write.name,
-        arguments: {
-          baseUrl: api.baseUrl,
-          rootId: "root",
-          branchId: "branch",
-          recordId: write.recordId,
-          sourceRefs,
-          ...write.payload,
-        },
-      });
-      const record = (JSON.parse(readTextContent(result)) as {
-        record?: { recordId?: string; sourceRefs?: unknown };
-      }).record;
-      if (
-        result.isError ||
-        record?.recordId !== write.recordId ||
-        JSON.stringify(record.sourceRefs) !== JSON.stringify(sourceRefs)
-      ) {
-        fail("Installed MCP did not preserve memory identity and provenance.", { write, record });
-      }
-    }
-    const query = await client.callTool({
-      name: "memory_query",
-      arguments: {
-        baseUrl: api.baseUrl,
-        rootId: "root",
-        branchId: "branch",
-        kind: write.kind,
-        includeRecords: true,
-      },
-    });
-    const queried = JSON.parse(readTextContent(query)) as {
-      records?: Array<{ recordId?: string; sourceRefs?: unknown }>;
-    };
-    if (
-      queried.records?.length !== 1 ||
-      queried.records[0]?.recordId !== write.recordId ||
-      JSON.stringify(queried.records[0]?.sourceRefs) !== JSON.stringify(sourceRefs)
-    ) {
-      fail("Installed MCP retry did not leave one logical memory record.", { write, queried });
-    }
-  }
-
-  for (const write of writes) {
-    const result = await client.callTool({
-      name: write.name,
-      arguments: {
-        baseUrl: api.baseUrl,
-        rootId: "legacy-root",
-        branchId: "legacy-branch",
-        ...write.payload,
-      },
-    });
-    const record = (JSON.parse(readTextContent(result)) as {
-      record?: { recordId?: string; sourceRefs?: unknown };
-    }).record;
-    const prefix = write.kind === "fact" ? "memfact:" : "memproc:";
-    const expectedRefs = [
-      { kind: "branch", rootDropId: "legacy-root", branchId: "legacy-branch" },
-    ];
-    if (
-      result.isError ||
-      !record?.recordId?.startsWith(prefix) ||
-      JSON.stringify(record.sourceRefs) !== JSON.stringify(expectedRefs)
-    ) {
-      fail("Installed MCP changed omitted memory input behavior.", { write, record });
-    }
-  }
-
-  const beforeInvalid = api.requestCount();
-  const invalid = await client.callTool({
-    name: "memory_fact",
-    arguments: {
-      baseUrl: api.baseUrl,
-      rootId: "root",
-      branchId: "branch",
-      text: "Invalid provenance",
-      sourceRefs: [{ kind: "branch", rootDropId: "missing-branch-id" }],
-    },
-  });
-  if (
-    !invalid.isError ||
-    !readTextContent(invalid).includes("Input validation error") ||
-    api.requestCount() !== beforeInvalid
-  ) {
-    fail("Installed MCP accepted malformed source refs.", { invalid });
-  }
-};
-
 const main = async () => {
   const { command, args } = parseArgs();
   const transport = new StdioClientTransport({
@@ -276,7 +78,6 @@ const main = async () => {
   });
 
   const client = new Client({ name: "nulldown-mcp-smoke", version: "1.0.0" });
-  const memoryApi = await createMemoryApi();
   try {
     await withTimeout(client.connect(transport), "MCP initialize");
     const listed = await withTimeout(client.listTools(), "MCP tools/list");
@@ -292,7 +93,6 @@ const main = async () => {
     ) {
       fail("MCP drop_create did not expose account-authoring guidance.", { dropCreate });
     }
-    await verifyMemoryContract(client, listed, memoryApi);
 
     for (const identity of [{ eventId: "retry-1" }, { createdAt: 1 }]) {
       requireInputValidationError(
@@ -454,11 +254,7 @@ const main = async () => {
       ),
     );
   } finally {
-    try {
-      await client.close();
-    } finally {
-      await memoryApi.close();
-    }
+    await client.close();
   }
 };
 

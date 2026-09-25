@@ -1,5 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { NullMemSourceRefSchema } from "@thenullnode/nulldown/nullmem";
 import { z } from "zod";
 import { asCompact, asJsonText } from "../response";
 import {
@@ -96,14 +95,6 @@ export const registerMemoryTools = (server: McpServer): void => {
         ...clientArgsSchema,
         rootId: z.string().describe("Root drop id."),
         branchId: z.string().describe("Branch id."),
-        recordId: z
-          .string()
-          .optional()
-          .describe("Stable fact record id to reuse when retrying the same logical fact."),
-        sourceRefs: z
-          .array(NullMemSourceRefSchema)
-          .optional()
-          .describe("Canonical provenance references to persist exactly as supplied."),
         text: z.string().describe("Fact body."),
         title: z.string().optional(),
         targetKind: z.string().optional(),
@@ -119,8 +110,6 @@ export const registerMemoryTools = (server: McpServer): void => {
         await createClient(args).createMemoryFact({
           rootId: args.rootId,
           branchId: args.branchId,
-          recordId: args.recordId,
-          sourceRefs: args.sourceRefs,
           text: args.text,
           title: args.title,
           targetKind: args.targetKind,
@@ -142,16 +131,6 @@ export const registerMemoryTools = (server: McpServer): void => {
         ...clientArgsSchema,
         rootId: z.string().describe("Root drop id."),
         branchId: z.string().describe("Branch id."),
-        recordId: z
-          .string()
-          .optional()
-          .describe(
-            "Stable procedure record id to reuse when retrying the same logical procedure.",
-          ),
-        sourceRefs: z
-          .array(NullMemSourceRefSchema)
-          .optional()
-          .describe("Canonical provenance references to persist exactly as supplied."),
         goal: z.string().describe("Procedure goal."),
         summary: z.string().describe("Reusable summary."),
         steps: z.array(jsonValueSchema).optional(),
@@ -168,8 +147,6 @@ export const registerMemoryTools = (server: McpServer): void => {
         await createClient(args).createMemoryProcedure({
           rootId: args.rootId,
           branchId: args.branchId,
-          recordId: args.recordId,
-          sourceRefs: args.sourceRefs,
           goal: args.goal,
           summary: args.summary,
           steps: args.steps,
