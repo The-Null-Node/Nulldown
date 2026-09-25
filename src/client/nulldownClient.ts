@@ -33,6 +33,7 @@ import type {
   RemoteNullplugManifest,
   RemoteNullplugRegistryRecord,
 } from "../../shared/nullplug/registry";
+import type { NullMemSourceRef } from "../../shared/nullmem/types";
 
 /** JSON-compatible value accepted by Nulldown HTTP APIs. */
 export type NulldownJsonValue =
@@ -246,6 +247,10 @@ export interface NulldownMemoryFactRequest {
   rootId: string;
   /** Branch id. */
   branchId: string;
+  /** Stable fact record id. Reuse this value when retrying the same logical fact. */
+  recordId?: string;
+  /** Canonical provenance references to persist exactly as supplied. */
+  sourceRefs?: NullMemSourceRef[];
   /** Fact body. */
   text: string;
   /** Optional compact title. */
@@ -270,6 +275,10 @@ export interface NulldownMemoryProcedureRequest {
   rootId: string;
   /** Branch id. */
   branchId: string;
+  /** Stable procedure record id. Reuse this value when retrying the same logical procedure. */
+  recordId?: string;
+  /** Canonical provenance references to persist exactly as supplied. */
+  sourceRefs?: NullMemSourceRef[];
   /** Procedure goal. */
   goal: string;
   /** Compact reusable summary. */

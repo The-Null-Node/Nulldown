@@ -339,6 +339,140 @@ describe.each(serverFactories)("%s createNulldownMcpServer", (_name, createServe
     }
   });
 
+  it("advertises and forwards deterministic NullMem write inputs", async () => {
+    const posted = new Map<string, unknown>();
+    const api = await listen((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        posted.set(request.url ?? "", JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({ stored: true }));
+      });
+    });
+    const server = createServer();
+    const client = new Client({ name: "nulldown-test", version: "1.0.0" });
+    const { clientTransport, serverTransport } = createTransportPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const sourceRefs = [
+      {
+        kind: "snapshot",
+        rootDropId: "source-root",
+        branchId: "source-branch",
+        snapshotId: 7,
+      },
+      { kind: "mcp", toolId: "memory_fact" },
+    ];
+
+    try {
+      const listed = await client.listTools();
+      for (const name of ["memory_fact", "memory_procedure"]) {
+        const inputSchema = listed.tools.find((tool) => tool.name === name)?.inputSchema;
+        expect(inputSchema).toMatchObject({
+          properties: {
+            recordId: { type: "string" },
+            sourceRefs: { type: "array" },
+          },
+        });
+        for (const kind of [
+          "drop", "branch", "snapshot", "diff", "node",
+          "heap", "nullplug", "tool", "theme", "mcp",
+        ]) {
+          expect(JSON.stringify(inputSchema)).toContain(`\"${kind}\"`);
+        }
+      }
+
+      const factResult = await client.callTool({
+        name: "memory_fact",
+        arguments: {
+          baseUrl: api.baseUrl,
+          rootId: "root",
+          branchId: "branch",
+          recordId: "memfact:stable",
+          sourceRefs,
+          title: "Stable fact",
+          text: "One logical fact across retries.",
+        },
+      });
+      const procedureResult = await client.callTool({
+        name: "memory_procedure",
+        arguments: {
+          baseUrl: api.baseUrl,
+          rootId: "root",
+          branchId: "branch",
+          recordId: "memproc:stable",
+          sourceRefs,
+          goal: "Retry safely",
+          summary: "Reuse the deterministic procedure id.",
+          steps: [],
+        },
+      });
+
+      expect(factResult.isError).toBeFalsy();
+      expect(procedureResult.isError).toBeFalsy();
+      expect(posted.get("/api/branches/root/branch/memory/facts")).toEqual({
+        recordId: "memfact:stable",
+        sourceRefs,
+        title: "Stable fact",
+        text: "One logical fact across retries.",
+      });
+      expect(posted.get("/api/branches/root/branch/memory/procedures")).toEqual({
+        recordId: "memproc:stable",
+        sourceRefs,
+        goal: "Retry safely",
+        summary: "Reuse the deterministic procedure id.",
+        steps: [],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+      api.server.closeAllConnections();
+      await new Promise<void>((resolve) => api.server.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    ["memory_fact", { text: "Invalid source ref" }],
+    [
+      "memory_procedure",
+      { goal: "Reject invalid provenance", summary: "Validate before HTTP.", steps: [] },
+    ],
+  ])("rejects malformed source refs before %s sends HTTP", async (name, payload) => {
+    let requestCount = 0;
+    const api = await listen((_request, response) => {
+      requestCount += 1;
+      response.writeHead(500).end();
+    });
+    const server = createServer();
+    const client = new Client({ name: "nulldown-test", version: "1.0.0" });
+    const { clientTransport, serverTransport } = createTransportPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    try {
+      const result = await client.callTool({
+        name,
+        arguments: {
+          baseUrl: api.baseUrl,
+          rootId: "root",
+          branchId: "branch",
+          sourceRefs: [{ kind: "branch", rootDropId: "missing-branch-id" }],
+          ...payload,
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain("Input validation error");
+      expect(requestCount).toBe(0);
+    } finally {
+      await client.close();
+      await server.close();
+      api.server.closeAllConnections();
+      await new Promise<void>((resolve) => api.server.close(() => resolve()));
+    }
+  });
+
   it("seals unlisted drop_create requests with an authoring credential", async () => {
     let postedBody: unknown;
     const api = await listen((request, response) => {
