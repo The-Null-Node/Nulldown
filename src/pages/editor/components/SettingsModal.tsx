@@ -452,7 +452,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
     (state) => state.setPasskeyProtectionEnabled,
   );
   const setAllowedUrls = useDropStore((state) => state.setAllowedUrls);
-  const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
   const hydrateSharePreferences = useDropStore(
     (state) => state.hydrateSharePreferences,
   );
@@ -477,9 +476,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
 
   useEffect(() => {
     if (!open) return;
-    void hydrateOfflineMode();
     void hydrateSharePreferences();
-  }, [open, hydrateOfflineMode, hydrateSharePreferences]);
+  }, [open, hydrateSharePreferences]);
 
   return (
     <Dialog

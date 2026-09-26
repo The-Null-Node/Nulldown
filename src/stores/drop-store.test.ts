@@ -1,5 +1,6 @@
 import { jest } from "@jest/globals";
 import { readFileSync } from "node:fs";
+import type useDropStoreType from "./drop-store";
 import type {
   DropEnvelope,
   DropGraph,
@@ -7,7 +8,9 @@ import type {
 } from "../../shared/drop/types";
 
 interface LoadedDropStore {
-  useDropStore: typeof import("./drop-store").default;
+  kvStore: Map<string, unknown>;
+  reads: string[];
+  useDropStore: typeof useDropStoreType;
   localCreate: jest.MockedFunction<
     (
       payload: DropPayload,
@@ -115,7 +118,7 @@ const createEnvelope = (accountId = "account-1"): DropEnvelope => ({
   },
 });
 
-const loadDropStore = async (): Promise<LoadedDropStore> => {
+const loadDropStore = async (options: { persisted?: Record<string, unknown>; readGate?: Promise<void> } = {}): Promise<LoadedDropStore> => {
   jest.resetModules();
 
   const localGet = jest.fn() as LoadedDropStore["localGet"];
@@ -134,7 +137,8 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
   const remoteCrudCreate = jest.fn(async () => undefined) as LoadedDropStore["remoteCrudCreate"];
   const localResolveGraph = jest.fn() as LoadedDropStore["localResolveGraph"];
   const remoteResolveGraph = jest.fn() as LoadedDropStore["remoteResolveGraph"];
-  const kvStore = new Map<string, unknown>();
+  const kvStore = new Map<string, unknown>(Object.entries(options.persisted ?? {}));
+  const reads: string[] = [];
 
   localCreate.mockResolvedValue({
     id: "local_id_1234",
@@ -187,6 +191,8 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
 
   jest.unstable_mockModule("../lib/indexed-db/key-value", () => ({
     getKvItem: jest.fn(async (key: string) => {
+      reads.push(key);
+      await options.readGate;
       const value = kvStore.get(key);
       return value === undefined || value === null ? null : String(value);
     }),
@@ -202,7 +208,7 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
     }),
   }));
   jest.unstable_mockModule("../lib/indexed-db/database", () => ({
-    isIndexedDbSupported: jest.fn().mockReturnValue(false),
+    isIndexedDbSupported: jest.fn().mockReturnValue(Boolean(options.persisted)),
   }));
 
   jest.unstable_mockModule("../lib/auth/vault/passkey-vault", () => ({
@@ -234,6 +240,8 @@ const loadDropStore = async (): Promise<LoadedDropStore> => {
   const module = await import("./drop-store");
 
   return {
+    kvStore,
+    reads,
     useDropStore: module.default,
     localCreate,
     localGet,
@@ -254,6 +262,47 @@ const dropStoreSource = readFileSync(
 );
 
 describe("dropStore provider-port boundary", () => {
+  it("coalesces hydration and preserves updates queued during delayed reads", async () => {
+    let release!: () => void;
+    const readGate = new Promise<void>(resolve => { release = resolve; });
+    const { useDropStore, kvStore, reads } = await loadDropStore({ persisted: {
+      nulldown_offline_mode: "offline", nulldown_share_visibility: "private",
+    }, readGate });
+    const state = useDropStore.getState();
+    const loads = [state.hydrateOfflineMode(), state.hydrateSharePreferences()];
+    const update = state.setShareVisibility("public");
+    release();
+    await Promise.all([...loads, update]);
+    expect(reads.filter(key => key === "nulldown_offline_mode")).toHaveLength(1);
+    expect(useDropStore.getState().mode).toBe("offline");
+    expect(useDropStore.getState().shareVisibility).toBe("public");
+    expect(kvStore.get("nulldown_share_visibility")).toBe("public");
+  });
+
+  it("loads preferences without publishing and resumes persisted work only at online startup", async () => {
+    const queue = [{ version: 1, dropId: "offline_queued", visibility: "private", source: "create_online", queuedAt: 1 }];
+    const { useDropStore, localCrudGet, kvStore } = await loadDropStore({ persisted: {
+      nulldown_offline_mode: "offline", nulldown_sync_queue_v1: queue,
+    } });
+    await useDropStore.getState().hydrateSharePreferences();
+    expect(localCrudGet).not.toHaveBeenCalled();
+    await useDropStore.getState().startPublication();
+    expect(localCrudGet).not.toHaveBeenCalled();
+    expect(kvStore.get("nulldown_sync_queue_v1")).toEqual(queue);
+    await useDropStore.getState().setMode("online");
+    expect(localCrudGet).toHaveBeenCalledWith("offline_queued");
+  });
+
+  it("migrates legacy offline settings before creating a drop", async () => {
+    const { useDropStore, localCreate, remoteCreate, kvStore } = await loadDropStore({ persisted: {
+      nulldown_sync_target_provider: "local", nulldown_share_visibility: "public",
+    } });
+    await useDropStore.getState().createDrop({ content: "offline persisted preference" });
+    expect(localCreate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ visibility: "private", unlockPolicy: "vault-only" }));
+    expect(remoteCreate).not.toHaveBeenCalled();
+    expect(kvStore.get("nulldown_offline_mode")).toBe("offline");
+  });
+
   it("obtains drop capabilities through one stable registry", () => {
     expect(dropStoreSource).toContain(
       "const dropProviders = getDefaultDropProviderPortRegistry();",
@@ -527,6 +576,7 @@ describe("dropStore resolution", () => {
     });
 
     await useDropStore.getState().setMode("offline");
+    await useDropStore.getState().setShareVisibility("unlisted");
     const transition = await useDropStore
       .getState()
       .setMode("online", { activeDropId: localRecordId });

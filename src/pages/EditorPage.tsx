@@ -14,10 +14,7 @@ import React, {
 import { useNavigate, useSearchParams } from "react-router-dom";
 import useEditorStore, { type EditorState } from "../stores/editor-store";
 import useStorageStore from "../stores/storage-store";
-import useDropStore, {
-  isOfflineDropId,
-  type OwnedDropRecord,
-} from "../stores/drop-store";
+import useDropStore, { isOfflineDropId } from "../stores/drop-store";
 import { normalizeNetworkAllowlist } from "../lib/network-allowlist";
 import { useDraftStorage } from "../hooks/use-local-storage";
 import EditorToolbar from "./editor/components/EditorToolbar";
@@ -33,10 +30,11 @@ import { useShareDrop } from "./editor/hooks/use-share-drop";
 import { usePreviewToggle } from "./editor/hooks/use-preview-toggle";
 import { startNewDraft } from "./editor/start-new-draft";
 import { useDiffChannel } from "./editor/sync/use-channel";
+import { useEditorLibrary } from "./editor/hooks/use-editor-library";
 import {
-  listRecentExternalDrops,
-  type RecentExternalDropRecord,
-} from "../lib/drop/recent-external-drops";
+  deriveLibraryGroups,
+  type PaletteAction,
+} from "./editor/library-items";
 import {
   useEditorSession,
   type EditorRouteSession,
@@ -45,9 +43,7 @@ import { buildDraftPackFromSnapshot } from "../lib/nulledit/draft-pack";
 import { computeDiffOps } from "../../shared/nulledit/textDiff";
 import {
   createDraftStorageKey,
-  listDraftLibraryEntries,
   removeDraftLibraryEntry,
-  type DraftLibraryEntry,
   upsertDraftLibraryEntry,
 } from "../lib/draft/library";
 import {
@@ -59,8 +55,6 @@ import { toUserFacingDropError } from "../lib/drop/user-errors";
 import { getUnlockedVault } from "../lib/auth/vault/passkey-vault";
 import { createBranchApiClient } from "../../shared/drop/branch-api";
 import { getAccountSessionToken } from "../lib/auth/account-session";
-import { fetchAccountLibrary } from "../lib/auth/account-library-client";
-import type { AccountLibraryEntry } from "../../shared/auth/account-library";
 import {
   clearBranchPromotionIntent,
   readBranchPromotionIntent,
@@ -77,18 +71,6 @@ import {
 } from "../lib/nullplug/browser-client";
 import { resolveRootRuntimePolicy } from "../../shared/nullplug/policy";
 import { useAccountPreferencesStore } from "../stores/account-preferences-store";
-
-type PaletteAction =
-  | { kind: "open-drop"; id: string; source: "owned" | "external" | "remote" }
-  | { kind: "open-draft"; entry: DraftLibraryEntry }
-  | {
-      kind: "insert-block";
-      snippet: string;
-      selectionStartOffset: number;
-      selectionEndOffset: number;
-    }
-  | { kind: "new-drop" }
-  | { kind: "refresh-search" };
 
 type PaletteEntity = Searchable<PaletteAction>;
 
@@ -112,14 +94,6 @@ const nextVisibility = (
   const index = VISIBILITY_CYCLE.indexOf(current);
   const nextIndex = index < 0 ? 0 : (index + 1) % VISIBILITY_CYCLE.length;
   return VISIBILITY_CYCLE[nextIndex];
-};
-
-const formatTimestamp = (timestamp: number) => {
-  try {
-    return new Date(timestamp).toLocaleString();
-  } catch {
-    return "Unknown";
-  }
 };
 
 const EditorPage: React.FC = () => {
@@ -281,10 +255,7 @@ const EditorSessionPage: React.FC<{
   const shareVisibility = useDropStore((state) => state.shareVisibility);
   const syntaxMode = useDropStore((state) => state.syntaxMode);
   const allowedUrls = useDropStore((state) => state.allowedUrls);
-  const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
-  const hydrateSharePreferences = useDropStore(
-    (state) => state.hydrateSharePreferences,
-  );
+  const startPublication = useDropStore((state) => state.startPublication);
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
   const setMode = useDropStore((state) => state.setMode);
   const setAccountPreference = useAccountPreferencesStore(
@@ -294,7 +265,6 @@ const EditorSessionPage: React.FC<{
   const resolveDropOwnership = useDropStore(
     (state) => state.resolveDropOwnership,
   );
-  const listOwnedDrops = useDropStore((state) => state.listOwnedDrops);
   const setAllowedUrls = useDropStore((state) => state.setAllowedUrls);
   const [modeSwitching, setModeSwitching] = useState(false);
 
@@ -382,9 +352,13 @@ const EditorSessionPage: React.FC<{
 
   useEffect(() => {
     void initializeStorage();
-    void hydrateOfflineMode();
-    void hydrateSharePreferences();
-  }, [hydrateOfflineMode, hydrateSharePreferences, initializeStorage]);
+    void startPublication().catch((error) => {
+      if (isActive())
+        setLoadError(
+          toUserFacingDropError(error, "Unable to initialize editor settings."),
+        );
+    });
+  }, [startPublication, initializeStorage, isActive]);
 
   const handleToggleShareVisibility = useCallback(() => {
     void setAccountPreference(
@@ -606,77 +580,25 @@ const EditorSessionPage: React.FC<{
   const prevShowPreviewRef = useRef(showPreview);
 
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [libraryLoading, setLibraryLoading] = useState(false);
-  const [libraryDrops, setLibraryDrops] = useState<OwnedDropRecord[]>([]);
-  const [libraryRemoteEntries, setLibraryRemoteEntries] = useState<
-    AccountLibraryEntry[]
-  >([]);
-  const [libraryRefreshError, setLibraryRefreshError] = useState<string | null>(
-    null,
+  const {
+    library,
+    loading: libraryLoading,
+    error: libraryRefreshError,
+    refresh: refreshLibrary,
+  } = useEditorLibrary(libraryOpen);
+
+  const buildDraftPack = useCallback(
+    (policy = draftDiffPolicy) => {
+      return buildDraftPackFromSnapshot({
+        snapshotter: editor.getSnapshotter(),
+        snapshotId: editor.getCurrentSnapshotId(),
+        // Existing or cloned drops carry lineage-aware draft packs so recipients can inspect edit history.
+        policy,
+        source: existingDropId || baseDropId ? "edited-drop" : "new-drop",
+      });
+    },
+    [baseDropId, draftDiffPolicy, editor, existingDropId],
   );
-  const [libraryExternalDrops, setLibraryExternalDrops] = useState<
-    RecentExternalDropRecord[]
-  >([]);
-  const [libraryDrafts, setLibraryDrafts] = useState<DraftLibraryEntry[]>([]);
-
-  const refreshLibrary = useCallback(async () => {
-    setLibraryLoading(true);
-
-    try {
-      const [drops, drafts, externalDrops] = await Promise.all([
-        listOwnedDrops(),
-        Promise.resolve(listDraftLibraryEntries()),
-        Promise.resolve(listRecentExternalDrops()),
-      ]);
-      setLibraryDrops(drops);
-      setLibraryDrafts(drafts);
-      setLibraryExternalDrops(externalDrops);
-    } catch (error) {
-      console.error("Failed to load library:", error);
-      setLibraryRefreshError(
-        "Unable to refresh local library entries. Existing results are still available.",
-      );
-    }
-
-    try {
-      const remoteLibrary = await fetchAccountLibrary();
-      const activeEntries = new Map<string, AccountLibraryEntry>();
-      for (const entry of remoteLibrary.items) {
-        if (entry.state === "deleted") {
-          activeEntries.delete(entry.id);
-        } else {
-          activeEntries.set(entry.id, entry);
-        }
-      }
-      setLibraryRemoteEntries([...activeEntries.values()]);
-      setLibraryRefreshError(null);
-    } catch (error) {
-      console.error("Failed to load remote library:", error);
-      setLibraryRefreshError(
-        "Unable to refresh Remote Library. Existing results are still available.",
-      );
-    } finally {
-      setLibraryLoading(false);
-    }
-  }, [listOwnedDrops]);
-
-  useEffect(() => {
-    if (!libraryOpen) {
-      return;
-    }
-
-    void refreshLibrary();
-  }, [libraryOpen, refreshLibrary]);
-
-  const buildDraftPack = useCallback(() => {
-    return buildDraftPackFromSnapshot({
-      snapshotter: editor.getSnapshotter(),
-      snapshotId: editor.getCurrentSnapshotId(),
-      // Existing or cloned drops carry lineage-aware draft packs so recipients can inspect edit history.
-      policy: draftDiffPolicy,
-      source: existingDropId || baseDropId ? "edited-drop" : "new-drop",
-    });
-  }, [baseDropId, draftDiffPolicy, editor, existingDropId]);
 
   const publishActiveBranch = useCallback(async () => {
     if (!isActive() || !ready) throw new Error("Editor is not ready.");
@@ -1141,70 +1063,6 @@ const EditorSessionPage: React.FC<{
       },
     ];
 
-    const draftEntities: PaletteEntity[] = libraryDrafts.map((entry) => ({
-      id: `draft-${entry.draftKey}`,
-      type: "draft",
-      title: entry.title,
-      description: `${entry.preview} • Updated ${formatTimestamp(entry.updatedAt)}`,
-      keywords: [entry.draftId, entry.dropId ?? ""],
-      value: { kind: "open-draft", entry },
-    }));
-
-    const ownedDropIds = new Set(libraryDrops.map((entry) => entry.id));
-
-    const ownedDropEntities: PaletteEntity[] = libraryDrops.map((entry) => {
-      const shortId = toShortDropId(entry.id);
-      const baseDescription = `Owned • ${entry.visibility} • Updated ${formatTimestamp(
-        entry.updatedAt,
-      )}`;
-
-      return {
-        id: `drop-owned-${entry.id}`,
-        type: "drop",
-        title: `Nulldown ${shortId}`,
-        description: baseDescription,
-        keywords: [entry.id, shortId, "owned", "edit", entry.visibility],
-        value: { kind: "open-drop", id: entry.id, source: "owned" },
-      } satisfies PaletteEntity;
-    });
-
-    const externalDropEntities: PaletteEntity[] = libraryExternalDrops
-      .filter((entry) => !ownedDropIds.has(entry.id))
-      .map((entry) => {
-        const shortId = toShortDropId(entry.id);
-        const baseDescription = entry.preview
-          ? `${entry.preview} • External • Viewed ${formatTimestamp(entry.updatedAt)}`
-          : `External • Viewed ${formatTimestamp(entry.updatedAt)}`;
-
-        return {
-          id: `drop-external-${entry.id}`,
-          type: "drop",
-          title: entry.title,
-          description: baseDescription,
-          keywords: [entry.id, shortId, "external", "view"],
-          value: { kind: "open-drop", id: entry.id, source: "external" },
-        } satisfies PaletteEntity;
-      });
-
-    const remoteDropEntities: PaletteEntity[] = libraryRemoteEntries
-      .filter((entry) => entry.state === "active")
-      .map((entry) => {
-        const shortId = toShortDropId(entry.id);
-        return {
-          id: `drop-remote-${entry.id}`,
-          type: "drop",
-          title: `Nulldown ${shortId}`,
-          description: `Remote library • ${entry.visibility} • Updated ${formatTimestamp(entry.updatedAt)}`,
-          keywords: [entry.id, shortId, "remote", "library", entry.visibility],
-          value: { kind: "open-drop", id: entry.id, source: "remote" },
-        } satisfies PaletteEntity;
-      });
-
-    const dropEntities: PaletteEntity[] = [
-      ...ownedDropEntities,
-      ...externalDropEntities,
-    ];
-
     return [
       {
         id: "commands",
@@ -1216,26 +1074,13 @@ const EditorSessionPage: React.FC<{
         label: "Editor Blocks",
         entities: blockEntities,
       },
-      {
-        id: "drafts",
-        label: "Drafts",
-        entities: draftEntities,
-      },
-      {
-        id: "drops",
-        label: "Drops",
-        entities: dropEntities,
-      },
-      {
-        id: "remote-library",
-        label: "Remote Library",
-        entities: remoteDropEntities,
-      },
+      ...deriveLibraryGroups(library),
     ].filter((group) => group.entities.length > 0);
-  }, [libraryDrafts, libraryDrops, libraryExternalDrops, libraryRemoteEntries]);
+  }, [library]);
 
   const handleSelectSearchEntity = useCallback(
     (entity: Searchable<PaletteAction>) => {
+      if (!isActive()) return;
       void (async () => {
         switch (entity.value.kind) {
           case "open-drop": {
@@ -1274,6 +1119,7 @@ const EditorSessionPage: React.FC<{
               }
             }
 
+            if (!isActive()) return;
             navigate(`/?${params.toString()}`);
             return;
           }
@@ -1304,6 +1150,7 @@ const EditorSessionPage: React.FC<{
       newDrop,
       refreshLibrary,
       resolveDropOwnership,
+      isActive,
     ],
   );
 

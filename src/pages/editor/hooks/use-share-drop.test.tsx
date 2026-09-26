@@ -63,3 +63,39 @@ it("refuses publication while bootstrap is incomplete", async () => {
   expect(publishBranch).not.toHaveBeenCalled();
   expect(hook.result.current.error).toContain("finish loading");
 });
+
+it("uses settings loaded during sharing rather than the render-time defaults", async () => {
+  const createDrop = jest.fn(async () => ({
+    id: "saved",
+    url: "saved",
+    scope: "local" as const,
+  }));
+  const buildDraftPack = jest.fn(() => undefined);
+  useDropStore.setState({
+    draftDiffPolicy: "edited-only",
+    allowedUrls: [],
+    createDrop,
+    hydrateOfflineMode: async () => {},
+    hydrateSharePreferences: async () => {
+      useDropStore.setState({
+        draftDiffPolicy: "always",
+        allowedUrls: ["https://example.com"],
+      });
+    },
+  });
+  const hook = renderHook(() =>
+    useShareDrop("content", () => {}, { buildDraftPack }),
+  );
+  await act(async () => {
+    await hook.result.current.shareDrop();
+  });
+  expect(buildDraftPack).toHaveBeenCalledWith("always");
+  expect(createDrop).toHaveBeenCalledWith(
+    expect.objectContaining({
+      metadata: expect.objectContaining({
+        allowedUrls: ["https://example.com"],
+      }),
+    }),
+    undefined,
+  );
+});
