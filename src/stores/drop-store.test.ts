@@ -262,6 +262,25 @@ const dropStoreSource = readFileSync(
 );
 
 describe("dropStore provider-port boundary", () => {
+  it("resumes branch editor mode without attempting sealed-root publication", async () => {
+    const { useDropStore, localCrudGet, remoteCreate } = await loadDropStore({ persisted: { nulldown_offline_mode: "offline" } });
+    const { transitionEditorMode } = await import("../pages/editor/mode-transition");
+    await transitionEditorMode("online", { activeDropId: "remote_branch_root", branchManaged: true });
+    expect(useDropStore.getState().mode).toBe("online");
+    expect(localCrudGet).not.toHaveBeenCalled();
+    expect(remoteCreate).not.toHaveBeenCalled();
+    expect(useDropStore.getState().syncConflicts).toEqual([]);
+  });
+
+  it("still publishes an offline local document when its editor returns online", async () => {
+    const { localCrudGet, localGet, remoteCreate } = await loadDropStore({ persisted: { nulldown_offline_mode: "offline" } });
+    localCrudGet.mockResolvedValue({ id: "offline_local", envelope: createEnvelope(), createdAt: 1, updatedAt: 1 });
+    localGet.mockResolvedValue({ content: "local document" });
+    const { transitionEditorMode } = await import("../pages/editor/mode-transition");
+    const result = await transitionEditorMode("online", { activeDropId: "offline_local", branchManaged: false });
+    expect(remoteCreate).toHaveBeenCalledWith({ content: "local document" }, expect.objectContaining({ id: "offline_local" }));
+    expect(result.publishedDrop?.sourceId).toBe("offline_local");
+  });
   it("coalesces hydration and preserves updates queued during delayed reads", async () => {
     let release!: () => void;
     const readGate = new Promise<void>(resolve => { release = resolve; });
