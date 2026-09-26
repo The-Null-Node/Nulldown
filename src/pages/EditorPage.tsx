@@ -29,6 +29,7 @@ import BranchSyncBanner from "./editor/components/BranchSyncBanner";
 import { useShareDrop } from "./editor/hooks/use-share-drop";
 import { usePreviewToggle } from "./editor/hooks/use-preview-toggle";
 import { startNewDraft } from "./editor/start-new-draft";
+import { transitionEditorMode } from "./editor/mode-transition";
 import { useDiffChannel } from "./editor/sync/use-channel";
 import { useEditorLibrary } from "./editor/hooks/use-editor-library";
 import {
@@ -257,7 +258,6 @@ const EditorSessionPage: React.FC<{
   const allowedUrls = useDropStore((state) => state.allowedUrls);
   const startPublication = useDropStore((state) => state.startPublication);
   const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
-  const setMode = useDropStore((state) => state.setMode);
   const setAccountPreference = useAccountPreferencesStore(
     (state) => state.setPreference,
   );
@@ -491,6 +491,13 @@ const EditorSessionPage: React.FC<{
               headEventSeq: branchContent.headEventSeq ?? -1,
             };
           } catch (branchError) {
+            if (!current()) return;
+            setLoadError(
+              toUserFacingDropError(
+                branchError,
+                "Unable to load the remote branch. Editing is unavailable until it loads.",
+              ),
+            );
             console.error(
               "Failed to resolve remote branch state:",
               branchError,
@@ -773,8 +780,10 @@ const EditorSessionPage: React.FC<{
 
     void (async () => {
       try {
-        const result = await setMode(nextMode, {
+        const result = await transitionEditorMode(nextMode, {
           activeDropId,
+          branchManaged:
+            shouldWaitForRemoteBranchSession || shouldUseRemoteBranchDiff,
         });
         if (!isActive()) return;
 
@@ -802,7 +811,8 @@ const EditorSessionPage: React.FC<{
     modeSwitching,
     setBaseDropId,
     setError,
-    setMode,
+    shouldWaitForRemoteBranchSession,
+    shouldUseRemoteBranchDiff,
     isActive,
   ]);
 
