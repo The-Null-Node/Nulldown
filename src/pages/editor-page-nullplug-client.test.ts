@@ -10,7 +10,7 @@ describe("EditorPage nullplug client boundary", () => {
     expect(editorPageSource).toContain(
       "nullplugClientRef.current = createBrowserNullplugClient();",
     );
-    expect(editorPageSource).toContain("nullplugRuntime: nullplugClient");
+    expect(editorPageSource).toContain("useEditorSession(nullplugClient)");
     expect(editorPageSource).not.toContain("getDefaultRemoteNullplugRuntime");
   });
 
@@ -27,9 +27,7 @@ describe("EditorPage nullplug client boundary", () => {
     expect(editorPageSource).toContain(
       "The UI state does not match the active branch.",
     );
-    expect(editorPageSource).toContain(
-      "await nullplugClient.submitResponse(",
-    );
+    expect(editorPageSource).toContain("await nullplugClient.submitResponse(");
     expect(editorPageSource).toContain("await nullplugClient.submitState(");
     expect(editorPageSource.match(/createBranchApiClient\(/g)).toHaveLength(3);
   });

@@ -12,6 +12,106 @@ const waitFor = async (predicate: () => boolean): Promise<void> => {
 };
 
 describe("nulledit editor", () => {
+  it("cancels queued rendering on terminal, idempotent disposal", async () => {
+    let invoked = 0;
+    nullplug("editor-dispose-queued", () => {
+      invoked += 1;
+      return "unexpected";
+    });
+    const editor = createEditor();
+    editor.reset();
+    editor.seedSnapshot("```editor-dispose-queued\n```");
+    editor.dispose();
+    editor.dispose();
+    await Promise.resolve();
+    expect(invoked).toBe(0);
+    expect(() => editor.seedSnapshot("revived")).toThrow("disposed");
+    expect(() => editor.reset()).toThrow("disposed");
+    expect(() => editor.addDiffs([])).toThrow("disposed");
+    expect(() => editor.clearDiffs()).toThrow("disposed");
+    expect(() => editor.setRuntimeCaller(null)).toThrow("disposed");
+    expect(() => editor.setRuntimePolicy(null)).toThrow("disposed");
+    await expect(editor.render()).rejects.toThrow("disposed");
+  });
+
+  it.each(["reset", "dispose"] as const)(
+    "isolates a successor from a render pending across %s",
+    async (transition) => {
+      let release!: () => void;
+      let started = false;
+      let completed = false;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      nullplug(`editor-lifecycle-${transition}`, async () => {
+        started = true;
+        await gate;
+        completed = true;
+        return "obsolete output";
+      });
+      const old = createEditor();
+      old.reset();
+      old.seedSnapshot(`\`\`\`editor-lifecycle-${transition}\n\`\`\``);
+      try {
+        await waitFor(() => started);
+        old[transition]();
+        const next = transition === "reset" ? old : createEditor();
+        if (transition === "dispose") {
+          expect(next.getSnapshotter()).not.toBe(old.getSnapshotter());
+        }
+        next.seedSnapshot("successor content");
+        await waitFor(
+          () =>
+            useEditorStore.getState().renderFrame?.sourceMarkdown ===
+            "successor content",
+        );
+        const winningFrame = useEditorStore.getState().renderFrame;
+        const snapshotId = next.getCurrentSnapshotId()!;
+        release();
+        await waitFor(() => completed);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (transition === "dispose") old.dispose();
+        expect(useEditorStore.getState().renderFrame).toBe(winningFrame);
+        expect(useEditorStore.getState().textContent).toBe("successor content");
+        expect(next.getSnapshotter().get(snapshotId)?.content).toBe(
+          "successor content",
+        );
+        next.dispose();
+      } finally {
+        release();
+        old.dispose();
+      }
+    },
+  );
+
+  it("invalidates queued turns on reset without restarting render epochs", async () => {
+    let invoked = 0;
+    nullplug("editor-reset-queued", () => {
+      invoked += 1;
+      return "obsolete";
+    });
+    const editor = createEditor();
+    editor.reset();
+    editor.seedSnapshot("first");
+    await waitFor(
+      () => useEditorStore.getState().renderFrame?.status === "final",
+    );
+    const firstEpoch = Number(
+      useEditorStore.getState().renderFrame!.frameId.split(":").at(-1),
+    );
+    editor.seedSnapshot("```editor-reset-queued\n```");
+    editor.reset();
+    editor.seedSnapshot("next");
+    await waitFor(
+      () => useEditorStore.getState().renderFrame?.sourceMarkdown === "next",
+    );
+    expect(invoked).toBe(0);
+    expect(
+      Number(useEditorStore.getState().renderFrame!.frameId.split(":").at(-1)),
+    ).toBeGreaterThan(firstEpoch);
+    editor.dispose();
+  });
+
   it("carries remote branch provenance into approval primitives", async () => {
     const editor = createEditor();
     editor.reset();

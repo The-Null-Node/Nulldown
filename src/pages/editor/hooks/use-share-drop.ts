@@ -7,15 +7,15 @@ This hook prepares the payload and reports UI state; it does not talk to provide
 import { useCallback, useState } from "react";
 import type { DropDraftPack } from "../../../../shared/drop/types";
 import { useTheme } from "../../../theme/theme-context";
-import useDropStore, {
-  type DropPayload,
-} from "../../../stores/drop-store";
+import useDropStore, { type DropPayload } from "../../../stores/drop-store";
 import { toUserFacingDropError } from "../../../lib/drop/user-errors";
 
 export function useShareDrop(
   markdown: string,
   clearDraft: () => void | Promise<unknown>,
   snapshotMeta?: {
+    isActive?: () => boolean;
+    canShare?: boolean;
     baseDropId?: string | null;
     rootDropId?: string | null;
     existingDropId?: string | null;
@@ -46,6 +46,12 @@ export function useShareDrop(
   }, []);
 
   const shareDrop = useCallback(async () => {
+    const active = () => snapshotMeta?.isActive?.() ?? true;
+    if (!active()) return;
+    if (snapshotMeta?.canShare === false) {
+      setError("Wait for the editor to finish loading before sharing.");
+      return;
+    }
     if (!markdown.trim()) {
       setError("Cannot share empty content.");
       return;
@@ -59,9 +65,11 @@ export function useShareDrop(
     try {
       await hydrateOfflineMode();
       await hydrateSharePreferences();
+      if (!active()) return;
 
       if (snapshotMeta?.publishBranch) {
         const result = await snapshotMeta.publishBranch();
+        if (!active()) return;
         setSuccessUrl(result.url);
         setSuccessOffline(Boolean(result.offline));
         setSuccessKind("branch");
@@ -101,11 +109,13 @@ export function useShareDrop(
             }
           : undefined,
       );
+      if (!active()) return;
       setSuccessUrl(result.url);
       setSuccessOffline(result.scope === "local");
       setSuccessKind("share");
       await Promise.resolve(clearDraft());
     } catch (err: unknown) {
+      if (!active()) return;
       console.error("Share error:", err);
       setError(
         toUserFacingDropError(
@@ -114,7 +124,7 @@ export function useShareDrop(
         ),
       );
     } finally {
-      setSharing(false);
+      if (active()) setSharing(false);
     }
   }, [
     clearDraft,
@@ -130,6 +140,8 @@ export function useShareDrop(
     snapshotMeta?.buildDraftPack,
     snapshotMeta?.publishBranch,
     snapshotMeta?.snapshotId,
+    snapshotMeta?.isActive,
+    snapshotMeta?.canShare,
     themeId,
   ]);
 
