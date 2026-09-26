@@ -133,6 +133,8 @@ interface DropStoreState {
   hydrated: boolean;
   hydrateOfflineMode: () => Promise<void>;
   hydrateSharePreferences: () => Promise<void>;
+  /** Resumes persisted publication once settings are loaded, only in online mode. */
+  startPublication: () => Promise<void>;
   applySettings: (changes: DropSettingsChanges) => Promise<void>;
   setMode: (
     mode: DropMode,
@@ -419,6 +421,9 @@ const useDropStore = create<DropStoreState>((set, get) => {
   let publishLoopPromise: Promise<void> | null = null;
   let syncConflictsHydrated = false;
   let syncQueueHydrated = false;
+  let settingsLoad: Promise<void> | null = null;
+  let settingsUpdates: Promise<void> = Promise.resolve();
+  let publicationStartup: Promise<void> | null = null;
 
   const setSyncRuntimeState = () => {
     set({
@@ -930,34 +935,13 @@ const useDropStore = create<DropStoreState>((set, get) => {
   syncConflicts: [],
 
   hydrateOfflineMode: async () => {
-    if (get().hydrated) return;
-
-    const [storedMode, legacySyncTarget] = await Promise.all([
-      readPersistedItem(OFFLINE_MODE_KEY),
-      readPersistedItem(SYNC_TARGET_PROVIDER_KEY),
-    ]);
-
-    const currentSnapshot = settingsSnapshotFromState(get());
-    const nextSnapshot = normalizeSettingsSnapshot({
-      ...currentSnapshot,
-      mode: parseModeFromStoredValue(storedMode, legacySyncTarget),
-    });
-
-    set({
-      ...derivedStateFromSnapshot(nextSnapshot),
-      hydrated: true,
-    });
-
-    await writePersistedItem(OFFLINE_MODE_KEY, serializeMode(nextSnapshot.mode));
+    await get().hydrateSharePreferences();
   },
 
   hydrateSharePreferences: async () => {
-    await hydrateSyncConflicts();
-    await hydrateSyncQueue();
-    if (pendingPublishIntents.size > 0) {
-      void ensurePublishLoop();
-    }
-
+    if (settingsLoad) return settingsLoad;
+    if (get().hydrated) return;
+    settingsLoad = (async () => {
     const [
       storedMode,
       storedVisibility,
@@ -1018,9 +1002,35 @@ const useDropStore = create<DropStoreState>((set, get) => {
         serializeAllowedUrls(nextSnapshot.allowedUrls),
       ),
     ]);
+    })();
+    try {
+      await settingsLoad;
+    } finally {
+      settingsLoad = null;
+    }
+  },
+
+  startPublication: async () => {
+    if (publicationStartup) return publicationStartup;
+    publicationStartup = (async () => {
+      await get().hydrateSharePreferences();
+      await settingsUpdates;
+      await hydrateSyncConflicts();
+      await hydrateSyncQueue();
+      if (get().mode === "online" && pendingPublishIntents.size > 0) {
+        await ensurePublishLoop();
+      }
+    })();
+    try {
+      await publicationStartup;
+    } finally {
+      publicationStartup = null;
+    }
   },
 
   applySettings: async (changes: DropSettingsChanges) => {
+    const update = settingsUpdates.then(async () => {
+    await get().hydrateSharePreferences();
     const incomingEntries = Object.entries(changes).filter(
       ([, value]) => value !== undefined,
     ) as Array<[SettingName, DropSettingsChanges[SettingName]]>;
@@ -1064,12 +1074,17 @@ const useDropStore = create<DropStoreState>((set, get) => {
         );
       }),
     );
+    });
+    settingsUpdates = update.catch(() => {});
+    await update;
   },
 
   setMode: async (
     mode: DropMode,
     options: ModeTransitionOptions = {},
   ): Promise<ModeTransitionResult> => {
+    await get().hydrateSharePreferences();
+    await settingsUpdates;
     const currentMode = get().mode;
 
     if (currentMode === mode) {
@@ -1088,6 +1103,7 @@ const useDropStore = create<DropStoreState>((set, get) => {
         onProgress: options.onProgress,
       });
     }
+    if (mode === "online") await get().startPublication();
 
     return {
       mode,
@@ -1138,12 +1154,8 @@ const useDropStore = create<DropStoreState>((set, get) => {
   },
 
   createDrop: async (payload: DropPayload, options: Partial<DropProviderCreateOptions> = {}) => {
-    if (!get().hydrated) {
-      await Promise.all([
-        get().hydrateOfflineMode(),
-        get().hydrateSharePreferences(),
-      ]);
-    }
+    await get().hydrateSharePreferences();
+    await settingsUpdates;
 
     const mode = get().mode;
     const visibility = resolveCreateVisibility(

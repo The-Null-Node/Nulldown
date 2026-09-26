@@ -5,7 +5,10 @@ This hook prepares the payload and reports UI state; it does not talk to provide
 */
 
 import { useCallback, useState } from "react";
-import type { DropDraftPack } from "../../../../shared/drop/types";
+import type {
+  DropDraftPack,
+  DropDraftDiffPolicy,
+} from "../../../../shared/drop/types";
 import { useTheme } from "../../../theme/theme-context";
 import useDropStore, { type DropPayload } from "../../../stores/drop-store";
 import { toUserFacingDropError } from "../../../lib/drop/user-errors";
@@ -20,7 +23,7 @@ export function useShareDrop(
     rootDropId?: string | null;
     existingDropId?: string | null;
     snapshotId?: number | null;
-    buildDraftPack?: () => DropDraftPack | undefined;
+    buildDraftPack?: (policy: DropDraftDiffPolicy) => DropDraftPack | undefined;
     publishBranch?: () => Promise<{ url: string; offline?: boolean }>;
   },
 ) {
@@ -31,12 +34,9 @@ export function useShareDrop(
   const [successKind, setSuccessKind] = useState<"share" | "branch">("share");
   const { themeId } = useTheme();
   const createDrop = useDropStore((state) => state.createDrop);
-  const hydrateOfflineMode = useDropStore((state) => state.hydrateOfflineMode);
   const hydrateSharePreferences = useDropStore(
     (state) => state.hydrateSharePreferences,
   );
-  const allowedUrls = useDropStore((state) => state.allowedUrls);
-  const draftDiffPolicy = useDropStore((state) => state.draftDiffPolicy);
 
   const resetShare = useCallback(() => {
     setSuccessUrl(null);
@@ -63,9 +63,9 @@ export function useShareDrop(
     setSuccessOffline(false);
 
     try {
-      await hydrateOfflineMode();
       await hydrateSharePreferences();
       if (!active()) return;
+      const { allowedUrls, draftDiffPolicy } = useDropStore.getState();
 
       if (snapshotMeta?.publishBranch) {
         const result = await snapshotMeta.publishBranch();
@@ -93,7 +93,7 @@ export function useShareDrop(
         Boolean(snapshotMeta?.existingDropId ?? snapshotMeta?.baseDropId);
       // Existing drops keep edit lineage by default; brand-new shares only include it when policy says so.
       const draftPack = shouldPersistDraftPack
-        ? snapshotMeta?.buildDraftPack?.()
+        ? snapshotMeta?.buildDraftPack?.(draftDiffPolicy)
         : undefined;
 
       if (draftPack) {
@@ -129,9 +129,6 @@ export function useShareDrop(
   }, [
     clearDraft,
     createDrop,
-    allowedUrls,
-    draftDiffPolicy,
-    hydrateOfflineMode,
     hydrateSharePreferences,
     snapshotMeta?.existingDropId,
     markdown,
