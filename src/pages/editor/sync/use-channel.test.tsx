@@ -109,8 +109,14 @@ jest.unstable_mockModule("../../../lib/diff/remote-channel", () => ({
   },
 }));
 jest.unstable_mockModule("../../../lib/diff/local-channel", () => ({
-  createLocalDiffChannel: (options: { dropId: string; clientId?: string }) =>
-    new ControlledDiffChannel(options.dropId, options.clientId ?? "generated"),
+  createLocalDiffChannel: (options: { dropId: string; clientId?: string }) => {
+    const channel = new ControlledDiffChannel(
+      options.dropId,
+      options.clientId ?? "generated",
+    );
+    channels.set(channel.clientId, channel);
+    return channel;
+  },
 }));
 
 const { useDiffChannel } = await import("./use-channel");
@@ -171,6 +177,26 @@ const foreignEvent = (): DropDiffEvent => ({
 });
 
 describe("useDiffChannel durable browser outbox", () => {
+  it("starts local transport when draft bootstrap becomes ready", () => {
+    const options = createOptions({
+      branchId: null,
+      enabled: false,
+      isOffline: false,
+    });
+    const onUpdate = () => {};
+    const view = render(<HookHarness options={options} onUpdate={onUpdate} />);
+    expect(channels.size).toBe(0);
+    view.rerender(
+      <HookHarness
+        options={{ ...options, enabled: true }}
+        onUpdate={onUpdate}
+      />,
+    );
+    const channel = channels.get(clientId)!;
+    expect(channel.start).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(channel.stop).toHaveBeenCalled();
+  });
   beforeEach(async () => {
     channels.clear();
     publishedEvents.length = 0;

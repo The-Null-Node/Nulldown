@@ -31,12 +31,16 @@ import BranchActivityDialog from "./editor/components/BranchActivityDialog";
 import BranchSyncBanner from "./editor/components/BranchSyncBanner";
 import { useShareDrop } from "./editor/hooks/use-share-drop";
 import { usePreviewToggle } from "./editor/hooks/use-preview-toggle";
+import { startNewDraft } from "./editor/start-new-draft";
 import { useDiffChannel } from "./editor/sync/use-channel";
 import {
   listRecentExternalDrops,
   type RecentExternalDropRecord,
 } from "../lib/drop/recent-external-drops";
-import createEditor from "../lib/nulledit/editor";
+import {
+  useEditorSession,
+  type EditorRouteSession,
+} from "./editor/hooks/use-editor-session";
 import { buildDraftPackFromSnapshot } from "../lib/nulledit/draft-pack";
 import { computeDiffOps } from "../../shared/nulledit/textDiff";
 import {
@@ -119,18 +123,35 @@ const formatTimestamp = (timestamp: number) => {
 };
 
 const EditorPage: React.FC = () => {
+  const [params] = useSearchParams();
+  const routeKey = JSON.stringify([
+    params.get("edit"),
+    params.get("clone"),
+    params.get("draft"),
+    params.get("draftKey"),
+  ]);
+  return <EditorRoute key={routeKey} />;
+};
+
+const EditorRoute: React.FC = () => {
   const nullplugClientRef = useRef<BrowserNullplugClient | null>(null);
   if (!nullplugClientRef.current) {
     nullplugClientRef.current = createBrowserNullplugClient();
   }
   const nullplugClient = nullplugClientRef.current;
-  const editorRef = useRef<ReturnType<typeof createEditor> | null>(null);
-  if (!editorRef.current) {
-    editorRef.current = createEditor({
-      nullplugRuntime: nullplugClient,
-    });
-  }
-  const editor = editorRef.current;
+  const session = useEditorSession(nullplugClient);
+  return session ? (
+    <EditorSessionPage session={session} nullplugClient={nullplugClient} />
+  ) : null;
+};
+
+const EditorSessionPage: React.FC<{
+  session: EditorRouteSession;
+  nullplugClient: BrowserNullplugClient;
+}> = ({ session, nullplugClient }) => {
+  const { editor, isActive } = session;
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const [searchParams] = useSearchParams();
@@ -168,7 +189,8 @@ const EditorPage: React.FC = () => {
   );
   const promotionIntentRef = useRef<BranchPromotionIntent | null>(null);
   const ignoreDraftLoadRef = useRef(false);
-  const runtimePolicyRef = useRef<ReturnType<typeof resolveRootRuntimePolicy>>(null);
+  const runtimePolicyRef =
+    useRef<ReturnType<typeof resolveRootRuntimePolicy>>(null);
   const activeBranchSessionRef = useRef<ActiveBranchSession | null>(null);
   const [existingDropId, setExistingDropId] = useState<string | null>(null);
   const [activeRootDropId, setActiveRootDropId] = useState<string | null>(null);
@@ -210,10 +232,11 @@ const EditorPage: React.FC = () => {
 
   const setDraftContent = useCallback(
     (value: string) => {
-      if (ignoreDraftLoadRef.current) return;
+      if (!isActive() || ignoreDraftLoadRef.current) return;
       const branchSession = activeBranchSessionRef.current;
       if (!value) {
         editor.reset();
+        bufferRef.current = "";
         return;
       }
       editor.reset();
@@ -229,7 +252,7 @@ const EditorPage: React.FC = () => {
       editor.seedSnapshot(value);
       bufferRef.current = value;
     },
-    [editor],
+    [editor, isActive],
   );
 
   const {
@@ -249,9 +272,11 @@ const EditorPage: React.FC = () => {
     editor,
     onRestoreBranchDraft: setDraftContent,
     onRuntimeFacts: applyRuntimeFacts,
-    enabled: shouldWaitForRemoteBranchSession
-      ? Boolean(activeBranchSession?.rootDropId)
-      : hasDiffTarget,
+    enabled:
+      ready &&
+      (shouldWaitForRemoteBranchSession
+        ? Boolean(activeBranchSession?.rootDropId)
+        : hasDiffTarget),
   });
   const shareVisibility = useDropStore((state) => state.shareVisibility);
   const syntaxMode = useDropStore((state) => state.syntaxMode);
@@ -288,10 +313,15 @@ const EditorPage: React.FC = () => {
                 ? "Viewing"
                 : null;
 
-  const { clearDraft: clearDraftStorage, load: loadDraftStorage } =
-    useDraftStorage(draftStorageKey, markdown, setDraftContent);
+  const { clearDraft: clearDraftStorage } = useDraftStorage(
+    draftStorageKey,
+    markdown,
+    setDraftContent,
+    { autoSave: ready, autoLoad: false },
+  );
 
   const clearDraft = useCallback(() => {
+    if (!isActive()) return;
     ignoreDraftLoadRef.current = false;
     setExistingDropId(null);
     setActiveRootDropId(null);
@@ -302,11 +332,20 @@ const EditorPage: React.FC = () => {
     bufferRef.current = "";
     removeDraftLibraryEntry(draftStorageKey);
     void clearDraftStorage();
-  }, [clearDraftStorage, draftStorageKey, editor, setBaseDropId]);
+  }, [clearDraftStorage, draftStorageKey, editor, isActive, setBaseDropId]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handleBufferChange = useCallback(
     (nextValue: string) => {
+      if (
+        !isActive() ||
+        !ready ||
+        (shouldWaitForRemoteBranchSession &&
+          (!activeBranchSession ||
+            !syncState.canEdit ||
+            syncState.mode === "inactive"))
+      )
+        return;
       const previousValue = bufferRef.current;
       if (nextValue === previousValue) return;
       const diffs = computeDiffOps(previousValue, nextValue);
@@ -324,12 +363,21 @@ const EditorPage: React.FC = () => {
       // each event from the immediately preceding text instead of a stale buffer.
       bufferRef.current = nextValue;
       editor.addDiffs(diffs);
-      void publishDiffs(diffs, { draftContent: nextValue })
-        .catch(() => {
-          // Keep the visible local text intact; the branch hook switches this editor read-only.
-        });
+      void publishDiffs(diffs, { draftContent: nextValue }).catch(() => {
+        // Keep the visible local text intact; the branch hook switches this editor read-only.
+      });
     },
-    [editor, publishDiffs, shouldUseRemoteBranchDiff],
+    [
+      editor,
+      publishDiffs,
+      shouldUseRemoteBranchDiff,
+      isActive,
+      ready,
+      shouldWaitForRemoteBranchSession,
+      activeBranchSession,
+      syncState.canEdit,
+      syncState.mode,
+    ],
   );
 
   useEffect(() => {
@@ -356,7 +404,7 @@ const EditorPage: React.FC = () => {
   );
 
   useEffect(() => {
-    if (ignoreDraftLoadRef.current) {
+    if (!ready || ignoreDraftLoadRef.current) {
       return;
     }
 
@@ -376,28 +424,45 @@ const EditorPage: React.FC = () => {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [baseDropId, cloneId, draftStorageKey, editId, existingDropId, markdown]);
+  }, [
+    baseDropId,
+    cloneId,
+    draftStorageKey,
+    editId,
+    existingDropId,
+    markdown,
+    ready,
+  ]);
 
   useEffect(() => {
     setBranchActivityOpen(false);
   }, [activeBranchSession?.branchId, activeBranchSession?.rootDropId]);
 
   useEffect(() => {
-    if (!routeDropId) {
-      ignoreDraftLoadRef.current = false;
-      setExistingDropId(null);
-      setActiveRootDropId(null);
-      setActiveBranchSession(null);
-      editor.setRuntimeCaller(null);
-      editor.setRuntimePolicy(null);
-      return;
-    }
-
+    let cancelled = false;
+    const current = () => !cancelled && isActive();
+    setReady(false);
+    setLoadError(null);
     ignoreDraftLoadRef.current = true;
 
     const fetchTargetDrop = async () => {
       try {
+        await initializeStorage();
+        if (!current()) return;
+        if (!routeDropId) {
+          const draft = await useStorageStore
+            .getState()
+            .getItem(draftStorageKey, { throwOnError: true });
+          if (!current()) return;
+          editor.reset();
+          setBaseDropId(null);
+          editor.seedSnapshot(draft ?? "");
+          bufferRef.current = draft ?? "";
+          setReady(true);
+          return;
+        }
         const payload = await getDrop(routeDropId);
+        if (!current()) return;
         if (!payload) {
           throw new Error("Drop not found in local or remote providers.");
         }
@@ -407,6 +472,7 @@ const EditorPage: React.FC = () => {
 
         try {
           const ownership = await resolveDropOwnership(routeDropId);
+          if (!current()) return;
           if (ownership) {
             resolvedDropId = ownership.id;
             ownedByCurrentAccount = ownership.ownedByCurrentAccount;
@@ -425,6 +491,7 @@ const EditorPage: React.FC = () => {
         if (!isOfflineDropId(rootDropId)) {
           try {
             const { accountId } = await getUnlockedVault();
+            if (!current()) return;
             const branchClient = createBranchApiClient({
               baseUrl: "",
               accountId,
@@ -432,10 +499,12 @@ const EditorPage: React.FC = () => {
               authTokenProvider,
             });
             const branch = await branchClient.resolveBranch(rootDropId);
+            if (!current()) return;
             const branchContent = await branchClient.getBranchContent(
               branch.rootDropId,
               branch.branchId,
             );
+            if (!current()) return;
 
             // Branch content wins over the sealed payload when remote editing is active because the branch
             // stores newer in-progress text than the last promoted/shared drop body.
@@ -457,6 +526,14 @@ const EditorPage: React.FC = () => {
 
         const shouldEditInPlace = ownedByCurrentAccount;
 
+        // Preserve target precedence: branch head over payload, nonblank local
+        // draft over either. Durable pending drafts restore after sync starts.
+        const storedDraft = await useStorageStore
+          .getState()
+          .getItem(draftStorageKey, { throwOnError: true });
+        if (!current()) return;
+        if (storedDraft?.trim()) content = storedDraft;
+
         editor.reset();
         runtimePolicyRef.current = resolveRootRuntimePolicy(payload.metadata);
         editor.setRuntimePolicy(runtimePolicyRef.current);
@@ -477,26 +554,29 @@ const EditorPage: React.FC = () => {
         );
         bufferRef.current = content;
 
-        const storedDraft = await loadDraftStorage();
-        if (storedDraft && storedDraft.trim() && storedDraft !== content) {
-          // Draft storage is local-only and intentionally allowed to override the loaded share target.
-          ignoreDraftLoadRef.current = false;
-          setDraftContent(storedDraft);
-          ignoreDraftLoadRef.current = true;
-        }
+        setReady(true);
       } catch (err) {
+        if (!current()) return;
+        setLoadError(
+          toUserFacingDropError(err, "Unable to load this editor draft."),
+        );
         console.error(`Failed to ${editId ? "edit" : "clone"} drop:`, err);
       } finally {
-        ignoreDraftLoadRef.current = false;
+        if (current()) ignoreDraftLoadRef.current = false;
       }
     };
 
     void fetchTargetDrop();
+    return () => {
+      cancelled = true;
+    };
   }, [
     editId,
     editor,
     getDrop,
-    loadDraftStorage,
+    draftStorageKey,
+    initializeStorage,
+    isActive,
     resolveDropOwnership,
     authTokenProvider,
     routeDropId,
@@ -507,7 +587,6 @@ const EditorPage: React.FC = () => {
   const {
     editorHidden,
     isTransitioning,
-    resetView,
     setEditMode,
     setPreviewMode,
     showPreview,
@@ -529,8 +608,12 @@ const EditorPage: React.FC = () => {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryDrops, setLibraryDrops] = useState<OwnedDropRecord[]>([]);
-  const [libraryRemoteEntries, setLibraryRemoteEntries] = useState<AccountLibraryEntry[]>([]);
-  const [libraryRefreshError, setLibraryRefreshError] = useState<string | null>(null);
+  const [libraryRemoteEntries, setLibraryRemoteEntries] = useState<
+    AccountLibraryEntry[]
+  >([]);
+  const [libraryRefreshError, setLibraryRefreshError] = useState<string | null>(
+    null,
+  );
   const [libraryExternalDrops, setLibraryExternalDrops] = useState<
     RecentExternalDropRecord[]
   >([]);
@@ -550,7 +633,9 @@ const EditorPage: React.FC = () => {
       setLibraryExternalDrops(externalDrops);
     } catch (error) {
       console.error("Failed to load library:", error);
-      setLibraryRefreshError("Unable to refresh local library entries. Existing results are still available.");
+      setLibraryRefreshError(
+        "Unable to refresh local library entries. Existing results are still available.",
+      );
     }
 
     try {
@@ -567,7 +652,9 @@ const EditorPage: React.FC = () => {
       setLibraryRefreshError(null);
     } catch (error) {
       console.error("Failed to load remote library:", error);
-      setLibraryRefreshError("Unable to refresh Remote Library. Existing results are still available.");
+      setLibraryRefreshError(
+        "Unable to refresh Remote Library. Existing results are still available.",
+      );
     } finally {
       setLibraryLoading(false);
     }
@@ -592,11 +679,13 @@ const EditorPage: React.FC = () => {
   }, [baseDropId, draftDiffPolicy, editor, existingDropId]);
 
   const publishActiveBranch = useCallback(async () => {
+    if (!isActive() || !ready) throw new Error("Editor is not ready.");
     if (!activeBranchSession || !shouldUseRemoteBranchDiff) {
       throw new Error("No remote branch is active for publishing.");
     }
 
     await flushPendingDiffs();
+    if (!isActive()) throw new Error("Editor route changed.");
 
     const branchClient = createBranchApiClient({
       baseUrl: "",
@@ -609,11 +698,11 @@ const EditorPage: React.FC = () => {
       priorIntent &&
       priorIntent.rootDropId === activeBranchSession.rootDropId &&
       priorIntent.branchId === activeBranchSession.branchId
-          ? priorIntent
-         : readBranchPromotionIntent(
-             activeBranchSession.rootDropId,
-             activeBranchSession.branchId,
-           );
+        ? priorIntent
+        : readBranchPromotionIntent(
+            activeBranchSession.rootDropId,
+            activeBranchSession.branchId,
+          );
     if (!promotionIntent) {
       const branchContent = await branchClient.getBranchContent(
         activeBranchSession.rootDropId,
@@ -650,7 +739,7 @@ const EditorPage: React.FC = () => {
       if (
         error instanceof Error &&
         (error.message.includes("promotion_head_mismatch") ||
-          error.message.includes("\"code\":\"promotion_head_mismatch\""))
+          error.message.includes('"code":"promotion_head_mismatch"'))
       ) {
         promotionIntentRef.current = null;
         clearBranchPromotionIntent(
@@ -665,11 +754,12 @@ const EditorPage: React.FC = () => {
     authTokenProvider,
     flushPendingDiffs,
     shouldUseRemoteBranchDiff,
+    isActive,
+    ready,
   ]);
 
   const {
     error,
-    resetShare,
     setError,
     shareDrop,
     sharing,
@@ -677,6 +767,15 @@ const EditorPage: React.FC = () => {
     successOffline,
     successUrl,
   } = useShareDrop(markdown, clearDraft, {
+    isActive,
+    canShare:
+      ready &&
+      (!shouldWaitForRemoteBranchSession ||
+        Boolean(
+          activeBranchSession &&
+          syncState.canEdit &&
+          syncState.mode !== "inactive",
+        )),
     baseDropId,
     rootDropId: activeRootDropId,
     existingDropId,
@@ -700,7 +799,9 @@ const EditorPage: React.FC = () => {
           activeBranchSession.rootDropId,
           activeBranchSession.branchId,
         );
+        if (!isActive()) return;
         await discardSyncConflict();
+        if (!isActive()) return;
         editor.reset();
         editor.setRuntimePolicy(runtimePolicyRef.current);
         editor.setRuntimeCaller({
@@ -710,7 +811,7 @@ const EditorPage: React.FC = () => {
         editor.seedSnapshot(branch.content);
         bufferRef.current = branch.content;
         setActiveBranchSession((current) =>
-            current
+          current
             ? {
                 ...current,
                 headEventSeq: branch.headEventSeq ?? -1,
@@ -718,6 +819,7 @@ const EditorPage: React.FC = () => {
             : current,
         );
       } catch (recoveryError) {
+        if (!isActive()) return;
         setError(
           recoveryError instanceof Error
             ? recoveryError.message
@@ -725,7 +827,14 @@ const EditorPage: React.FC = () => {
         );
       }
     })();
-  }, [activeBranchSession, authTokenProvider, discardSyncConflict, editor, setError]);
+  }, [
+    activeBranchSession,
+    authTokenProvider,
+    discardSyncConflict,
+    editor,
+    setError,
+    isActive,
+  ]);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -745,6 +854,7 @@ const EditorPage: React.FC = () => {
         const result = await setMode(nextMode, {
           activeDropId,
         });
+        if (!isActive()) return;
 
         if (result.publishedDrop) {
           // A mode transition can publish a previously local-only drop and therefore change the canonical id.
@@ -771,6 +881,7 @@ const EditorPage: React.FC = () => {
     setBaseDropId,
     setError,
     setMode,
+    isActive,
   ]);
 
   const updateSelection = useCallback(
@@ -874,17 +985,30 @@ const EditorPage: React.FC = () => {
   ]);
 
   const newDrop = useCallback(() => {
-    clearDraft();
-    resetShare();
-    resetView();
-    setEditSurface(renderedFirstMode ? "rendered" : "source");
-
-    if (!renderedFirstMode) {
-      setTimeout(() => {
-        textareaRef.current?.focus();
-      }, 0);
+    if (!isActive() || !ready) return;
+    try {
+      startNewDraft({
+        draftKey: draftStorageKey,
+        content: bufferRef.current,
+        dropId: existingDropId ?? editId ?? baseDropId ?? cloneId ?? null,
+        navigate,
+      });
+    } catch (error) {
+      setError(
+        toUserFacingDropError(error, "Unable to save the current draft."),
+      );
     }
-  }, [clearDraft, renderedFirstMode, resetShare, resetView]);
+  }, [
+    isActive,
+    ready,
+    draftStorageKey,
+    existingDropId,
+    editId,
+    baseDropId,
+    cloneId,
+    navigate,
+    setError,
+  ]);
 
   const openLibrary = useCallback(() => {
     setLibraryOpen(true);
@@ -946,7 +1070,7 @@ const EditorPage: React.FC = () => {
         id: "command-new-drop",
         type: "command",
         title: "New Nulldown",
-        description: "Clear this draft and start fresh.",
+        description: "Save this draft and start a new document.",
         keywords: ["new", "scratch", "clear"],
         value: { kind: "new-drop" },
       },
@@ -1115,7 +1239,10 @@ const EditorPage: React.FC = () => {
       void (async () => {
         switch (entity.value.kind) {
           case "open-drop": {
-            if (entity.value.source === "owned" || entity.value.source === "remote") {
+            if (
+              entity.value.source === "owned" ||
+              entity.value.source === "remote"
+            ) {
               navigate(`/?edit=${encodeURIComponent(entity.value.id)}`);
               return;
             }
@@ -1157,7 +1284,6 @@ const EditorPage: React.FC = () => {
           }
 
           case "new-drop": {
-            navigate("/");
             newDrop();
             return;
           }
@@ -1361,10 +1487,12 @@ const EditorPage: React.FC = () => {
         }}
       />
 
-      {libraryRefreshError ? <ErrorBanner message={libraryRefreshError} /> : null}
+      {libraryRefreshError ? (
+        <ErrorBanner message={libraryRefreshError} />
+      ) : null}
 
       <div className="flex-1 relative" style={{ height: "calc(100vh - 65px)" }}>
-        {error && <ErrorBanner message={error} />}
+        {(loadError || error) && <ErrorBanner message={loadError || error!} />}
         <BranchSyncBanner
           state={syncState}
           onUseRemoteBranch={recoverWithRemoteBranch}
@@ -1375,8 +1503,10 @@ const EditorPage: React.FC = () => {
           editorState={{
             editorHidden,
             syncReadOnly: Boolean(
-              activeBranchSession &&
-                (syncState.mode === "inactive" || !syncState.canEdit),
+              !ready ||
+              (shouldWaitForRemoteBranchSession && !activeBranchSession) ||
+              (activeBranchSession &&
+                (syncState.mode === "inactive" || !syncState.canEdit)),
             ),
           }}
           markdown={markdown}

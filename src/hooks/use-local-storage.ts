@@ -11,7 +11,7 @@ export function useLocalStorageSync(
     skipEmpty?: boolean;
     // Debounce duration for auto-save writes
     debounceMs?: number;
-  } = {}
+  } = {},
 ) {
   const { autoSave = true, skipEmpty = false, debounceMs = 200 } = options;
 
@@ -26,9 +26,12 @@ export function useLocalStorageSync(
     // Skip saving empty values if configured
     if (skipEmpty && !value) return;
 
-    const timer = window.setTimeout(() => {
-      void setItem(key, value);
-    }, Math.max(0, debounceMs));
+    const timer = window.setTimeout(
+      () => {
+        void setItem(key, value);
+      },
+      Math.max(0, debounceMs),
+    );
 
     return () => {
       window.clearTimeout(timer);
@@ -57,7 +60,8 @@ export function useLocalStorageLoad<T = string>(
   options: {
     // Custom parser for the loaded value
     parser?: (value: string) => T;
-  } = {}
+    autoLoad?: boolean;
+  } = {},
 ) {
   const getItem = useStorageStore((state) => state.getItem);
   const isClient = useStorageStore((state) => state.isClient);
@@ -75,7 +79,7 @@ export function useLocalStorageLoad<T = string>(
 
   // Load on mount
   useEffect(() => {
-    if (!isClient) return;
+    if (!isClient || options.autoLoad === false) return;
     if (loadedKeyRef.current === key) return;
 
     loadedKeyRef.current = key;
@@ -107,8 +111,9 @@ export function useLocalStorageLoad<T = string>(
 
     return () => {
       cancelled = true;
+      loadedKeyRef.current = null;
     };
-  }, [key, isClient, getItem]);
+  }, [key, isClient, getItem, options.autoLoad]);
 
   // Manual load function
   const load = useCallback(async () => {
@@ -129,10 +134,11 @@ export function useLocalStorage(
     autoSave?: boolean;
     skipEmpty?: boolean;
     debounceMs?: number;
-  } = {}
+    autoLoad?: boolean;
+  } = {},
 ) {
   const { save, remove } = useLocalStorageSync(key, value, options);
-  const { load } = useLocalStorageLoad(key, onLoad);
+  const { load } = useLocalStorageLoad(key, onLoad, options);
 
   return {
     save,
@@ -144,7 +150,8 @@ export function useLocalStorage(
 export function useDraftStorage(
   draftKey: string,
   content: string,
-  setContent: (content: string) => void
+  setContent: (content: string) => void,
+  options: { autoSave?: boolean; autoLoad?: boolean } = {},
 ) {
   const storage = useLocalStorage(
     draftKey,
@@ -155,10 +162,11 @@ export function useDraftStorage(
       }
     },
     {
-      autoSave: true,
+      autoSave: options.autoSave ?? true,
+      autoLoad: options.autoLoad,
       skipEmpty: false,
       debounceMs: 250,
-    }
+    },
   );
 
   const clearDraft = useCallback(() => {
