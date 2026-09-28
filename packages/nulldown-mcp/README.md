@@ -6,12 +6,12 @@ Nulldown turns Markdown into deterministic structure. This server lets an MCP cl
 
 ## Install
 
-This checkout prepares unpublished MCP `0.0.8`, requiring core
-`>=0.0.8 <0.1.0`. Verify the candidate with both local tarballs; the registry
-command below does not install this unpublished pair.
+The `0.0.9` MCP prerelease is available under the `next` tag and requires core
+`>=0.0.9 <0.1.0`. Release verification installs both local tarballs before
+publication.
 
 ```bash
-bun install -g @thenullnode/nulldown-mcp
+bun install -g @thenullnode/nulldown-mcp@next
 nulldown-mcp
 ```
 

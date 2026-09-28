@@ -13,6 +13,7 @@ const QUERY_ROOT_ID = "smoke-query-root";
 const QUERY_BRANCH_ID = "smoke:query-branch";
 const CONTENT_ROOT_ID = "smoke-content-root";
 const CONTENT_BRANCH_ID = "smoke:content-branch";
+const SMOKE_ND_TOKEN = "mcp-smoke-nd-token-7f6b4d21";
 
 const expectedTools = [
   "strategy_search",
@@ -86,6 +87,7 @@ const sendJson = (
 
 const startFixture = async () => {
   const requests: string[] = [];
+  const authenticated = { reads: 0, writes: 0 };
   const memoryRecords = new Map<string, Record<string, unknown>>();
   let generatedMemoryId = 0;
   let closePromise: Promise<void> | undefined;
@@ -94,6 +96,12 @@ const startFixture = async () => {
     requests.push(
       `${request.method ?? "UNKNOWN"} ${url.pathname}${url.search}`,
     );
+    if (request.headers.authorization !== `Bearer ${SMOKE_ND_TOKEN}`) {
+      sendJson(response, 401, { error: "missing smoke bearer token" });
+      return;
+    }
+    if (request.method === "GET") authenticated.reads += 1;
+    else authenticated.writes += 1;
 
     const memoryMatch = url.pathname.match(
       /^\/api\/branches\/([^/]+)\/([^/]+)\/memory\/(facts|procedures|query)$/,
@@ -230,6 +238,7 @@ const startFixture = async () => {
   return {
     origin: `http://127.0.0.1:${port}`,
     requests,
+    authenticated,
     close: () => {
       closePromise ??= withTimeout(
         new Promise<void>((resolve, reject) => {
@@ -477,7 +486,7 @@ const createChildEnvironment = (origin: string) => {
     ),
   );
   const smokeSecrets = {
-    ND_TOKEN: "mcp-smoke-nd-token-7f6b4d21",
+    ND_TOKEN: SMOKE_ND_TOKEN,
     ND_DIFF_AUTH_TOKEN: "mcp-smoke-diff-token-3c89a105",
     DIFF_WEBHOOK_SECRET: "mcp-smoke-webhook-secret-51e78a2c",
     VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK: "mcp-smoke-public-jwk-secret-a6320d94",
@@ -808,11 +817,24 @@ const main = async () => {
         requests: fixture.requests,
       });
     }
+    if (
+      fixture.authenticated.reads === 0 ||
+      fixture.authenticated.writes === 0
+    ) {
+      fail(
+        "Installed MCP did not complete authenticated read and write requests.",
+        {
+          authenticated: fixture.authenticated,
+          requests: fixture.requests,
+        },
+      );
+    }
     report = {
       command,
       args,
       ...checks,
       localFixtureRequests: fixture.requests,
+      authenticatedRequests: fixture.authenticated,
       diagnosticEvents: diagnostics.map((entry) => entry.event ?? null),
       protocolStdoutCheck:
         "StdioClientTransport exposes protocol messages only; this SDK has no raw child stdout stream.",

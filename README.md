@@ -132,14 +132,14 @@ nd --base=http://127.0.0.1:8788 get <id> --json
 
 ## Agents And MCP
 
-This checkout prepares the unpublished `0.0.8` core and MCP pair. MCP requires
-core `>=0.0.8 <0.1.0` for the strategy-read contract below. Registry install
-commands do not install this local candidate; verification uses both local tarballs.
+The `0.0.9` core and MCP prerelease is available under the `next` tag. MCP
+requires core `>=0.0.9 <0.1.0` for the strategy-read and NullMem contracts
+below. Release verification installs both local tarballs before publication.
 
 Use the separate MCP package to let agents retrieve structure, manage branch diffs, and work with NullMem without shelling out:
 
 ```bash
-bun install -g @thenullnode/nulldown-mcp
+bun install -g @thenullnode/nulldown-mcp@next
 ```
 
 `nulldown-mcp` is a stdio server configured by an MCP client, not an interactive terminal program. Configure `ND_BASE_URL`, `ND_TOKEN`, and `ND_CLIENT_ID` in the MCP client environment as needed. `ND_ACCOUNT_ID` is a development-only alternative accepted only when the target API explicitly enables its insecure account header; an invalid bearer credential never falls back to it. Read/query tools support bounded compact responses; expand exact branch content only when a decision needs it. See the [MCP package README](packages/nulldown-mcp/README.md).
@@ -234,9 +234,9 @@ Install dependencies:
 bun install
 ```
 
-The root-only `@thenullnode/nulldown: file:.` override links MCP to this checkout
-while `0.0.8` is unpublished. It does not replace the MCP package's consumer
-dependency range; installed-pair verification supplies both exact tarballs.
+The root-only `@thenullnode/nulldown: file:.` override links MCP to this checkout.
+It does not replace the MCP package's consumer dependency range; installed-pair
+verification supplies both exact tarballs.
 
 Run the Vite development server:
 
