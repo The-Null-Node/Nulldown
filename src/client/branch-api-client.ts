@@ -1,4 +1,9 @@
 import {
+  isDropBranchContentResponse,
+  isDropBranchListResponse,
+  isDropBranchPromoteResponse,
+  isDropBranchResolveResponse,
+  isDropSnapshotListResponse,
   NULLDOWN_ACCOUNT_ID_HEADER,
   type DropBranchContentResponse,
   type DropBranchListResponse,
@@ -7,6 +12,12 @@ import {
   type DropBranchResolveResponse,
   type DropSnapshotListResponse,
 } from "../../shared/drop/branch";
+import {
+  isBranchResolvedQueryResponse,
+  isBranchResolvedUpdateResponse,
+  isNullplugResponseSubmitResponse,
+  isNullplugStateSubmitResponse,
+} from "../../shared/drop/branch-api";
 import type {
   BranchApiClient,
   BranchResolvedQueryOptions,
@@ -60,6 +71,7 @@ const readJson = async <T>(
   options: CreateBranchApiClientOptions,
   url: string,
   init: RequestInit,
+  isValid: (value: unknown) => value is T,
 ): Promise<T> => {
   const response = await requestNulldownHttp<T>(
     options.fetchImpl ?? fetch,
@@ -71,13 +83,16 @@ const readJson = async <T>(
     },
   );
   if (!response.ok) throw createNulldownHttpResponseError(response);
-  if (!response.text.trim()) {
-    throw new NulldownHttpTransportError("Response body was not valid JSON.", {
-      code: "invalid_json_response",
-      status: response.status,
-    });
+  if (!response.text.trim() || !isValid(response.data)) {
+    throw new NulldownHttpTransportError(
+      "Response body did not match the endpoint contract.",
+      {
+        code: "invalid_api_response",
+        status: response.status,
+      },
+    );
   }
-  return response.data as T;
+  return response.data;
 };
 
 const appendDefined = (
@@ -94,39 +109,59 @@ export const createBranchApiClient = (
   options: CreateBranchApiClientOptions,
 ): BranchApiClient => {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
-  const request = async <T>(path: string, init: RequestInit): Promise<T> =>
-    await readJson<T>(options, `${baseUrl}${path}`, init);
+  const request = async <T>(
+    path: string,
+    init: RequestInit,
+    isValid: (value: unknown) => value is T,
+  ): Promise<T> => await readJson(options, `${baseUrl}${path}`, init, isValid);
+
+  const invalidReceipt = (): never => {
+    throw new NulldownHttpTransportError(
+      "Response receipt did not acknowledge the requested operation.",
+      { code: "invalid_api_response" },
+    );
+  };
 
   return {
     async listBranches(rootDropId): Promise<DropBranchListResponse> {
-      return await request(`/api/branches/${encodeURIComponent(rootDropId)}`, {
-        method: "GET",
-        headers: await withHeaders(options),
-      });
+      const response = await request(
+        `/api/branches/${encodeURIComponent(rootDropId)}`,
+        {
+          method: "GET",
+          headers: await withHeaders(options),
+        },
+        isDropBranchListResponse,
+      );
+      return response;
     },
     async resolveBranch(dropId): Promise<DropBranchResolveResponse> {
       return await request(
         `/api/branches/resolve/${encodeURIComponent(dropId)}`,
         { method: "POST", headers: await withHeaders(options) },
+        isDropBranchResolveResponse,
       );
     },
     async getBranchContent(
       rootDropId,
       branchId,
     ): Promise<DropBranchContentResponse> {
-      return await request(
+      const response = await request(
         `/api/branches/${encodeURIComponent(rootDropId)}/${encodeURIComponent(branchId)}/content`,
         { method: "GET", headers: await withHeaders(options) },
+        isDropBranchContentResponse,
       );
+      return response.branchId === branchId ? response : invalidReceipt();
     },
     async listSnapshots(
       rootDropId,
       branchId,
     ): Promise<DropSnapshotListResponse> {
-      return await request(
+      const response = await request(
         `/api/branches/${encodeURIComponent(rootDropId)}/${encodeURIComponent(branchId)}/snapshots`,
         { method: "GET", headers: await withHeaders(options) },
+        isDropSnapshotListResponse,
       );
+      return response.branchId === branchId ? response : invalidReceipt();
     },
     async queryResolved(
       rootDropId,
@@ -152,17 +187,19 @@ export const createBranchApiClient = (
       appendDefined(params, "callId", queryOptions.callId);
       appendDefined(params, "primitiveId", queryOptions.primitiveId);
       const suffix = params.size ? `?${params}` : "";
-      return await request(
+      const response = await request(
         `/api/branches/${encodeURIComponent(rootDropId)}/${encodeURIComponent(branchId)}/resolved/query${suffix}`,
         { method: "GET", headers: await withHeaders(options) },
+        isBranchResolvedQueryResponse,
       );
+      return response.branchId === branchId ? response : invalidReceipt();
     },
     async updateResolved(
       rootDropId,
       branchId,
       update: BranchResolvedUpdateRequest = {},
     ): Promise<BranchResolvedUpdateResponse> {
-      return await request(
+      const response = await request(
         `/api/branches/${encodeURIComponent(rootDropId)}/${encodeURIComponent(branchId)}/resolved/update`,
         {
           method: "POST",
@@ -171,36 +208,59 @@ export const createBranchApiClient = (
           }),
           body: JSON.stringify(update),
         },
+        isBranchResolvedUpdateResponse,
       );
+      return response.branchId === branchId ? response : invalidReceipt();
     },
     async submitNullplugResponse(
       fact: NullplugUiResponseFact,
     ): Promise<NullplugResponseSubmitResponse> {
-      return await request("/api/nullplug/submit", {
-        method: "POST",
-        headers: await withHeaders(options, {
-          "Content-Type": "application/json",
-        }),
-        body: JSON.stringify(fact),
-      });
+      const response = await request(
+        "/api/nullplug/submit",
+        {
+          method: "POST",
+          headers: await withHeaders(options, {
+            "Content-Type": "application/json",
+          }),
+          body: JSON.stringify(fact),
+        },
+        isNullplugResponseSubmitResponse,
+      );
+      return response.stored &&
+        response.fact.id === fact.id &&
+        response.fact.primitiveId === fact.primitiveId &&
+        response.fact.source.branchId === fact.source.branchId
+        ? response
+        : invalidReceipt();
     },
     async submitNullplugState(
       fact: NullplugUiStatePatchFact | NullplugUiStateSnapshot,
     ): Promise<NullplugStateSubmitResponse> {
-      return await request("/api/nullplug/state", {
-        method: "POST",
-        headers: await withHeaders(options, {
-          "Content-Type": "application/json",
-        }),
-        body: JSON.stringify(fact),
-      });
+      const response = await request(
+        "/api/nullplug/state",
+        {
+          method: "POST",
+          headers: await withHeaders(options, {
+            "Content-Type": "application/json",
+          }),
+          body: JSON.stringify(fact),
+        },
+        isNullplugStateSubmitResponse,
+      );
+      return response.stored &&
+        response.fact.kind === fact.kind &&
+        response.fact.id === fact.id &&
+        response.fact.callId === fact.callId &&
+        response.fact.source.branchId === fact.source.branchId
+        ? response
+        : invalidReceipt();
     },
     async promoteBranch(
       rootDropId,
       branchId,
       promotion: DropBranchPromoteRequest,
     ): Promise<DropBranchPromoteResponse> {
-      return await request(
+      const response = await request(
         `/api/branches/${encodeURIComponent(rootDropId)}/${encodeURIComponent(branchId)}/promote`,
         {
           method: "POST",
@@ -209,7 +269,12 @@ export const createBranchApiClient = (
           }),
           body: JSON.stringify(promotion),
         },
+        isDropBranchPromoteResponse,
       );
+      return response.branchId === branchId &&
+        response.snapshotId === promotion.expectedSnapshotId
+        ? response
+        : invalidReceipt();
     },
   };
 };

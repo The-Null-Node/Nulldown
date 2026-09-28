@@ -461,17 +461,31 @@ describe("NulldownClient", () => {
             stored: true,
             indexed: true,
             key: "response-key",
-            fact: {},
+            fact: JSON.parse(String(init?.body)),
           });
         }
         if (requestUrl.endsWith("/api/nullplug/state")) {
-          return Response.json({ stored: true, key: "state-key", fact: {} });
+          return Response.json({
+            stored: true,
+            indexed: true,
+            key: "state-key",
+            fact: JSON.parse(String(init?.body)),
+          });
         }
         if (
           requestUrl.endsWith("/api/nullplug/registry") &&
           init?.method === "POST"
         ) {
-          return Response.json({ registered: true, record: {} });
+          return Response.json({
+            registered: true,
+            record: {
+              version: 1,
+              manifest: JSON.parse(String(init.body)),
+              status: "active",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          });
         }
         if (requestUrl.endsWith("/api/nullplug/registry")) {
           return Response.json({ items: [], cursor: null });
@@ -539,6 +553,42 @@ describe("NulldownClient", () => {
       "GET",
       "POST",
     ]);
+  });
+
+  it("rejects successful endpoint bodies that do not match typed contracts", async () => {
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async () => Response.json({ stored: true }),
+    });
+
+    await expect(
+      client.submitNullplugResponse({
+        version: 1,
+        kind: "ui.response",
+        id: "response-1",
+        primitiveId: "approve",
+        createdAt: 1,
+        source: { rootDropId: "root-1", branchId: "branch-1" },
+        data: { accepted: true },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_api_response", status: 200 });
+  });
+
+  it("rejects branch content for a different requested branch", async () => {
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async () =>
+        Response.json({
+          rootDropId: "root-1",
+          branchId: "branch-other",
+          snapshotId: 1,
+          content: "# Other branch",
+        }),
+    });
+
+    await expect(
+      client.getBranchContent("root-1", "branch-requested"),
+    ).rejects.toMatchObject({ code: "invalid_api_response", status: 200 });
   });
 
   it("serializes compact procedure step memory query params", async () => {

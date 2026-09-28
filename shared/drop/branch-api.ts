@@ -16,6 +16,16 @@ import type {
   NullplugUiStatePatchFact,
   NullplugUiStateSnapshot,
 } from "../nullplug/ui";
+import {
+  isNullplugUiResponseFact,
+  isNullplugUiStatePatchFact,
+  isNullplugUiStateSnapshot,
+} from "../nullplug/ui";
+import { isNulldownSourceHash } from "./resolved/hash";
+import {
+  isResolvedDocumentNodeQueryResult,
+  isResolvedRuntimeNodeQueryResult,
+} from "./resolved/validators";
 
 export interface BranchResolvedQueryOptions {
   resolverId?: string;
@@ -118,3 +128,72 @@ export interface BranchApiClient {
     promotion: DropBranchPromoteRequest,
   ): Promise<DropBranchPromoteResponse>;
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+const isNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+/** Returns true when a value is a valid resolved-heap query response. */
+export const isBranchResolvedQueryResponse = (
+  value: unknown,
+): value is BranchResolvedQueryResponse =>
+  isRecord(value) &&
+  isString(value.rootDropId) &&
+  isString(value.branchId) &&
+  isNumber(value.snapshotId) &&
+  isString(value.resolverId) &&
+  isString(value.resolverVersion) &&
+  isNulldownSourceHash(value.sourceContentHash) &&
+  typeof value.stale === "boolean" &&
+  typeof value.heapGenerated === "boolean" &&
+  isNumber(value.nodeCount) &&
+  Array.isArray(value.nodes) &&
+  value.nodes.every(
+    (node) =>
+      isResolvedDocumentNodeQueryResult(node) ||
+      isResolvedRuntimeNodeQueryResult(node),
+  );
+
+/** Returns true when a value is a valid resolved-heap update receipt. */
+export const isBranchResolvedUpdateResponse = (
+  value: unknown,
+): value is BranchResolvedUpdateResponse =>
+  isRecord(value) &&
+  isString(value.rootDropId) &&
+  isString(value.branchId) &&
+  isNumber(value.snapshotId) &&
+  isNulldownSourceHash(value.sourceContentHash) &&
+  Array.isArray(value.updated) &&
+  value.updated.every(
+    (entry) =>
+      isRecord(entry) &&
+      isString(entry.resolverId) &&
+      isString(entry.key) &&
+      isNumber(entry.nodeCount) &&
+      isNulldownSourceHash(entry.sourceContentHash),
+  );
+
+/** Returns true when a value acknowledges one persisted Nullplug response fact. */
+export const isNullplugResponseSubmitResponse = (
+  value: unknown,
+): value is NullplugResponseSubmitResponse =>
+  isRecord(value) &&
+  typeof value.stored === "boolean" &&
+  typeof value.indexed === "boolean" &&
+  isString(value.key) &&
+  isNullplugUiResponseFact(value.fact);
+
+/** Returns true when a value acknowledges one persisted Nullplug state fact. */
+export const isNullplugStateSubmitResponse = (
+  value: unknown,
+): value is NullplugStateSubmitResponse =>
+  isRecord(value) &&
+  typeof value.stored === "boolean" &&
+  typeof value.indexed === "boolean" &&
+  isString(value.key) &&
+  (isNullplugUiStatePatchFact(value.fact) ||
+    isNullplugUiStateSnapshot(value.fact));

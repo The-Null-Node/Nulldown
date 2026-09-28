@@ -167,3 +167,70 @@ export const isDropBranchRecord = (value: unknown): value is DropBranchRecord =>
 export const isDropSnapshotRecord = (
   value: unknown,
 ): value is DropSnapshotRecord => isDropSnapshotRecordV1(value);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+const isNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const isNullableString = (value: unknown): value is string | null =>
+  value === null || isString(value);
+
+/** Returns true when a value is a valid branch-list API response. */
+export const isDropBranchListResponse = (
+  value: unknown,
+): value is DropBranchListResponse =>
+  isRecord(value) &&
+  isString(value.rootDropId) &&
+  Array.isArray(value.branches) &&
+  value.branches.every(isDropBranchRecord);
+
+/** Returns true when a value is a valid branch-resolution API response. */
+export const isDropBranchResolveResponse = (
+  value: unknown,
+): value is DropBranchResolveResponse =>
+  isRecord(value) &&
+  isString(value.rootDropId) &&
+  isString(value.branchId) &&
+  (value.mode === "owner" || value.mode === "clone") &&
+  typeof value.created === "boolean" &&
+  isNumber(value.headSnapshotId) &&
+  isNullableString(value.ownerAccountId) &&
+  isNullableString(value.writerAccountId);
+
+/** Returns true when a value is a valid materialized branch-content response. */
+export const isDropBranchContentResponse = (
+  value: unknown,
+): value is DropBranchContentResponse =>
+  isRecord(value) &&
+  isString(value.rootDropId) &&
+  isString(value.branchId) &&
+  isNumber(value.snapshotId) &&
+  (value.headEventSeq === undefined ||
+    value.headEventSeq === null ||
+    isNumber(value.headEventSeq)) &&
+  isString(value.content);
+
+/** Returns true when a value is a valid branch snapshot-list response. */
+export const isDropSnapshotListResponse = (
+  value: unknown,
+): value is DropSnapshotListResponse =>
+  isRecord(value) &&
+  isString(value.rootDropId) &&
+  isString(value.branchId) &&
+  Array.isArray(value.snapshots) &&
+  value.snapshots.every(isDropSnapshotRecord);
+
+/** Returns true when a value is a valid branch-promotion receipt. */
+export const isDropBranchPromoteResponse = (
+  value: unknown,
+): value is DropBranchPromoteResponse =>
+  isRecord(value) &&
+  isString(value.dropId) &&
+  isString(value.url) &&
+  isString(value.rootDropId) &&
+  isString(value.branchId) &&
+  isNumber(value.snapshotId);
