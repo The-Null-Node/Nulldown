@@ -42,6 +42,11 @@ import type {
   RemoteNullplugRegistryRecord,
 } from "../../shared/nullplug/registry";
 import type { NullMemSourceRef } from "../../shared/nullmem/source-reference";
+import {
+  createNulldownHttpResponseError,
+  NulldownHttpTransportError,
+  requestNulldownHttp,
+} from "./http-transport";
 
 /** JSON-compatible value accepted by Nulldown HTTP APIs. */
 export type NulldownJsonValue =
@@ -96,6 +101,8 @@ export interface NulldownClientConfig {
   diffWebhookSecret?: string | null;
   /** Optional fetch implementation for tests or alternate runtimes. */
   fetch?: typeof fetch;
+  /** Optional request deadline in milliseconds. Omitted requests have no client deadline. */
+  requestTimeoutMs?: number;
 }
 
 /** Options accepted when constructing a Nulldown client. */
@@ -402,14 +409,6 @@ export class NulldownClientError extends Error {
   }
 }
 
-const parseJsonLoose = (text: string): unknown | null => {
-  try {
-    return text ? JSON.parse(text) : null;
-  } catch {
-    return null;
-  }
-};
-
 const looksLikeSealedEnvelope = (value: unknown): boolean =>
   typeof value === "object" &&
   value !== null &&
@@ -534,6 +533,7 @@ export const createNulldownClientConfig = (
       ? options.diffWebhookSecret
       : process.env.DIFF_WEBHOOK_SECRET ?? null,
   fetch: options.fetch,
+  requestTimeoutMs: options.requestTimeoutMs,
 });
 
 /** Small HTTP client for direct Nulldown API calls used by CLI and MCP surfaces. */
@@ -558,7 +558,7 @@ export class NulldownClient {
       !explicitAuthorization && this.config.token === null
         ? this.config.bearerProvider
         : undefined;
-    const perform = async (bearer: string | null): Promise<Response> => {
+    const perform = async (bearer: string | null) => {
       const headers = new Headers(options.headers);
       if (bearer && !headers.has("Authorization")) {
         headers.set("Authorization", `Bearer ${bearer}`);
@@ -569,50 +569,59 @@ export class NulldownClient {
       if (this.config.clientId && !headers.has(DIFF_CLIENT_ID_HEADER)) {
         headers.set(DIFF_CLIENT_ID_HEADER, this.config.clientId);
       }
-      return await this.fetchImpl(`${this.config.baseUrl}${path}`, {
-        ...options,
-        headers,
-      });
+      return await requestNulldownHttp<T>(
+        this.fetchImpl,
+        `${this.config.baseUrl}${path}`,
+        {
+          init: { ...options, headers },
+          timeoutMs: this.config.requestTimeoutMs,
+        },
+      );
     };
 
-    let bearer = bearerProvider
-      ? await bearerProvider({})
-      : (this.config.token ?? null);
-    let response = await perform(bearer);
-    if (
-      response.status === 401 &&
-      bearerProvider &&
-      bearer &&
-      isReplayableRequestBody(options.body)
-    ) {
-      await response.body?.cancel().catch(() => undefined);
-      bearer = await bearerProvider({
-        forceRefresh: true,
-        rejectedToken: bearer,
-      });
-      response = await perform(bearer);
+    try {
+      let bearer = bearerProvider
+        ? await bearerProvider({})
+        : (this.config.token ?? null);
+      let response = await perform(bearer);
+      if (
+        response.status === 401 &&
+        bearerProvider &&
+        bearer &&
+        isReplayableRequestBody(options.body)
+      ) {
+        bearer = await bearerProvider({
+          forceRefresh: true,
+          rejectedToken: bearer,
+        });
+        response = await perform(bearer);
+      }
+      if (!response.ok) {
+        const error = createNulldownHttpResponseError(response);
+        throw new NulldownClientError(error.message, {
+          status: error.status,
+          code: error.code,
+        });
+      }
+      return {
+        status: response.status,
+        headers: response.headers,
+        text: response.text,
+        data: response.data,
+      };
+    } catch (error) {
+      if (error instanceof NulldownHttpTransportError) {
+        const message =
+          error.code === "request_failed" && error.cause instanceof Error
+            ? error.cause.message
+            : error.message;
+        throw new NulldownClientError(message, {
+          status: error.status,
+          code: error.code,
+        });
+      }
+      throw error;
     }
-    const text = await response.text();
-    const data = parseJsonLoose(text) as T | null;
-
-    if (!response.ok) {
-      const message =
-        data && typeof data === "object" && "error" in data
-          ? String((data as { error: unknown }).error)
-          : text || `${response.status} ${response.statusText}`;
-      const code =
-        data && typeof data === "object" && "code" in data
-          ? String((data as { code: unknown }).code)
-          : undefined;
-      throw new NulldownClientError(message, { status: response.status, code });
-    }
-
-    return {
-      status: response.status,
-      headers: response.headers,
-      text,
-      data,
-    };
   }
 
   /** Reads a drop by canonical or short id. */

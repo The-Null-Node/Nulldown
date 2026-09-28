@@ -53,6 +53,12 @@ import type {
   DropReadResult,
   NulldownRuntime,
 } from "./runtime/types";
+import {
+  createNulldownHttpResponseError,
+  NulldownHttpTransportError,
+  requestNulldownHttp,
+  type NulldownHttpResponse,
+} from "../client/http-transport";
 
 export {
   buildSeedDropContent,
@@ -151,12 +157,7 @@ interface DiffAuthTokenBundle {
   credentials: Record<string, DiffCredentialEntry>;
 }
 
-interface ApiResponse<T = unknown> {
-  status: number;
-  headers: Headers;
-  text: string;
-  data: T | null;
-}
+type ApiResponse<T = unknown> = NulldownHttpResponse<T>;
 
 class CliError extends Error {
   readonly status?: number;
@@ -583,56 +584,18 @@ const requestOnce = async <T = unknown>(
     headers.set(DIFF_CLIENT_ID_HEADER, config.clientId);
   }
 
-  const controller = new AbortController();
-  const externalSignal = options.signal;
-  let abortSource: "caller" | "timeout" | null = null;
-  const abortFromCaller = () => {
-    if (abortSource) return;
-    abortSource = "caller";
-    controller.abort(externalSignal?.reason);
-  };
-  if (externalSignal?.aborted) abortFromCaller();
-  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timeout = setTimeout(() => {
-    if (abortSource) return;
-    abortSource = "timeout";
-    controller.abort();
-  }, config.requestTimeoutMs);
-
   diagnostics.emit({ event: "http.start", requestId, method });
   try {
-    const response = await dependencies.fetch(`${config.baseUrl}${path}`, {
-      ...options,
-      headers,
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    const data = parseJsonLoose(text) as T | null;
-    const contentType = response.headers.get("Content-Type") || "";
-
-    if (
-      response.ok &&
-      contentType.includes("application/json") &&
-      text.trim() &&
-      text.trim() !== "null" &&
-      data === null
-    ) {
-      throw new CliError("Response body was not valid JSON.", {
-        status: response.status,
-        code: "invalid_json_response",
-      });
-    }
-
+    const response = await requestNulldownHttp<T>(
+      dependencies.fetch,
+      `${config.baseUrl}${path}`,
+      {
+        init: { ...options, headers },
+        timeoutMs: config.requestTimeoutMs,
+      },
+    );
     if (!response.ok) {
-      const message =
-        data && typeof data === "object" && "error" in data
-          ? String((data as { error: unknown }).error)
-          : text || `${response.status} ${response.statusText}`;
-      const code =
-        data && typeof data === "object" && "code" in data
-          ? String((data as { code: unknown }).code)
-          : "http_error";
-      throw new CliError(message, { status: response.status, code });
+      throw createNulldownHttpResponseError(response);
     }
 
     diagnostics.emit({
@@ -642,19 +605,15 @@ const requestOnce = async <T = unknown>(
       durationMs: dependencies.now() - startedAt,
       status: response.status,
     });
-    return {
-      status: response.status,
-      headers: response.headers,
-      text,
-      data,
-    };
+    return response;
   } catch (error) {
-    const normalized = abortSource === "timeout"
-      ? new CliError("Request timed out.", { code: "request_timeout" })
-      : abortSource === "caller"
-        ? new CliError("Request was aborted.", { code: "request_aborted" })
-        : error instanceof CliError
-          ? error
+    const normalized = error instanceof CliError
+      ? error
+      : error instanceof NulldownHttpTransportError
+        ? new CliError(error.message, {
+            code: error.code,
+            status: error.status,
+          })
           : new CliError("Request failed.", { code: "request_failed" });
     diagnostics.emit({
       event: "http.error",
@@ -665,9 +624,6 @@ const requestOnce = async <T = unknown>(
       status: normalized.status,
     });
     throw normalized;
-  } finally {
-    clearTimeout(timeout);
-    externalSignal?.removeEventListener("abort", abortFromCaller);
   }
 };
 
