@@ -7,8 +7,16 @@ import {
   DIFF_TIMESTAMP_HEADER,
   buildDiffSigningPayload,
 } from "../../shared/drop/diff-auth";
-import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
-import type { BranchResolvedQueryResponse } from "../../shared/drop/branch-api";
+import {
+  isDropBranchContentResponse,
+  isDropBranchResolveResponse,
+  NULLDOWN_ACCOUNT_ID_HEADER,
+} from "../../shared/drop/branch";
+import {
+  isNullplugResponseSubmitResponse,
+  isNullplugStateSubmitResponse,
+  type BranchResolvedQueryResponse,
+} from "../../shared/drop/branch-api";
 import {
   decodeDropEnvelope,
   encodeDropEnvelope,
@@ -28,18 +36,21 @@ import type {
 } from "../../shared/drop/diff";
 import { hasConfirmedDropDiffAppendReceipt } from "../../shared/drop/diff";
 import { DropDiffEventIdSchema } from "../../shared/drop/codecs/diff-v1";
-import type {
-  NullplugInvokeRequest,
-  NullplugInvokeResponse,
+import {
+  isNullplugInvokeResponse,
+  type NullplugInvokeRequest,
+  type NullplugInvokeResponse,
 } from "../../shared/nullplug/types";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
   NullplugUiStateSnapshot,
 } from "../../shared/nullplug/ui";
-import type {
-  RemoteNullplugManifest,
-  RemoteNullplugRegistryRecord,
+import {
+  isRemoteNullplugManifest,
+  isRemoteNullplugRegistryRecord,
+  type RemoteNullplugManifest,
+  type RemoteNullplugRegistryRecord,
 } from "../../shared/nullplug/registry";
 import type { NullMemSourceRef } from "../../shared/nullmem/source-reference";
 import {
@@ -510,6 +521,48 @@ const isReplayableRequestBody = (body: RequestInit["body"]): boolean =>
   typeof body === "string" ||
   body instanceof URLSearchParams;
 
+const requireApiResponse = <T>(
+  value: unknown,
+  isValid: (candidate: unknown) => candidate is T,
+  status?: number,
+): T => {
+  if (!isValid(value)) {
+    throw new NulldownClientError(
+      "Response body did not match the endpoint contract.",
+      { code: "invalid_api_response", status },
+    );
+  }
+  return value;
+};
+
+const invalidApiReceipt = (status?: number): never => {
+  throw new NulldownClientError(
+    "Response receipt did not acknowledge the requested operation.",
+    { code: "invalid_api_response", status },
+  );
+};
+
+const isNullplugRegistryListResult = (
+  value: unknown,
+): value is NulldownNullplugRegistryListResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "items" in value &&
+  Array.isArray(value.items) &&
+  value.items.every(isRemoteNullplugManifest) &&
+  "cursor" in value &&
+  (value.cursor === null || typeof value.cursor === "string");
+
+const isNullplugRegistryRegisterResult = (
+  value: unknown,
+): value is NulldownNullplugRegistryRegisterResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "registered" in value &&
+  value.registered === true &&
+  "record" in value &&
+  isRemoteNullplugRegistryRecord(value.record);
+
 /** Creates Nulldown client configuration from options and `ND_*` environment variables. */
 export const createNulldownClientConfig = (
   options: CreateNulldownClientOptions = {},
@@ -837,7 +890,11 @@ export class NulldownClient {
       `/api/branches/resolve/${encodeURIComponent(dropId)}`,
       { method: "POST" },
     );
-    return response.data;
+    return requireApiResponse(
+      response.data,
+      isDropBranchResolveResponse,
+      response.status,
+    );
   }
 
   /** Reads exact branch content. */
@@ -845,7 +902,14 @@ export class NulldownClient {
     const response = await this.request(
       `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/content`,
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isDropBranchContentResponse,
+      response.status,
+    );
+    return result.branchId === branchId
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Queries a branch resolved heap. */
@@ -952,7 +1016,11 @@ export class NulldownClient {
         body: JSON.stringify(request),
       },
     );
-    return response.data;
+    return requireApiResponse(
+      response.data,
+      isNullplugInvokeResponse,
+      response.status,
+    );
   }
 
   /** Stores an immutable nullplug UI response fact. */
@@ -967,7 +1035,17 @@ export class NulldownClient {
         body: JSON.stringify(fact),
       },
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isNullplugResponseSubmitResponse,
+      response.status,
+    );
+    return result.stored &&
+      result.fact.id === fact.id &&
+      result.fact.primitiveId === fact.primitiveId &&
+      result.fact.source.branchId === fact.source.branchId
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Stores a nullplug UI state patch or snapshot fact. */
@@ -982,7 +1060,18 @@ export class NulldownClient {
         body: JSON.stringify(fact),
       },
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isNullplugStateSubmitResponse,
+      response.status,
+    );
+    return result.stored &&
+      result.fact.kind === fact.kind &&
+      result.fact.id === fact.id &&
+      result.fact.callId === fact.callId &&
+      result.fact.source.branchId === fact.source.branchId
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Lists active remote nullplug manifests. */
@@ -990,7 +1079,11 @@ export class NulldownClient {
     const response = await this.request<NulldownNullplugRegistryListResult>(
       "/api/nullplug/registry",
     );
-    return response.data;
+    return requireApiResponse(
+      response.data,
+      isNullplugRegistryListResult,
+      response.status,
+    );
   }
 
   /** Registers a signed remote nullplug manifest. */
@@ -1005,7 +1098,15 @@ export class NulldownClient {
         body: JSON.stringify(manifest),
       },
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isNullplugRegistryRegisterResult,
+      response.status,
+    );
+    return result.record.manifest.id === manifest.id &&
+      result.record.manifest.version === manifest.version
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Posts a single atomic branch diff event and returns its server acknowledgement. */
