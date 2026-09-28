@@ -1,4 +1,4 @@
-import { createBranchApiClient } from "../../../shared/drop/branch-api";
+import { createBranchApiClient } from "../../client/branch-api-client";
 import type { NullplugRuntime } from "../../../shared/nullplug/runtime";
 import type {
   NullplugUiResponseFact,
