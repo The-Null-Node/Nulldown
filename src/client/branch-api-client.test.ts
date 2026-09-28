@@ -1,8 +1,8 @@
-import { createBranchApiClient } from "./branch-api";
+import { createBranchApiClient } from "./branch-api-client";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
-} from "../nullplug/ui";
+} from "../../shared/nullplug/ui";
 
 describe("branch api client", () => {
   it("lists branches with the configured authentication headers", async () => {
@@ -146,6 +146,36 @@ describe("branch api client", () => {
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
       expectedSnapshotId: 4,
       idempotencyKey: "promotion-1",
+    });
+  });
+
+  it("uses portable malformed-JSON and timeout classifications", async () => {
+    const invalid = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      fetchImpl: async () =>
+        new Response("{not-json", {
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+    await expect(invalid.listBranches("root-1")).rejects.toMatchObject({
+      code: "invalid_json_response",
+      status: 200,
+    });
+
+    const timed = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      requestTimeoutMs: 1,
+      fetchImpl: async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted")),
+            { once: true },
+          );
+        }),
+    });
+    await expect(timed.listBranches("root-1")).rejects.toMatchObject({
+      code: "request_timeout",
     });
   });
 });

@@ -97,6 +97,20 @@ describe("browser remote nullplug runtime", () => {
     );
   });
 
+  it("classifies malformed registry JSON through the portable transport", async () => {
+    const runtime = createRemoteNullplugRuntime({
+      fetchImpl: async () =>
+        new Response("{not-json", {
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    await expect(runtime.supports!(invokeRequest)).rejects.toMatchObject({
+      code: "registry_invalid",
+      message: "Nullplug registry returned invalid JSON.",
+    });
+  });
+
   it("discovers plugin ownership across registry pages", async () => {
     const calls: string[] = [];
     const runtime = createRemoteNullplugRuntime({

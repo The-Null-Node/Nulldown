@@ -54,7 +54,7 @@ import {
 import { toShortDropId } from "../../shared/drop/id";
 import { toUserFacingDropError } from "../lib/drop/user-errors";
 import { getUnlockedVault } from "../lib/auth/vault/passkey-vault";
-import { createBranchApiClient } from "../../shared/drop/branch-api";
+import { createBranchApiClient } from "../client/branch-api-client";
 import { getAccountSessionToken } from "../lib/auth/account-session";
 import {
   clearBranchPromotionIntent,
