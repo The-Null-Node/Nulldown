@@ -11,7 +11,7 @@ import {
 import {
   createNulldownClient,
   createNulldownClientConfig,
-  NulldownClientError,
+  type NulldownClientError,
   type NulldownEnvelopeProvider,
 } from "./nulldown-client";
 import { encodeDropEnvelope } from "../../shared/drop/codecs/envelope-v1";
@@ -641,5 +641,60 @@ describe("NulldownClient", () => {
       } as RequestInit),
     ).rejects.toMatchObject({ status: 401 });
     expect(bearerProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed successful JSON with the portable transport code", async () => {
+    const client = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: async () =>
+        new Response("{not-json", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    await expect(client.request("/api/test")).rejects.toMatchObject({
+      name: "NulldownClientError",
+      message: "Response body was not valid JSON.",
+      code: "invalid_json_response",
+      status: 200,
+    });
+  });
+
+  it("classifies configured deadlines and caller cancellation separately", async () => {
+    const waitForAbort = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> =>
+      await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+      });
+    const timed = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: waitForAbort,
+      requestTimeoutMs: 1,
+    });
+
+    await expect(timed.request("/api/test")).rejects.toMatchObject({
+      name: "NulldownClientError",
+      code: "request_timeout",
+    });
+
+    const controller = new AbortController();
+    const cancellable = createNulldownClient({
+      baseUrl: "https://nulldown.test",
+      fetch: waitForAbort,
+    });
+    const pending = cancellable.request("/api/test", {
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({
+      name: "NulldownClientError",
+      code: "request_aborted",
+    });
   });
 });
