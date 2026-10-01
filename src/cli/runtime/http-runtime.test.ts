@@ -87,6 +87,37 @@ describe("HTTP drop runtime", () => {
     ]);
   });
 
+  it("rejects successful create bodies that do not match the endpoint contract", async () => {
+    const runtime = createHttpNulldownRuntime({
+      readDrop: async () => {
+        throw new Error("unused");
+      },
+      request: requestWithData({ id: "drop-1" }),
+    });
+
+    await expect(runtime.drops.create({ content: "content" })).rejects.toThrow(
+      "Create response did not include a drop",
+    );
+  });
+
+  it("rejects branch content for a different requested branch", async () => {
+    const runtime = createHttpNulldownRuntime({
+      readDrop: async () => {
+        throw new Error("unused");
+      },
+      request: requestWithData({
+        rootDropId: "root-1",
+        branchId: "branch-other",
+        snapshotId: 1,
+        content: "# Other branch",
+      }),
+    });
+
+    await expect(
+      runtime.branches.content("root-1", "branch-requested"),
+    ).rejects.toThrow("did not acknowledge the requested operation");
+  });
+
   it("accepts a complete diff receipt for every submitted event", async () => {
     const envelope: DropDiffEnvelope = {
       version: 1,

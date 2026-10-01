@@ -1,8 +1,8 @@
-import { createBranchApiClient } from "./branch-api";
+import { createBranchApiClient } from "./branch-api-client";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
-} from "../nullplug/ui";
+} from "../../shared/nullplug/ui";
 
 describe("branch api client", () => {
   it("lists branches with the configured authentication headers", async () => {
@@ -147,5 +147,113 @@ describe("branch api client", () => {
       expectedSnapshotId: 4,
       idempotencyKey: "promotion-1",
     });
+  });
+
+  it("uses portable malformed-JSON and timeout classifications", async () => {
+    const invalid = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      fetchImpl: async () =>
+        new Response("{not-json", {
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+    await expect(invalid.listBranches("root-1")).rejects.toMatchObject({
+      code: "invalid_json_response",
+      status: 200,
+    });
+
+    const timed = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      requestTimeoutMs: 1,
+      fetchImpl: async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted")),
+            { once: true },
+          );
+        }),
+    });
+    await expect(timed.listBranches("root-1")).rejects.toMatchObject({
+      code: "request_timeout",
+    });
+  });
+
+  it("rejects successful bodies that do not match the endpoint contract", async () => {
+    const client = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      fetchImpl: async () => Response.json({ rootDropId: "root-1" }),
+    });
+
+    await expect(client.listBranches("root-1")).rejects.toMatchObject({
+      code: "invalid_api_response",
+    });
+  });
+
+  it("rejects typed receipts for a different requested operation", async () => {
+    const client = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      fetchImpl: async () =>
+        Response.json({
+          dropId: "promoted-1",
+          url: "https://nulldown.test/d/promot",
+          rootDropId: "root-1",
+          branchId: "branch-other",
+          snapshotId: 4,
+        }),
+    });
+
+    await expect(
+      client.promoteBranch("root-1", "branch-1", {
+        expectedSnapshotId: 4,
+        idempotencyKey: "promotion-1",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_api_response" });
+  });
+
+  it("validates nested resolved-query results", async () => {
+    const response = {
+      rootDropId: "root-1",
+      branchId: "branch-1",
+      snapshotId: 1,
+      resolverId: "nulldown.resolved.document.v1",
+      resolverVersion: "1",
+      sourceContentHash: `sha256:${"A".repeat(43)}`,
+      stale: false,
+      heapGenerated: false,
+      nodeCount: 1,
+      nodes: [
+        {
+          node: {
+            id: "node-1",
+            kind: "paragraph",
+            text: "Hello",
+            sourceRange: { start: 0, end: 5 },
+            sourceHash: `sha256:${"B".repeat(43)}`,
+          },
+          score: 1,
+          reasons: ["query"],
+        },
+      ],
+    };
+    const valid = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      fetchImpl: async () => Response.json(response),
+    });
+    await expect(valid.queryResolved("root-1", "branch-1")).resolves.toEqual(
+      response,
+    );
+
+    const invalid = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      fetchImpl: async () =>
+        Response.json({
+          ...response,
+          nodes: [{ ...response.nodes[0], score: "high" }],
+        }),
+    });
+    await expect(
+      invalid.queryResolved("root-1", "branch-1"),
+    ).rejects.toMatchObject({ code: "invalid_api_response" });
   });
 });

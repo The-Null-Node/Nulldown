@@ -29,13 +29,16 @@ const fail = (message: string, details: Record<string, unknown>): never => {
 };
 
 const packageJson = JSON.parse(
-  readFileSync(new URL("../packages/nulldown-mcp/package.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../packages/nulldown-mcp/package.json", import.meta.url),
+    "utf8",
+  ),
 ) as PackageJson;
 
 const binEntries = packageJson.bin ?? {};
-const expectedCoreRange = ">=0.0.8 <0.1.0";
+const expectedCoreRange = ">=0.0.9 <0.1.0";
 if (packageJson.dependencies?.["@thenullnode/nulldown"] !== expectedCoreRange) {
-  fail("MCP requires the core release that provides bounded strategy reads.", {
+  fail("MCP requires the core release that provides its public contracts.", {
     expectedCoreRange,
     actualCoreRange: packageJson.dependencies?.["@thenullnode/nulldown"],
   });
@@ -105,7 +108,10 @@ const credentialImport = packageTooling.match(
   /import\s*\{([^}]*)\}\s*from\s*"@thenullnode\/nulldown\/auth\/cliCredential";/u,
 );
 const credentialImports = new Set(
-  credentialImport?.[1].split(",").map((name) => name.trim()).filter(Boolean) ?? [],
+  credentialImport?.[1]
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean) ?? [],
 );
 const requiredCredentialImports = [
   "createFileCliCredentialTokenProvider",

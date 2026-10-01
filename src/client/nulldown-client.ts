@@ -7,8 +7,16 @@ import {
   DIFF_TIMESTAMP_HEADER,
   buildDiffSigningPayload,
 } from "../../shared/drop/diff-auth";
-import { NULLDOWN_ACCOUNT_ID_HEADER } from "../../shared/drop/branch";
-import type { BranchResolvedQueryResponse } from "../../shared/drop/branch-api";
+import {
+  isDropBranchContentResponse,
+  isDropBranchResolveResponse,
+  NULLDOWN_ACCOUNT_ID_HEADER,
+} from "../../shared/drop/branch";
+import {
+  isNullplugResponseSubmitResponse,
+  isNullplugStateSubmitResponse,
+  type BranchResolvedQueryResponse,
+} from "../../shared/drop/branch-api";
 import {
   decodeDropEnvelope,
   encodeDropEnvelope,
@@ -28,19 +36,28 @@ import type {
 } from "../../shared/drop/diff";
 import { hasConfirmedDropDiffAppendReceipt } from "../../shared/drop/diff";
 import { DropDiffEventIdSchema } from "../../shared/drop/codecs/diff-v1";
-import type {
-  NullplugInvokeRequest,
-  NullplugInvokeResponse,
+import {
+  isNullplugInvokeResponse,
+  type NullplugInvokeRequest,
+  type NullplugInvokeResponse,
 } from "../../shared/nullplug/types";
 import type {
   NullplugUiResponseFact,
   NullplugUiStatePatchFact,
   NullplugUiStateSnapshot,
 } from "../../shared/nullplug/ui";
-import type {
-  RemoteNullplugManifest,
-  RemoteNullplugRegistryRecord,
+import {
+  isRemoteNullplugManifest,
+  isRemoteNullplugRegistryRecord,
+  type RemoteNullplugManifest,
+  type RemoteNullplugRegistryRecord,
 } from "../../shared/nullplug/registry";
+import type { NullMemSourceRef } from "../../shared/nullmem/source-reference";
+import {
+  createNulldownHttpResponseError,
+  NulldownHttpTransportError,
+  requestNulldownHttp,
+} from "./http-transport";
 
 /** JSON-compatible value accepted by Nulldown HTTP APIs. */
 export type NulldownJsonValue =
@@ -95,6 +112,8 @@ export interface NulldownClientConfig {
   diffWebhookSecret?: string | null;
   /** Optional fetch implementation for tests or alternate runtimes. */
   fetch?: typeof fetch;
+  /** Optional request deadline in milliseconds. Omitted requests have no client deadline. */
+  requestTimeoutMs?: number;
 }
 
 /** Options accepted when constructing a Nulldown client. */
@@ -254,6 +273,10 @@ export interface NulldownMemoryFactRequest {
   rootId: string;
   /** Branch id. */
   branchId: string;
+  /** Stable fact record id. Reuse this value when retrying the same logical fact. */
+  recordId?: string;
+  /** Canonical provenance references to persist exactly as supplied. */
+  sourceRefs?: NullMemSourceRef[];
   /** Fact body. */
   text: string;
   /** Optional compact title. */
@@ -278,6 +301,10 @@ export interface NulldownMemoryProcedureRequest {
   rootId: string;
   /** Branch id. */
   branchId: string;
+  /** Stable procedure record id. Reuse this value when retrying the same logical procedure. */
+  recordId?: string;
+  /** Canonical provenance references to persist exactly as supplied. */
+  sourceRefs?: NullMemSourceRef[];
   /** Procedure goal. */
   goal: string;
   /** Compact reusable summary. */
@@ -393,14 +420,6 @@ export class NulldownClientError extends Error {
   }
 }
 
-const parseJsonLoose = (text: string): unknown | null => {
-  try {
-    return text ? JSON.parse(text) : null;
-  } catch {
-    return null;
-  }
-};
-
 const looksLikeSealedEnvelope = (value: unknown): boolean =>
   typeof value === "object" &&
   value !== null &&
@@ -502,6 +521,48 @@ const isReplayableRequestBody = (body: RequestInit["body"]): boolean =>
   typeof body === "string" ||
   body instanceof URLSearchParams;
 
+const requireApiResponse = <T>(
+  value: unknown,
+  isValid: (candidate: unknown) => candidate is T,
+  status?: number,
+): T => {
+  if (!isValid(value)) {
+    throw new NulldownClientError(
+      "Response body did not match the endpoint contract.",
+      { code: "invalid_api_response", status },
+    );
+  }
+  return value;
+};
+
+const invalidApiReceipt = (status?: number): never => {
+  throw new NulldownClientError(
+    "Response receipt did not acknowledge the requested operation.",
+    { code: "invalid_api_response", status },
+  );
+};
+
+const isNullplugRegistryListResult = (
+  value: unknown,
+): value is NulldownNullplugRegistryListResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "items" in value &&
+  Array.isArray(value.items) &&
+  value.items.every(isRemoteNullplugManifest) &&
+  "cursor" in value &&
+  (value.cursor === null || typeof value.cursor === "string");
+
+const isNullplugRegistryRegisterResult = (
+  value: unknown,
+): value is NulldownNullplugRegistryRegisterResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "registered" in value &&
+  value.registered === true &&
+  "record" in value &&
+  isRemoteNullplugRegistryRecord(value.record);
+
 /** Creates Nulldown client configuration from options and `ND_*` environment variables. */
 export const createNulldownClientConfig = (
   options: CreateNulldownClientOptions = {},
@@ -525,6 +586,7 @@ export const createNulldownClientConfig = (
       ? options.diffWebhookSecret
       : process.env.DIFF_WEBHOOK_SECRET ?? null,
   fetch: options.fetch,
+  requestTimeoutMs: options.requestTimeoutMs,
 });
 
 /** Small HTTP client for direct Nulldown API calls used by CLI and MCP surfaces. */
@@ -549,7 +611,7 @@ export class NulldownClient {
       !explicitAuthorization && this.config.token === null
         ? this.config.bearerProvider
         : undefined;
-    const perform = async (bearer: string | null): Promise<Response> => {
+    const perform = async (bearer: string | null) => {
       const headers = new Headers(options.headers);
       if (bearer && !headers.has("Authorization")) {
         headers.set("Authorization", `Bearer ${bearer}`);
@@ -560,50 +622,59 @@ export class NulldownClient {
       if (this.config.clientId && !headers.has(DIFF_CLIENT_ID_HEADER)) {
         headers.set(DIFF_CLIENT_ID_HEADER, this.config.clientId);
       }
-      return await this.fetchImpl(`${this.config.baseUrl}${path}`, {
-        ...options,
-        headers,
-      });
+      return await requestNulldownHttp<T>(
+        this.fetchImpl,
+        `${this.config.baseUrl}${path}`,
+        {
+          init: { ...options, headers },
+          timeoutMs: this.config.requestTimeoutMs,
+        },
+      );
     };
 
-    let bearer = bearerProvider
-      ? await bearerProvider({})
-      : (this.config.token ?? null);
-    let response = await perform(bearer);
-    if (
-      response.status === 401 &&
-      bearerProvider &&
-      bearer &&
-      isReplayableRequestBody(options.body)
-    ) {
-      await response.body?.cancel().catch(() => undefined);
-      bearer = await bearerProvider({
-        forceRefresh: true,
-        rejectedToken: bearer,
-      });
-      response = await perform(bearer);
+    try {
+      let bearer = bearerProvider
+        ? await bearerProvider({})
+        : (this.config.token ?? null);
+      let response = await perform(bearer);
+      if (
+        response.status === 401 &&
+        bearerProvider &&
+        bearer &&
+        isReplayableRequestBody(options.body)
+      ) {
+        bearer = await bearerProvider({
+          forceRefresh: true,
+          rejectedToken: bearer,
+        });
+        response = await perform(bearer);
+      }
+      if (!response.ok) {
+        const error = createNulldownHttpResponseError(response);
+        throw new NulldownClientError(error.message, {
+          status: error.status,
+          code: error.code,
+        });
+      }
+      return {
+        status: response.status,
+        headers: response.headers,
+        text: response.text,
+        data: response.data,
+      };
+    } catch (error) {
+      if (error instanceof NulldownHttpTransportError) {
+        const message =
+          error.code === "request_failed" && error.cause instanceof Error
+            ? error.cause.message
+            : error.message;
+        throw new NulldownClientError(message, {
+          status: error.status,
+          code: error.code,
+        });
+      }
+      throw error;
     }
-    const text = await response.text();
-    const data = parseJsonLoose(text) as T | null;
-
-    if (!response.ok) {
-      const message =
-        data && typeof data === "object" && "error" in data
-          ? String((data as { error: unknown }).error)
-          : text || `${response.status} ${response.statusText}`;
-      const code =
-        data && typeof data === "object" && "code" in data
-          ? String((data as { code: unknown }).code)
-          : undefined;
-      throw new NulldownClientError(message, { status: response.status, code });
-    }
-
-    return {
-      status: response.status,
-      headers: response.headers,
-      text,
-      data,
-    };
   }
 
   /** Reads a drop by canonical or short id. */
@@ -819,7 +890,11 @@ export class NulldownClient {
       `/api/branches/resolve/${encodeURIComponent(dropId)}`,
       { method: "POST" },
     );
-    return response.data;
+    return requireApiResponse(
+      response.data,
+      isDropBranchResolveResponse,
+      response.status,
+    );
   }
 
   /** Reads exact branch content. */
@@ -827,7 +902,14 @@ export class NulldownClient {
     const response = await this.request(
       `/api/branches/${encodeURIComponent(rootId)}/${encodeBranchPathSegment(branchId)}/content`,
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isDropBranchContentResponse,
+      response.status,
+    );
+    return result.branchId === branchId
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Queries a branch resolved heap. */
@@ -934,7 +1016,11 @@ export class NulldownClient {
         body: JSON.stringify(request),
       },
     );
-    return response.data;
+    return requireApiResponse(
+      response.data,
+      isNullplugInvokeResponse,
+      response.status,
+    );
   }
 
   /** Stores an immutable nullplug UI response fact. */
@@ -949,7 +1035,17 @@ export class NulldownClient {
         body: JSON.stringify(fact),
       },
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isNullplugResponseSubmitResponse,
+      response.status,
+    );
+    return result.stored &&
+      result.fact.id === fact.id &&
+      result.fact.primitiveId === fact.primitiveId &&
+      result.fact.source.branchId === fact.source.branchId
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Stores a nullplug UI state patch or snapshot fact. */
@@ -964,7 +1060,18 @@ export class NulldownClient {
         body: JSON.stringify(fact),
       },
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isNullplugStateSubmitResponse,
+      response.status,
+    );
+    return result.stored &&
+      result.fact.kind === fact.kind &&
+      result.fact.id === fact.id &&
+      result.fact.callId === fact.callId &&
+      result.fact.source.branchId === fact.source.branchId
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Lists active remote nullplug manifests. */
@@ -972,7 +1079,11 @@ export class NulldownClient {
     const response = await this.request<NulldownNullplugRegistryListResult>(
       "/api/nullplug/registry",
     );
-    return response.data;
+    return requireApiResponse(
+      response.data,
+      isNullplugRegistryListResult,
+      response.status,
+    );
   }
 
   /** Registers a signed remote nullplug manifest. */
@@ -987,7 +1098,15 @@ export class NulldownClient {
         body: JSON.stringify(manifest),
       },
     );
-    return response.data;
+    const result = requireApiResponse(
+      response.data,
+      isNullplugRegistryRegisterResult,
+      response.status,
+    );
+    return result.record.manifest.id === manifest.id &&
+      result.record.manifest.version === manifest.version
+      ? result
+      : invalidApiReceipt(response.status);
   }
 
   /** Posts a single atomic branch diff event and returns its server acknowledgement. */

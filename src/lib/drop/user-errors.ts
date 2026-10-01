@@ -10,7 +10,10 @@ const getRawErrorMessage = (error: unknown): string => {
   return String(error ?? "").trim();
 };
 
-const messageIncludes = (message: string, tokens: readonly string[]): boolean => {
+const messageIncludes = (
+  message: string,
+  tokens: readonly string[],
+): boolean => {
   const lower = message.toLowerCase();
   return tokens.some((token) => lower.includes(token));
 };
@@ -23,6 +26,14 @@ export const toUserFacingDropError = (
 
   if (!message) {
     return fallback;
+  }
+
+  if (
+    messageIncludes(message, [
+      "remote branch editing is not available for encrypted drop envelopes",
+    ])
+  ) {
+    return "This encrypted drop cannot be edited through a remote branch yet. You can view its content; editing and publishing are unavailable.";
   }
 
   if (

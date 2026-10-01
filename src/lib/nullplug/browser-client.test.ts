@@ -50,7 +50,12 @@ describe("browser nullplug client", () => {
     let authCalls = 0;
     const fetchImpl: typeof fetch = async (input, init) => {
       requests.push({ url: String(input), init });
-      return Response.json({ stored: true, indexed: true, key: "fact-key" });
+      return Response.json({
+        stored: true,
+        indexed: true,
+        key: "fact-key",
+        fact: JSON.parse(String(init?.body)),
+      });
     };
     const client = createBrowserNullplugClient({
       nullplugRuntime: {
@@ -93,7 +98,9 @@ describe("browser nullplug client", () => {
     await expect(
       client.submitResponse(context, responseFact),
     ).resolves.toBeUndefined();
-    await expect(client.submitState(context, stateFact)).resolves.toBeUndefined();
+    await expect(
+      client.submitState(context, stateFact),
+    ).resolves.toBeUndefined();
 
     expect(authCalls).toBe(2);
     expect(requests.map(({ url }) => url)).toEqual([
