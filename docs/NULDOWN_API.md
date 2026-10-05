@@ -4,9 +4,9 @@ This document is the CLI and API guide for Nulldown drops, branch editing, diffs
 
 Published Nulldown docs:
 
-- [Docs index](https://nulldown.app/d/r1Belg)
-- [API reference](https://nulldown.app/d/q7RRSk)
-- [Agent skill prompt](https://nulldown.app/d/6p6ytx)
+- [Docs index](https://nulldown.app/d/kzgJGL)
+- [Connect an agent through MCP](https://nulldown.app/d/NVJIa8)
+- [Agent workflow reference](../skill.md)
 
 ## Base URL
 
@@ -20,7 +20,7 @@ Local Pages Functions normally run behind Wrangler or a deployed Pages URL. The 
 
 ## CLI Quickstart
 
-The repo ships a Bun-native `nd`/`nulldown` CLI in `bin/nulldown.ts`. Use it for normal agent and operator workflows; use raw HTTP only when building another client or debugging the wire contract.
+The repo ships a Bun-native `nd`/`nulldown` CLI in `bin/nulldown.ts`. Use it for terminal automation and operator workflows. Agents should use the [MCP server](../packages/nulldown-mcp/README.md); raw HTTP is useful when building another client or debugging the wire contract.
 
 ## 0.1 package API migration
 
@@ -142,7 +142,7 @@ Use exact revision strings, including quotes if the header includes them.
 
 ## State And Metadata
 
-Drop state belongs in `payload.metadata`, not in markdown content. Markdown should render UI; metadata should drive readers, agents, and diff replay.
+Markdown holds readable document state: plans, findings, instructions, and results. Drop metadata holds document-level configuration and auxiliary state. Diff event metadata describes an action, while the diff operations change the Markdown. These are distinct inputs; metadata does not replace document content.
 
 Good metadata fields:
 
@@ -162,7 +162,7 @@ Good metadata fields:
 }
 ```
 
-Agents and CLIs should read metadata before content when they need state.
+Read metadata when the task depends on configuration or auxiliary state. Read current branch content to inspect the plan or calculate an edit. The example fields describe application data, not an automatic execution or replay policy.
 
 ## Authentication
 
@@ -647,7 +647,12 @@ Implementation: `functions/api/diff/[id].ts`.
 
 Append diff events to the resolved branch. Diff events are the normal edit
 primitive: accepted writes advance the branch snapshot, and branch query lazily
-materializes resolved heaps from that snapshot when needed.
+materializes resolved heaps from that snapshot when needed. Event metadata lets
+the writer preserve action context such as intent, labels, confidence, result or
+policy references, and sequencing alongside the text operations. A finite numeric
+`metadata.args.priority` is additionally projected as a diff-linked priority fact.
+The other metadata fields remain explanatory signals and do not independently
+increase query scores.
 
 CLI examples:
 
@@ -986,7 +991,8 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority.ts
 Create a branch-scoped priority overlay fact. Priority facts do not mutate branch
 markdown or rewrite heap deltas; they are D1-backed overlays read by
 `resolved/query`. Node and heap facts affect current query scoring. Diff facts
-are persisted for future diff-target scoring and retrieval. Node facts should
+affect nodes associated with matching event references, which document queries
+load through the requested `fromSeq`/`toSeq` range. Node facts should
 include a resolver id when the node id is resolver-specific; the CLI defaults
 node facts to the document resolver.
 
