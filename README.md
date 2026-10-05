@@ -1,18 +1,33 @@
 # Nulldown
 
-**Markdown that stays readable while people and agents work on it together.**
+**Markdown with durable state for agents to execute and reuse.**
 
-Nulldown keeps a Markdown document, its history, and the context around each change
-together. You can read the document normally, replay how it reached its current
-state, retrieve the part an agent needs, or use it to drive a workflow or interface.
+Give agents plans they can act on, results they can inspect, and knowledge they can
+carry into the next task. Instead of reconstructing what happened from scattered
+conversations, they can retrieve recorded decisions, follow procedures, and build
+on previous work.
 
-That means one source can serve people, agents, workflows, memory, and interfaces
-without copying the same work into disconnected prompts, databases, and component
-state.
+Markdown is already familiar to humans and agents. Nulldown adds persistent state,
+structured retrieval, and execution context, so the same document can guide the
+work and keep a record of its results.
 
-## Start With A Document
+## What You Can Build
 
-Imagine a release plan:
+- **Agent orchestration:** coordinate agents through shared plans, procedure steps,
+  results, and handoffs. Your agent framework runs the agents; Nulldown keeps their
+  shared context available.
+- **Long-term memory:** preserve findings, decisions, and reusable procedures
+  beyond a conversation, with sources the next session can check.
+- **Collaborative Markdown:** contribute recorded changes, review independent
+  timelines, and recover conflicting edits before publishing.
+- **Executable Markdown:** connect instructions to agent-executed procedures and
+  runtime-backed interactions, then record their outcomes.
+- **Document-driven interfaces:** put reviews, approvals, and workflow views beside
+  the content they depend on.
+
+## From One Release To The Next
+
+Start with a release plan:
 
 ```markdown
 # Release plan
@@ -22,24 +37,33 @@ Imagine a release plan:
 - [ ] Publish the release notes
 ```
 
-In Nulldown:
+An agent retrieves the plan and rollout-check procedure, runs the check, and
+records its result with a link to the evidence. A reviewer records an approval.
+The next agent reads that decision and continues from the saved state.
 
-- a person or agent can update the checklist;
-- each accepted change keeps its source client and context;
-- a query for "rollout" can return the matching section and point to its source;
-- another branch can explore a different release path without replacing this one.
+After review, the team saves the useful method as a reusable procedure. The next
+release starts with that method and its sources, then records fresh results.
 
-The result is still Markdown. Nulldown adds durable state and retrieval around it.
+**Read the context → execute a step → record the result → reuse what worked.**
 
-## What It Enables
+The agent or configured runtime executes the actions. The document holds the
+instructions, context, and outcomes that make the work inspectable and reusable.
 
-- plans, specifications, and knowledge that people and agents can share;
-- focused retrieval tied back to exact document ranges;
-- reviewable automation where the change and its intent travel together;
-- separate timelines for experiments, reviews, and publication;
-- reusable memory and document-driven interfaces near their source material.
+## Connect An Agent
 
-## Try It
+Install the matching MCP and core packages:
+
+```bash
+bun install -g @thenullnode/nulldown@0.0.9 @thenullnode/nulldown-mcp@0.0.9
+```
+
+Add `nulldown-mcp` as a local stdio server in your MCP client. Follow
+[Connect an agent](https://nulldown.app/d/NVJIa8) for account setup, a first recorded
+change, and retrieving the result in another session. The
+[MCP package README](packages/nulldown-mcp/README.md) covers configuration and tool
+contracts.
+
+## Try The CLI
 
 The current `0.0.9` prerelease is published under the `next` tag and requires
 [Bun](https://bun.sh).
@@ -70,7 +94,7 @@ so use only non-sensitive sample content.
 - **Automation:** use the [CLI and HTTP API](docs/NULDOWN_API.md) for documents,
   branches, diffs, queries, and publication.
 - **Self-hosting:** run the portable API with filesystem blobs and SQLite metadata.
-- **Concepts:** start with the [Nulldown documentation](https://nulldown.app/d/qP3Mi4).
+- **Concepts:** start with the [Nulldown documentation](https://nulldown.app/d/kzgJGL).
 
 ## How The Model Fits Together
 
@@ -108,31 +132,19 @@ An authoring-capable login can create account-owned sealed documents with `priva
 `unlisted`, or `public` visibility. See
 [Privacy and access](https://nulldown.app/d/prO0pe) before using sensitive content.
 
-## Agents And MCP
-
-Install the MCP prerelease:
-
-```bash
-bun install -g @thenullnode/nulldown-mcp@next
-```
-
-The server exposes focused tools for documents, branches, diffs, resolved queries,
-strategy, and NullMem. It is a stdio MCP server configured by your MCP client; it is
-not an interactive terminal program.
-
-See [Connect an agent](https://nulldown.app/d/NVJIa8) for the shortest setup path and
-the [MCP package README](packages/nulldown-mcp/README.md) for authentication,
-configuration, tool groups, and retry behavior.
-
 ## Documentation
 
-- [Why Nulldown](https://nulldown.app/d/jjDqJJ)
-- [Understand document state](https://nulldown.app/d/7UWCph)
-- [Work with Nulldown as an agent](https://nulldown.app/d/ashG9C)
-- [Use documents as interfaces](https://nulldown.app/d/7t8MZQ)
+- [Why Nulldown](https://nulldown.app/d/TQHCCo)
+- [Coordinate agents around a shared plan](https://nulldown.app/d/UeifJr)
+- [Reuse knowledge across agent sessions](https://nulldown.app/d/2jvr1e)
+- [Execute a procedure and record its result](https://nulldown.app/d/6Cy3H4)
+- [Review and recover collaborative edits](https://nulldown.app/d/SEbKiW)
+- [Understand document state](https://nulldown.app/d/m255tk)
+- [Work with Nulldown as an agent](https://nulldown.app/d/J8V2nm)
+- [Use documents as interfaces](https://nulldown.app/d/NyInTa)
 - [Documents and changes](https://nulldown.app/d/AGJtdX)
-- [Ways to use Nulldown](https://nulldown.app/d/VD4rpR)
-- [Full documentation index](https://nulldown.app/d/qP3Mi4)
+- [Choose an interface](https://nulldown.app/d/VD4rpR)
+- [Full documentation index](https://nulldown.app/d/kzgJGL)
 
 Current limitations and release status live in
 [Project status](https://nulldown.app/d/XG80QG).
