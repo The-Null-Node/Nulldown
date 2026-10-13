@@ -199,8 +199,38 @@ bun run package:check-cli
 bun run package:check-mcp
 ```
 
+Production browser builds load public provider keys from `.env.production`.
+The matching private keys belong in Cloudflare Pages secrets, never in a `VITE_`
+variable. Local `.env.*.local` files can override the public build configuration.
+
 Run `bun run format:check`, `bun run lint`, and `bun run typecheck` for the local
 tooling baseline. Repository contribution rules live in [AGENTS.md](AGENTS.md).
+
+### Runtime internals
+
+Branch timeline lookup, actor resolution, snapshot reads, and heap maintenance
+route through `src/server/state-plane/gateway.ts`. Its request-scoped capabilities
+delegate to the existing branch services through a legacy adapter, retaining blob
+storage, optional SQL projections, and replay fallbacks.
+
+Diff transport uses the same gateway for append and polling capabilities. Append
+commands retain the existing Nulledit commit service and durable receipts.
+NullMem record persistence uses `src/server/stores/nullmem-record-store.ts`, whose
+query, write, and delete capabilities bind their value type to validated NullMem
+records.
+
+Resolved queries emit content-free `resolved.heap.phase` timing logs with request
+and phase identifiers. Query totals and projection generation are logged at
+`info`; `LOG_LEVEL=debug` adds read, replay, authorization, and ranking phases.
+Projection write phases report attempted/completed statement counts and available
+D1 SQL duration. Phase durations include nested work, so do not sum them; SQL
+duration excludes network time.
+
+For runtime diff operations, [`DropDiffOperation`](shared/drop/diff-operation.ts)
+provides validated factories and defensive copies of editor buffers and records.
+Use `fromDiff()` for editor operations, `fromRecord()` for incoming records, and
+`toRecord()` at transport and persistence boundaries. The existing v1 wire format
+is preserved.
 
 ## License
 

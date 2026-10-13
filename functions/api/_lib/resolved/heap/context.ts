@@ -1,5 +1,5 @@
 import { resolveAuthenticatedAccountId } from "../../accounts/session/authentication";
-import { createBranchRepository } from "../../branches/storage/repository";
+import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { jsonErrorResponse, resolveParam } from "../../core/http/responses";
@@ -100,11 +100,11 @@ export const resolveResolvedBranchTarget = async (
   if ("error" in identity) return identity;
   const { rootDropId, branchId } = identity;
 
-  const branchRepository = createBranchRepository({
+  const statePlane = createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  const branch = await branchRepository.readBranch(rootDropId, branchId);
+  const branch = await statePlane.branches.readBranch(rootDropId, branchId);
   if (!branch) {
     return {
       error: jsonErrorResponse(404, "branch_not_found", "Branch not found."),
@@ -133,10 +133,10 @@ export const resolveReadableResolvedBranchTarget = async (
     return { error: branchNotFoundResponse() };
   }
 
-  const branch = await createBranchRepository({
+  const branch = await createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
-  }).readBranch(rootDropId, branchId);
+  }).branches.readBranch(rootDropId, branchId);
   if (!branch || !canReadBranch(authorization, branch)) {
     return { error: branchNotFoundResponse() };
   }

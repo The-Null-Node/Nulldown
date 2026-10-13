@@ -1,7 +1,4 @@
-import {
-  readBranchContent,
-  readBranchEventsBySeqRange,
-} from "../../branches/content/replay";
+import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
@@ -36,15 +33,21 @@ import type {
   ResolvedHeapQueryOptions,
   ResolvedHeapQueryRepairTarget,
 } from "./types";
-import { createBranchRepository } from "../../branches/storage/repository";
-import { isCurrentResolvedDocumentProjection, readResolvedHeapState } from "./state";
+import {
+  isCurrentResolvedDocumentProjection,
+  readResolvedHeapState,
+} from "./state";
 import type { ResolvedHeapProjectionRead } from "./projector";
+import { createResolvedHeapTiming, timeHeapPhase } from "./timing";
 
 const RESOLVED_DOCUMENT_SNAPSHOTTER_ID = "nulledit.resolved-document";
 const defaultCompactTextLimit = 240;
 const maxCompactTextLimit = 600;
 
-const compactText = (value: string, limit: number): { text: string; truncated: boolean } => {
+const compactText = (
+  value: string,
+  limit: number,
+): { text: string; truncated: boolean } => {
   if (value.length <= limit) {
     return { text: value, truncated: false };
   }
@@ -99,7 +102,8 @@ const snapshotterRequestFromUrl = (url: URL) => {
   const labelsParam = url.searchParams.get("labels");
 
   return {
-    query: url.searchParams.get("q") || url.searchParams.get("query") || undefined,
+    query:
+      url.searchParams.get("q") || url.searchParams.get("query") || undefined,
     top: Number.isFinite(top) ? top : undefined,
     maxTokens: Number.isFinite(maxTokens) ? maxTokens : undefined,
     preview: url.searchParams.has("preview")
@@ -115,7 +119,12 @@ const queryResolvedHeapUnsafe = async (
   request: Request,
   options?: ResolvedHeapQueryOptions,
 ): Promise<Response> => {
-  const target = await resolveReadableResolvedBranchTarget(request, env, params);
+  const timing = env.heapTiming;
+  const target = await timeHeapPhase(
+    timing,
+    "query.authorize-target",
+    async () => resolveReadableResolvedBranchTarget(request, env, params),
+  );
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
 
@@ -130,11 +139,10 @@ const queryResolvedHeapUnsafe = async (
     Boolean(snapshotterId) &&
     !url.searchParams.has("resolverId") &&
     snapshotterId !== RESOLVED_DOCUMENT_SNAPSHOTTER_ID;
-  const canReadSensitive = await canReadSensitiveBranch(
-    request,
-    env,
-    rootDropId,
-    branch,
+  const canReadSensitive = await timeHeapPhase(
+    timing,
+    "query.authorize-sensitive",
+    async () => canReadSensitiveBranch(request, env, rootDropId, branch),
   );
   if (
     (resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID ||
@@ -149,9 +157,11 @@ const queryResolvedHeapUnsafe = async (
   }
 
   if (snapshotterId && isNonDocumentSnapshotter) {
-    const result = await options?.querySnapshotter?.(
-      snapshotterId,
-      snapshotterRequestFromUrl(url),
+    const result = await timeHeapPhase(timing, "query.snapshotter", async () =>
+      options?.querySnapshotter?.(
+        snapshotterId,
+        snapshotterRequestFromUrl(url),
+      ),
     );
     return jsonResponse(result ?? { items: [] });
   }
@@ -172,7 +182,9 @@ const queryResolvedHeapUnsafe = async (
       resolverId,
     };
     try {
-      await options.repairBufferedCommits(repairTarget);
+      await timeHeapPhase(timing, "query.repair", async () =>
+        options.repairBufferedCommits!(repairTarget),
+      );
     } catch (error) {
       try {
         options.onRepairError?.(error, repairTarget);
@@ -182,30 +194,53 @@ const queryResolvedHeapUnsafe = async (
     }
   }
 
-  const snapshot = resolverId === RESOLVED_DOCUMENT_RESOLVER_ID
-    ? await createBranchRepository({ blobs: env.R2_BUCKET, sql: env.DB })
-      .readSnapshot(rootDropId, branchId, snapshotId)
-    : null;
-  if (snapshot && (snapshot.rootDropId !== rootDropId || snapshot.branchId !== branchId || snapshot.snapshotId !== snapshotId)) {
+  const statePlane = createBranchStatePlane({
+    blobs: env.R2_BUCKET,
+    sql: env.DB,
+  });
+  const snapshot =
+    resolverId === RESOLVED_DOCUMENT_RESOLVER_ID
+      ? await timeHeapPhase(timing, "query.snapshot", async () =>
+          statePlane.snapshots.readSnapshot(rootDropId, branchId, snapshotId),
+        )
+      : null;
+  if (
+    snapshot &&
+    (snapshot.rootDropId !== rootDropId ||
+      snapshot.branchId !== branchId ||
+      snapshot.snapshotId !== snapshotId)
+  ) {
     throw new Error("snapshot_source_identity_invalid");
   }
   // Snapshot zero is mutable; only committed nonzero snapshots can skip replay.
-  const authoritativeHash = snapshotId > 0 ? snapshot?.sourceContentHash : undefined;
+  const authoritativeHash =
+    snapshotId > 0 ? snapshot?.sourceContentHash : undefined;
   let projection: ResolvedHeapProjectionRead | undefined;
   if (authoritativeHash && snapshotId <= branch.headSnapshotId) {
-    const state = await readResolvedHeapState(env, rootDropId, branchId, resolverId, snapshotId, authoritativeHash);
-    if (isCurrentResolvedDocumentProjection(state, rootDropId, branchId, snapshotId, authoritativeHash)) {
+    const state = await readResolvedHeapState(
+      env,
+      rootDropId,
+      branchId,
+      resolverId,
+      snapshotId,
+      authoritativeHash,
+    );
+    if (
+      isCurrentResolvedDocumentProjection(
+        state,
+        rootDropId,
+        branchId,
+        snapshotId,
+        authoritativeHash,
+      )
+    ) {
       projection = { state, heapGenerated: false, stale: false };
     }
   }
 
   if (!projection) {
-    const content = await readBranchContent(
-      env.R2_BUCKET,
-      rootDropId,
-      branchId,
-      snapshotId,
-      env.DB,
+    const content = await timeHeapPhase(timing, "query.replay", async () =>
+      statePlane.snapshots.readContent(rootDropId, branchId, snapshotId),
     );
     if (content === null) {
       return jsonErrorResponse(
@@ -215,28 +250,39 @@ const queryResolvedHeapUnsafe = async (
       );
     }
 
-    const sourceContentHash = await hashBranchSnapshotSource({
-      rootDropId,
-      branchId,
-      snapshotId,
-      content,
-    });
+    const sourceContentHash = await timeHeapPhase(
+      timing,
+      "query.source-hash",
+      async () =>
+        hashBranchSnapshotSource({
+          rootDropId,
+          branchId,
+          snapshotId,
+          content,
+        }),
+    );
     if (authoritativeHash && sourceContentHash !== authoritativeHash) {
       throw new Error("snapshot_source_hash_mismatch");
     }
-    projection = await ensureResolvedHeapProjection(
-      env,
-      resolverId,
-      {
-        rootDropId,
-        branchId,
-        snapshotId,
-        headEventSeq: resolverId === RESOLVED_DOCUMENT_RESOLVER_ID
-          ? snapshot?.patchEndSeq
-          : branch.headEventSeq,
-        content,
-      },
-      sourceContentHash,
+    projection = await timeHeapPhase(
+      timing,
+      "query.ensure-projection",
+      async () =>
+        ensureResolvedHeapProjection(
+          env,
+          resolverId,
+          {
+            rootDropId,
+            branchId,
+            snapshotId,
+            headEventSeq:
+              resolverId === RESOLVED_DOCUMENT_RESOLVER_ID
+                ? snapshot?.patchEndSeq
+                : branch.headEventSeq,
+            content,
+          },
+          sourceContentHash,
+        ),
     );
   }
   const { state, heapGenerated, stale } = projection;
@@ -250,26 +296,32 @@ const queryResolvedHeapUnsafe = async (
   }
 
   const priorityScoring = canReadSensitive
-    ? await createResolvedHeapRepository({
-        sql: env.DB,
-      }).readPriorityScoring(rootDropId, branchId, state.resolverId)
+    ? await timeHeapPhase(timing, "query.priority", async () =>
+        createResolvedHeapRepository({
+          sql: env.DB,
+        }).readPriorityScoring(rootDropId, branchId, state.resolverId),
+      )
     : {};
 
   if (state.resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID) {
-    const nodes = queryResolvedRuntimeNodes(state, {
-      q:
-        url.searchParams.get("q") || url.searchParams.get("query") || undefined,
-      kinds: parseRuntimeKinds(url.searchParams.get("kind")),
-      limit: parsePositiveInteger(
-        url.searchParams.get("k") || url.searchParams.get("top"),
-        10,
-      ),
-      pluginId: url.searchParams.get("pluginId") || undefined,
-      callId: url.searchParams.get("callId") || undefined,
-      primitiveId: url.searchParams.get("primitiveId") || undefined,
-      priorityByNodeId: priorityScoring.priorityByNodeId,
-      heapPriority: priorityScoring.heapPriority,
-    });
+    const nodes = await timeHeapPhase(timing, "query.rank-runtime", async () =>
+      queryResolvedRuntimeNodes(state, {
+        q:
+          url.searchParams.get("q") ||
+          url.searchParams.get("query") ||
+          undefined,
+        kinds: parseRuntimeKinds(url.searchParams.get("kind")),
+        limit: parsePositiveInteger(
+          url.searchParams.get("k") || url.searchParams.get("top"),
+          10,
+        ),
+        pluginId: url.searchParams.get("pluginId") || undefined,
+        callId: url.searchParams.get("callId") || undefined,
+        primitiveId: url.searchParams.get("primitiveId") || undefined,
+        priorityByNodeId: priorityScoring.priorityByNodeId,
+        heapPriority: priorityScoring.heapPriority,
+      }),
+    );
 
     return jsonResponse({
       rootDropId,
@@ -289,13 +341,13 @@ const queryResolvedHeapUnsafe = async (
   const toSeq = parseOptionalSeq(url.searchParams.get("toSeq"));
   const events =
     fromSeq !== null || toSeq !== null
-      ? await readBranchEventsBySeqRange(
-          env.R2_BUCKET,
-          rootDropId,
-          branchId,
-          fromSeq ?? toSeq ?? 0,
-          toSeq ?? fromSeq ?? 0,
-          env.DB,
+      ? await timeHeapPhase(timing, "query.events", async () =>
+          statePlane.snapshots.readEventsBySeqRange(
+            rootDropId,
+            branchId,
+            fromSeq ?? toSeq ?? 0,
+            toSeq ?? fromSeq ?? 0,
+          ),
         )
       : [];
   const includeEventMetadata =
@@ -303,20 +355,23 @@ const queryResolvedHeapUnsafe = async (
   const eventRefs = changedRangesFromDropDiffEvents(events).map((event) =>
     includeEventMetadata ? event : { ...event, metadata: undefined },
   );
-  const nodes = queryResolvedDocumentNodes(state, {
-    q: url.searchParams.get("q") || url.searchParams.get("query") || undefined,
-    kinds: parseDocumentKinds(url.searchParams.get("kind")),
-    limit: parsePositiveInteger(
-      url.searchParams.get("k") || url.searchParams.get("top"),
-      10,
-    ),
-    events: eventRefs,
-    changedOnly: parseBoolean(url.searchParams.get("changedOnly")),
-    includeAncestors: parseBoolean(url.searchParams.get("includeAncestors")),
-    priorityByNodeId: priorityScoring.priorityByNodeId,
-    priorityByDiffEventId: priorityScoring.priorityByDiffEventId,
-    heapPriority: priorityScoring.heapPriority,
-  });
+  const nodes = await timeHeapPhase(timing, "query.rank-document", async () =>
+    queryResolvedDocumentNodes(state, {
+      q:
+        url.searchParams.get("q") || url.searchParams.get("query") || undefined,
+      kinds: parseDocumentKinds(url.searchParams.get("kind")),
+      limit: parsePositiveInteger(
+        url.searchParams.get("k") || url.searchParams.get("top"),
+        10,
+      ),
+      events: eventRefs,
+      changedOnly: parseBoolean(url.searchParams.get("changedOnly")),
+      includeAncestors: parseBoolean(url.searchParams.get("includeAncestors")),
+      priorityByNodeId: priorityScoring.priorityByNodeId,
+      priorityByDiffEventId: priorityScoring.priorityByDiffEventId,
+      heapPriority: priorityScoring.heapPriority,
+    }),
+  );
 
   if (snapshotterId === RESOLVED_DOCUMENT_SNAPSHOTTER_ID) {
     const compact = compactResolvedDocumentItems(nodes, url);
@@ -357,8 +412,11 @@ export const queryResolvedHeap = async (
   request: Request,
   options?: ResolvedHeapQueryOptions,
 ): Promise<Response> => {
+  const heapTiming = createResolvedHeapTiming(request, env, options?.onTiming);
   try {
-    return await queryResolvedHeapUnsafe(env, params, request, options);
+    return await timeHeapPhase(heapTiming, "query", async () =>
+      queryResolvedHeapUnsafe({ ...env, heapTiming }, params, request, options),
+    );
   } catch (error) {
     if (isApiHttpError(error)) {
       return apiHttpErrorResponse(error);

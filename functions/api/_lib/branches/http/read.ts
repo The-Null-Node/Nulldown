@@ -2,9 +2,8 @@ import {
   canReadBranch,
   resolveRootReadAuthorization,
 } from "../../security/read-authorization";
-import { readBranchContent } from "../content/replay";
 import {
-  createBranchRouteRepository,
+  createBranchRouteStatePlane,
   resolveBranchTarget,
   type BranchRouteEnv,
   type BranchTargetParams,
@@ -33,18 +32,16 @@ export const getBranchContent = async (
     return new Response("Branch not found.", { status: 404 });
   }
 
-  const branchRepository = createBranchRouteRepository(env);
-  const branch = await branchRepository.readBranch(rootDropId, branchId);
+  const statePlane = createBranchRouteStatePlane(env);
+  const branch = await statePlane.branches.readBranch(rootDropId, branchId);
   if (!branch || !canReadBranch(authorization, branch)) {
     return new Response("Branch not found.", { status: 404 });
   }
 
-  const content = await readBranchContent(
-    env.R2_BUCKET,
+  const content = await statePlane.snapshots.readContent(
     rootDropId,
     branchId,
     branch.headSnapshotId,
-    env.DB,
   );
   if (content === null) {
     return new Response("Branch content not found.", { status: 404 });
@@ -89,13 +86,13 @@ export const listBranchSnapshots = async (
     return new Response("Branch not found.", { status: 404 });
   }
 
-  const branchRepository = createBranchRouteRepository(env);
-  const branch = await branchRepository.readBranch(rootDropId, branchId);
+  const statePlane = createBranchRouteStatePlane(env);
+  const branch = await statePlane.branches.readBranch(rootDropId, branchId);
   if (!branch || !canReadBranch(authorization, branch)) {
     return new Response("Branch not found.", { status: 404 });
   }
 
-  const snapshots = await branchRepository.listSnapshotsForBranch(
+  const snapshots = await statePlane.snapshots.listSnapshotsForBranch(
     rootDropId,
     branchId,
   );

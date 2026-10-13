@@ -21,6 +21,11 @@ import {
   isResolvedNodeRefRecord,
 } from "../../../../../shared/drop/resolved/validators";
 import type { SqlMetadataStore } from "../../../../../src/server/ports";
+import {
+  timeHeapPhase,
+  type ResolvedHeapTiming,
+  type ResolvedHeapTimingSpan,
+} from "./timing";
 
 const RESOLVED_HEAP_CHECKPOINT_INTERVAL = 24;
 const RESOLVED_HEAP_MAX_DELTA_DEPTH = 64;
@@ -101,6 +106,8 @@ const isResolvedRuntimeNodeProjection = (
 export interface ResolvedHeapProjectionRepositoryPorts {
   /** Optional SQL metadata store containing resolved heap projection rows. */
   sql?: SqlMetadataStore;
+  /** Optional phase observer scoped to the calling query. */
+  timing?: ResolvedHeapTiming;
 }
 
 /** Repository for compact resolved heap state, node payload, and delta rows. */
@@ -218,7 +225,10 @@ const hydrateResolvedNodesFromPayloads = async (
     offset < hashes.length;
     offset += RESOLVED_NODE_PAYLOAD_BATCH_SIZE
   ) {
-    const batch = hashes.slice(offset, offset + RESOLVED_NODE_PAYLOAD_BATCH_SIZE);
+    const batch = hashes.slice(
+      offset,
+      offset + RESOLVED_NODE_PAYLOAD_BATCH_SIZE,
+    );
     const { results = [] } = await db
       .prepare(
         `SELECT node_hash, node_json
@@ -261,7 +271,10 @@ const hydrateResolvedNodesFromProjection = async (
     )
     .all<{ node_id: string; node_json: string }>();
 
-  const nodesById = new Map<string, ResolvedDocumentNode | ResolvedRuntimeNode>();
+  const nodesById = new Map<
+    string,
+    ResolvedDocumentNode | ResolvedRuntimeNode
+  >();
   for (const row of results) {
     if (!refIds.has(row.node_id)) continue;
     const node =
@@ -357,22 +370,30 @@ const readResolvedStateSnapshotFromD1 = async (
 const syncResolvedNodesToD1 = async (
   db: SqlMetadataStore | undefined,
   state: ResolvedNulldownState,
+  span: ResolvedHeapTimingSpan,
 ): Promise<void> => {
   if (!db || !state.branchId || state.snapshotId === undefined) return;
 
-  await db
-    .prepare(
-      `DELETE FROM resolved_nodes
+  await span.write(
+    db
+      .prepare(
+        `DELETE FROM resolved_nodes
        WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ? AND resolver_id = ?`,
-    )
-    .bind(state.rootDropId, state.branchId, state.snapshotId, state.resolverId)
-    .run();
+      )
+      .bind(
+        state.rootDropId,
+        state.branchId,
+        state.snapshotId,
+        state.resolverId,
+      ),
+  );
 
   const nodes = [...(state.documentNodes ?? []), ...(state.runtimeNodes ?? [])];
   for (const node of nodes) {
-    await db
-      .prepare(
-        `INSERT INTO resolved_nodes (
+    await span.write(
+      db
+        .prepare(
+          `INSERT INTO resolved_nodes (
            root_drop_id, branch_id, snapshot_id, resolver_id, node_id,
            kind, source_start, source_end, text, importance, node_json
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -384,21 +405,21 @@ const syncResolvedNodesToD1 = async (
             text = excluded.text,
             importance = excluded.importance,
             node_json = excluded.node_json`,
-      )
-      .bind(
-        state.rootDropId,
-        state.branchId,
-        state.snapshotId,
-        state.resolverId,
-        node.id,
-        node.kind,
-        node.sourceRange?.start ?? null,
-        node.sourceRange?.end ?? null,
-        node.text,
-        node.importance ?? null,
-        JSON.stringify(node),
-      )
-      .run();
+        )
+        .bind(
+          state.rootDropId,
+          state.branchId,
+          state.snapshotId,
+          state.resolverId,
+          node.id,
+          node.kind,
+          node.sourceRange?.start ?? null,
+          node.sourceRange?.end ?? null,
+          node.text,
+          node.importance ?? null,
+          JSON.stringify(node),
+        ),
+    );
   }
 };
 
@@ -406,17 +427,24 @@ const syncResolvedNodeRefsToD1 = async (
   db: SqlMetadataStore,
   delta: ResolvedHeapDeltaRecord,
   nodeRefs: readonly ResolvedNodeRefRecord[],
+  span: ResolvedHeapTimingSpan,
 ): Promise<void> => {
-  await db
-    .prepare(
-      `DELETE FROM resolved_node_refs
+  await span.write(
+    db
+      .prepare(
+        `DELETE FROM resolved_node_refs
        WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ? AND resolver_id = ?`,
-    )
-    .bind(delta.rootDropId, delta.branchId, delta.snapshotId, delta.resolverId)
-    .run();
+      )
+      .bind(
+        delta.rootDropId,
+        delta.branchId,
+        delta.snapshotId,
+        delta.resolverId,
+      ),
+  );
 
   for (const nodeRef of nodeRefs) {
-    await writeResolvedNodeRefToD1(db, delta, nodeRef);
+    await writeResolvedNodeRefToD1(db, delta, nodeRef, span);
   }
 };
 
@@ -424,10 +452,12 @@ const writeResolvedNodeRefToD1 = async (
   db: SqlMetadataStore,
   delta: ResolvedHeapDeltaRecord,
   nodeRef: ResolvedNodeRefRecord,
+  span: ResolvedHeapTimingSpan,
 ): Promise<void> => {
-  await db
-    .prepare(
-      `INSERT INTO resolved_node_refs (
+  await span.write(
+    db
+      .prepare(
+        `INSERT INTO resolved_node_refs (
           root_drop_id, branch_id, snapshot_id, resolver_id, node_id,
           kind, node_hash, source_hash, source_start, source_end,
           parent_node_id, importance, ref_json
@@ -442,29 +472,30 @@ const writeResolvedNodeRefToD1 = async (
           parent_node_id = excluded.parent_node_id,
           importance = excluded.importance,
           ref_json = excluded.ref_json`,
-    )
-    .bind(
-      delta.rootDropId,
-      delta.branchId,
-      delta.snapshotId,
-      delta.resolverId,
-      nodeRef.nodeId,
-      nodeRef.kind,
-      nodeRef.nodeHash,
-      nodeRef.sourceHash,
-      nodeRef.sourceRange?.start ?? null,
-      nodeRef.sourceRange?.end ?? null,
-      nodeRef.parentId ?? null,
-      nodeRef.importance ?? null,
-      JSON.stringify(nodeRef),
-    )
-    .run();
+      )
+      .bind(
+        delta.rootDropId,
+        delta.branchId,
+        delta.snapshotId,
+        delta.resolverId,
+        nodeRef.nodeId,
+        nodeRef.kind,
+        nodeRef.nodeHash,
+        nodeRef.sourceHash,
+        nodeRef.sourceRange?.start ?? null,
+        nodeRef.sourceRange?.end ?? null,
+        nodeRef.parentId ?? null,
+        nodeRef.importance ?? null,
+        JSON.stringify(nodeRef),
+      ),
+  );
 };
 
 const writeResolvedNodePayloadsToD1 = async (
   db: SqlMetadataStore,
   state: ResolvedNulldownState,
   nodeRefs: readonly ResolvedNodeRefRecord[],
+  span: ResolvedHeapTimingSpan,
 ): Promise<void> => {
   const nodes = [...(state.documentNodes ?? []), ...(state.runtimeNodes ?? [])];
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -472,24 +503,25 @@ const writeResolvedNodePayloadsToD1 = async (
   for (const ref of nodeRefs) {
     const node = nodeById.get(ref.nodeId);
     if (!node) continue;
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO resolved_node_payloads (
+    await span.write(
+      db
+        .prepare(
+          `INSERT OR IGNORE INTO resolved_node_payloads (
            node_hash, kind, source_hash, source_start, source_end, text,
            first_seen_at, node_json
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        ref.nodeHash,
-        ref.kind,
-        ref.sourceHash,
-        ref.sourceRange?.start ?? null,
-        ref.sourceRange?.end ?? null,
-        ref.text ?? node.text,
-        state.resolvedAt,
-        JSON.stringify(node),
-      )
-      .run();
+        )
+        .bind(
+          ref.nodeHash,
+          ref.kind,
+          ref.sourceHash,
+          ref.sourceRange?.start ?? null,
+          ref.sourceRange?.end ?? null,
+          ref.text ?? node.text,
+          state.resolvedAt,
+          JSON.stringify(node),
+        ),
+    );
   }
 };
 
@@ -504,6 +536,7 @@ const shouldCheckpointResolvedHeap = (
 const syncResolvedHeapDeltaToD1 = async (
   db: SqlMetadataStore | undefined,
   state: ResolvedNulldownState,
+  timing?: ResolvedHeapTiming,
 ): Promise<void> => {
   if (!db || !state.branchId || state.snapshotId === undefined) return;
   const parent =
@@ -516,25 +549,45 @@ const syncResolvedHeapDeltaToD1 = async (
         }
       : undefined;
   const parentNodeRefs = parent
-    ? await resolveResolvedNodeRefsFromD1(db, parent).catch(() => null)
+    ? await timeHeapPhase(timing, "projection.parent-refs", async () =>
+        resolveResolvedNodeRefsFromD1(db, parent),
+      ).catch(() => null)
     : null;
-  const currentNodeRefs = await createResolvedNodeRefRecords(state);
-  const delta = await createResolvedHeapDeltaRecord({
-    state,
-    parent,
-    parentNodeRefs: parentNodeRefs ?? undefined,
-    checkpointed: shouldCheckpointResolvedHeap(
-      state.snapshotId,
-      !parent || parentNodeRefs !== null,
-    ),
-  });
+  const currentNodeRefs = await timeHeapPhase(
+    timing,
+    "projection.node-refs",
+    async () => createResolvedNodeRefRecords(state),
+  );
+  const checkpointed = shouldCheckpointResolvedHeap(
+    state.snapshotId,
+    !parent || parentNodeRefs !== null,
+  );
+  const delta = await timeHeapPhase(
+    timing,
+    "projection.delta-build",
+    async () =>
+      createResolvedHeapDeltaRecord({
+        state,
+        parent,
+        parentNodeRefs: parentNodeRefs ?? undefined,
+        checkpointed,
+      }),
+  );
   if (!delta) return;
 
-  await writeResolvedNodePayloadsToD1(db, state, currentNodeRefs);
+  await timeHeapPhase(
+    timing,
+    "projection.payload-writes",
+    async (span) =>
+      writeResolvedNodePayloadsToD1(db, state, currentNodeRefs, span),
+    currentNodeRefs.length,
+  );
 
-  await db
-    .prepare(
-      `INSERT INTO resolved_heap_deltas (
+  await timeHeapPhase(timing, "projection.delta-write", async (span) =>
+    span.write(
+      db
+        .prepare(
+          `INSERT INTO resolved_heap_deltas (
          root_drop_id, branch_id, snapshot_id, resolver_id, resolver_version,
          parent_snapshot_id, parent_resolver_id, source_content_hash,
          source_seq_from, source_seq_to, resolved_at, checkpointed, heap_delta_json
@@ -549,40 +602,53 @@ const syncResolvedHeapDeltaToD1 = async (
          resolved_at = excluded.resolved_at,
          checkpointed = excluded.checkpointed,
          heap_delta_json = excluded.heap_delta_json`,
-    )
-    .bind(
-      delta.rootDropId,
-      delta.branchId,
-      delta.snapshotId,
-      delta.resolverId,
-      delta.resolverVersion,
-      delta.parent?.snapshotId ?? null,
-      delta.parent?.resolverId ?? null,
-      delta.sourceContentHash,
-      delta.sourceSeqRange?.from ?? null,
-      delta.sourceSeqRange?.to ?? null,
-      delta.resolvedAt,
-      delta.checkpointed ? 1 : 0,
-      JSON.stringify(delta),
-    )
-    .run();
-  await syncResolvedNodeRefsToD1(db, delta, currentNodeRefs);
+        )
+        .bind(
+          delta.rootDropId,
+          delta.branchId,
+          delta.snapshotId,
+          delta.resolverId,
+          delta.resolverVersion,
+          delta.parent?.snapshotId ?? null,
+          delta.parent?.resolverId ?? null,
+          delta.sourceContentHash,
+          delta.sourceSeqRange?.from ?? null,
+          delta.sourceSeqRange?.to ?? null,
+          delta.resolvedAt,
+          delta.checkpointed ? 1 : 0,
+          JSON.stringify(delta),
+        ),
+    ),
+  );
+  await timeHeapPhase(
+    timing,
+    "projection.ref-writes",
+    async (span) => syncResolvedNodeRefsToD1(db, delta, currentNodeRefs, span),
+    currentNodeRefs.length,
+  );
 };
 
 /** Writes compact resolved heap projections into D1 without touching R2 blobs. */
 export const syncResolvedStateToD1 = async (
   db: SqlMetadataStore | undefined,
   state: ResolvedNulldownState,
+  timing?: ResolvedHeapTiming,
 ): Promise<void> => {
   if (!db || !state.branchId || state.snapshotId === undefined) return;
 
-  await syncResolvedNodesToD1(db, state);
-  await syncResolvedHeapDeltaToD1(db, state);
+  await timeHeapPhase(
+    timing,
+    "projection.node-writes",
+    async (span) => syncResolvedNodesToD1(db, state, span),
+    (state.documentNodes?.length ?? 0) + (state.runtimeNodes?.length ?? 0),
+  );
+  await syncResolvedHeapDeltaToD1(db, state, timing);
 };
 
 /** Creates a compact resolved heap projection repository bound to SQL ports. */
 export const createResolvedHeapProjectionRepository = ({
   sql,
+  timing,
 }: ResolvedHeapProjectionRepositoryPorts): ResolvedHeapProjectionRepository => ({
   readState: async (rootDropId, branchId, resolverId, snapshotId) => {
     if (!sql) return null;
@@ -604,5 +670,5 @@ export const createResolvedHeapProjectionRepository = ({
       ))
     );
   },
-  syncState: (state) => syncResolvedStateToD1(sql, state),
+  syncState: (state) => syncResolvedStateToD1(sql, state, timing),
 });

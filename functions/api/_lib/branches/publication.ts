@@ -29,14 +29,13 @@ import {
   acquireRootMutationLock,
   RootMutationLockError,
 } from "../drops/storage/mutation-lock";
-import { readBranchContent } from "./content/replay";
+import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
 import { assertOwnerRootHistory, readRootDropState } from "./lifecycle";
 import type { BranchPromotionEnv, BranchPromotionParams } from "./promotion";
 import {
   withBranchMutationLock,
   BranchMutationLockError,
 } from "./storage/mutation-lock";
-import { createBranchRepository } from "./storage/repository";
 import {
   readPublicationReceipt,
   writePublicationReceipt,
@@ -104,6 +103,11 @@ export const publishOwnerSnapshot = async (
       sql: env.DB,
     }).resolveRemoteDropId(resolveParam(params.rootId));
     if (!rootDropId) return fail(404, "drop_not_found", "Drop not found.");
+    const statePlane = createBranchStatePlane({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+      providerPrivateKey: env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
+    });
     const rootLock = await acquireRootMutationLock(env.R2_BUCKET, rootDropId);
     try {
       const result = await withBranchMutationLock(
@@ -122,10 +126,7 @@ export const publishOwnerSnapshot = async (
               "publication_forbidden",
               "Verified root ownership is required.",
             );
-          const branch = await createBranchRepository({
-            blobs: env.R2_BUCKET,
-            sql: env.DB,
-          }).readBranch(rootDropId, "owner");
+          const branch = await statePlane.branches.readBranch(rootDropId, "owner");
           if (
             !branch ||
             branch.mode !== "owner" ||
@@ -190,12 +191,10 @@ export const publishOwnerSnapshot = async (
                 "Root content cannot be materialized.",
               );
             await assertOwnerRootHistory(env.R2_BUCKET, rootState, env.DB);
-            const content = await readBranchContent(
-              env.R2_BUCKET,
+            const content = await statePlane.snapshots.readContent(
               rootDropId,
               "owner",
               input.expectedSnapshotId,
-              env.DB,
             );
             if (content === null)
               return fail(

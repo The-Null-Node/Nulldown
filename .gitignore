@@ -8,6 +8,8 @@ dist
 .env
 .env.*
 !.env.example
+# Public browser verification/encryption keys only; never private material.
+!.env.production
 macos/
 .diff-auth/
 .nulldown-data/

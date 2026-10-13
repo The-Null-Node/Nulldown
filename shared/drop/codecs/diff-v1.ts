@@ -246,12 +246,28 @@ export const DropDiffAppendEnvelopeSchema = DropDiffEnvelopeSchema.superRefine(
         if (operation.native?.range) {
           requireSafeInteger(
             operation.native.range.start,
-            ["events", eventIndex, "ops", operationIndex, "native", "range", "start"],
+            [
+              "events",
+              eventIndex,
+              "ops",
+              operationIndex,
+              "native",
+              "range",
+              "start",
+            ],
             context,
           );
           requireSafeInteger(
             operation.native.range.end,
-            ["events", eventIndex, "ops", operationIndex, "native", "range", "end"],
+            [
+              "events",
+              eventIndex,
+              "ops",
+              operationIndex,
+              "native",
+              "range",
+              "end",
+            ],
             context,
           );
         }

@@ -1,4 +1,4 @@
-import { readBranchContent } from "../../branches/content/replay";
+import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
@@ -69,12 +69,10 @@ export const updateResolvedHeap = async (
       parsed.snapshotId === undefined || parsed.snapshotId === "latest"
         ? branch.headSnapshotId
         : parsed.snapshotId;
-    const content = await readBranchContent(
-      env.R2_BUCKET,
+    const content = await createBranchStatePlane({ blobs: env.R2_BUCKET, sql: env.DB }).snapshots.readContent(
       rootDropId,
       branchId,
       snapshotId,
-      env.DB,
     );
     if (content === null) {
       return jsonErrorResponse(

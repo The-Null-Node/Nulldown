@@ -16,6 +16,7 @@ import {
   writeResolvedHeapState,
 } from "./state";
 import type { ResolvedHeapEnv, ResolvedUpdateRequest } from "./types";
+import { timeHeapPhase } from "./timing";
 
 /** Resolver ids that the branch-scoped resolved heap projector can build. */
 export type ResolvedProjectableResolverId =
@@ -59,13 +60,18 @@ export const projectResolvedDocumentHeap = async (
   env: ResolvedHeapEnv,
   source: ResolvedHeapProjectionSource,
 ): Promise<ResolvedHeapProjectionWrite> => {
-  const state = await heapifyResolvedDocument({
-    rootDropId: source.rootDropId,
-    branchId: source.branchId,
-    snapshotId: source.snapshotId,
-    sourceSeqRange: sourceSeqRangeForHead(source.headEventSeq),
-    content: source.content,
-  });
+  const state = await timeHeapPhase(
+    env.heapTiming,
+    "projection.heapify-document",
+    async () =>
+      heapifyResolvedDocument({
+        rootDropId: source.rootDropId,
+        branchId: source.branchId,
+        snapshotId: source.snapshotId,
+        sourceSeqRange: sourceSeqRangeForHead(source.headEventSeq),
+        content: source.content,
+      }),
+  );
   const key = await writeResolvedHeapState(env, state);
   return { state, key };
 };
@@ -80,35 +86,42 @@ export const projectResolvedRuntimeRefsHeap = async (
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  const headBeforeRead = await runtimeFactRepository.readBranchHeadRuntimeFactSeq(
-    source.rootDropId,
-    source.branchId,
-  );
+  const headBeforeRead =
+    await runtimeFactRepository.readBranchHeadRuntimeFactSeq(
+      source.rootDropId,
+      source.branchId,
+    );
   const runtimeFacts = await listNullplugRuntimeFacts(
     env.R2_BUCKET,
     source.rootDropId,
     source.branchId,
     env.DB,
   );
-  const headAfterRead = await runtimeFactRepository.readBranchHeadRuntimeFactSeq(
-    source.rootDropId,
-    source.branchId,
-  );
+  const headAfterRead =
+    await runtimeFactRepository.readBranchHeadRuntimeFactSeq(
+      source.rootDropId,
+      source.branchId,
+    );
   // A concurrent append may be present in the fact list, but an older cursor is safe:
   // the next query will observe the newer head and regenerate instead of missing data.
   const runtimeFactHeadSeq =
     headBeforeRead === headAfterRead ? headAfterRead : headBeforeRead;
-  const state = await heapifyResolvedRuntimeRefs({
-    rootDropId: source.rootDropId,
-    branchId: source.branchId,
-    snapshotId: source.snapshotId,
-    sourceSeqRange: sourceSeqRangeForHead(runtimeFactHeadSeq),
-    content: source.content,
-    uiPrimitives: update.uiPrimitives,
-    uiResponseFacts: runtimeFacts.uiResponseFacts,
-    uiStatePatchFacts: runtimeFacts.uiStatePatchFacts,
-    uiStateSnapshots: runtimeFacts.uiStateSnapshots,
-  });
+  const state = await timeHeapPhase(
+    env.heapTiming,
+    "projection.heapify-runtime",
+    async () =>
+      heapifyResolvedRuntimeRefs({
+        rootDropId: source.rootDropId,
+        branchId: source.branchId,
+        snapshotId: source.snapshotId,
+        sourceSeqRange: sourceSeqRangeForHead(runtimeFactHeadSeq),
+        content: source.content,
+        uiPrimitives: update.uiPrimitives,
+        uiResponseFacts: runtimeFacts.uiResponseFacts,
+        uiStatePatchFacts: runtimeFacts.uiStatePatchFacts,
+        uiStateSnapshots: runtimeFacts.uiStateSnapshots,
+      }),
+  );
   const key = await writeResolvedHeapState(env, state);
   return { state, key };
 };
@@ -154,8 +167,13 @@ export const ensureResolvedHeapProjection = async (
   let stale = Boolean(state && state.sourceContentHash !== sourceContentHash);
   if (resolverId === RESOLVED_DOCUMENT_RESOLVER_ID) {
     stale ||= Boolean(
-      state && !isCurrentResolvedDocumentProjection(
-        state, source.rootDropId, source.branchId, source.snapshotId, sourceContentHash,
+      state &&
+      !isCurrentResolvedDocumentProjection(
+        state,
+        source.rootDropId,
+        source.branchId,
+        source.snapshotId,
+        sourceContentHash,
       ),
     );
   }
@@ -177,7 +195,12 @@ export const ensureResolvedHeapProjection = async (
     (resolverId === RESOLVED_DOCUMENT_RESOLVER_ID ||
       resolverId === RESOLVED_RUNTIME_REFS_RESOLVER_ID)
   ) {
-    state = (await projectResolvedHeap(env, resolverId, source)).state;
+    const projectableResolverId = resolverId;
+    state = (
+      await timeHeapPhase(env.heapTiming, "projection.generate", async () =>
+        projectResolvedHeap(env, projectableResolverId, source),
+      )
+    ).state;
     heapGenerated = true;
     stale = false;
   }

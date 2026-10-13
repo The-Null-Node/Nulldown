@@ -23,6 +23,10 @@ migrations_dir = "migrations"
 binding = "OPENAUTH_AUTHORITY"
 service = "nulldown-openauth"
 
+[[services]]
+binding = "TELEMETRY"
+service = "nulldown-telemetry"
+
 [vars]
 OPENAUTH_ISSUER_URL = "https://auth.nulldown.app"
 OPENAUTH_CLIENT_ID = "nulldown-browser-v1"
