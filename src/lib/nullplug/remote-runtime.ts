@@ -15,6 +15,11 @@ import {
   type NullplugRuntimeResolution,
 } from "../../../shared/nullplug/types";
 import { getAccountSessionToken } from "../auth/account-session";
+import {
+  NulldownHttpTransportError,
+  requestNulldownHttp,
+  type NulldownHttpResponse,
+} from "../../client/http-transport";
 
 /** Browser HTTP dependencies for remote Nullplug resolution. */
 export interface CreateRemoteNullplugRuntimeOptions {
@@ -28,6 +33,8 @@ export interface CreateRemoteNullplugRuntimeOptions {
   registryTtlMs?: number;
   /** Supplies the current browser account session for protected invocations. */
   authTokenProvider?: (() => Promise<string | null>) | null;
+  /** Optional request deadline in milliseconds. */
+  requestTimeoutMs?: number;
 }
 
 const readRegistryPage = (
@@ -44,20 +51,16 @@ const readRegistryPage = (
   };
 };
 
-const readProviderError = async (
-  response: Response,
-): Promise<{ code: string; message: string }> => {
-  try {
-    const value = (await response.json()) as unknown;
-    if (typeof value === "object" && value !== null) {
-      const code = "code" in value ? value.code : undefined;
-      const error = "error" in value ? value.error : undefined;
-      if (typeof code === "string" && typeof error === "string") {
-        return { code, message: error };
-      }
+const readProviderError = (
+  response: NulldownHttpResponse,
+): { code: string; message: string } => {
+  const value = response.data;
+  if (typeof value === "object" && value !== null) {
+    const code = "code" in value ? value.code : undefined;
+    const error = "error" in value ? value.error : undefined;
+    if (typeof code === "string" && typeof error === "string") {
+      return { code, message: error };
     }
-  } catch {
-    // Fall through to the stable transport error below.
   }
   return {
     code: "provider_invoke_failed",
@@ -87,16 +90,40 @@ export const createRemoteNullplugRuntime = (
     let cursor: string | null = null;
     do {
       const suffix = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-      const response = await fetchImpl(
-        `${baseUrl}/api/nullplug/registry${suffix}`,
-      );
+      let response: NulldownHttpResponse<unknown>;
+      try {
+        response = await requestNulldownHttp(
+          fetchImpl,
+          `${baseUrl}/api/nullplug/registry${suffix}`,
+          {
+            timeoutMs: options.requestTimeoutMs,
+            responseMode: "json",
+          },
+        );
+      } catch (error) {
+        if (
+          error instanceof NulldownHttpTransportError &&
+          error.code === "invalid_json_response"
+        ) {
+          throw new NullplugRuntimeError(
+            "registry_invalid",
+            "Nullplug registry returned invalid JSON.",
+            { cause: error },
+          );
+        }
+        throw new NullplugRuntimeError(
+          "registry_unavailable",
+          "Nullplug registry request failed.",
+          { cause: error },
+        );
+      }
       if (!response.ok) {
         throw new NullplugRuntimeError(
           "registry_unavailable",
           `Nullplug registry returned HTTP ${response.status}.`,
         );
       }
-      const page = readRegistryPage(await response.json());
+      const page = readRegistryPage(response.data);
       items.push(...page.items);
       cursor = page.cursor;
       if (cursor && seenCursors.has(cursor)) {
@@ -132,45 +159,51 @@ export const createRemoteNullplugRuntime = (
       return {
         resolution,
         invoke: async (invokeRequest: NullplugInvokeRequest) => {
-          let response: Response;
+          let response: NulldownHttpResponse<unknown>;
           try {
             const token = await authTokenProvider?.();
-            response = await fetchImpl(`${baseUrl}/api/nullplug/resolve`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            response = await requestNulldownHttp(
+              fetchImpl,
+              `${baseUrl}/api/nullplug/resolve`,
+              {
+                timeoutMs: options.requestTimeoutMs,
+                responseMode: "json",
+                init: {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                  },
+                  body: JSON.stringify({
+                    ...invokeRequest,
+                    call: { ...invokeRequest.call, version: manifest.version },
+                  }),
+                },
               },
-              body: JSON.stringify({
-                ...invokeRequest,
-                call: { ...invokeRequest.call, version: manifest.version },
-              }),
-            });
+            );
           } catch (error) {
+            const invalidResult =
+              error instanceof NulldownHttpTransportError &&
+              error.code === "invalid_json_response";
             throw new NullplugRuntimeError(
-              "provider_transport_failed",
-              "Provider nullplug runtime request failed.",
+              invalidResult
+                ? "provider_result_invalid"
+                : "provider_transport_failed",
+              invalidResult
+                ? "Provider nullplug runtime returned invalid JSON."
+                : "Provider nullplug runtime request failed.",
               { cause: error, resolution },
             );
           }
           if (!response.ok) {
-            const providerError = await readProviderError(response);
+            const providerError = readProviderError(response);
             throw new NullplugRuntimeError(
               providerError.code,
               providerError.message,
               { resolution },
             );
           }
-          let parsed: unknown;
-          try {
-            parsed = await response.json();
-          } catch (error) {
-            throw new NullplugRuntimeError(
-              "provider_result_invalid",
-              "Provider nullplug runtime returned invalid JSON.",
-              { cause: error, resolution },
-            );
-          }
+          const parsed = response.data;
           if (!isNullplugInvokeResponse(parsed)) {
             throw new NullplugRuntimeError(
               "provider_result_invalid",

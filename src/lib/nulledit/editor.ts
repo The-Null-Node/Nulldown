@@ -23,6 +23,7 @@ import type { NullplugCaller } from "../../../shared/nullplug/types";
 import type { NullplugRuntime } from "../../../shared/nullplug/runtime";
 import type { RootRuntimePolicy } from "../../../shared/nullplug/policy";
 
+/** One browser editor lifetime; disposal is terminal and leaves presentation intact. */
 export interface IEditor {
   state: EditorState;
   addDiff: (diff: Diff) => void;
@@ -31,13 +32,12 @@ export interface IEditor {
   render: () => Promise<string>;
   seedSnapshot: (content: string) => SnapshotId;
   reset: () => void;
+  dispose: () => void;
   setRuntimeCaller: (caller: NullplugCaller | null) => void;
   setRuntimePolicy: (policy: RootRuntimePolicy | null) => void;
   getSnapshotter: () => Snapshotter;
   getCurrentSnapshotId: () => SnapshotId | null;
 }
-
-const snapshotter = new Snapshotter(3);
 
 const uniqueStrings = (values: Iterable<string | undefined>): string[] => [
   ...new Set([...values].filter((value): value is string => Boolean(value))),
@@ -52,15 +52,23 @@ export interface CreateEditorOptions {
   nullplugRuntime?: NullplugRuntime;
 }
 
+/** Creates an editor with isolated history and a cancellable rendering lifetime. */
 export default function createEditor(
   options: CreateEditorOptions = {},
 ): IEditor {
+  const snapshotter = new Snapshotter(3);
+  let disposed = false;
+  let scheduleGeneration = 0;
   let currentSnapshotId: SnapshotId | null = null;
   let lastRenderedSnapshotId: SnapshotId | null = null;
   let renderToken = 0;
   let renderScheduled = false;
   let runtimeCaller: NullplugCaller | null = null;
   let runtimePolicy: RootRuntimePolicy | null = null;
+
+  const assertActive = () => {
+    if (disposed) throw new Error("Editor has been disposed.");
+  };
 
   const setCurrentSnapshotId = (snapshotId: SnapshotId | null) => {
     currentSnapshotId = snapshotId;
@@ -81,15 +89,19 @@ export default function createEditor(
   const queueRender = () => {
     if (renderScheduled) return;
     renderScheduled = true;
+    const generation = scheduleGeneration;
     // Batch rapid keystrokes into a single render turn without delaying the store update itself.
     queueMicrotask(async () => {
+      if (disposed || generation !== scheduleGeneration) return;
       renderScheduled = false;
       await editor.render();
     });
   };
 
   const addDiffs = (diffs: Diff[]) => {
+    assertActive();
     if (!diffs.length) return;
+    renderToken += 1;
     const snapshotId = ensureSnapshotId();
     const prevText = useEditorStore.getState().textContent;
     const nextText = diffs.reduce(
@@ -123,6 +135,7 @@ export default function createEditor(
     addDiffs,
 
     clearDiffs: () => {
+      assertActive();
       const prevText = useEditorStore.getState().textContent;
       if (!prevText) {
         useEditorStore.getState().setTextContent("");
@@ -137,6 +150,7 @@ export default function createEditor(
     },
 
     render: async () => {
+      assertActive();
       if (!currentSnapshotId) {
         return useEditorStore.getState().textContent;
       }
@@ -246,26 +260,26 @@ export default function createEditor(
       state.commitStructuredRender(
         {
           frameId: `render:${snapshotId}:${token}`,
-        rootDropId,
-        branchId: runtimeCaller?.branchId,
-        versionId: snapshotId,
-        sourceMarkdown: content,
-        renderedMarkdown,
-        sourceContentHash,
-        renderedContentHash,
-        acceptedDiffRefs: [],
-        resolverRefs: [],
-        nullplugCalls: renderResult.nullplugCalls,
-        nullplugCallIds,
+          rootDropId,
+          branchId: runtimeCaller?.branchId,
+          versionId: snapshotId,
+          sourceMarkdown: content,
+          renderedMarkdown,
+          sourceContentHash,
+          renderedContentHash,
+          acceptedDiffRefs: [],
+          resolverRefs: [],
+          nullplugCalls: renderResult.nullplugCalls,
+          nullplugCallIds,
           diagnostics: renderResult.diagnostics,
           status: "final",
         },
         {
-         uiPrimitives: renderResult.uiPrimitives,
-         uiState: renderResult.uiState,
-         mutations: renderResult.mutations,
-         yields: renderResult.yields,
-         diagnostics: renderResult.diagnostics,
+          uiPrimitives: renderResult.uiPrimitives,
+          uiState: renderResult.uiState,
+          mutations: renderResult.mutations,
+          yields: renderResult.yields,
+          diagnostics: renderResult.diagnostics,
           callIds: nullplugCallIds,
         },
       );
@@ -275,6 +289,8 @@ export default function createEditor(
     },
 
     seedSnapshot: (content: string) => {
+      assertActive();
+      renderToken += 1;
       const snapshotId = snapshotter.requestSnapshotId();
       snapshotter.updateSnapshot(snapshotId, {
         content,
@@ -292,10 +308,12 @@ export default function createEditor(
     },
 
     reset: () => {
+      assertActive();
       snapshotter.reset();
       currentSnapshotId = null;
       lastRenderedSnapshotId = null;
-      renderToken = 0;
+      renderToken += 1;
+      scheduleGeneration += 1;
       renderScheduled = false;
       runtimeCaller = null;
       runtimePolicy = null;
@@ -309,11 +327,26 @@ export default function createEditor(
     },
 
     setRuntimeCaller: (caller) => {
+      assertActive();
       runtimeCaller = caller ? { ...caller } : null;
     },
 
     setRuntimePolicy: (policy) => {
+      assertActive();
       runtimePolicy = policy;
+    },
+
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      renderToken += 1;
+      scheduleGeneration += 1;
+      renderScheduled = false;
+      currentSnapshotId = null;
+      lastRenderedSnapshotId = null;
+      runtimeCaller = null;
+      runtimePolicy = null;
+      snapshotter.reset();
     },
 
     getSnapshotter: () => snapshotter,

@@ -7,20 +7,20 @@ For strategy or onboarding work, fetch the public Strategy Index first: https://
 Published Nulldown docs:
 
 - [Strategy Index](https://nulldown.app/d/zyLn4c)
-- [Docs index](https://nulldown.app/d/r1Belg)
-- [Agent skill prompt](https://nulldown.app/d/6p6ytx)
-- [API reference](https://nulldown.app/d/q7RRSk)
+- [Docs index](https://nulldown.app/d/kzgJGL)
+- [Agent guide](https://nulldown.app/d/J8V2nm)
+- [CLI and HTTP API reference](docs/NULDOWN_API.md)
 
 ## Mission
 
-Operate Nulldown safely. Prefer small, reversible, revision-aware changes. Use metadata as state, markdown as renderable content, and branch diffs for atomic edits.
+Help agents execute and reuse work through durable Markdown. Retrieve the current plan and relevant evidence, make small revision-aware changes, record outcomes, and verify the resulting branch state.
 
 ## Core Rules
 
 1. Stay on the selected surface: direct MCP tools for MCP agents, `nd` for CLI workflows, and raw HTTP only as a fallback.
 2. Always fetch before mutating.
 3. Read canonical IDs, revisions, payload shape, and metadata before editing.
-4. Store document state in `metadata`, not in markdown fences.
+4. Keep readable document content in Markdown. Use drop metadata for configuration and auxiliary state, and diff event metadata for action context.
 5. Use revision-safe root upserts through `nd update` unless the user explicitly accepts last-write-wins.
 6. On the CLI surface, prefer append-only branch diffs through `nd diff replace` or `nd diff apply`; on MCP, use `diff_apply` directly.
 7. Never assume `nd get` or `/api/get/:id` returns plaintext. It may return an encrypted `nmdn.drop.v1` envelope.
@@ -218,9 +218,9 @@ Promotion requires account auth and branch owner/writer permission. Reuse the
 same snapshot/key pair if the response is lost; refresh and use a new pair only
 after `promotion_head_mismatch`.
 
-## Metadata State Pattern
+## Auxiliary Metadata Pattern
 
-State belongs in the drop metadata object:
+Application configuration and auxiliary UI state can live in drop metadata. This example is application data, not a built-in replay policy:
 
 ```json
 {
@@ -230,15 +230,6 @@ State belongs in the drop metadata object:
       "docType": "nulldown.ui.state.v1",
       "revision": 1,
       "activePanel": "overview"
-    },
-    "diffReaderHint": {
-      "eventPolicy": "state-first",
-      "recommendedReplay": [
-        "read metadata.uiState",
-        "apply metadata changes",
-        "apply content ops",
-        "render markdown"
-      ]
     }
   }
 }

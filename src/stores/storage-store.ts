@@ -51,7 +51,7 @@ export interface StorageState {
 
   // Atomic operations
   setItem: (key: string, value: string) => StorageOperationResult;
-  getItem: (key: string) => string | null;
+  getItem: (key: string, options?: { throwOnError?: boolean }) => string | null;
   removeItem: (key: string) => StorageOperationResult;
   clear: () => StorageOperationResult;
 
@@ -93,7 +93,10 @@ const useStorageStore = create<StorageState>((set, get) => ({
     }
   },
 
-  getItem: (key: string): string | null => {
+  getItem: (
+    key: string,
+    options?: { throwOnError?: boolean },
+  ): string | null => {
     const state = get();
 
     if (!state.isClient) {
@@ -103,6 +106,7 @@ const useStorageStore = create<StorageState>((set, get) => ({
     try {
       return localStorage.getItem(key);
     } catch (error) {
+      if (options?.throwOnError) throw error;
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       console.error(`Failed to get localStorage item "${key}":`, errorMessage);

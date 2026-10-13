@@ -12,7 +12,7 @@ import type {
   DropBranchContentResponse,
   DropBranchRecord,
 } from "../../../../shared/drop/branch";
-import { createBranchApiClient } from "../../../../shared/drop/branch-api";
+import { createBranchApiClient } from "../../../client/branch-api-client";
 import {
   getBranchWriterLabel,
   groupBranchActivity,

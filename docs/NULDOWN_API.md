@@ -4,9 +4,9 @@ This document is the CLI and API guide for Nulldown drops, branch editing, diffs
 
 Published Nulldown docs:
 
-- [Docs index](https://nulldown.app/d/r1Belg)
-- [API reference](https://nulldown.app/d/q7RRSk)
-- [Agent skill prompt](https://nulldown.app/d/6p6ytx)
+- [Docs index](https://nulldown.app/d/kzgJGL)
+- [Connect an agent through MCP](https://nulldown.app/d/NVJIa8)
+- [Agent workflow reference](../skill.md)
 
 ## Base URL
 
@@ -20,7 +20,7 @@ Local Pages Functions normally run behind Wrangler or a deployed Pages URL. The 
 
 ## CLI Quickstart
 
-The repo ships a Bun-native `nd`/`nulldown` CLI in `bin/nulldown.ts`. Use it for normal agent and operator workflows; use raw HTTP only when building another client or debugging the wire contract.
+The repo ships a Bun-native `nd`/`nulldown` CLI in `bin/nulldown.ts`. Use it for terminal automation and operator workflows. Agents should use the [MCP server](../packages/nulldown-mcp/README.md); raw HTTP is useful when building another client or debugging the wire contract.
 
 ## 0.1 package API migration
 
@@ -142,7 +142,7 @@ Use exact revision strings, including quotes if the header includes them.
 
 ## State And Metadata
 
-Drop state belongs in `payload.metadata`, not in markdown content. Markdown should render UI; metadata should drive readers, agents, and diff replay.
+Markdown holds readable document state: plans, findings, instructions, and results. Drop metadata holds document-level configuration and auxiliary state. Diff event metadata describes an action, while the diff operations change the Markdown. These are distinct inputs; metadata does not replace document content.
 
 Good metadata fields:
 
@@ -162,7 +162,7 @@ Good metadata fields:
 }
 ```
 
-Agents and CLIs should read metadata before content when they need state.
+Read metadata when the task depends on configuration or auxiliary state. Read current branch content to inspect the plan or calculate an edit. The example fields describe application data, not an automatic execution or replay policy.
 
 ## Authentication
 
@@ -647,7 +647,12 @@ Implementation: `functions/api/diff/[id].ts`.
 
 Append diff events to the resolved branch. Diff events are the normal edit
 primitive: accepted writes advance the branch snapshot, and branch query lazily
-materializes resolved heaps from that snapshot when needed.
+materializes resolved heaps from that snapshot when needed. Event metadata lets
+the writer preserve action context such as intent, labels, confidence, result or
+policy references, and sequencing alongside the text operations. A finite numeric
+`metadata.args.priority` is additionally projected as a diff-linked priority fact.
+The other metadata fields remain explanatory signals and do not independently
+increase query scores.
 
 CLI examples:
 
@@ -714,10 +719,14 @@ Response:
 }
 ```
 
-`nd diff replace` can bootstrap a fresh branch by diffing from the root drop
-content when the requested branch does not exist yet. `nd diff batch` posts the
-same `DropDiffEnvelope` shape as `nd diff event`, but requires an explicit
-`--branch` because it is intended for ordered branch mutations.
+Explicit `branchId` targets must exist; missing targets return `404
+branch_not_found` instead of resolving another branch. A target that conflicts
+with a branch-bound credential returns `403 branch_target_mismatch`. Empty,
+repeated, or malformed targets return `400 branch_target_invalid`. Resolve the
+actor's branch before editing it. Omitting `branchId` retains actor resolution.
+`nd diff batch` requires an explicit `--branch` for ordered branch mutations.
+
+A diff acknowledgement confirms a branch save, not root publication.
 
 Limits:
 
@@ -878,6 +887,48 @@ Response:
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/snapshots.ts`.
 
+### POST /api/branches/:rootId/owner/publish
+
+Publish the current owner snapshot at the existing root ID. Requires an
+authenticated account matching both the verified root ownership projection and
+the owner branch. Provider-escrow envelopes retain their visibility and key
+recipients; roots that cannot be opened by the server cannot use this operation.
+Clone promotion continues to create a separate drop.
+
+Request:
+
+```json
+{
+  "expectedSnapshotId": 3,
+  "expectedRevision": "\"root-etag\"",
+  "idempotencyKey": "publish-update-1"
+}
+```
+
+Read `expectedRevision` from the root's `X-Drop-Revision` or `ETag` header.
+The snapshot must match the current owner head when creating a new intent.
+Success returns `outcome: "root-published"`, equal `dropId` and `rootDropId`,
+`branchId: "owner"`, `snapshotId`, the published `revision`, and `url`.
+
+Reuse all request fields after an interrupted request. A completed retry returns
+the original receipt even if another publication has since updated the root.
+A pending retry never overwrites a different, newer root. Stale snapshots,
+revisions, or changed retry fields return `409`; an unconfirmed operation returns
+`503` and can be retried with the original fields.
+
+Use MCP `branch_publish`, SDK `publishBranch(rootId, request)`, or:
+
+```bash
+bun run nd -- branch publish <rootId> --expected-snapshot 3 --expected-revision '<etag>' --idempotency-key publish-update-1 --json
+```
+
+Once an owner branch exists, direct root upserts return
+`409 owner_branch_publication_required`. Existing root/history divergence returns
+`409 owner_root_history_conflict` on owner resolution or new publication.
+Existing clones keep their histories; new clones start from published root content.
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/publish.ts`.
+
 ### GET /api/branches/:rootId/:branchId/resolved/query
 
 Query top resolved heap nodes for a branch snapshot. The default document resolver indexes titles, headings, sections, paragraphs, list/checklist items, code blocks, nullplug refs, and links. Its ordinary reads, including the canonical document snapshotter, follow the branch content policy above. Priority facts are sensitive overlays: scoring and `priority-fact` reasons are applied only for the authenticated canonical projected owner or exact target branch writer. Public and unlisted document readers without that authority still receive ordinary document results, with no priority overlay or priority-fact read. `resolverId=nulldown.resolved.runtime-refs` queries runtime nodes for `nullplug.ref`, `ui.primitive`, `ui.response`, and `ui.state`; it and every non-document snapshotter additionally require the canonical projected owner or the exact branch writer. After ordinary root and branch access succeeds, missing sensitive authority returns `403`. Denied roots and branches return the generic `404`, and authorization happens before repair, heap materialization, content/event/fact reads, or snapshotter dispatch. Once authorized, a supported missing or stale heap is rebuilt from authoritative branch content and stored nullplug UI facts.
@@ -986,7 +1037,8 @@ Implementation: `functions/api/branches/[rootId]/[branchId]/resolved/priority.ts
 Create a branch-scoped priority overlay fact. Priority facts do not mutate branch
 markdown or rewrite heap deltas; they are D1-backed overlays read by
 `resolved/query`. Node and heap facts affect current query scoring. Diff facts
-are persisted for future diff-target scoring and retrieval. Node facts should
+affect nodes associated with matching event references, which document queries
+load through the requested `fromSeq`/`toSeq` range. Node facts should
 include a resolver id when the node id is resolver-specific; the CLI defaults
 node facts to the document resolver.
 

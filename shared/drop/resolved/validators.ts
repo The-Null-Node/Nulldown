@@ -13,6 +13,7 @@ import type {
   ResolvedDiffEventRef,
   ResolvedDocumentNode,
   ResolvedDocumentNodeKind,
+  ResolvedDocumentNodeQueryResult,
   ResolvedHeapDeltaRecord,
   ResolvedHeapRef,
   ResolvedNulldownState,
@@ -23,6 +24,7 @@ import type {
   ResolvedPriorityFactRecord,
   ResolvedRuntimeNode,
   ResolvedRuntimeNodeKind,
+  ResolvedRuntimeNodeQueryResult,
   ResolvedSourceRange,
   ResolvedSourceSeqRange,
   ResolvedUiResponseRef,
@@ -213,7 +215,8 @@ const isResolvedRuntimeNodeKind = (
   value === "ui.state" ||
   value === "ui.response";
 
-const isResolvedRuntimeNode = (
+/** Returns true when a value is a valid runtime node in a resolved heap. */
+export const isResolvedRuntimeNode = (
   value: unknown,
 ): value is ResolvedRuntimeNode => {
   if (!isRecord(value)) return false;
@@ -256,7 +259,8 @@ const isResolvedDocumentNodeKind = (
   value === "link.ref" ||
   value === "diff.region";
 
-const isResolvedDocumentNode = (
+/** Returns true when a value is a valid document node in a resolved heap. */
+export const isResolvedDocumentNode = (
   value: unknown,
 ): value is ResolvedDocumentNode => {
   if (!isRecord(value)) return false;
@@ -355,6 +359,28 @@ const isResolvedDiffEventRef = (
     value.changedRanges.every(isResolvedSourceRange)
   );
 };
+
+/** Returns true when a value is a scored document-node query result. */
+export const isResolvedDocumentNodeQueryResult = (
+  value: unknown,
+): value is ResolvedDocumentNodeQueryResult => {
+  if (!isRecord(value) || !isResolvedDocumentNode(value.node)) return false;
+  if (!isNumber(value.score) || !isStringArray(value.reasons)) return false;
+  return (
+    value.eventRefs === undefined ||
+    (Array.isArray(value.eventRefs) &&
+      value.eventRefs.every(isResolvedDiffEventRef))
+  );
+};
+
+/** Returns true when a value is a scored runtime-node query result. */
+export const isResolvedRuntimeNodeQueryResult = (
+  value: unknown,
+): value is ResolvedRuntimeNodeQueryResult =>
+  isRecord(value) &&
+  isResolvedRuntimeNode(value.node) &&
+  isNumber(value.score) &&
+  isStringArray(value.reasons);
 
 /** Returns true when a value is a valid semantic heap delta record. */
 export const isResolvedHeapDeltaRecord = (

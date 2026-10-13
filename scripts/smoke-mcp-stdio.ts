@@ -13,6 +13,7 @@ const QUERY_ROOT_ID = "smoke-query-root";
 const QUERY_BRANCH_ID = "smoke:query-branch";
 const CONTENT_ROOT_ID = "smoke-content-root";
 const CONTENT_BRANCH_ID = "smoke:content-branch";
+const SMOKE_ND_TOKEN = "mcp-smoke-nd-token-7f6b4d21";
 
 const expectedTools = [
   "strategy_search",
@@ -86,12 +87,73 @@ const sendJson = (
 
 const startFixture = async () => {
   const requests: string[] = [];
+  const authenticated = { reads: 0, writes: 0 };
+  const memoryRecords = new Map<string, Record<string, unknown>>();
+  let generatedMemoryId = 0;
   let closePromise: Promise<void> | undefined;
-  const server = createServer((request, response) => {
+  const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
     requests.push(
       `${request.method ?? "UNKNOWN"} ${url.pathname}${url.search}`,
     );
+    if (request.headers.authorization !== `Bearer ${SMOKE_ND_TOKEN}`) {
+      sendJson(response, 401, { error: "missing smoke bearer token" });
+      return;
+    }
+    if (request.method === "GET") authenticated.reads += 1;
+    else authenticated.writes += 1;
+
+    const memoryMatch = url.pathname.match(
+      /^\/api\/branches\/([^/]+)\/([^/]+)\/memory\/(facts|procedures|query)$/,
+    );
+    if (memoryMatch) {
+      const rootDropId = decodeURIComponent(memoryMatch[1]!);
+      const branchId = decodeURIComponent(memoryMatch[2]!);
+      const action = memoryMatch[3];
+      if (request.method === "GET" && action === "query") {
+        const kind = url.searchParams.get("kind");
+        const records = [...memoryRecords.values()].filter(
+          (record) => !kind || record.kind === kind,
+        );
+        sendJson(response, 200, { rootDropId, branchId, records });
+        return;
+      }
+      if (
+        request.method === "POST" &&
+        (action === "facts" || action === "procedures")
+      ) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const body = JSON.parse(
+          Buffer.concat(chunks).toString("utf8"),
+        ) as Record<string, unknown>;
+        const kind = action === "facts" ? "fact" : "procedure";
+        const prefix = kind === "fact" ? "memfact" : "memproc";
+        const recordId =
+          typeof body.recordId === "string"
+            ? body.recordId
+            : `${prefix}:generated-${++generatedMemoryId}`;
+        const sourceRefs = body.sourceRefs ?? [
+          { kind: "branch", rootDropId, branchId },
+        ];
+        const record = {
+          version: 1,
+          kind,
+          ...body,
+          recordId,
+          rootDropId,
+          branchId,
+          sourceRefs,
+          createdAt: Date.now(),
+        };
+        memoryRecords.set(`${kind}:${recordId}`, record);
+        sendJson(response, 201, { rootDropId, branchId, record });
+        return;
+      }
+      sendJson(response, 405, { error: "unexpected memory fixture method" });
+      return;
+    }
+
     if (request.method !== "GET") {
       sendJson(response, 405, { error: "fixture only accepts GET" });
       return;
@@ -176,6 +238,7 @@ const startFixture = async () => {
   return {
     origin: `http://127.0.0.1:${port}`,
     requests,
+    authenticated,
     close: () => {
       closePromise ??= withTimeout(
         new Promise<void>((resolve, reject) => {
@@ -218,6 +281,196 @@ const requireInputValidationError = (
   }
 };
 
+const verifyMemoryWriteContract = async (
+  client: Client,
+  listed: Awaited<ReturnType<Client["listTools"]>>,
+  fixture: Awaited<ReturnType<typeof startFixture>>,
+): Promise<void> => {
+  const sourceKinds = [
+    "drop",
+    "branch",
+    "snapshot",
+    "diff",
+    "node",
+    "heap",
+    "nullplug",
+    "tool",
+    "theme",
+    "mcp",
+  ];
+  for (const name of ["memory_fact", "memory_procedure"]) {
+    const schema = listed.tools.find((tool) => tool.name === name)?.inputSchema;
+    const properties = (
+      schema as { properties?: Record<string, { type?: string }> } | undefined
+    )?.properties;
+    const serialized = JSON.stringify(schema);
+    if (
+      properties?.recordId?.type !== "string" ||
+      properties.sourceRefs?.type !== "array" ||
+      sourceKinds.some((kind) => !serialized.includes(`\"${kind}\"`))
+    ) {
+      fail(
+        "Installed MCP omitted deterministic memory identity or canonical provenance.",
+        { name, schema },
+      );
+    }
+  }
+
+  const sourceRefs = [
+    {
+      kind: "snapshot",
+      rootDropId: "source-root",
+      branchId: "source-branch",
+      snapshotId: 7,
+    },
+    { kind: "mcp", toolId: "installed-package-smoke" },
+  ];
+  const writes = [
+    {
+      name: "memory_fact",
+      kind: "fact",
+      recordId: "memfact:installed-retry",
+      payload: { text: "Installed deterministic fact." },
+    },
+    {
+      name: "memory_procedure",
+      kind: "procedure",
+      recordId: "memproc:installed-retry",
+      payload: {
+        goal: "Retry safely",
+        summary: "Reuse one procedure id.",
+        steps: [],
+      },
+    },
+  ] as const;
+
+  for (const write of writes) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await withTimeout(
+        client.callTool({
+          name: write.name,
+          arguments: {
+            baseUrl: fixture.origin,
+            rootId: "root",
+            branchId: "branch",
+            recordId: write.recordId,
+            sourceRefs,
+            ...write.payload,
+          },
+        }),
+        `MCP ${write.name} deterministic retry`,
+      );
+      const record = (
+        JSON.parse(readTextContent(result)) as {
+          record?: { recordId?: string; sourceRefs?: unknown };
+        }
+      ).record;
+      if (
+        result.isError ||
+        record?.recordId !== write.recordId ||
+        JSON.stringify(record.sourceRefs) !== JSON.stringify(sourceRefs)
+      ) {
+        fail("Installed MCP did not preserve memory identity and provenance.", {
+          write,
+          record,
+        });
+      }
+    }
+
+    const query = await withTimeout(
+      client.callTool({
+        name: "memory_query",
+        arguments: {
+          baseUrl: fixture.origin,
+          rootId: "root",
+          branchId: "branch",
+          kind: write.kind,
+          includeRecords: true,
+        },
+      }),
+      `MCP ${write.name} retry query`,
+    );
+    const queried = JSON.parse(readTextContent(query)) as {
+      records?: Array<{ recordId?: string; sourceRefs?: unknown }>;
+    };
+    if (
+      queried.records?.length !== 1 ||
+      queried.records[0]?.recordId !== write.recordId ||
+      JSON.stringify(queried.records[0]?.sourceRefs) !==
+        JSON.stringify(sourceRefs)
+    ) {
+      fail("Installed MCP retry did not leave one logical memory record.", {
+        write,
+        queried,
+      });
+    }
+  }
+
+  for (const write of writes) {
+    const result = await withTimeout(
+      client.callTool({
+        name: write.name,
+        arguments: {
+          baseUrl: fixture.origin,
+          rootId: "legacy-root",
+          branchId: "legacy-branch",
+          ...write.payload,
+        },
+      }),
+      `MCP ${write.name} generated-id fallback`,
+    );
+    const record = (
+      JSON.parse(readTextContent(result)) as {
+        record?: { recordId?: string; sourceRefs?: unknown };
+      }
+    ).record;
+    const prefix = write.kind === "fact" ? "memfact:" : "memproc:";
+    const expectedRefs = [
+      {
+        kind: "branch",
+        rootDropId: "legacy-root",
+        branchId: "legacy-branch",
+      },
+    ];
+    if (
+      result.isError ||
+      !record?.recordId?.startsWith(prefix) ||
+      JSON.stringify(record.sourceRefs) !== JSON.stringify(expectedRefs)
+    ) {
+      fail("Installed MCP changed omitted memory input behavior.", {
+        write,
+        record,
+      });
+    }
+  }
+
+  const requestsBeforeInvalidCall = fixture.requests.length;
+  const invalid = await withTimeout(
+    client.callTool({
+      name: "memory_fact",
+      arguments: {
+        baseUrl: fixture.origin,
+        rootId: "root",
+        branchId: "branch",
+        text: "Invalid provenance",
+        sourceRefs: [{ kind: "branch", rootDropId: "missing-branch-id" }],
+      },
+    }),
+    "MCP memory_fact malformed provenance validation",
+  );
+  if (
+    !invalid.isError ||
+    !readTextContent(invalid).includes("Input validation error") ||
+    fixture.requests.length !== requestsBeforeInvalidCall
+  ) {
+    fail("Installed MCP accepted malformed source refs or sent HTTP.", {
+      invalid,
+      requestsBeforeInvalidCall,
+      requestsAfterInvalidCall: fixture.requests.length,
+    });
+  }
+};
+
 const createChildEnvironment = (origin: string) => {
   const secretNames = [
     "ND_AUTH_FILE",
@@ -233,7 +486,7 @@ const createChildEnvironment = (origin: string) => {
     ),
   );
   const smokeSecrets = {
-    ND_TOKEN: "mcp-smoke-nd-token-7f6b4d21",
+    ND_TOKEN: SMOKE_ND_TOKEN,
     ND_DIFF_AUTH_TOKEN: "mcp-smoke-diff-token-3c89a105",
     DIFF_WEBHOOK_SECRET: "mcp-smoke-webhook-secret-51e78a2c",
     VITE_PROVIDER_ENCRYPTION_PUBLIC_JWK: "mcp-smoke-public-jwk-secret-a6320d94",
@@ -394,6 +647,7 @@ const main = async () => {
           dropCreate,
         });
       }
+      await verifyMemoryWriteContract(client, listed, fixture);
 
       for (const identity of [{ eventId: "retry-1" }, { createdAt: 1 }]) {
         requireInputValidationError(
@@ -558,16 +812,29 @@ const main = async () => {
     }
 
     const diagnostics = parseDiagnostics(stderrChunks, smokeSecrets);
-    if (fixture.requests.length !== 4) {
+    if (fixture.requests.length !== 12) {
       fail("Local HTTP fixture received an unexpected number of requests.", {
         requests: fixture.requests,
       });
+    }
+    if (
+      fixture.authenticated.reads === 0 ||
+      fixture.authenticated.writes === 0
+    ) {
+      fail(
+        "Installed MCP did not complete authenticated read and write requests.",
+        {
+          authenticated: fixture.authenticated,
+          requests: fixture.requests,
+        },
+      );
     }
     report = {
       command,
       args,
       ...checks,
       localFixtureRequests: fixture.requests,
+      authenticatedRequests: fixture.authenticated,
       diagnosticEvents: diagnostics.map((entry) => entry.event ?? null),
       protocolStdoutCheck:
         "StdioClientTransport exposes protocol messages only; this SDK has no raw child stdout stream.",

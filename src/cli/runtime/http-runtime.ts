@@ -28,6 +28,7 @@ import type {
   DropUpdateResult,
   NulldownRuntime,
 } from "./types";
+import { isShortDropId, toShortDropId } from "../../../shared/drop/id";
 import {
   hasConfirmedDropDiffAppendReceipt,
   isDropDiffAppendResponse,
@@ -40,6 +41,14 @@ import {
   decodeCliDeviceStartResponse,
 } from "../../../shared/auth/codecs/cli-device-v1";
 import { encodeDropEnvelope } from "../../../shared/drop/codecs/envelope-v1";
+import {
+  isDropBranchContentResponse,
+  isDropBranchListResponse,
+  isDropBranchPromoteResponse,
+  isDropBranchPublishResponse,
+  isDropBranchResolveResponse,
+  isDropSnapshotListResponse,
+} from "../../../shared/drop/branch";
 
 const encodeBranchPathSegment = (value: string): string =>
   encodeURIComponent(value).replace(/%3A/gi, ":");
@@ -116,6 +125,35 @@ const maybeSet = (
   if (value !== null && value !== undefined) body[key] = value;
 };
 
+const requireRuntimeResponse = <T>(
+  value: unknown,
+  isValid: (candidate: unknown) => candidate is T,
+  message = "Response body did not match the endpoint contract.",
+): T => {
+  if (!isValid(value)) {
+    throw new Error(message);
+  }
+  return value;
+};
+
+const isDropWriteResult = (
+  value: unknown,
+): value is DropCreateResult | DropUpdateResult =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "url" in value &&
+  typeof value.url === "string";
+
+const requireOperationIdentity = (confirmed: boolean): void => {
+  if (!confirmed) {
+    throw new Error(
+      "Response receipt did not acknowledge the requested operation.",
+    );
+  }
+};
+
 const decodeCliDevicePollResponse = (
   value: unknown,
 ): CliDevicePollResponse | null => {
@@ -190,9 +228,11 @@ export const createHttpNulldownRuntime = (
           }),
         },
       );
-      if (!response.data)
-        throw new Error("Create response did not include a drop.");
-      return response.data;
+      return requireRuntimeResponse(
+        response.data,
+        isDropWriteResult,
+        "Create response did not include a drop.",
+      );
     },
     async update(request: DropUpdateRequest): Promise<DropUpdateResult> {
       const body: Record<string, unknown> = {
@@ -212,9 +252,12 @@ export const createHttpNulldownRuntime = (
           body: JSON.stringify(body),
         },
       );
-      if (!response.data)
-        throw new Error("Update response did not include a drop.");
-      return response.data;
+      const result = requireRuntimeResponse(
+        response.data,
+        isDropWriteResult,
+        "Update response did not include a drop.",
+      );
+      return result;
     },
     get: (id) => dependencies.readDrop(id),
     async list(request: DropListRequest = {}) {
@@ -257,27 +300,41 @@ export const createHttpNulldownRuntime = (
       const response = await dependencies.request(
         `/api/branches/${encodeURIComponent(rootId)}`,
       );
-      return response.data;
+      const result = requireRuntimeResponse(
+        response.data,
+        isDropBranchListResponse,
+      );
+      return result;
     },
     async resolve(dropId) {
       const response = await dependencies.request(
         `/api/branches/resolve/${encodeURIComponent(dropId)}`,
         { method: "POST" },
       );
-      return response.data;
+      return requireRuntimeResponse(response.data, isDropBranchResolveResponse);
     },
     async content(rootId, branchId) {
       const response = await dependencies.request(
         `${branchPath(rootId, branchId)}/content`,
       );
-      return response.data;
+      const result = requireRuntimeResponse(
+        response.data,
+        isDropBranchContentResponse,
+      );
+      requireOperationIdentity(result.branchId === branchId);
+      return result;
     },
     async contentOrNull(rootId, branchId) {
       try {
         const response = await dependencies.request(
           `${branchPath(rootId, branchId)}/content`,
         );
-        return response.data;
+        const result = requireRuntimeResponse(
+          response.data,
+          isDropBranchContentResponse,
+        );
+        requireOperationIdentity(result.branchId === branchId);
+        return result;
       } catch (error) {
         if (error && typeof error === "object" && "status" in error) {
           const status = (error as { status?: unknown }).status;
@@ -290,7 +347,12 @@ export const createHttpNulldownRuntime = (
       const response = await dependencies.request(
         `${branchPath(rootId, branchId)}/snapshots`,
       );
-      return response.data;
+      const result = requireRuntimeResponse(
+        response.data,
+        isDropSnapshotListResponse,
+      );
+      requireOperationIdentity(result.branchId === branchId);
+      return result;
     },
     async promote(input) {
       const response = await dependencies.request(
@@ -304,7 +366,25 @@ export const createHttpNulldownRuntime = (
           }),
         },
       );
-      return response.data;
+      const result = requireRuntimeResponse(
+        response.data,
+        isDropBranchPromoteResponse,
+      );
+      requireOperationIdentity(
+        result.branchId === input.branchId &&
+          result.snapshotId === input.expectedSnapshotId,
+      );
+      return result;
+    },
+    async publish(input) {
+      const { rootId, ...publication } = input;
+      const response = await dependencies.request(`${branchPath(rootId, "owner")}/publish`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(publication),
+      });
+      const result = requireRuntimeResponse(response.data, isDropBranchPublishResponse);
+      requireOperationIdentity(result.snapshotId === input.expectedSnapshotId &&
+        (result.rootDropId === rootId || (isShortDropId(rootId) && toShortDropId(result.rootDropId) === rootId)));
+      return result;
     },
   },
   diffs: {

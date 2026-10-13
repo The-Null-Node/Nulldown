@@ -3,6 +3,10 @@ import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { resolveParam } from "../../core/http/responses";
 import {
+  isApiHttpError,
+  apiHttpErrorResponse,
+} from "../../core/http/responses";
+import {
   canReadRoot,
   resolveRootReadAuthorization,
 } from "../../security/read-authorization";
@@ -68,6 +72,7 @@ export const resolveBranchForRequest = async (
       },
     );
   } catch (error: unknown) {
+    if (isApiHttpError(error)) return apiHttpErrorResponse(error);
     const message = error instanceof Error ? error.message : String(error);
     return new Response(`Failed to resolve branch: ${message}`, {
       status: 400,

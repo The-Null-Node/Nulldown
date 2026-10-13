@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,7 +34,10 @@ class PackageSmokeFailure extends Error {
   }
 }
 
-const fail = (message: string, details: Record<string, unknown> = {}): never => {
+const fail = (
+  message: string,
+  details: Record<string, unknown> = {},
+): never => {
   throw new PackageSmokeFailure(message, details);
 };
 
@@ -50,63 +61,29 @@ const run = (command: string, args: string[], cwd: string) => {
   return result;
 };
 
-const main = (): void => {
-  const tempRoot = mkdtempSync(join(tmpdir(), "nulldown-mcp-package-"));
-  try {
-    const basePackResult = run(
-      "npm",
-      ["pack", "--json", "--pack-destination", tempRoot],
-      repoRoot,
-    );
-    const [basePack] = JSON.parse(basePackResult.stdout) as Array<{ filename: string }>;
-    if (!basePack?.filename) {
-      fail("npm pack did not return a base package filename.", { stdout: basePackResult.stdout });
-    }
-
-    const mcpPackResult = run(
-      "npm",
-      ["pack", "--json", "--pack-destination", tempRoot],
-      packageDir,
-    );
-    const [mcpPack] = JSON.parse(mcpPackResult.stdout) as Array<{ filename: string }>;
-    if (!mcpPack?.filename) {
-      fail("npm pack did not return an MCP package filename.", { stdout: mcpPackResult.stdout });
-    }
-
-    const installDir = join(tempRoot, "install");
-    mkdirSync(installDir);
-    writeFileSync(join(installDir, "package.json"), '{"type":"module","private":true}\n');
-
-    const baseTarballPath = join(tempRoot, basePack.filename);
-    const mcpTarballPath = join(tempRoot, mcpPack.filename);
-    run(
-      "npm",
-      [
-        "install",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "--package-lock=false",
-        baseTarballPath,
-        mcpTarballPath,
-      ],
-      installDir,
-    );
-
-    const importCheckPath = join(installDir, "check-imports.mjs");
-    writeFileSync(
-      importCheckPath,
-      `${JSON.stringify([
-        ["@thenullnode/nulldown-mcp", ["createNulldownMcpServer", "runNulldownMcpServer"]],
-        ["@thenullnode/nulldown-mcp/server", ["createNulldownMcpServer", "runNulldownMcpServer"]],
-        ["@thenullnode/nulldown/client", ["DEFAULT_NULLDOWN_BASE_URL", "NulldownClient", "createNulldownClient"]],
-        ["@thenullnode/nulldown/server/runtime", ["createNulldownServerRuntime"]],
-        ["@thenullnode/nulldown/drop/authoring", ["sealDropForAuthoring"]],
-        ["@thenullnode/nulldown/drop/diff", ["isDropDiffOp"]],
-        ["@thenullnode/nulldown/nulledit/types", ["DiffOp"]],
-        ["@thenullnode/nulldown/auth/cliCredential", ["createFileCliCredentialTokenProvider"]],
-        ["@thenullnode/nulldown/auth/cliDevice", []],
-      ])};
+const importCheckSource = `${JSON.stringify([
+  [
+    "@thenullnode/nulldown-mcp",
+    ["createNulldownMcpServer", "runNulldownMcpServer"],
+  ],
+  [
+    "@thenullnode/nulldown-mcp/server",
+    ["createNulldownMcpServer", "runNulldownMcpServer"],
+  ],
+  [
+    "@thenullnode/nulldown/client",
+    ["DEFAULT_NULLDOWN_BASE_URL", "NulldownClient", "createNulldownClient"],
+  ],
+  ["@thenullnode/nulldown/server/runtime", ["createNulldownServerRuntime"]],
+  ["@thenullnode/nulldown/drop/authoring", ["sealDropForAuthoring"]],
+  ["@thenullnode/nulldown/drop/diff", ["isDropDiffOp"]],
+  ["@thenullnode/nulldown/nulledit/types", ["DiffOp"]],
+  [
+    "@thenullnode/nulldown/auth/cliCredential",
+    ["createFileCliCredentialTokenProvider"],
+  ],
+  ["@thenullnode/nulldown/auth/cliDevice", []],
+])};
 for (const [specifier, expectedExports] of expectations) {
   const imported = await import(specifier);
   const missingExports = expectedExports.filter((name) => !(name in imported));
@@ -116,33 +93,131 @@ for (const [specifier, expectedExports] of expectations) {
   }
 }
 console.log(JSON.stringify({ checkedImports: expectations.map(([specifier]) => specifier) }));
-`.replace(/^/, "const expectations = "),
-    );
-    const importCheckResult = run("bun", [importCheckPath], installDir);
+`.replace(/^/, "const expectations = ");
 
-    const binPath = join(installDir, "node_modules", ".bin", "nulldown-mcp");
-    const altBinPath = join(installDir, "node_modules", ".bin", "nd-mcp");
-    const packageBinPath = join(
-      installDir,
-      "node_modules",
-      "@thenullnode",
-      "nulldown-mcp",
-      "bin",
-      "nulldown-mcp",
+const verifyInstalledPackage = (
+  tempRoot: string,
+  label: string,
+  packagePaths: string[],
+) => {
+  const installDir = join(tempRoot, label);
+  mkdirSync(installDir);
+  writeFileSync(
+    join(installDir, "package.json"),
+    '{"type":"module","private":true}\n',
+  );
+  run(
+    "npm",
+    [
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "--package-lock=false",
+      ...packagePaths,
+    ],
+    installDir,
+  );
+
+  const importCheckPath = join(installDir, "check-imports.mjs");
+  writeFileSync(importCheckPath, importCheckSource);
+  const importCheckResult = run("bun", [importCheckPath], installDir);
+  const binPath = join(installDir, "node_modules", ".bin", "nulldown-mcp");
+  const altBinPath = join(installDir, "node_modules", ".bin", "nd-mcp");
+  const packageBinPath = join(
+    installDir,
+    "node_modules",
+    "@thenullnode",
+    "nulldown-mcp",
+    "bin",
+    "nulldown-mcp",
+  );
+  accessSync(binPath, constants.X_OK);
+  accessSync(altBinPath, constants.X_OK);
+  accessSync(packageBinPath, constants.X_OK);
+  run(
+    "bun",
+    ["run", join(repoRoot, "scripts", "smoke-mcp-stdio.ts"), binPath],
+    installDir,
+  );
+  run(
+    "bun",
+    ["run", join(repoRoot, "scripts", "smoke-mcp-stdio.ts"), altBinPath],
+    installDir,
+  );
+
+  const corePackage = JSON.parse(
+    readFileSync(
+      join(
+        installDir,
+        "node_modules",
+        "@thenullnode",
+        "nulldown",
+        "package.json",
+      ),
+      "utf8",
+    ),
+  ) as { version?: string };
+  if (!/^0\.0\.(?:9|[1-9]\d+)$/.test(corePackage.version ?? "")) {
+    fail(
+      "Installed core package is outside the declared MCP dependency range.",
+      {
+        label,
+        version: corePackage.version,
+      },
     );
-    accessSync(binPath, constants.X_OK);
-    accessSync(altBinPath, constants.X_OK);
-    accessSync(packageBinPath, constants.X_OK);
-    run(
-      "bun",
-      ["run", join(repoRoot, "scripts", "smoke-mcp-stdio.ts"), binPath],
-      installDir,
+  }
+  return {
+    installDir,
+    coreVersion: corePackage.version,
+    binPath,
+    altBinPath,
+    packageBinPath,
+    importCheck: JSON.parse(importCheckResult.stdout),
+    executedAliases: ["nulldown-mcp", "nd-mcp"],
+  };
+};
+
+const main = (): void => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nulldown-mcp-package-"));
+  try {
+    const basePackResult = run(
+      "npm",
+      ["pack", "--json", "--pack-destination", tempRoot],
+      repoRoot,
     );
-    run(
-      "bun",
-      ["run", join(repoRoot, "scripts", "smoke-mcp-stdio.ts"), altBinPath],
-      installDir,
+    const [basePack] = JSON.parse(basePackResult.stdout) as Array<{
+      filename: string;
+    }>;
+    if (!basePack?.filename) {
+      fail("npm pack did not return a base package filename.", {
+        stdout: basePackResult.stdout,
+      });
+    }
+
+    const mcpPackResult = run(
+      "npm",
+      ["pack", "--json", "--pack-destination", tempRoot],
+      packageDir,
     );
+    const [mcpPack] = JSON.parse(mcpPackResult.stdout) as Array<{
+      filename: string;
+    }>;
+    if (!mcpPack?.filename) {
+      fail("npm pack did not return an MCP package filename.", {
+        stdout: mcpPackResult.stdout,
+      });
+    }
+
+    const baseTarballPath = join(tempRoot, basePack.filename);
+    const mcpTarballPath = join(tempRoot, mcpPack.filename);
+    const localPair = verifyInstalledPackage(tempRoot, "local-pair", [
+      baseTarballPath,
+      mcpTarballPath,
+    ]);
+    const publishedRange = verifyInstalledPackage(tempRoot, "published-range", [
+      mcpTarballPath,
+    ]);
 
     console.log(
       JSON.stringify(
@@ -150,11 +225,8 @@ console.log(JSON.stringify({ checkedImports: expectations.map(([specifier]) => s
           package: "@thenullnode/nulldown-mcp",
           baseTarball: baseTarballPath,
           mcpTarball: mcpTarballPath,
-          binPath,
-          altBinPath,
-          packageBinPath,
-          importCheck: JSON.parse(importCheckResult.stdout),
-          executedAliases: ["nulldown-mcp", "nd-mcp"],
+          localPair,
+          publishedRange,
         },
         null,
         2,

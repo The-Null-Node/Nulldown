@@ -9,6 +9,9 @@ import type {
   SqlMetadataStore,
 } from "../../../../src/server/ports";
 import { decryptProviderEscrowEnvelope } from "../crypto/envelopes/provider-escrow";
+import { acquireRootMutationLock, type RootMutationLock } from "../drops/storage/mutation-lock";
+import { ApiHttpError } from "../core/http/responses";
+import { readBranchContent } from "./content/replay";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
   OWNER_BRANCH_ID,
@@ -33,7 +36,40 @@ export interface RootDropState {
   rootDropId: string;
   ownerAccountId: string | null;
   baseContent: string;
+  publishedSnapshotId?: number;
 }
+
+const publishedSnapshot = (
+  metadata: Record<string, unknown> | undefined,
+  rootDropId: string,
+): number | undefined => {
+  const value = metadata?.ownerPublication as Record<string, unknown> | undefined;
+  return value &&
+    value.rootDropId === rootDropId &&
+    value.branchId === "owner" &&
+    Number.isSafeInteger(value.snapshotId) &&
+    Number(value.snapshotId) >= 0
+    ? Number(value.snapshotId)
+    : undefined;
+};
+
+/** Rejects legacy root/history divergence rather than resurrecting old owner content. */
+export const assertOwnerRootHistory = async (
+  bucket: BlobObjectStore,
+  state: RootDropState,
+  db?: SqlMetadataStore,
+): Promise<void> => {
+  const published = await readBranchContent(
+    bucket, state.rootDropId, OWNER_BRANCH_ID, state.publishedSnapshotId ?? 0, db,
+  );
+  if (published !== state.baseContent) {
+    throw new ApiHttpError({
+      status: 409,
+      code: "owner_root_history_conflict",
+      message: "Stored root and owner history diverged. Reconcile them before editing or publishing.",
+    });
+  }
+};
 
 /** Reads root drop ownership and plaintext content needed for branch creation. */
 export const readRootDropState = async (
@@ -73,6 +109,7 @@ export const readRootDropState = async (
         rootDropId,
         ownerAccountId: envelope.accountId,
         baseContent: payload.content,
+        publishedSnapshotId: publishedSnapshot(envelope.metadata, rootDropId),
       };
     } catch {
       return null;
@@ -87,6 +124,7 @@ export const readRootDropState = async (
           ? parsedJson.metadata.ownerAccountId
           : null,
       baseContent: parsedJson.content,
+      publishedSnapshotId: publishedSnapshot(parsedJson.metadata, rootDropId),
     };
   }
 
@@ -424,6 +462,25 @@ export const resolveBranchForActor = async (
   rawProviderPrivateKey?: string,
   db?: SqlMetadataStore,
 ): Promise<{ branch: DropBranchRecord; created: boolean }> => {
+  const lock = await acquireRootMutationLock(bucket, rootDropId);
+  try {
+    return await resolveBranchForActorUnderRootLock(
+      bucket, rootDropId, accountId, clientId, lock, rawProviderPrivateKey, db,
+    );
+  } finally {
+    await lock.release();
+  }
+};
+
+const resolveBranchForActorUnderRootLock = async (
+  bucket: BlobObjectStore,
+  rootDropId: string,
+  accountId: string | null,
+  clientId: string | null,
+  rootLock: RootMutationLock,
+  rawProviderPrivateKey?: string,
+  db?: SqlMetadataStore,
+): Promise<{ branch: DropBranchRecord; created: boolean }> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const ownerAccountId = await getOwnerAccountIdForDrop(bucket, rootDropId);
   const rootState = await readRootDropState(
@@ -443,10 +500,12 @@ export const resolveBranchForActor = async (
       OWNER_BRANCH_ID,
     );
     if (existing) {
+      await assertOwnerRootHistory(bucket, rootState, db);
       const upgraded = await ensureBranchSnapshotHeap(bucket, existing, db);
       return { branch: upgraded, created: false };
     }
 
+    await rootLock.beginCommit();
     const created = await createInitialBranchState(
       bucket,
       rootDropId,
@@ -486,6 +545,7 @@ export const resolveBranchForActor = async (
     return { branch: upgraded, created: false };
   }
 
+  await rootLock.beginCommit();
   const created = await createInitialBranchState(
     bucket,
     rootDropId,
@@ -498,6 +558,7 @@ export const resolveBranchForActor = async (
     db,
   );
 
+  await rootLock.beginCommit();
   await writeWriterBranchId(bucket, rootDropId, writerKey, branchId, db);
 
   return { branch: created, created: true };

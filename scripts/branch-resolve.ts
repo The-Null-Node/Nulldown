@@ -1,4 +1,4 @@
-import { createBranchApiClient } from "../shared/drop/branch-api";
+import { createBranchApiClient } from "../src/client/branch-api-client";
 import { getArgValue, resolveBaseUrl } from "./diff-auth-util";
 
 const main = async () => {

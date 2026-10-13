@@ -36,6 +36,7 @@ import { createRequestLogger, toLogRef } from "../../core/logging/logger";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
+  ApiHttpError,
   jsonErrorResponse,
   jsonResponse,
   parseJsonTextWithSchema,
@@ -107,6 +108,9 @@ const resolveId = (id: string | string[] | undefined) =>
 const resolveRequestedBranchId = (request: Request): string | null => {
   const url = new URL(request.url);
   const branchId = url.searchParams.get("branchId");
+  if (branchId !== null && (!branchId || branchId !== sanitizeDiffAuthToken(branchId) || url.searchParams.getAll("branchId").length !== 1)) {
+    throw new ApiHttpError({ status: 400, code: "branch_target_invalid", message: "Supply one exact, nonempty branchId." });
+  }
   return sanitizeDiffAuthToken(branchId);
 };
 
@@ -146,6 +150,10 @@ const resolveBranchForDiffRequest = async (
   request: Request,
   auth: Pick<DiffRequestAuthSuccess, "mode" | "branchId" | "clientId">,
 ): Promise<DropBranchRecord> => {
+  const requestedBranchId = resolveRequestedBranchId(request);
+  if (auth.branchId && requestedBranchId && auth.branchId !== requestedBranchId) {
+    throw new ApiHttpError({ status: 403, code: "branch_target_mismatch", message: "The requested branch does not match the branch credential." });
+  }
   const statePlane = createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
@@ -154,18 +162,18 @@ const resolveBranchForDiffRequest = async (
   if (auth.branchId) {
     const branch = await statePlane.branches.readBranch(dropId, auth.branchId);
     if (!branch) {
-      throw new Error("Resolved branch credential points to a missing branch.");
+      throw new ApiHttpError({ status: 404, code: "branch_not_found", message: "Branch not found." });
     }
     return branch;
   }
 
   const accountId = await resolveAuthenticatedAccountId(request, env);
-  const requestedBranchId = resolveRequestedBranchId(request);
   if (requestedBranchId) {
     const branch = await statePlane.branches.readBranch(dropId, requestedBranchId);
     if (branch) {
       return branch;
     }
+    throw new ApiHttpError({ status: 404, code: "branch_not_found", message: "Branch not found." });
   }
 
   const resolved = await statePlane.branches.resolveForActor(

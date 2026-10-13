@@ -1,18 +1,16 @@
 # @thenullnode/nulldown-mcp
 
-`@thenullnode/nulldown-mcp` is the stdio MCP server for Nulldown's deterministic Markdown structure. It gives agents structured access to drops, branches, diff events, resolved queries, and NullMem without requiring shell commands.
+`@thenullnode/nulldown-mcp` connects agents to durable Markdown state. Agents can retrieve a plan, follow a saved procedure, record results, and reuse knowledge in a later session through MCP tools.
 
-Nulldown turns Markdown into deterministic structure. This server lets an MCP client retrieve the smallest relevant branch structure, follow source references, apply attributable diffs, and retain reusable facts or procedures near their evidence.
+The server provides focused document queries, attributed edits, and branch-scoped memory. Your agent executes the tools; Nulldown preserves the context and evidence it needs to continue.
 
 ## Install
 
-This checkout prepares unpublished MCP `0.0.8`, requiring core
-`>=0.0.8 <0.1.0`. Verify the candidate with both local tarballs; the registry
-command below does not install this unpublished pair.
+The `0.0.9` MCP prerelease is available under the `next` tag and requires core
+`>=0.0.9 <0.1.0`. Install the matching pair for the connection walkthrough:
 
 ```bash
-bun install -g @thenullnode/nulldown-mcp
-nulldown-mcp
+bun install -g @thenullnode/nulldown@0.0.9 @thenullnode/nulldown-mcp@0.0.9
 ```
 
 From this repository checkout:
@@ -25,7 +23,7 @@ The package also exposes the `nd-mcp` binary.
 
 ## Configure A Client
 
-Use `nulldown-mcp` as a stdio MCP command. For example:
+Use `nulldown-mcp` as a stdio MCP command. The client starts the server; it is not an interactive terminal program. Client configuration formats vary; a client using `mcpServers` might use:
 
 ```json
 {
@@ -59,6 +57,13 @@ An older auth file without local authoring material fails deterministically with
 For an exact `diff_apply` retry, provide `eventId` and `createdAt` together with
 the original operations and metadata. The tool rejects partial identities before
 network I/O and treats a missing or mismatched acknowledgement as unconfirmed.
+
+Diffs save to branches. To update the existing root link, its verified owner can
+call `branch_publish` with `rootId`, `expectedSnapshotId`, `expectedRevision`
+(from `drop_get`), and a stable `idempotencyKey`. Retry with those exact fields
+after a lost response, then verify the root with `drop_get`. The receipt reports
+`outcome: "root-published"`. Explicit diff targets must exist and agree with any
+branch-bound credential; they never fall back to another branch.
 
 ## Tool Groups
 
@@ -107,7 +112,7 @@ Compactness is a transport guard, not a substitute for correct retrieval. Agents
 
 ## Learn More
 
-- [Nulldown documentation](https://nulldown.app/d/vjdL1x)
-- [Deterministic structure for Markdown](https://nulldown.app/d/q2BylK)
-- [Agents, retrieval, and memory](https://nulldown.app/d/TwPp4l)
-- [Build with Nulldown](https://nulldown.app/d/hCPw9B)
+- [Nulldown documentation](https://nulldown.app/d/kzgJGL)
+- [Why Nulldown](https://nulldown.app/d/TQHCCo)
+- [Work with Nulldown as an agent](https://nulldown.app/d/J8V2nm)
+- [Connect an agent](https://nulldown.app/d/NVJIa8)

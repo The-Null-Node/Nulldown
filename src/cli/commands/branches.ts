@@ -160,6 +160,20 @@ export const createBranchCommand = <TConfig>(
       return;
     }
 
+    if (subcommand === "publish") {
+      const rootId = args.positionals[2];
+      const snapshot = flagString(args, "expected-snapshot");
+      const expectedSnapshotId = snapshot && /^\d+$/.test(snapshot) ? Number(snapshot) : NaN;
+      const expectedRevision = flagString(args, "expected-revision");
+      const idempotencyKey = flagString(args, "idempotency-key");
+      if (!rootId || !Number.isSafeInteger(expectedSnapshotId) || !expectedRevision || !idempotencyKey) {
+        throw new Error("Usage: nd branch publish <rootId> --expected-snapshot <n> --expected-revision <etag> --idempotency-key <key>");
+      }
+      const response = await dependencies.runtime.branches.publish({ rootId, expectedSnapshotId, expectedRevision, idempotencyKey });
+      dependencies.print(response);
+      return;
+    }
+
     if (subcommand === "memory" || subcommand === "mem") {
       const action = args.positionals[2];
       const rootId =

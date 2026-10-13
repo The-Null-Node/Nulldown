@@ -199,7 +199,7 @@ export function useDiffChannel({
     } else {
       channel.start();
     }
-  }, [branchId, dropId, transportPaused]);
+  }, [branchId, dropId, enabled, transportPaused]);
 
   const publishDiffs = useCallback(
     (

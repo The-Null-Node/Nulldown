@@ -41,6 +41,19 @@ const diffApplyInputSchema = z
 
 /** Registers branch query/content and diff tools on the MCP server. */
 export const registerBranchTools = (server: McpServer): void => {
+  server.registerTool("branch_publish", {
+    title: "Publish Owner Snapshot",
+    description: "Explicitly publish an owner snapshot to the same root ID. Requires verified root ownership. Reuse the exact snapshot, root revision and idempotency key on retries.",
+    inputSchema: {
+      ...clientArgsSchema,
+      rootId: z.string().min(1),
+      expectedSnapshotId: z.number().int().nonnegative().safe(),
+      expectedRevision: z.string().min(1),
+      idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{1,120}$/),
+    },
+  }, async (args) => asJsonText(await createClient(args).publishBranch(args.rootId, {
+    expectedSnapshotId: args.expectedSnapshotId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+  })));
   server.registerTool(
     "branch_resolve",
     {
