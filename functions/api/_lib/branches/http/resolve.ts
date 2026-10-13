@@ -6,7 +6,7 @@ import {
   canReadRoot,
   resolveRootReadAuthorization,
 } from "../../security/read-authorization";
-import { resolveBranchForActor } from "../lifecycle";
+import { createBranchRouteStatePlane } from "./request-context";
 import type { BranchRootParams, BranchRouteEnv } from "./request-context";
 
 /** Resolves or creates the branch assigned to the authenticated account/client. */
@@ -48,14 +48,9 @@ export const resolveBranchForRequest = async (
   );
 
   try {
-    const { branch, created } = await resolveBranchForActor(
-      env.R2_BUCKET,
-      id,
-      accountId,
-      clientId,
-      env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
-      env.DB,
-    );
+    const { branch, created } = await createBranchRouteStatePlane(
+      env,
+    ).branches.resolveForActor(id, accountId, clientId);
 
     return new Response(
       JSON.stringify({

@@ -11,9 +11,8 @@ import {
 } from "../../core/http/responses";
 import { createRequestLogger, toLogRef } from "../../core/logging/logger";
 import { createDropIdentityRepository } from "../../drops/identity/id";
-import { backfillBranchToSnapshotHeap } from "../lifecycle";
 import {
-  createBranchRouteRepository,
+  createBranchRouteStatePlane,
   type BranchRootParams,
   type BranchRouteEnv,
 } from "./request-context";
@@ -108,8 +107,8 @@ export const backfillBranchesForDrop = async (
     const query = parseBranchBackfillQuery(request);
     const inputCursor = query.cursor;
     const limit = query.limit ?? DEFAULT_BACKFILL_LIMIT;
-    const branchRepository = createBranchRouteRepository(env);
-    const page = await branchRepository.listBranchesForRootPage(
+    const statePlane = createBranchRouteStatePlane(env);
+    const page = await statePlane.maintenance.listBranchesForRootPage(
       rootDropId,
       limit,
       inputCursor,
@@ -130,11 +129,9 @@ export const backfillBranchesForDrop = async (
         typeof branch.headEventSeq === "number";
 
       try {
-        const upgraded = await backfillBranchToSnapshotHeap(
-          env.R2_BUCKET,
+        const upgraded = await statePlane.maintenance.backfillSnapshotHeap(
           rootDropId,
           branch.branchId,
-          env.DB,
         );
         if (!upgraded) {
           stats.missing += 1;

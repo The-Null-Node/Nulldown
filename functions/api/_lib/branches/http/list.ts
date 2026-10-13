@@ -1,6 +1,6 @@
 import { resolveRootReadAuthorization } from "../../security/read-authorization";
 import {
-  createBranchRouteRepository,
+  createBranchRouteStatePlane,
   resolveRootDropIdForReadRequest,
   type BranchRootParams,
   type BranchRouteEnv,
@@ -26,8 +26,8 @@ export const listBranchesForDrop = async (
     return new Response("Branch not found.", { status: 404 });
   }
 
-  const branchRepository = createBranchRouteRepository(env);
-  let branches = await branchRepository.listBranchesForRoot(id);
+  const statePlane = createBranchRouteStatePlane(env);
+  let branches = await statePlane.branches.listBranchesForRoot(id);
   if (authorization.kind === "private" && !authorization.isCanonicalOwner) {
     branches = branches.filter(
       (branch) => branch.writerAccountId === authorization.accountId,

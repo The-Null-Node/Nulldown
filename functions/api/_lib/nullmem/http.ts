@@ -11,6 +11,7 @@ import {
   type NullMemAuthorizationEnv,
 } from "./authorization";
 import { createNullMemService } from "./service";
+import { createMemoryStatePlane } from "../../../../src/server/state-plane/gateway";
 import {
   type NullMemFactRecord,
   type NullMemProcedureRecord,
@@ -202,15 +203,15 @@ const createNullMemHttpServices = (
       ),
     };
   }
-  if (services?.memory) return { memory: services.memory };
+  if (services?.memory) return createMemoryStatePlane(services.memory);
 
-  return {
-    memory: createNullMemService({
+  return createMemoryStatePlane(
+    createNullMemService({
       blobs: env.R2_BUCKET,
       sql: env.DB,
       data: services?.data,
     }),
-  };
+  );
 };
 
 /** Queries branch-scoped NullMem records and built-in capability memory. */
@@ -278,11 +279,13 @@ export const queryNullMem = async (
     const memory =
       target.canReadSensitive || services?.memory
         ? memoryServices.memory
-        : createNullMemService({
-            blobs: withoutRemoteCapabilityCatalog(env.R2_BUCKET),
-            sql: env.DB,
-            data: services?.data,
-          });
+        : createMemoryStatePlane(
+            createNullMemService({
+              blobs: withoutRemoteCapabilityCatalog(env.R2_BUCKET),
+              sql: env.DB,
+              data: services?.data,
+            }),
+          ).memory;
     const result = await memory.query({
       rootDropId: target.rootDropId,
       branchId: target.branchId,

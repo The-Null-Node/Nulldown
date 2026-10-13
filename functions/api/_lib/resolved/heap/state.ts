@@ -5,6 +5,7 @@ import {
 import type { ResolvedNulldownState } from "../../../../../shared/drop/resolved/types";
 import { createResolvedHeapRepository } from "./repository";
 import type { ResolvedHeapEnv } from "./types";
+import { timeHeapPhase } from "./timing";
 import { createResolvedHeapDataKey } from "../../../../../src/server/nulledit/data-keys/resolved";
 import { isResolvedNulldownState } from "../../../../../shared/drop/resolved/validators";
 import {
@@ -52,28 +53,51 @@ export const readResolvedHeapState = async (
     resolverId === RESOLVED_DOCUMENT_RESOLVER_ID
   ) {
     // This optional derived store must not prevent legacy reads or query repair.
-    const state = await env.resolvedDocumentData
-      .get(createResolvedHeapDataKey({ rootDropId, branchId, resolverId, snapshotId }))
-      .catch(() => null);
+    const state = await timeHeapPhase(
+      env.heapTiming,
+      "read.runtime-projection",
+      async () =>
+        env.resolvedDocumentData!.get(
+          createResolvedHeapDataKey({
+            rootDropId,
+            branchId,
+            resolverId,
+            snapshotId,
+          }),
+        ),
+    ).catch(() => null);
     if (
-      isCurrentResolvedDocumentProjection(state, rootDropId, branchId, snapshotId, sourceContentHash)
+      isCurrentResolvedDocumentProjection(
+        state,
+        rootDropId,
+        branchId,
+        snapshotId,
+        sourceContentHash,
+      )
     ) {
       return state;
     }
   }
   if (env.DB) {
-    const state = await createResolvedHeapRepository({
-      sql: env.DB,
-    }).readState(rootDropId, branchId, resolverId, snapshotId);
+    const state = await timeHeapPhase(
+      env.heapTiming,
+      "read.sql-projection",
+      async () =>
+        createResolvedHeapRepository({
+          sql: env.DB,
+        }).readState(rootDropId, branchId, resolverId, snapshotId),
+    );
     if (state) return state;
   }
 
-  return readResolvedNulldownState(
-    env.R2_BUCKET,
-    rootDropId,
-    branchId,
-    resolverId,
-    snapshotId,
+  return timeHeapPhase(env.heapTiming, "read.r2-projection", async () =>
+    readResolvedNulldownState(
+      env.R2_BUCKET,
+      rootDropId,
+      branchId,
+      resolverId,
+      snapshotId,
+    ),
   );
 };
 
@@ -82,7 +106,20 @@ export const writeResolvedHeapState = async (
   env: ResolvedHeapEnv,
   state: ResolvedNulldownState,
 ): Promise<string> => {
-  const key = await writeResolvedNulldownState(env.R2_BUCKET, state);
-  await createResolvedHeapRepository({ sql: env.DB }).syncState(state);
+  const key = await timeHeapPhase(
+    env.heapTiming,
+    "projection.r2-write",
+    async () => writeResolvedNulldownState(env.R2_BUCKET, state),
+  );
+  await timeHeapPhase(
+    env.heapTiming,
+    "projection.sql-sync",
+    async () =>
+      createResolvedHeapRepository({
+        sql: env.DB,
+        timing: env.heapTiming,
+      }).syncState(state),
+    (state.documentNodes?.length ?? 0) + (state.runtimeNodes?.length ?? 0),
+  );
   return key;
 };

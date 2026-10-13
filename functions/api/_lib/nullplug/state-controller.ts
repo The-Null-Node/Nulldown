@@ -15,7 +15,7 @@ import {
 } from "./facts/repository";
 import { createDropIdentityRepository } from "../drops/identity/id";
 import { resolveAuthenticatedAccountId } from "../accounts/session/authentication";
-import { createBranchRepository } from "../branches/storage/repository";
+import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
 import { readBranchContent } from "../branches/content/replay";
 import { createBranchRuntimeFactLogRepository } from "../branches/storage/runtime-fact-log";
 import {
@@ -132,11 +132,11 @@ const handlePost = async (
       );
     }
 
-    const branchRepository = createBranchRepository({
+    const statePlane = createBranchStatePlane({
       blobs: serviceEnv.R2_BUCKET,
       sql: serviceEnv.DB,
     });
-    const branch = await branchRepository.readBranch(
+    const branch = await statePlane.branches.readBranch(
       canonicalRootDropId,
       branchId,
     );
@@ -160,7 +160,7 @@ const handlePost = async (
       canonicalRootDropId,
       branchId,
       async (lock) => {
-        const lockedBranch = await branchRepository.readBranch(
+        const lockedBranch = await statePlane.branches.readBranch(
           canonicalRootDropId,
           branchId,
         );

@@ -1,4 +1,4 @@
-import { createBranchRepository } from "../branches/storage/repository";
+import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
 import { evaluateNullMemFreshnessBatch } from "../../../../shared/nullmem/freshness";
 import type { NullMemFreshnessReport } from "../../../../shared/nullmem/freshness";
 import type { NullMemRecord } from "../../../../shared/nullmem/records";
@@ -66,8 +66,8 @@ const resolveFreshnessHeadSnapshotId = async ({
     }
   }
 
-  const branchRepository = createBranchRepository({ blobs, sql });
-  const branch = await branchRepository.readBranch(rootDropId, branchId);
+  const statePlane = createBranchStatePlane({ blobs, sql });
+  const branch = await statePlane.branches.readBranch(rootDropId, branchId);
   return branch?.headSnapshotId;
 };
 

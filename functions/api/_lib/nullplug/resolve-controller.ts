@@ -8,7 +8,7 @@ import {
   type NullplugRuntimeError,
 } from "../../../../shared/nullplug/runtime";
 import { resolveAuthenticatedAccountId } from "../accounts/session/authentication";
-import { createBranchRepository } from "../branches/storage/repository";
+import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
 import { sanitizeDiffAuthToken } from "../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../drops/identity/id";
 import { createRequestLogger, toLogRef } from "../core/logging/logger";
@@ -129,10 +129,10 @@ const authorizeCallerBranch = async (
     };
   }
 
-  const branch = await createBranchRepository({
+  const branch = await createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
-  }).readBranch(rootDropId, branchId);
+  }).branches.readBranch(rootDropId, branchId);
   if (!branch) {
     return {
       error:

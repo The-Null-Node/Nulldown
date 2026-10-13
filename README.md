@@ -58,6 +58,14 @@ Portable contracts and codecs live under `shared/`. Public package imports are d
 
 Browser drop storage and Nullplug invocation use separate capabilities. `DropProviderPortRegistry` routes local and remote drop operations, while `BrowserNullplugClient` owns editor-session invocation and branch fact submission. Backend composition is exposed independently through `NulldownServerRuntime` from `@thenullnode/nulldown/server/runtime`.
 
+Branch timeline lookup, actor resolution, snapshot reads, and heap maintenance route through `src/server/state-plane/gateway.ts`. Its request-scoped capabilities delegate to the existing branch services through a legacy adapter, retaining the current blob storage, optional SQL projections, and replay fallbacks.
+
+Diff transport uses the same gateway for append and polling capabilities. Append
+commands retain the existing Nulledit commit service and durable receipts.
+NullMem record persistence uses `src/server/stores/nullmem-record-store.ts`, whose
+query, write, and delete capabilities bind their value type to validated NullMem
+records.
+
 Remote manifests declare the versioned invocation media type `application/vnd.nulldown.nullplug.invoke+json;version=1`. Provider invocation rechecks the endpoint allowlist, narrows capabilities to the manifest permissions, enforces a timeout and response-size limit, and rejects non-conforming responses. It never imports code from manifest URLs.
 
 ## Authenticated Branch Workflow
@@ -184,6 +192,13 @@ Legacy snapshots and mutable snapshot zero still reconstruct on every query,
 without writing hashes back. Runtime fact freshness and per-query priority reads
 remain independent of document projection reuse. No database migration is required.
 
+Resolved queries emit content-free `resolved.heap.phase` timing logs with request
+and phase identifiers. Query totals and projection generation are logged at
+`info`; `LOG_LEVEL=debug` adds read, replay, authorization, and ranking phases.
+Projection write phases report attempted/completed statement counts and available
+D1 SQL duration. Phase durations include nested work, so do not sum them; SQL
+duration excludes network time.
+
 Resolved queries and updates check root plaintext-read permissions before using
 cached or regenerated heaps. Private and account-vault-only envelopes require the
 root owner's authenticated session. Runtime projections additionally require the
@@ -276,6 +291,12 @@ configuration, OpenAuth, and tests as separate TypeScript surfaces. Run the
 individual `typecheck:<surface>` scripts when you need diagnostics for one area.
 
 ## Contributing
+
+For runtime diff operations, [`DropDiffOperation`](shared/drop/diff-operation.ts)
+provides validated factories and defensive copies of editor buffers and records.
+Use `fromDiff()` for editor operations, `fromRecord()` for incoming records, and
+`toRecord()` at transport and persistence boundaries. The existing v1 wire format
+is preserved.
 
 Repository rules live in [AGENTS.md](AGENTS.md). Nulldown-hosted plans, documentation, and agent memory are updated with branch diffs and verified through resolved queries. The local [`docs/`](docs/README.md) directory retains source-coupled references and migration material; the hosted documentation graph is the public conceptual source of truth.
 

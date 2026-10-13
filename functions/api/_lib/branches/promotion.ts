@@ -9,8 +9,7 @@ import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
 } from "../accounts/session/authentication";
-import { readBranchContent } from "./content/replay";
-import { createBranchRepository } from "./storage/repository";
+import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
 import {
   completeBranchPromotionReceipt,
   createBranchPromotionReceipt,
@@ -119,7 +118,7 @@ export const promoteBranchSnapshot = async (
       return jsonErrorResponse(401, "account_required", "Account ID is required.");
     }
 
-    const branchRepository = createBranchRepository({
+    const statePlane = createBranchStatePlane({
       blobs: env.R2_BUCKET,
       sql: env.DB,
     });
@@ -128,7 +127,7 @@ export const promoteBranchSnapshot = async (
       rootDropId,
       branchId,
       async (lock) => {
-        const branch = await branchRepository.readBranch(rootDropId, branchId);
+        const branch = await statePlane.branches.readBranch(rootDropId, branchId);
         if (!branch) {
           throw new PromotionHttpError(404, "branch_not_found", "Branch not found.");
         }
@@ -180,12 +179,10 @@ export const promoteBranchSnapshot = async (
           );
         }
 
-        const content = await readBranchContent(
-          env.R2_BUCKET,
+        const content = await statePlane.snapshots.readContent(
           rootDropId,
           branchId,
           promotion.expectedSnapshotId,
-          env.DB,
         );
         if (content === null) {
           throw new PromotionHttpError(

@@ -13,11 +13,14 @@ import type {
   ResolvedPriorityScoring,
 } from "./priority-facts-repository";
 import { createResolvedHeapProjectionRepository } from "./projection-repository";
+import type { ResolvedHeapTiming } from "./timing";
 
 /** Ports used by resolved heap repositories. */
 export interface ResolvedHeapRepositoryPorts {
   /** Optional SQL metadata store containing resolved heap projections. */
   sql?: SqlMetadataStore;
+  /** Optional observer scoped to the calling query. */
+  timing?: ResolvedHeapTiming;
 }
 
 /** Repository facade for compact resolved heap projections and priority facts. */
@@ -62,8 +65,12 @@ export interface ResolvedHeapRepository {
 /** Creates a resolved heap repository bound to composed SQL ports. */
 export const createResolvedHeapRepository = ({
   sql,
+  timing,
 }: ResolvedHeapRepositoryPorts): ResolvedHeapRepository => {
-  const projectionRepository = createResolvedHeapProjectionRepository({ sql });
+  const projectionRepository = createResolvedHeapProjectionRepository({
+    sql,
+    timing,
+  });
   const requireSql = (): SqlMetadataStore => {
     if (!sql) {
       throw new Error("SQL metadata store is required to use resolved heaps.");

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import {
-  diffToDropDiffOp,
-  type DropDiffEnvelope,
-  type DropDiffEventMetadata,
-  type DropDiffOp,
+import type {
+  DropDiffEnvelope,
+  DropDiffEventMetadata,
+  DropDiffOp,
 } from "../../../shared/drop/diff";
+import { DropDiffOperation } from "../../../shared/drop/diff-operation";
 import {
   DIFF_CLIENT_ID_HEADER,
   DIFF_SECRET_KID_HEADER,
@@ -523,7 +523,7 @@ export const createDiffCommand = <TConfig>(
       const envelope = createEvent({
         dropId: branchContent?.rootDropId ?? canonical!.id,
         clientId: dependencies.clientId() || "nd-cli",
-        ops: diffs.map((diff) => diffToDropDiffOp(diff)),
+        ops: diffs.map((diff) => DropDiffOperation.fromDiff(diff).toRecord()),
         metadata: {
           ...metadata,
           followsSeq: branchContent?.headEventSeq ?? -1,

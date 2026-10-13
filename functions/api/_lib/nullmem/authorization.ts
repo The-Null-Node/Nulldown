@@ -2,7 +2,7 @@ import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
 } from "../accounts/session/authentication";
-import { createBranchRepository } from "../branches/storage/repository";
+import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
 import { jsonErrorResponse, resolveParam } from "../core/http/responses";
 import { createDropIdentityRepository } from "../drops/identity/id";
 import {
@@ -80,11 +80,11 @@ export const resolveNullMemTarget = async (
     };
   }
 
-  const branchRepository = createBranchRepository({
+  const statePlane = createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  const branch = await branchRepository.readBranch(
+  const branch = await statePlane.branches.readBranch(
     rootDropId,
     requestedBranchId,
   );
@@ -142,11 +142,11 @@ export const resolveNullMemQueryTarget = async (
     return { error: branchNotFoundResponse() };
   }
 
-  const branchRepository = createBranchRepository({
+  const statePlane = createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  const branch = await branchRepository.readBranch(
+  const branch = await statePlane.branches.readBranch(
     rootDropId,
     requestedBranchId,
   );

@@ -1,4 +1,5 @@
 import type { AccountAuthEnv } from "../../accounts/session/authentication";
+import type { ResolvedHeapTiming, ResolvedHeapTimingObserver } from "./timing";
 import type {
   RESOLVED_DOCUMENT_RESOLVER_ID,
   RESOLVED_RUNTIME_REFS_RESOLVER_ID,
@@ -26,6 +27,8 @@ export interface ResolvedHeapEnv extends AccountAuthEnv {
   DB?: SqlMetadataStore;
   /** Trusted runtime snapshotter storage; never populated from request payloads. */
   resolvedDocumentData?: Pick<RuntimeDataStore, "get">;
+  /** Internal request-scoped phase observer; never populated from request payloads. */
+  heapTiming?: ResolvedHeapTiming;
 }
 
 /** Route parameters for branch resolved heap operations. */
@@ -65,12 +68,17 @@ export interface ResolvedHeapQueryRepairTarget {
 
 /** Optional services used by resolved heap queries. */
 export interface ResolvedHeapQueryOptions {
+  /** Replaces default structured timing emission for this request only. */
+  onTiming?: ResolvedHeapTimingObserver;
   /** Flushes cold-path derived state before querying the latest snapshot. */
   repairBufferedCommits?: (
     target: ResolvedHeapQueryRepairTarget,
   ) => Promise<void> | void;
   /** Observes repair failures without failing the query. */
-  onRepairError?: (error: unknown, target: ResolvedHeapQueryRepairTarget) => void;
+  onRepairError?: (
+    error: unknown,
+    target: ResolvedHeapQueryRepairTarget,
+  ) => void;
   /** Dispatches an authorized non-document snapshotter query. */
   querySnapshotter?: (
     snapshotterId: string,
