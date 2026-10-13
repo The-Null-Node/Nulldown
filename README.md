@@ -199,6 +199,10 @@ bun run package:check-cli
 bun run package:check-mcp
 ```
 
+Production browser builds load public provider keys from `.env.production`.
+The matching private keys belong in Cloudflare Pages secrets, never in a `VITE_`
+variable. Local `.env.*.local` files can override the public build configuration.
+
 Run `bun run format:check`, `bun run lint`, and `bun run typecheck` for the local
 tooling baseline. Repository contribution rules live in [AGENTS.md](AGENTS.md).
 
