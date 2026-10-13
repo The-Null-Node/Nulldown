@@ -5,6 +5,47 @@ import type {
 } from "../../shared/nullplug/ui";
 
 describe("branch api client", () => {
+  it("publishes the exact snapshot and root revision with authenticated retry identity", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const receipt = {
+      rootDropId: "root-publication",
+      dropId: "root-publication",
+      branchId: "owner",
+      snapshotId: 2,
+      url: "https://nulldown.test/d/root-p",
+      revision: "new-etag",
+      outcome: "root-published",
+    };
+    const client = createBranchApiClient({
+      baseUrl: "https://nulldown.test",
+      authToken: "session",
+      fetchImpl: (async (url, init) => {
+        calls.push({ url: String(url), init });
+        return Response.json(receipt);
+      }) as typeof fetch,
+    });
+    const intent = {
+      expectedSnapshotId: 2,
+      expectedRevision: "old-etag",
+      idempotencyKey: "stable",
+    };
+    expect(await client.publishBranch("root-publication", intent)).toEqual(
+      receipt,
+    );
+    expect(calls[0].url).toBe(
+      "https://nulldown.test/api/branches/root-publication/owner/publish",
+    );
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual(intent);
+    expect(new Headers(calls[0].init?.headers).get("Authorization")).toBe(
+      "Bearer session",
+    );
+    await expect(
+      client.publishBranch("root-publication", {
+        ...intent,
+        expectedSnapshotId: 3,
+      }),
+    ).rejects.toThrow("receipt");
+  });
   it("lists branches with the configured authentication headers", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const client = createBranchApiClient({

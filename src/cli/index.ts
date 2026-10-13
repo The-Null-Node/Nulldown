@@ -232,6 +232,7 @@ Branch commands:
   branch priority list <rootId> <branchId> [--target-kind <kind>] [--target <id>]
   branch priority delete <rootId> <branchId> <factId>
   branch promote <rootId> <branchId> --expected-snapshot <n> --idempotency-key <key>
+  branch publish <rootId> --expected-snapshot <n> --expected-revision <etag> --idempotency-key <key>
 
 Diff commands:
   diff poll <dropId> [--cursor <n>] [--limit <n>]

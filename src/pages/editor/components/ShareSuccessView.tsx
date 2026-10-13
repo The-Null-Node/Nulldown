@@ -8,7 +8,7 @@ interface ShareSuccessViewProps {
   onCopyError: (message: string) => void;
   onNewDrop: () => void;
   offline?: boolean;
-  kind?: "share" | "branch";
+  kind?: "share" | "branch" | "root";
 }
 
 const ShareSuccessView: React.FC<ShareSuccessViewProps> = ({
@@ -37,7 +37,7 @@ const ShareSuccessView: React.FC<ShareSuccessViewProps> = ({
           <CardTitle className="text-xl text-accent">
             {offline
               ? "Drop Saved Offline"
-              : kind === "branch"
+              : kind === "root" ? "Drop Updated" : kind === "branch"
                 ? "Branch Published"
                 : "Drop Created"}
           </CardTitle>
@@ -47,7 +47,7 @@ const ShareSuccessView: React.FC<ShareSuccessViewProps> = ({
           <p className="mb-4 text-sm">
             {offline
               ? "Your drop was saved in your browser."
-              : kind === "branch"
+              : kind === "root" ? "Your changes are published at the same link." : kind === "branch"
                 ? "Your branch has been promoted to a shareable drop."
               : "Your markdown has been dropped into the void."}
           </p>

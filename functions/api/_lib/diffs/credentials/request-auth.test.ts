@@ -2,6 +2,14 @@ import { jest } from "@jest/globals";
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { onRequest } from "../../../diff/[id]";
 import { resolveBranchForActor } from "../../branches/lifecycle";
+import { createDiffCredentialRepository } from "./repository";
+import {
+  buildDiffSigningPayload,
+  DIFF_CLIENT_ID_HEADER,
+  DIFF_SECRET_KID_HEADER,
+  DIFF_SIGNATURE_HEADER,
+  DIFF_TIMESTAMP_HEADER,
+} from "../../../../../shared/drop/diff-auth";
 import {
   accountId,
   createPostRequest,
@@ -50,6 +58,76 @@ describe("diff request authentication contracts", () => {
 
     expect(response.status).toBe(200);
   });
+
+  it.each(["owner", "missing"])(
+    "rejects a signed credential/query conflict targeting %s before any branch write",
+    async (target) => {
+      const bucket = createSeededBucket();
+      await createDiffCredentialRepository({
+        blobs: bucket,
+      }).putDiffAuthCredential({
+        version: 1,
+        dropId: rootDropId,
+        branchId: "credential-branch",
+        clientId: "signed-client",
+        kid: "test-key",
+        secret: "test-secret",
+        createdAt: Date.now(),
+        expiresAt: null,
+      });
+      const original = createPostRequest([
+        makeEvent({
+          eventId: "conflicting-target",
+          sourceClientId: "signed-client",
+          text: "wrong",
+          createdAt: 1,
+        }),
+      ]);
+      const body = await original.text();
+      const timestamp = String(Date.now());
+      const url = new URL(original.url);
+      url.searchParams.set("branchId", target);
+      const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode("test-secret"),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"],
+      );
+      const signature = await crypto.subtle.sign(
+        "HMAC",
+        key,
+        new TextEncoder().encode(
+          buildDiffSigningPayload("POST", url.pathname, timestamp, body),
+        ),
+      );
+      const headers = new Headers(original.headers);
+      headers.set(DIFF_CLIENT_ID_HEADER, "signed-client");
+      headers.set(DIFF_SECRET_KID_HEADER, "test-key");
+      headers.set(DIFF_TIMESTAMP_HEADER, timestamp);
+      headers.set(
+        DIFF_SIGNATURE_HEADER,
+        `sha256=${Buffer.from(signature).toString("hex")}`,
+      );
+      const before = await bucket.list({});
+      const response = await onRequest({
+        request: new Request(url, { method: "POST", headers, body }),
+        env: { R2_BUCKET: bucket as unknown as R2Bucket },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        code: "branch_target_mismatch",
+      });
+      const identity = ({ key, etag }: { key: string; etag: string }) => ({
+        key,
+        etag,
+      });
+      expect((await bucket.list({})).objects.map(identity)).toEqual(
+        before.objects.map(identity),
+      );
+    },
+  );
 
   it("rejects an account session write to another account's existing branch", async () => {
     const bucket = createSeededBucket();

@@ -3,6 +3,8 @@ import {
   type DropBranchContentResponse,
   type DropBranchPromoteResponse,
   type DropBranchPromoteRequest,
+  type DropBranchPublishRequest,
+  type DropBranchPublishResponse,
   type DropBranchResolveResponse,
   type DropSnapshotListResponse,
 } from "./branch";
@@ -96,6 +98,13 @@ export interface NullplugStateSubmitResponse {
 
 /** Application-facing branch HTTP operations implemented by a runtime adapter. */
 export interface BranchApiClient {
+  /** Reads a root revision for a new publication intent. */
+  getRootRevision(rootDropId: string): Promise<string>;
+  /** Publishes an owner snapshot to its existing root ID. */
+  publishBranch(
+    rootDropId: string,
+    publication: DropBranchPublishRequest,
+  ): Promise<DropBranchPublishResponse>;
   listBranches(rootDropId: string): Promise<DropBranchListResponse>;
   resolveBranch(dropId: string): Promise<DropBranchResolveResponse>;
   getBranchContent(

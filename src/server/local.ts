@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { isDropIdToken, toShortDropId } from "../../shared/drop/id";
+import { publishOwnerSnapshot } from "../../functions/api/_lib/branches/publication";
 import {
   createRequestLogger,
   toLogRef,
@@ -443,6 +444,19 @@ export const createLocalNulldownServer = ({
       path: "/api/branches/:rootId/:branchId/content",
       handler: ({ request, params }) =>
         getBranchContent(env, routeParams(params), request),
+    },
+    {
+      method: "POST",
+      path: "/api/branches/:rootId/:branchId/publish",
+      handler: ({ request, params }) =>
+        publishOwnerSnapshot(
+          {
+            ...env,
+            PUBLIC_BASE_URL: env.PUBLIC_BASE_URL ?? new URL(request.url).origin,
+          },
+          routeParams(params),
+          request,
+        ),
     },
     {
       method: "GET",

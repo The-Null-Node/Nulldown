@@ -64,6 +64,26 @@ it("refuses publication while bootstrap is incomplete", async () => {
   expect(hook.result.current.error).toContain("finish loading");
 });
 
+it("reports same-root publication distinctly from clone promotion", async () => {
+  useDropStore.setState({ hydrateSharePreferences: async () => {} });
+  const clearDraft = jest.fn<() => void>();
+  const hook = renderHook(() =>
+    useShareDrop("updated", clearDraft, {
+      publishBranch: async () => ({
+        url: "same-link",
+        outcome: "root-published",
+      }),
+      canShare: true,
+    }),
+  );
+  await act(async () => {
+    await hook.result.current.shareDrop();
+  });
+  expect(hook.result.current.successKind).toBe("root");
+  expect(hook.result.current.successUrl).toBe("same-link");
+  expect(clearDraft).toHaveBeenCalledTimes(1);
+});
+
 it("uses settings loaded during sharing rather than the render-time defaults", async () => {
   const createDrop = jest.fn(async () => ({
     id: "saved",

@@ -190,6 +190,69 @@ beforeAll(() => {
 });
 
 describe("createNulldownMcpServer", () => {
+  it("forwards an exact owner publication intent and returns its same-root receipt", async () => {
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const receipt = {
+      outcome: "root-published",
+      rootDropId: "root-publication",
+      dropId: "root-publication",
+      branchId: "owner",
+      snapshotId: 3,
+      revision: "published-etag",
+      url: "https://nulldown.test/d/root-p",
+    };
+    const api = await listen((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += String(chunk);
+      });
+      request.on("end", () => {
+        requests.push({
+          path: `${request.method} ${request.url}`,
+          body: JSON.parse(body),
+        });
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify(receipt));
+      });
+    });
+    const restoreEnvironment = setMcpEnvironment({});
+    const server = createNulldownMcpServer();
+    const client = new Client({ name: "publication-test", version: "1.0.0" });
+    const { clientTransport, serverTransport } = createTransportPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const intent = {
+        expectedSnapshotId: 3,
+        expectedRevision: "old-etag",
+        idempotencyKey: "stable-publication",
+      };
+      const result = await client.callTool({
+        name: "branch_publish",
+        arguments: {
+          baseUrl: api.baseUrl,
+          rootId: "root-publication",
+          ...intent,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(readToolContent(result)[0]?.text ?? "{}")).toEqual(
+        receipt,
+      );
+      expect(requests).toEqual([
+        {
+          path: "POST /api/branches/root-publication/owner/publish",
+          body: intent,
+        },
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+      restoreEnvironment();
+      api.server.closeAllConnections();
+      await new Promise<void>((resolve) => api.server.close(() => resolve()));
+    }
+  });
   it.each([false, true])(
     "keeps strategy identity within the minimum budget (metadata: %s)",
     async (implicit) => {

@@ -58,6 +58,13 @@ For an exact `diff_apply` retry, provide `eventId` and `createdAt` together with
 the original operations and metadata. The tool rejects partial identities before
 network I/O and treats a missing or mismatched acknowledgement as unconfirmed.
 
+Diffs save to branches. To update the existing root link, its verified owner can
+call `branch_publish` with `rootId`, `expectedSnapshotId`, `expectedRevision`
+(from `drop_get`), and a stable `idempotencyKey`. Retry with those exact fields
+after a lost response, then verify the root with `drop_get`. The receipt reports
+`outcome: "root-published"`. Explicit diff targets must exist and agree with any
+branch-bound credential; they never fall back to another branch.
+
 ## Tool Groups
 
 | Group          | Purpose                                                                                        |

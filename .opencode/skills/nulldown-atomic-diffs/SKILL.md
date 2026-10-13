@@ -13,6 +13,14 @@ for a selected CLI workflow or missing MCP capability.
 Never replace a whole root when a branch diff is intended. Record facts or
 procedures only when those record classes are explicitly authorized.
 
+Choose the intended target explicitly. A diff receipt confirms a branch save,
+not publication to the root. For an authorized same-root publication, edit the
+owner branch, read its accepted snapshot and the root revision, then call
+`branch_publish` with a stable idempotency key. Retry with exactly the same
+snapshot, revision, and key; verify publication through `drop_get`. Only the
+verified root owner can publish this way. Clone promotion creates a new drop.
+Do not silently substitute another branch when an explicit target is missing.
+
 ## Hosted Strategy
 
 Canonical strategy program: https://nulldown.app/d/VfrzR4

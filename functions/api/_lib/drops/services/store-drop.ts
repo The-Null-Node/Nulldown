@@ -32,6 +32,7 @@ import {
 } from "../storage/mutation-lock";
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
 import { createSearchDatabase } from "../../search/repository";
+import { createBranchRepository } from "../../branches/storage/repository";
 import {
   AccountLibraryError,
   projectAccountLibraryEnvelope,
@@ -442,6 +443,16 @@ export const storeDrop = async ({
         "account_owned_envelope_required",
         "An account-owned envelope is required to update this drop.",
       );
+    }
+
+    // Resolution/branch bootstrap shares the root lease, so an upsert cannot
+    // race snapshot zero creation and leave an older owner timeline behind.
+    if (requestedId && upsert && rootMutationLock) {
+      const ownerBranch = await createBranchRepository({ blobs: env.blobs, sql: env.sql }).readBranch(requestedId, "owner");
+      if (ownerBranch) {
+        logger.logEnd(409, { reason: "owner_branch_publication_required", requestedDropRef: toLogRef(requestedId) });
+        return jsonErrorResponse(409, "owner_branch_publication_required", "This root has owner history. Edit and publish the owner branch instead of replacing the root.");
+      }
     }
 
     let id: string | null = null;

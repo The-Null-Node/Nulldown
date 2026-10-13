@@ -128,6 +128,23 @@ nd branch query <root-id> <branch-id> --query "rollout" --top 3 --json
 Use `branch query` when you need the smallest relevant structure. Fetch exact branch
 content when you need to edit, verify a claim, or inspect the complete document.
 
+Saving a diff updates its branch. To publish an owner snapshot at the existing
+document link, read the root revision with `drop_get`, then use MCP
+`branch_publish` with `rootId`, `expectedSnapshotId`, `expectedRevision`, and a
+stable `idempotencyKey`. Verify the published result with `drop_get`.
+
+The CLI equivalent is:
+
+```bash
+nd branch publish <root-id> --expected-snapshot <n> --expected-revision '<etag>' --idempotency-key <key>
+```
+
+Reuse all three intent fields when retrying a lost response. Clone promotion still
+creates a new document. Once an owner branch exists, direct root replacement
+returns `owner_branch_publication_required`; edit and publish that branch instead.
+Explicit diff branch targets must exist and match the credential's branch, when
+the credential is branch-bound. Omitting a target resolves the account's branch.
+
 An authoring-capable login can create account-owned sealed documents with `private`,
 `unlisted`, or `public` visibility. See
 [Privacy and access](https://nulldown.app/d/prO0pe) before using sensitive content.

@@ -115,6 +115,8 @@ export interface DropRuntime {
 
 /** Runtime facade for read-only branch commands. */
 export interface BranchRuntime {
+  /** Publishes an owner snapshot under the existing root ID. */
+  publish(input: { rootId: string; expectedSnapshotId: number; expectedRevision: string; idempotencyKey: string }): Promise<unknown | null>;
   /** Lists branches for a root drop. */
   list(rootId: string): Promise<unknown | null>;
   /** Resolves the editable branch for a drop. */

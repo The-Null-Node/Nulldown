@@ -95,6 +95,7 @@ export class MemoryR2Bucket {
       string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream | null,
     options?: any,
   ): Promise<any> {
+    const asText = await this.toText(value);
     const existing = this.objects.get(key);
     const onlyIf = options?.onlyIf;
 
@@ -110,7 +111,6 @@ export class MemoryR2Bucket {
       }
     }
 
-    const asText = await this.toText(value);
     const uploaded = new Date();
     const contentType =
       typeof options?.httpMetadata?.contentType === "string"
