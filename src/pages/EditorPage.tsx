@@ -632,6 +632,11 @@ const EditorSessionPage: React.FC<{
             activeBranchSession.rootDropId,
             activeBranchSession.branchId,
           );
+    if (
+      activeBranchSession.branchId === "owner" &&
+      !promotionIntent?.expectedRevision
+    )
+      promotionIntent = null;
     if (!promotionIntent) {
       const branchContent = await branchClient.getBranchContent(
         activeBranchSession.rootDropId,
@@ -641,6 +646,13 @@ const EditorSessionPage: React.FC<{
         rootDropId: activeBranchSession.rootDropId,
         branchId: activeBranchSession.branchId,
         snapshotId: branchContent.snapshotId,
+        ...(activeBranchSession.branchId === "owner"
+          ? {
+              expectedRevision: await branchClient.getRootRevision(
+                activeBranchSession.rootDropId,
+              ),
+            }
+          : {}),
         idempotencyKey:
           typeof crypto !== "undefined" && crypto.randomUUID
             ? crypto.randomUUID()
@@ -649,25 +661,41 @@ const EditorSessionPage: React.FC<{
       writeBranchPromotionIntent(promotionIntent);
     }
     promotionIntentRef.current = promotionIntent;
+    if (!isActive()) throw new Error("Editor route changed.");
     try {
-      const promoted = await branchClient.promoteBranch(
-        activeBranchSession.rootDropId,
-        activeBranchSession.branchId,
-        {
-          expectedSnapshotId: promotionIntent.snapshotId,
-          idempotencyKey: promotionIntent.idempotencyKey,
-        },
-      );
+      const promoted =
+        activeBranchSession.branchId === "owner"
+          ? await branchClient.publishBranch(activeBranchSession.rootDropId, {
+              expectedSnapshotId: promotionIntent.snapshotId,
+              expectedRevision: promotionIntent.expectedRevision!,
+              idempotencyKey: promotionIntent.idempotencyKey,
+            })
+          : await branchClient.promoteBranch(
+              activeBranchSession.rootDropId,
+              activeBranchSession.branchId,
+              {
+                expectedSnapshotId: promotionIntent.snapshotId,
+                idempotencyKey: promotionIntent.idempotencyKey,
+              },
+            );
       promotionIntentRef.current = null;
       clearBranchPromotionIntent(
         activeBranchSession.rootDropId,
         activeBranchSession.branchId,
       );
-      return { url: promoted.url, offline: false };
+      return {
+        url: promoted.url,
+        offline: false,
+        ...(activeBranchSession.branchId === "owner"
+          ? { outcome: "root-published" as const }
+          : {}),
+      };
     } catch (error) {
       if (
         error instanceof Error &&
-        (error.message.includes("promotion_head_mismatch") ||
+        (error.message.includes("publication_head_mismatch") ||
+          error.message.includes("publication_revision_mismatch") ||
+          error.message.includes("promotion_head_mismatch") ||
           error.message.includes('"code":"promotion_head_mismatch"'))
       ) {
         promotionIntentRef.current = null;
@@ -1290,7 +1318,11 @@ const EditorSessionPage: React.FC<{
         syncTitle={syncState.message}
         canTakeOverBranch={syncState.mode === "observer"}
         shareLabel={
-          shouldUseRemoteBranchDiff ? "Publish Branch" : "Share to the Void"
+          shouldUseRemoteBranchDiff
+            ? activeBranchSession?.branchId === "owner"
+              ? "Publish Update"
+              : "Publish Branch"
+            : "Share to the Void"
         }
         sharingLabel={
           shouldUseRemoteBranchDiff ? "Publishing..." : "Sharing..."

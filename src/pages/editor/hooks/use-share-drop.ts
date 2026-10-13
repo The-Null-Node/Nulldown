@@ -24,14 +24,20 @@ export function useShareDrop(
     existingDropId?: string | null;
     snapshotId?: number | null;
     buildDraftPack?: (policy: DropDraftDiffPolicy) => DropDraftPack | undefined;
-    publishBranch?: () => Promise<{ url: string; offline?: boolean }>;
+    publishBranch?: () => Promise<{
+      url: string;
+      offline?: boolean;
+      outcome?: "root-published";
+    }>;
   },
 ) {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successUrl, setSuccessUrl] = useState<string | null>(null);
   const [successOffline, setSuccessOffline] = useState(false);
-  const [successKind, setSuccessKind] = useState<"share" | "branch">("share");
+  const [successKind, setSuccessKind] = useState<"share" | "branch" | "root">(
+    "share",
+  );
   const { themeId } = useTheme();
   const createDrop = useDropStore((state) => state.createDrop);
   const hydrateSharePreferences = useDropStore(
@@ -72,7 +78,7 @@ export function useShareDrop(
         if (!active()) return;
         setSuccessUrl(result.url);
         setSuccessOffline(Boolean(result.offline));
-        setSuccessKind("branch");
+        setSuccessKind(result.outcome === "root-published" ? "root" : "branch");
         await Promise.resolve(clearDraft());
         return;
       }

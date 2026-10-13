@@ -17,6 +17,36 @@ import {
 } from "../testing/storage-fixture";
 
 describe("diff transport contracts", () => {
+  it.each(["missing", "", " owner "])(
+    "rejects explicit branch %j without creating an actor branch",
+    async (branchId) => {
+      const bucket = createSeededBucket();
+      const event = makeEvent({
+        eventId: "strict-target",
+        sourceClientId: "writer",
+        text: "x",
+        createdAt: 1,
+      });
+      const original = createPostRequest([event]);
+      const request = new Request(
+        `${original.url}?branchId=${encodeURIComponent(branchId)}`,
+        {
+          method: "POST",
+          headers: original.headers,
+          body: await original.text(),
+        },
+      );
+      const result = await onRequest({
+        request,
+        env: { R2_BUCKET: bucket as unknown as R2Bucket },
+        params: { id: rootDropId },
+      } as unknown as Parameters<typeof onRequest>[0]);
+      expect(result.status).toBe(branchId === "missing" ? 404 : 400);
+      expect(
+        (await bucket.list({ prefix: "__drop_branch__/" })).objects,
+      ).toHaveLength(0);
+    },
+  );
   let infoSpy: jest.SpiedFunction<typeof console.info>;
   let warnSpy: jest.SpiedFunction<typeof console.warn>;
   let errorSpy: jest.SpiedFunction<typeof console.error>;

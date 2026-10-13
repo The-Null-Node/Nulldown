@@ -159,6 +159,18 @@ export interface DropBranchPromoteRequest {
   idempotencyKey: string;
 }
 
+/** Immutable owner publication intent, fenced to both source and destination. */
+export interface DropBranchPublishRequest extends DropBranchPromoteRequest {
+  /** Root revision returned by GET /api/get/:id; reuse unchanged on retries. */
+  expectedRevision: string;
+}
+
+/** Durable acknowledgement of a snapshot published under its existing root ID. */
+export interface DropBranchPublishResponse extends DropBranchPromoteResponse {
+  outcome: "root-published";
+  revision: string;
+}
+
 /** Returns true when `value` is a valid persisted branch record. */
 export const isDropBranchRecord = (value: unknown): value is DropBranchRecord =>
   isDropBranchRecordV1(value);
@@ -234,3 +246,14 @@ export const isDropBranchPromoteResponse = (
   isString(value.rootDropId) &&
   isString(value.branchId) &&
   isNumber(value.snapshotId);
+
+/** Validates the same-root publication receipt returned by the server. */
+export const isDropBranchPublishResponse = (
+  value: unknown,
+): value is DropBranchPublishResponse =>
+  isDropBranchPromoteResponse(value) &&
+  (value as DropBranchPublishResponse).outcome === "root-published" &&
+  typeof (value as DropBranchPublishResponse).revision === "string" &&
+  Boolean((value as DropBranchPublishResponse).revision) &&
+  value.dropId === value.rootDropId &&
+  value.branchId === "owner";

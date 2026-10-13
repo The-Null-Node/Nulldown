@@ -874,6 +874,13 @@ describe("branch resolution authorization", () => {
 
   it("allows the canonical owner to resolve the private owner branch", async () => {
     const { bucket, db } = await setup();
+    // Owner snapshot zero must actually represent the stored root baseline.
+    await createBranchRepository({ blobs: bucket }).writeSnapshotCheckpoint(
+      roots.private,
+      "owner",
+      0,
+      `root:${roots.private}`,
+    );
 
     const response = await call(
       resolveBranch,

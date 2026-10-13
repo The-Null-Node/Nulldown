@@ -3,6 +3,8 @@ export interface BranchPromotionIntent {
   branchId: string;
   snapshotId: number;
   idempotencyKey: string;
+  /** Present only for same-root owner publication; persisted unchanged on retry. */
+  expectedRevision?: string;
 }
 
 const storageKey = (rootDropId: string, branchId: string): string =>
@@ -16,7 +18,8 @@ const isIntent = (value: unknown): value is BranchPromotionIntent => {
     typeof intent.branchId === "string" &&
     Number.isInteger(intent.snapshotId) &&
     (intent.snapshotId as number) >= 0 &&
-    typeof intent.idempotencyKey === "string"
+    typeof intent.idempotencyKey === "string" &&
+    (intent.expectedRevision === undefined || (typeof intent.expectedRevision === "string" && intent.expectedRevision.length > 0))
   );
 };
 

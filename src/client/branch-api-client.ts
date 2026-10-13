@@ -1,7 +1,9 @@
+import { isShortDropId, toShortDropId } from "../../shared/drop/id";
 import {
   isDropBranchContentResponse,
   isDropBranchListResponse,
   isDropBranchPromoteResponse,
+  isDropBranchPublishResponse,
   isDropBranchResolveResponse,
   isDropSnapshotListResponse,
   NULLDOWN_ACCOUNT_ID_HEADER,
@@ -123,6 +125,40 @@ export const createBranchApiClient = (
   };
 
   return {
+    async getRootRevision(rootDropId) {
+      const response = await (options.fetchImpl ?? fetch)(
+        `${baseUrl}/api/get/${encodeURIComponent(rootDropId)}`,
+        { headers: await withHeaders(options) },
+      );
+      const revision =
+        response.headers.get("X-Drop-Revision") ?? response.headers.get("ETag");
+      await response.body?.cancel();
+      if (!response.ok || !revision)
+        throw new NulldownHttpTransportError(
+          "Could not read the root revision.",
+          { code: "root_revision_unavailable", status: response.status },
+        );
+      return revision;
+    },
+    async publishBranch(rootDropId, publication) {
+      const response = await request(
+        `/api/branches/${encodeURIComponent(rootDropId)}/owner/publish`,
+        {
+          method: "POST",
+          headers: await withHeaders(options, {
+            "Content-Type": "application/json",
+          }),
+          body: JSON.stringify(publication),
+        },
+        isDropBranchPublishResponse,
+      );
+      return response.snapshotId === publication.expectedSnapshotId &&
+        (response.rootDropId === rootDropId ||
+          (isShortDropId(rootDropId) &&
+            toShortDropId(response.rootDropId) === rootDropId))
+        ? response
+        : invalidReceipt();
+    },
     async listBranches(rootDropId): Promise<DropBranchListResponse> {
       const response = await request(
         `/api/branches/${encodeURIComponent(rootDropId)}`,

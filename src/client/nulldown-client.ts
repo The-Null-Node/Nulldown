@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from "node:crypto";
+import { isDropBranchPublishResponse, type DropBranchPublishRequest, type DropBranchPublishResponse } from "../../shared/drop/branch";
 import {
   DIFF_CLIENT_ID_HEADER,
   DIFF_SECRET_KID_HEADER,
@@ -1107,6 +1108,18 @@ export class NulldownClient {
       result.record.manifest.version === manifest.version
       ? result
       : invalidApiReceipt(response.status);
+  }
+
+  /** Publishes a fenced owner snapshot to its existing root; retries reuse the exact request. */
+  async publishBranch(rootId: string, publication: DropBranchPublishRequest): Promise<DropBranchPublishResponse> {
+    const response = await this.request(`/api/branches/${encodeURIComponent(rootId)}/owner/publish`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(publication),
+    });
+    if (!isDropBranchPublishResponse(response.data) || response.data.snapshotId !== publication.expectedSnapshotId ||
+        !(response.data.rootDropId === rootId || (isShortDropId(rootId) && toShortDropId(response.data.rootDropId) === rootId))) {
+      throw new NulldownClientError("Publication receipt was not confirmed. Retry the exact same request.");
+    }
+    return response.data;
   }
 
   /** Posts a single atomic branch diff event and returns its server acknowledgement. */

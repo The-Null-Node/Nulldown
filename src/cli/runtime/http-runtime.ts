@@ -28,6 +28,7 @@ import type {
   DropUpdateResult,
   NulldownRuntime,
 } from "./types";
+import { isShortDropId, toShortDropId } from "../../../shared/drop/id";
 import {
   hasConfirmedDropDiffAppendReceipt,
   isDropDiffAppendResponse,
@@ -44,6 +45,7 @@ import {
   isDropBranchContentResponse,
   isDropBranchListResponse,
   isDropBranchPromoteResponse,
+  isDropBranchPublishResponse,
   isDropBranchResolveResponse,
   isDropSnapshotListResponse,
 } from "../../../shared/drop/branch";
@@ -372,6 +374,16 @@ export const createHttpNulldownRuntime = (
         result.branchId === input.branchId &&
           result.snapshotId === input.expectedSnapshotId,
       );
+      return result;
+    },
+    async publish(input) {
+      const { rootId, ...publication } = input;
+      const response = await dependencies.request(`${branchPath(rootId, "owner")}/publish`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(publication),
+      });
+      const result = requireRuntimeResponse(response.data, isDropBranchPublishResponse);
+      requireOperationIdentity(result.snapshotId === input.expectedSnapshotId &&
+        (result.rootDropId === rootId || (isShortDropId(rootId) && toShortDropId(result.rootDropId) === rootId)));
       return result;
     },
   },

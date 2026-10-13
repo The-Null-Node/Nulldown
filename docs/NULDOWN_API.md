@@ -719,10 +719,14 @@ Response:
 }
 ```
 
-`nd diff replace` can bootstrap a fresh branch by diffing from the root drop
-content when the requested branch does not exist yet. `nd diff batch` posts the
-same `DropDiffEnvelope` shape as `nd diff event`, but requires an explicit
-`--branch` because it is intended for ordered branch mutations.
+Explicit `branchId` targets must exist; missing targets return `404
+branch_not_found` instead of resolving another branch. A target that conflicts
+with a branch-bound credential returns `403 branch_target_mismatch`. Empty,
+repeated, or malformed targets return `400 branch_target_invalid`. Resolve the
+actor's branch before editing it. Omitting `branchId` retains actor resolution.
+`nd diff batch` requires an explicit `--branch` for ordered branch mutations.
+
+A diff acknowledgement confirms a branch save, not root publication.
 
 Limits:
 
@@ -882,6 +886,48 @@ Response:
 ```
 
 Implementation: `functions/api/branches/[rootId]/[branchId]/snapshots.ts`.
+
+### POST /api/branches/:rootId/owner/publish
+
+Publish the current owner snapshot at the existing root ID. Requires an
+authenticated account matching both the verified root ownership projection and
+the owner branch. Provider-escrow envelopes retain their visibility and key
+recipients; roots that cannot be opened by the server cannot use this operation.
+Clone promotion continues to create a separate drop.
+
+Request:
+
+```json
+{
+  "expectedSnapshotId": 3,
+  "expectedRevision": "\"root-etag\"",
+  "idempotencyKey": "publish-update-1"
+}
+```
+
+Read `expectedRevision` from the root's `X-Drop-Revision` or `ETag` header.
+The snapshot must match the current owner head when creating a new intent.
+Success returns `outcome: "root-published"`, equal `dropId` and `rootDropId`,
+`branchId: "owner"`, `snapshotId`, the published `revision`, and `url`.
+
+Reuse all request fields after an interrupted request. A completed retry returns
+the original receipt even if another publication has since updated the root.
+A pending retry never overwrites a different, newer root. Stale snapshots,
+revisions, or changed retry fields return `409`; an unconfirmed operation returns
+`503` and can be retried with the original fields.
+
+Use MCP `branch_publish`, SDK `publishBranch(rootId, request)`, or:
+
+```bash
+bun run nd -- branch publish <rootId> --expected-snapshot 3 --expected-revision '<etag>' --idempotency-key publish-update-1 --json
+```
+
+Once an owner branch exists, direct root upserts return
+`409 owner_branch_publication_required`. Existing root/history divergence returns
+`409 owner_root_history_conflict` on owner resolution or new publication.
+Existing clones keep their histories; new clones start from published root content.
+
+Implementation: `functions/api/branches/[rootId]/[branchId]/publish.ts`.
 
 ### GET /api/branches/:rootId/:branchId/resolved/query
 
