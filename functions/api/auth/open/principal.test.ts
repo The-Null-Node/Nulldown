@@ -11,6 +11,57 @@ import {
 } from "./testing/bff-fixture";
 
 describe("OpenAuth principal and refresh session", () => {
+  it.each(["network", "503", "429", "408", "database"])(
+    "preserves cookies when a dependency is unavailable (%s)",
+    async (failure) => {
+      const database = new MemoryD1Database();
+      database.users.add("user_recoverable");
+      const authority = await FakeOpenAuthFetcher.create();
+      const token = await authority.issueAccessToken("user_recoverable", {
+        expiresAt:
+          Math.floor(Date.now() / 1000) + (failure === "database" ? 300 : -1),
+      });
+      const env = createEnv(database, authority);
+      env.OPENAUTH_AUTHORITY = {
+        async fetch(input, init) {
+          const url = new URL(
+            input instanceof Request ? input.url : String(input),
+          );
+          if (url.pathname === "/token") {
+            if (failure === "network")
+              throw new Error("Temporary transport outage");
+            return Response.json(
+              { error: "temporarily_unavailable" },
+              { status: Number(failure) },
+            );
+          }
+          return authority.fetch(input, init);
+        },
+      };
+      if (failure === "database") {
+        database.first = () => {
+          throw new Error("Temporary database outage");
+        };
+      }
+      const response = await principal(
+        routeContext(
+          new Request(`${appOrigin}/api/auth/open/principal`, {
+            headers: {
+              Cookie: `${accessCookieName}=${token}; ${refreshCookieName}=refresh-preserved`,
+            },
+          }),
+          env,
+        ),
+      );
+      expect(response.status).toBe(503);
+      expect(setCookies(response)).toEqual([]);
+      await expect(response.json()).resolves.toEqual({
+        error: "open_auth_unavailable",
+        reason: "authority_or_principal_store_unavailable",
+      });
+    },
+  );
+
   it("returns anonymous for invalid access cookies without returning refresh material", async () => {
     const database = new MemoryD1Database();
     const authority = await FakeOpenAuthFetcher.create();

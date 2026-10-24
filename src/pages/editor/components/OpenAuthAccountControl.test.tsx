@@ -1,11 +1,18 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { jest } from "@jest/globals";
 import OpenAuthAccountControl from "./OpenAuthAccountControl";
 import {
   LOCAL_ACCOUNT_VAULT_CHANGED_EVENT,
   setActiveVaultUser,
+  getActiveVaultUser,
 } from "@/lib/auth/vault/passkey-vault";
 
 const originalFetchDescriptor = Object.getOwnPropertyDescriptor(
@@ -55,6 +62,52 @@ const localVaultRecord = (accountId: string) => ({
 });
 
 describe("OpenAuthAccountControl", () => {
+  it("ignores a session result after unmount without replacing the active vault", async () => {
+    setActiveVaultUser("current-user");
+    let complete!: (value: unknown) => void;
+    installFetch(
+      jest.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve;
+          }),
+      ),
+    );
+    const view = render(<OpenAuthAccountControl />);
+    view.unmount();
+    await act(async () => {
+      complete({ ok: true, json: async () => ({ userId: "stale-user" }) });
+    });
+    expect(getActiveVaultUser()).toBe("current-user");
+  });
+  it("ignores stale logout completion after unmount", async () => {
+    const onSignedOut = jest.fn();
+    let complete!: (value: unknown) => void;
+    installFetch(
+      jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ userId: "user-1" }),
+        })
+        .mockResolvedValueOnce({ ok: false, status: 404 })
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              complete = resolve;
+            }),
+        ),
+    );
+    const view = render(<OpenAuthAccountControl onSignedOut={onSignedOut} />);
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    view.unmount();
+    await act(async () => {
+      complete({ ok: true });
+    });
+    expect(onSignedOut).not.toHaveBeenCalled();
+    expect(getActiveVaultUser()).toBe("user-1");
+  });
   afterEach(() => {
     jest.restoreAllMocks();
     setActiveVaultUser(null);
@@ -67,7 +120,12 @@ describe("OpenAuthAccountControl", () => {
   });
 
   it("shows loading before resolving a signed-out OpenAuth principal", async () => {
-    const fetch = jest.fn().mockResolvedValue({ ok: false });
+    const fetch = jest
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ authenticated: false }),
+      });
     installFetch(fetch);
 
     render(<OpenAuthAccountControl />);
@@ -79,6 +137,28 @@ describe("OpenAuthAccountControl", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Sign in" })).not.toBeNull();
     });
+  });
+
+  it("preserves the active vault on unavailable checks and retries", async () => {
+    setActiveVaultUser("user-1");
+    const fetch = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ userId: "user-1" }),
+      })
+      .mockResolvedValue({ ok: false, status: 404 });
+    installFetch(fetch);
+    render(<OpenAuthAccountControl />);
+    const retry = await screen.findByRole("button", {
+      name: "Account unavailable — retry",
+    });
+    expect(getActiveVaultUser()).toBe("user-1");
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    fireEvent.click(retry);
+    await screen.findByText("Signed in");
+    expect(getActiveVaultUser()).toBe("user-1");
   });
 
   it("keeps the signed-in UI until the logout POST succeeds", async () => {
@@ -105,7 +185,9 @@ describe("OpenAuthAccountControl", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
-    const pendingButton = screen.getByRole("button", { name: "Signing out..." });
+    const pendingButton = screen.getByRole("button", {
+      name: "Signing out...",
+    });
     expect(pendingButton.hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("Signed in")).not.toBeNull();
     expect(fetch).toHaveBeenNthCalledWith(3, "/api/auth/open/logout", {
@@ -164,9 +246,15 @@ describe("OpenAuthAccountControl", () => {
     const setup = await screen.findByRole("button", { name: "Set up sync" });
     fireEvent.click(setup);
 
-    expect(await screen.findByRole("heading", { name: "Set up sync" })).not.toBeNull();
-    expect(screen.getByText(/Encrypt this browser's private-drop keys/)).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Create recovery code" })).not.toBeNull();
+    expect(
+      await screen.findByRole("heading", { name: "Set up sync" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(/Encrypt this browser's private-drop keys/),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Create recovery code" }),
+    ).not.toBeNull();
   });
 
   it("refreshes sync status when a local account is created after sign-in", async () => {
@@ -230,10 +318,14 @@ describe("OpenAuthAccountControl", () => {
     );
 
     render(<OpenAuthAccountControl />);
-    const restore = await screen.findByRole("button", { name: "Sync this browser" });
+    const restore = await screen.findByRole("button", {
+      name: "Sync this browser",
+    });
     fireEvent.click(restore);
 
-    const submit = await screen.findByRole("button", { name: "Restore account" });
+    const submit = await screen.findByRole("button", {
+      name: "Restore account",
+    });
     expect(submit.hasAttribute("disabled")).toBe(true);
     fireEvent.change(screen.getByRole("textbox", { name: "Recovery code" }), {
       target: { value: "recovery-code" },
@@ -288,7 +380,9 @@ describe("OpenAuthAccountControl", () => {
 
     const submit = screen.getByRole("button", { name: "Restore account" });
     expect(submit.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText(/does not yet provide an account switcher/)).not.toBeNull();
+    expect(
+      screen.getByText(/does not yet provide an account switcher/),
+    ).not.toBeNull();
     fireEvent.click(screen.getByRole("checkbox"));
     expect(submit.hasAttribute("disabled")).toBe(false);
   });

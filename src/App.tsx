@@ -35,6 +35,8 @@ const NotFoundPage: React.FC = () => {
 
 const App: React.FC = () => {
   const [accountReady, setAccountReady] = useState(false);
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [restoreRequired, setRestoreRequired] = useState(false);
   const [principal, setPrincipal] = useState<OpenAuthPrincipal | null>(null);
 
@@ -56,14 +58,12 @@ const App: React.FC = () => {
   useEffect(() => {
     let active = true;
     setAccountReady(false);
+    setSessionUnavailable(false);
     setRestoreRequired(false);
     void getOpenAuthSessionState().then(async (session) => {
       if (!active) return;
       if (session.status === "unavailable") {
-        clearAccountSession();
-        setActiveVaultUser(null);
-        setPrincipal(null);
-        setAccountReady(true);
+        setSessionUnavailable(true);
         return;
       }
       const principal =
@@ -86,7 +86,24 @@ const App: React.FC = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sessionAttempt]);
+
+  if (sessionUnavailable) {
+    return (
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-background text-sm text-muted">
+        <p>
+          Account service temporarily unavailable. Your local drafts are
+          preserved.
+        </p>
+        <button
+          type="button"
+          onClick={() => setSessionAttempt((attempt) => attempt + 1)}
+        >
+          Retry account check
+        </button>
+      </div>
+    );
+  }
 
   if (!accountReady) {
     return (
@@ -96,7 +113,10 @@ const App: React.FC = () => {
     );
   }
 
-  if (typeof window !== "undefined" && window.location.pathname === "/auth/cli") {
+  if (
+    typeof window !== "undefined" &&
+    window.location.pathname === "/auth/cli"
+  ) {
     return (
       <ThemeProvider>
         <CliAuthPage />
@@ -111,7 +131,8 @@ const App: React.FC = () => {
           <div className="max-w-md space-y-2">
             <h1 className="text-xl font-semibold">Sync this browser first</h1>
             <p className="text-sm text-muted">
-              Restore your private-drop keys before opening account-owned content. Any different local account is preserved.
+              Restore your private-drop keys before opening account-owned
+              content. Any different local account is preserved.
             </p>
           </div>
           <OpenAuthAccountControl

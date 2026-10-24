@@ -91,6 +91,8 @@ Do not hard-code current implementation names in the ritual. Keep it general so 
 
 ## Verification Rules
 
+- For behavior-changing work, load `nulldown-observability`; verify correlated outcomes and failure reasons, and report local versus production telemetry coverage.
+
 - Run focused tests for touched modules.
 - Run `bun run build` after import, module-boundary, or frontend changes.
 - Run `bun run cli:build` after CLI or shared API changes.

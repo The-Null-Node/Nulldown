@@ -345,6 +345,24 @@ nd --base=http://127.0.0.1:8788 get <id> --json
 
 ## Documentation
 
+### Operational telemetry
+
+The API middleware emits request summaries to the private `nulldown-telemetry`
+Worker through the `TELEMETRY` service binding. Deploy the collector with
+`bunx wrangler deploy --config packages/nulldown-telemetry/wrangler.jsonc`
+before deploying the Pages application that uses it.
+
+API responses include `x-request-id` and `x-operation-id` for investigation.
+Browser diagnostics cover API outcomes, session checks, errors, and new draft
+entries. Events contain allowlisted metadata, not document text or credentials.
+Browser reports are best-effort, bounded, rate-limited, and labeled separately
+from server observations. Query `nulldown-telemetry` in Workers Logs by
+`operationId` to connect a page visit to its server requests. Retention follows
+the account's Workers Logs limits; this collector does not provide an archive.
+
+Typecheck the collector with
+`bunx tsc --project packages/nulldown-telemetry/tsconfig.json`.
+
 The canonical conceptual documentation lives in Nulldown:
 
 - [Documentation index](https://nulldown.app/d/kzgJGL)

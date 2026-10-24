@@ -179,6 +179,24 @@ Metadata example:
 }
 ```
 
+For an agent edit, metadata can preserve what the writer knew at write time:
+
+```json
+{
+  "kind": "agent.edit",
+  "intent": "record an unresolved deployment blocker",
+  "args": { "priority": 3 },
+  "labels": ["deployment", "blocker"],
+  "confidence": 0.7,
+  "resultRef": "check:staging-smoke"
+}
+```
+
+The operations change Markdown. Intent, labels, confidence, and references
+explain the action. A numeric `args.priority` can become a diff-linked priority
+fact; include the acknowledged event sequence in a later branch query range when
+that priority should influence document ranking.
+
 Apply a small explicit edit:
 
 ```bash

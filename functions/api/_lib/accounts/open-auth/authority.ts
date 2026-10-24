@@ -53,11 +53,13 @@ export interface VerifiedOpenAuthPrincipal {
 /** Narrow BFF port. It never adapts OpenAuth credentials into legacy bearer headers. */
 export interface OpenAuthAuthority {
   createAuthorizationUrl(input: OpenAuthAuthorizationRequest): string;
-  exchangeAuthorizationCode(input: Readonly<{
-    code: string;
-    redirectUri: string;
-    verifier: string;
-  }>): Promise<OpenAuthTokens | null>;
+  exchangeAuthorizationCode(
+    input: Readonly<{
+      code: string;
+      redirectUri: string;
+      verifier: string;
+    }>,
+  ): Promise<OpenAuthTokens | null>;
   verifyAccessToken(
     accessToken: string,
     refreshToken?: string,
@@ -89,7 +91,8 @@ const normalizeToken = (value: string | undefined): string | null =>
   value && CONFIG_TOKEN_PATTERN.test(value) ? value : null;
 
 const isTokens = (value: unknown): value is OpenAuthTokens => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
   const record = value as Record<string, unknown>;
   return (
     typeof record.access === "string" &&
@@ -104,14 +107,14 @@ const isTokens = (value: unknown): value is OpenAuthTokens => {
 
 const openAuthSubjects = {
   [NULDOWN_USER_SUBJECT_TYPE]: {
-      "~standard": {
-        validate: async (value: unknown) => {
-          if (!decodeNulldownUserSubject(value)) {
-            return { issues: [{ message: "Invalid nulldown-user subject." }] };
-          }
-          return { value };
-        },
+    "~standard": {
+      validate: async (value: unknown) => {
+        if (!decodeNulldownUserSubject(value)) {
+          return { issues: [{ message: "Invalid nulldown-user subject." }] };
+        }
+        return { value };
       },
+    },
   },
 };
 
@@ -126,10 +129,26 @@ export const createOpenAuthAuthority = (
 
   // A future Pages deployment may bind the separately deployed issuer as OPENAUTH_AUTHORITY.
   // Without that binding, this adapter uses the configured canonical issuer URL directly.
-  const authorityFetch = env.OPENAUTH_AUTHORITY
+  const transport = env.OPENAUTH_AUTHORITY
     ? (input: RequestInfo | URL, init?: RequestInit) =>
         env.OPENAUTH_AUTHORITY!.fetch(input, init)
     : fetch;
+  const authorityFetch = async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const response = await transport(input, init);
+    // OpenAuth otherwise classifies every non-2xx token response as invalid credentials.
+    if (
+      response.status >= 500 ||
+      response.status === 429 ||
+      response.status === 408
+    ) {
+      await response.body?.cancel();
+      throw new Error("OpenAuth authority temporarily unavailable.");
+    }
+    return response;
+  };
   const client = createClient({
     clientID: clientId,
     issuer,
@@ -149,8 +168,16 @@ export const createOpenAuthAuthority = (
       return url.toString();
     },
     async exchangeAuthorizationCode(input) {
-      const exchanged = await client.exchange(input.code, input.redirectUri, input.verifier);
-      return exchanged.err ? null : isTokens(exchanged.tokens) ? exchanged.tokens : null;
+      const exchanged = await client.exchange(
+        input.code,
+        input.redirectUri,
+        input.verifier,
+      );
+      return exchanged.err
+        ? null
+        : isTokens(exchanged.tokens)
+          ? exchanged.tokens
+          : null;
     },
     async verifyAccessToken(accessToken, refreshToken) {
       const verified = await client.verify(

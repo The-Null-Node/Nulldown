@@ -1,4 +1,5 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import { createRequestLogger } from "../../core/logging/logger";
 
 import {
   appendOpenAuthSessionClearCookies,
@@ -47,11 +48,18 @@ export interface OpenAuthRequestIdentity {
 
 const textEncoder = new TextEncoder();
 
-const responseJson = (body: unknown, status: number, headers?: HeadersInit): Response => {
+const responseJson = (
+  body: unknown,
+  status: number,
+  headers?: HeadersInit,
+): Response => {
   const responseHeaders = new Headers(headers);
   responseHeaders.set("Content-Type", "application/json");
   responseHeaders.set("Cache-Control", "no-store");
-  return new Response(JSON.stringify(body), { status, headers: responseHeaders });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: responseHeaders,
+  });
 };
 
 const unavailable = (reason: string): Response =>
@@ -90,25 +98,38 @@ const resolveConfig = (
     return unavailable("bff_origin_configuration_missing");
   }
 
-  return { db: env.DB, authority, origin, callbackUri: `${origin}${CALLBACK_PATH}` };
+  return {
+    db: env.DB,
+    authority,
+    origin,
+    callbackUri: `${origin}${CALLBACK_PATH}`,
+  };
 };
 
-const isConfig = (value: OpenAuthBffConfig | Response): value is OpenAuthBffConfig =>
-  !(value instanceof Response);
+const isConfig = (
+  value: OpenAuthBffConfig | Response,
+): value is OpenAuthBffConfig => !(value instanceof Response);
 
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
   bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 };
 
 const randomToken = (bytesLength: number): string =>
   toBase64Url(crypto.getRandomValues(new Uint8Array(bytesLength)));
 
 const hashState = async (state: string): Promise<string> =>
-  toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", textEncoder.encode(state))));
+  toBase64Url(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", textEncoder.encode(state)),
+    ),
+  );
 
 const timingSafeEqual = (left: string, right: string): boolean => {
   const leftBytes = textEncoder.encode(left);
@@ -141,7 +162,10 @@ const callbackError = (error: string, status: number): Response => {
 };
 
 const callbackRedirect = (location: string): Response => {
-  const headers = new Headers({ Location: location, "Cache-Control": "no-store" });
+  const headers = new Headers({
+    Location: location,
+    "Cache-Control": "no-store",
+  });
   return new Response(null, { status: 302, headers });
 };
 
@@ -178,7 +202,9 @@ export const resolveOpenAuthRequestIdentity = async (
       accessToken,
       readOpenAuthRefreshCookie(request) ?? undefined,
     );
-    const userId = verified ? await readOpenAuthUser(config.db, verified) : null;
+    const userId = verified
+      ? await readOpenAuthUser(config.db, verified)
+      : null;
     if (!userId) return responseJson({ error: "open_auth_required" }, 401);
 
     const responseHeaders = new Headers();
@@ -199,7 +225,10 @@ export const startOpenAuthLogin = async (
   const config = resolveConfig(env, request);
   if (!isConfig(config)) return config;
 
-  const returnTo = parseReturnTo(new URL(request.url).searchParams.get("returnTo"), config.origin);
+  const returnTo = parseReturnTo(
+    new URL(request.url).searchParams.get("returnTo"),
+    config.origin,
+  );
   if (!returnTo) return responseJson({ error: "invalid_return_to" }, 400);
 
   const nonce = randomToken(32);
@@ -225,7 +254,11 @@ export const startOpenAuthLogin = async (
       codeChallenge,
     }),
   );
-  appendOpenAuthTransactionCookie(response.headers, { state, nonce, verifier }, TRANSACTION_TTL_SECONDS);
+  appendOpenAuthTransactionCookie(
+    response.headers,
+    { state, nonce, verifier },
+    TRANSACTION_TTL_SECONDS,
+  );
   return response;
 };
 
@@ -303,28 +336,55 @@ export const readOpenAuthPrincipal = async (
   env: OpenAuthBffEnvironment,
   request: Request,
 ): Promise<Response> => {
+  const logger = createRequestLogger({
+    request,
+    env,
+    route: "/api/auth/open/principal",
+  });
   const config = resolveConfig(env, request);
   if (!isConfig(config)) return config;
 
   const accessToken = readOpenAuthAccessCookie(request);
-  if (!accessToken) return responseJson({ authenticated: false }, 200);
+  if (!accessToken)
+    return responseJson({ authenticated: false }, 200, {
+      "x-diagnostic-reason": "session_missing",
+    });
   const refreshToken = readOpenAuthRefreshCookie(request);
 
   try {
-    const verified = await config.authority.verifyAccessToken(accessToken, refreshToken ?? undefined);
-    const userId = verified ? await readOpenAuthUser(config.db, verified) : null;
+    const verified = await config.authority.verifyAccessToken(
+      accessToken,
+      refreshToken ?? undefined,
+    );
+    const userId = verified
+      ? await readOpenAuthUser(config.db, verified)
+      : null;
     if (userId) {
       const headers = new Headers();
+      headers.set(
+        "x-diagnostic-reason",
+        verified?.refreshedTokens ? "refresh_completed" : "authenticated",
+      );
       if (verified?.refreshedTokens) {
         appendOpenAuthSessionCookies(headers, verified.refreshedTokens);
       }
       return responseJson({ authenticated: true, userId }, 200, headers);
     }
   } catch {
-    // This foundation has no refresh adapter. Invalid, expired, or unreachable authority state is anonymous.
+    logger.warn("auth.principal.unavailable", {
+      reason: "authority_or_principal_store_unavailable",
+    });
+    // An unavailable dependency is not evidence that the user's credentials are invalid.
+    const response = unavailable("authority_or_principal_store_unavailable");
+    response.headers.set("x-diagnostic-reason", "dependency_unavailable");
+    return response;
   }
 
   const headers = new Headers();
+  logger.info("auth.session.cleared", {
+    reason: "principal_verification_rejected",
+  });
+  headers.set("x-diagnostic-reason", "principal_verification_rejected");
   appendOpenAuthSessionClearCookies(headers);
   return responseJson({ authenticated: false }, 200, headers);
 };

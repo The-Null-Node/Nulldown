@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   beginOpenAuthLogin,
-  getOpenAuthPrincipal,
+  getOpenAuthSessionState,
   logoutOpenAuth,
   type OpenAuthPrincipal,
 } from "@/lib/auth/open-auth-client";
@@ -42,26 +42,41 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
   onSyncReady,
   onSignedOut,
 }) => {
-  const [principal, setPrincipal] = useState<OpenAuthPrincipal | null | undefined>(
-    undefined,
-  );
+  const [principal, setPrincipal] = useState<
+    OpenAuthPrincipal | null | undefined
+  >(undefined);
   const [logoutPending, setLogoutPending] = useState(false);
+  const lifetime = useRef(0);
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [logoutError, setLogoutError] = useState(false);
   const [syncState, setSyncState] = useState<AccountSyncState | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const [syncPending, setSyncPending] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [recoveryCode, setRecoveryCode] = useState("");
-  const [generatedRecoveryCode, setGeneratedRecoveryCode] = useState<string | null>(null);
-  const [generatedRecoveryDigest, setGeneratedRecoveryDigest] = useState<string | null>(null);
+  const [generatedRecoveryCode, setGeneratedRecoveryCode] = useState<
+    string | null
+  >(null);
+  const [generatedRecoveryDigest, setGeneratedRecoveryDigest] = useState<
+    string | null
+  >(null);
   const [canDiscardRecoveryCode, setCanDiscardRecoveryCode] = useState(false);
   const [replaceLocalAccount, setReplaceLocalAccount] = useState(false);
 
   useEffect(() => {
     let active = true;
+    lifetime.current++;
 
-    void getOpenAuthPrincipal().then((nextPrincipal) => {
+    setSessionUnavailable(false);
+    void getOpenAuthSessionState().then((session) => {
       if (active) {
+        if (session.status === "unavailable") {
+          setSessionUnavailable(true);
+          return;
+        }
+        const nextPrincipal =
+          session.status === "authenticated" ? session.principal : null;
         setActiveVaultUser(nextPrincipal?.userId ?? null);
         setPrincipal(nextPrincipal);
       }
@@ -69,25 +84,29 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
 
     return () => {
       active = false;
+      lifetime.current++;
     };
-  }, []);
+  }, [sessionAttempt]);
 
   useEffect(() => {
     let active = true;
+    let requestVersion = 0;
     const refreshSyncState = (): void => {
+      const version = ++requestVersion;
       if (!principal) {
         setSyncState(null);
         return;
       }
       void getAccountSyncState(principal)
         .then((state) => {
-          if (active) {
+          if (active && version === requestVersion) {
             setSyncError(null);
             setSyncState(state);
           }
         })
         .catch(() => {
-          if (active) setSyncError("Sync status unavailable");
+          if (active && version === requestVersion)
+            setSyncError("Sync status unavailable");
         });
     };
 
@@ -100,12 +119,18 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
     refreshSyncState();
     window.addEventListener("focus", refreshSyncState);
     window.addEventListener("storage", refreshSyncState);
-    window.addEventListener(LOCAL_ACCOUNT_VAULT_CHANGED_EVENT, refreshSyncState);
+    window.addEventListener(
+      LOCAL_ACCOUNT_VAULT_CHANGED_EVENT,
+      refreshSyncState,
+    );
     return () => {
       active = false;
       window.removeEventListener("focus", refreshSyncState);
       window.removeEventListener("storage", refreshSyncState);
-      window.removeEventListener(LOCAL_ACCOUNT_VAULT_CHANGED_EVENT, refreshSyncState);
+      window.removeEventListener(
+        LOCAL_ACCOUNT_VAULT_CHANGED_EVENT,
+        refreshSyncState,
+      );
     };
   }, [principal]);
 
@@ -117,7 +142,10 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
     setLogoutPending(true);
     setLogoutError(false);
     cancelAccountSyncOperations();
-    if (await logoutOpenAuth()) {
+    const version = lifetime.current;
+    const loggedOut = await logoutOpenAuth();
+    if (version !== lifetime.current) return;
+    if (loggedOut) {
       clearAccountSession();
       setActiveVaultUser(null);
       setSyncOpen(false);
@@ -188,8 +216,7 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
 
   const handleRecoveryCodeSaved = async (): Promise<void> => {
     if (
-      syncState?.status !== "ready" &&
-      syncState?.status !== "unconfirmed" ||
+      (syncState?.status !== "ready" && syncState?.status !== "unconfirmed") ||
       !generatedRecoveryDigest
     ) {
       return;
@@ -211,11 +238,26 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
       if (error instanceof RecoveryPackageMismatchError) {
         setCanDiscardRecoveryCode(true);
       }
-      setSyncError(error instanceof Error ? error.message : "Sync confirmation failed");
+      setSyncError(
+        error instanceof Error ? error.message : "Sync confirmation failed",
+      );
     } finally {
       setSyncPending(false);
     }
   };
+
+  if (sessionUnavailable) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className={controlClassName}
+        onClick={() => setSessionAttempt((attempt) => attempt + 1)}
+      >
+        Account unavailable — retry
+      </Button>
+    );
+  }
 
   if (principal === undefined) {
     return (
@@ -255,7 +297,7 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
             ? "Private-drop keys are available on this browser."
             : syncState?.status === "unconfirmed"
               ? "Replace the recovery code before relying on browser recovery."
-            : "Signed in. Set up sync to use private drops on another browser."
+              : "Signed in. Set up sync to use private drops on another browser."
         }
       >
         {syncState?.status === "ready"
@@ -282,9 +324,10 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
         >
           {syncState.status === "setup"
             ? "Set up sync"
-              : syncState.status === "restore"
-               ? "Sync this browser"
-              : syncState.status === "ready" || syncState.status === "unconfirmed"
+            : syncState.status === "restore"
+              ? "Sync this browser"
+              : syncState.status === "ready" ||
+                  syncState.status === "unconfirmed"
                 ? "Replace recovery code"
                 : "Local content needed"}
         </Button>
@@ -316,14 +359,16 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
             <DialogTitle>
               {syncState?.status === "restore"
                 ? "Sync this browser"
-                : syncState?.status === "ready" || syncState?.status === "unconfirmed"
+                : syncState?.status === "ready" ||
+                    syncState?.status === "unconfirmed"
                   ? "Replace recovery code"
                   : "Set up sync"}
             </DialogTitle>
             <DialogDescription>
               {syncState?.status === "restore"
                 ? "Enter your recovery code to restore the same private-drop keys on this browser. Existing local account data will be preserved."
-                : syncState?.status === "ready" || syncState?.status === "unconfirmed"
+                : syncState?.status === "ready" ||
+                    syncState?.status === "unconfirmed"
                   ? "Create a new recovery code and replace the previous encrypted recovery package."
                   : "Encrypt this browser's private-drop keys for recovery on another signed-in browser."}
             </DialogDescription>
@@ -343,10 +388,13 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
                   <input
                     type="checkbox"
                     checked={replaceLocalAccount}
-                    onChange={(event) => setReplaceLocalAccount(event.target.checked)}
+                    onChange={(event) =>
+                      setReplaceLocalAccount(event.target.checked)
+                    }
                   />
-                  Replace the active local account. Its keys will be archived in this browser,
-                  but this release does not yet provide an account switcher.
+                  Replace the active local account. Its keys will be archived in
+                  this browser, but this release does not yet provide an account
+                  switcher.
                 </label>
               ) : null}
             </div>
@@ -354,11 +402,15 @@ const OpenAuthAccountControl: React.FC<OpenAuthAccountControlProps> = ({
           {generatedRecoveryCode ? (
             <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
               <p className="text-sm font-medium">Save this recovery code now</p>
-              <code className="block break-all text-xs" data-testid="generated-recovery-code">
+              <code
+                className="block break-all text-xs"
+                data-testid="generated-recovery-code"
+              >
                 {generatedRecoveryCode}
               </code>
               <p className="text-xs text-muted">
-                Nulldown cannot recover this code. It is not stored by the service.
+                Nulldown cannot recover this code. It is not stored by the
+                service.
               </p>
             </div>
           ) : null}

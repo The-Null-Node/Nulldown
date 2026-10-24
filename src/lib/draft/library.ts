@@ -1,4 +1,5 @@
 import { getMarkdownTitle } from "../markdown-text";
+import { reportBrowserEvent } from "../observability/browser";
 
 export const DRAFT_LIBRARY_INDEX_KEY = "nulldown_draft_index_v1";
 export const DRAFT_STORAGE_PREFIX = "nulldown_draft_";
@@ -122,12 +123,13 @@ export const upsertDraftLibraryEntry = (
     updatedAt,
   };
 
-  const existing = readRawIndex().filter(
-    (entry) => entry.draftKey !== draftKey,
-  );
+  const index = readRawIndex();
+  const created = !index.some((entry) => entry.draftKey === draftKey);
+  const existing = index.filter((entry) => entry.draftKey !== draftKey);
   existing.push(nextEntry);
   existing.sort((a, b) => b.updatedAt - a.updatedAt);
   writeRawIndex(existing);
+  if (created) reportBrowserEvent("draft.created", "success");
 };
 
 export const listDraftLibraryEntries = (): DraftLibraryEntry[] => {

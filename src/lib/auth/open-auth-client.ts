@@ -1,5 +1,6 @@
 import { isIndexedDbSupported } from "../indexed-db/database";
 import { setKvValue } from "../indexed-db/key-value";
+import { reportBrowserEvent } from "../observability/browser";
 
 export interface OpenAuthPrincipal {
   userId: string;
@@ -42,29 +43,36 @@ const asPrincipal = (value: unknown): OpenAuthPrincipal | null => {
 };
 
 /** Distinguishes a real anonymous session from an unavailable account authority. */
-export const getOpenAuthSessionState = async (): Promise<OpenAuthSessionState> => {
-  try {
-    const response = await fetch(OPEN_AUTH_PRINCIPAL_PATH, {
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-    if (!response.ok) {
+export const getOpenAuthSessionState =
+  async (): Promise<OpenAuthSessionState> => {
+    try {
+      const response = await fetch(OPEN_AUTH_PRINCIPAL_PATH, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        reportBrowserEvent("session.check", "unavailable", {
+          status: response.status,
+        });
+        return { status: "unavailable" };
+      }
+      const principal = asPrincipal(await response.json());
+      reportBrowserEvent("session.check", principal ? "success" : "failure");
+      return principal
+        ? { status: "authenticated", principal }
+        : { status: "anonymous" };
+    } catch {
+      reportBrowserEvent("session.check", "unavailable");
       return { status: "unavailable" };
     }
-    const principal = asPrincipal(await response.json());
-    return principal
-      ? { status: "authenticated", principal }
-      : { status: "anonymous" };
-  } catch {
-    return { status: "unavailable" };
-  }
-};
+  };
 
 /** Returns the minimal principal for controls that already have an availability boundary. */
-export const getOpenAuthPrincipal = async (): Promise<OpenAuthPrincipal | null> => {
-  const state = await getOpenAuthSessionState();
-  return state.status === "authenticated" ? state.principal : null;
-};
+export const getOpenAuthPrincipal =
+  async (): Promise<OpenAuthPrincipal | null> => {
+    const state = await getOpenAuthSessionState();
+    return state.status === "authenticated" ? state.principal : null;
+  };
 
 /** Builds a BFF-safe post-login destination from the browser's current location. */
 export const getOpenAuthReturnTo = (
@@ -84,7 +92,9 @@ export const beginOpenAuthLogin = (
   location: OpenAuthBrowserLocation = window.location,
 ): void => {
   const returnTo = getOpenAuthReturnTo(location);
-  location.assign(`${OPEN_AUTH_LOGIN_PATH}?returnTo=${encodeURIComponent(returnTo)}`);
+  location.assign(
+    `${OPEN_AUTH_LOGIN_PATH}?returnTo=${encodeURIComponent(returnTo)}`,
+  );
 };
 
 /** Ends the cookie-backed OpenAuth session. Local UI changes only after a successful response. */
@@ -105,10 +115,7 @@ export const logoutOpenAuth = async (): Promise<boolean> => {
       }
     }
     try {
-      window.localStorage.setItem(
-        OPEN_AUTH_LOGOUT_STORAGE_KEY,
-        logoutVersion,
-      );
+      window.localStorage.setItem(OPEN_AUTH_LOGOUT_STORAGE_KEY, logoutVersion);
     } catch {
       // The current tab still signs out even if cross-tab notification is unavailable.
     }

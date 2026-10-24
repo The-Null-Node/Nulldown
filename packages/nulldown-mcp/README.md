@@ -65,6 +65,44 @@ after a lost response, then verify the root with `drop_get`. The receipt reports
 `outcome: "root-published"`. Explicit diff targets must exist and agree with any
 branch-bound credential; they never fall back to another branch.
 
+## Write The Change And Its Meaning
+
+`diff_apply` accepts action context alongside the Markdown operations:
+
+Calculate every operation range from current full branch content; the offsets
+below are illustrative.
+
+```json
+{
+  "dropId": "<root-id>",
+  "branchId": "<branch-id>",
+  "ops": [
+    {
+      "type": "insert",
+      "start": 42,
+      "end": 42,
+      "text": "Tier eligibility remains unresolved.\n"
+    }
+  ],
+  "metadata": {
+    "kind": "agent.edit",
+    "intent": "Record the unresolved eligibility question",
+    "args": { "priority": 4 },
+    "labels": ["exports", "open-question"],
+    "confidence": 0.55,
+    "resultRef": "source:S1"
+  }
+}
+```
+
+The operations determine current Markdown. The remaining fields describe the
+action. Confidence is a writer-declared signal, not a correctness guarantee.
+An explicit numeric `args.priority` can produce a priority fact linked to the
+diff event. To apply that diff priority during document retrieval, query the
+acknowledged event sequence with matching `fromSeq` and `toSeq`. Authorized
+results can then include `priority-fact`, `changed-range-overlap`, and the event
+reference that explains the score.
+
 ## Tool Groups
 
 | Group          | Purpose                                                                                        |

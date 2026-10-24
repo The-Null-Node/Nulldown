@@ -55,6 +55,13 @@ interface DropDiffEventMetadata {
 
 Keep metadata at the event level before adding op-level metadata. Most useful meaning belongs to the action, not every character insert/delete.
 
+An explicit finite number at `metadata.args.priority` has implemented behavior:
+the diff-priority snapshotter records a branch-scoped priority fact linked to the
+accepted event. Intent, labels, confidence, and references remain distinct
+provenance fields; they do not automatically become score boosts. Document
+queries use a diff priority when their event sequence range includes the linked
+event and the caller has authority to read protected priority overlays.
+
 ## Nullplug Results And Mutations
 
 Nullplug returns can include mutations and yields after normalization by the runtime wrapper.
