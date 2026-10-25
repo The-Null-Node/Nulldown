@@ -7,6 +7,7 @@ import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { resolveParam } from "../../core/http/responses";
 import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
+import { unobserved, type Timing } from "../../core/observability/profiling";
 
 /** Environment required by branch HTTP application services. */
 export interface BranchRouteEnv extends AccountAuthEnv {
@@ -67,9 +68,13 @@ export const resolveBranchTarget = async (
 };
 
 /** Creates the branch State Plane used for one HTTP request. */
-export const createBranchRouteStatePlane = (env: BranchRouteEnv) =>
+export const createBranchRouteStatePlane = (
+  env: BranchRouteEnv,
+  timing: Timing = unobserved,
+) =>
   createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
     providerPrivateKey: env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
+    timing,
   });

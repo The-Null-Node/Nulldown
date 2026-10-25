@@ -5,9 +5,8 @@ branch credentials, an environment webhook secret, or unauthenticated local deve
 */
 
 import { z } from "zod";
-import {
-  type DropDiffAppendResponse,
-} from "../../../../../shared/drop/diff";
+import { unobserved, type Timing } from "../../core/observability/profiling";
+import { type DropDiffAppendResponse } from "../../../../../shared/drop/diff";
 import {
   DIFF_TOKEN_MAX_LENGTH,
   DropDiffAppendEnvelopeSchema,
@@ -23,7 +22,10 @@ import {
 } from "../../accounts/session/authentication";
 import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import { BranchMutationLockError } from "../../branches/storage/mutation-lock";
-import { createBranchStatePlane, createDiffCommandStatePlane } from "../../../../../src/server/state-plane/gateway";
+import {
+  createBranchStatePlane,
+  createDiffCommandStatePlane,
+} from "../../../../../src/server/state-plane/gateway";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import {
   canReadBranch,
@@ -31,7 +33,10 @@ import {
   resolveRootReadAuthorization,
 } from "../../security/read-authorization";
 import type { NulldownServerRuntime } from "../../../../../src/server/runtime";
-import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
+import type {
+  BlobObjectStore,
+  SqlMetadataStore,
+} from "../../../../../src/server/ports";
 import { createRequestLogger, toLogRef } from "../../core/logging/logger";
 import {
   apiHttpErrorResponse,
@@ -108,8 +113,17 @@ const resolveId = (id: string | string[] | undefined) =>
 const resolveRequestedBranchId = (request: Request): string | null => {
   const url = new URL(request.url);
   const branchId = url.searchParams.get("branchId");
-  if (branchId !== null && (!branchId || branchId !== sanitizeDiffAuthToken(branchId) || url.searchParams.getAll("branchId").length !== 1)) {
-    throw new ApiHttpError({ status: 400, code: "branch_target_invalid", message: "Supply one exact, nonempty branchId." });
+  if (
+    branchId !== null &&
+    (!branchId ||
+      branchId !== sanitizeDiffAuthToken(branchId) ||
+      url.searchParams.getAll("branchId").length !== 1)
+  ) {
+    throw new ApiHttpError({
+      status: 400,
+      code: "branch_target_invalid",
+      message: "Supply one exact, nonempty branchId.",
+    });
   }
   return sanitizeDiffAuthToken(branchId);
 };
@@ -151,8 +165,16 @@ const resolveBranchForDiffRequest = async (
   auth: Pick<DiffRequestAuthSuccess, "mode" | "branchId" | "clientId">,
 ): Promise<DropBranchRecord> => {
   const requestedBranchId = resolveRequestedBranchId(request);
-  if (auth.branchId && requestedBranchId && auth.branchId !== requestedBranchId) {
-    throw new ApiHttpError({ status: 403, code: "branch_target_mismatch", message: "The requested branch does not match the branch credential." });
+  if (
+    auth.branchId &&
+    requestedBranchId &&
+    auth.branchId !== requestedBranchId
+  ) {
+    throw new ApiHttpError({
+      status: 403,
+      code: "branch_target_mismatch",
+      message: "The requested branch does not match the branch credential.",
+    });
   }
   const statePlane = createBranchStatePlane({
     blobs: env.R2_BUCKET,
@@ -162,18 +184,29 @@ const resolveBranchForDiffRequest = async (
   if (auth.branchId) {
     const branch = await statePlane.branches.readBranch(dropId, auth.branchId);
     if (!branch) {
-      throw new ApiHttpError({ status: 404, code: "branch_not_found", message: "Branch not found." });
+      throw new ApiHttpError({
+        status: 404,
+        code: "branch_not_found",
+        message: "Branch not found.",
+      });
     }
     return branch;
   }
 
   const accountId = await resolveAuthenticatedAccountId(request, env);
   if (requestedBranchId) {
-    const branch = await statePlane.branches.readBranch(dropId, requestedBranchId);
+    const branch = await statePlane.branches.readBranch(
+      dropId,
+      requestedBranchId,
+    );
     if (branch) {
       return branch;
     }
-    throw new ApiHttpError({ status: 404, code: "branch_not_found", message: "Branch not found." });
+    throw new ApiHttpError({
+      status: 404,
+      code: "branch_not_found",
+      message: "Branch not found.",
+    });
   }
 
   const resolved = await statePlane.branches.resolveForActor(
@@ -190,7 +223,8 @@ const canWriteBranch = (
 ): boolean =>
   Boolean(
     accountId &&
-      (accountId === branch.ownerAccountId || accountId === branch.writerAccountId),
+    (accountId === branch.ownerAccountId ||
+      accountId === branch.writerAccountId),
   );
 
 /** Appends posted diff events to the resolved branch. */
@@ -199,6 +233,7 @@ export const postDiffEvents = async (
   params: DiffTransportParams,
   request: Request,
   services: DiffTransportServices,
+  timing: Timing = unobserved,
 ): Promise<Response> => {
   const logger = createRequestLogger({
     request,
@@ -222,21 +257,21 @@ export const postDiffEvents = async (
       blobs: env.R2_BUCKET,
       sql: env.DB,
     });
-    const id = await dropIdentityRepository.resolveRemoteDropId(
-      requestedId,
-      logger,
+    const id = await timing.phase("diff.identity", () =>
+      dropIdentityRepository.resolveRemoteDropId(requestedId, logger),
     );
     if (!id) {
       logger.logEnd(400, { reason: "invalid_drop_id" });
       return new Response("Drop ID is required.", { status: 400 });
     }
 
-    const rawBody = await readRequestTextWithLimit(
-      request,
-      DIFF_REQUEST_BODY_MAX_BYTES,
+    const rawBody = await timing.phase("diff.body", () =>
+      readRequestTextWithLimit(request, DIFF_REQUEST_BODY_MAX_BYTES),
     );
 
-    const auth = await verifyDiffRequestAuth(env, request, id, rawBody);
+    const auth = await timing.phase("diff.auth", () =>
+      verifyDiffRequestAuth(env, request, id, rawBody),
+    );
     if (!auth.ok) {
       logger.logEnd(auth.status, {
         reason: auth.reason,
@@ -246,16 +281,22 @@ export const postDiffEvents = async (
       return new Response(auth.message, { status: auth.status });
     }
 
-    const parsed = parseJsonTextWithSchema(
-      rawBody,
-      DropDiffAppendEnvelopeSchema,
-      "Invalid diff envelope.",
+    const parsed = timing.sync("diff.validate", () =>
+      parseJsonTextWithSchema(
+        rawBody,
+        DropDiffAppendEnvelopeSchema,
+        "Invalid diff envelope.",
+      ),
     );
 
-    const branch = await resolveBranchForDiffRequest(env, id, request, auth);
+    const branch = await timing.phase("diff.branch", () =>
+      resolveBranchForDiffRequest(env, id, request, auth),
+    );
 
     if (auth.mode === "account") {
-      const accountId = await resolveAuthenticatedAccountId(request, env);
+      const accountId = await timing.phase("diff.authority", () =>
+        resolveAuthenticatedAccountId(request, env),
+      );
       if (!canWriteBranch(branch, accountId)) {
         logger.logEnd(403, {
           reason: "branch_write_forbidden",
@@ -278,19 +319,23 @@ export const postDiffEvents = async (
       });
     }
 
-    const commands = createDiffCommandStatePlane(services.serverRuntime.nulledit);
-    const appended = await commands.appendDiffEvents({
-      branch,
-      events: parsed.events,
-      waitUntil: services.waitUntil,
-      onSnapshotterError: (error, snapshotterId) => {
-        logger.logError("diff.nulledit_snapshotter_failed", error, {
-          snapshotterId,
-          dropRef: toLogRef(id),
-          branchRef: toLogRef(branch.branchId),
-        });
-      },
-    });
+    const commands = createDiffCommandStatePlane(
+      services.serverRuntime.nulledit,
+    );
+    const appended = await timing.phase("diff.append", () =>
+      commands.appendDiffEvents({
+        branch,
+        events: parsed.events,
+        waitUntil: services.waitUntil,
+        onSnapshotterError: (error, snapshotterId) => {
+          logger.logError("diff.nulledit_snapshotter_failed", error, {
+            snapshotterId,
+            dropRef: toLogRef(id),
+            branchRef: toLogRef(branch.branchId),
+          });
+        },
+      }),
+    );
     const snapshotId =
       appended.snapshot?.snapshotId ?? appended.branch.headSnapshotId;
 
@@ -304,14 +349,16 @@ export const postDiffEvents = async (
       snapshotId,
     });
 
-    return jsonResponse({
-      accepted: appended.acceptedEvents.length,
-      deduplicated: appended.deduplicatedCount,
-      branchId: branch.branchId,
-      snapshotId,
-      totalStored: appended.totalStored,
-      acknowledgements: appended.acknowledgements,
-    } satisfies DropDiffAppendResponse);
+    return timing.sync("diff.serialize", () =>
+      jsonResponse({
+        accepted: appended.acceptedEvents.length,
+        deduplicated: appended.deduplicatedCount,
+        branchId: branch.branchId,
+        snapshotId,
+        totalStored: appended.totalStored,
+        acknowledgements: appended.acknowledgements,
+      } satisfies DropDiffAppendResponse),
+    );
   } catch (error: unknown) {
     if (isApiHttpError(error)) {
       logger.logEnd(error.status, {
@@ -332,8 +379,8 @@ export const postDiffEvents = async (
         error.code === "branch_lock_timeout"
           ? "Branch is busy. Retry shortly."
           : error.outcome === "not_committed"
-          ? "Branch lock was not held before commit. Refresh and retry."
-          : "Branch mutation outcome could not be confirmed. Retry the exact same event.";
+            ? "Branch lock was not held before commit. Refresh and retry."
+            : "Branch mutation outcome could not be confirmed. Retry the exact same event.";
       logger.logEnd(status, { reason: error.code });
       return jsonErrorResponse(status, error.code, message);
     }

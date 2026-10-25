@@ -1,5 +1,6 @@
 import type { BlobObjectStore } from "../../../../../src/server/ports";
 import { createBranchLockKey } from "./keys";
+import { unobserved, type Timing } from "../../core/observability/profiling";
 
 const BRANCH_LOCK_MAX_ATTEMPTS = 120;
 const BRANCH_LOCK_BASE_BACKOFF_MS = 8;
@@ -66,10 +67,12 @@ export interface BranchMutationLockContext {
   beginCommit(): Promise<void>;
 }
 
-const objectEtag = (object: {
-  etag?: string;
-  httpEtag?: string;
-} | null): string | undefined => object?.etag ?? object?.httpEtag;
+const objectEtag = (
+  object: {
+    etag?: string;
+    httpEtag?: string;
+  } | null,
+): string | undefined => object?.etag ?? object?.httpEtag;
 
 const readText = async (
   object: { text: () => Promise<string> } | null,
@@ -182,7 +185,8 @@ const acquireBranchMutationLock = async (
     const existing = await readBranchLock(bucket, key);
     const isReleased = existing.payload?.releasedAt !== undefined;
     const isStale =
-      !existing.payload || Date.now() - existing.payload.createdAt > BRANCH_LOCK_STALE_MS;
+      !existing.payload ||
+      Date.now() - existing.payload.createdAt > BRANCH_LOCK_STALE_MS;
     if ((isReleased || isStale) && existing.etag) {
       try {
         const replaced = await bucket.put(key, lockBody(token), {
@@ -274,8 +278,11 @@ export const withBranchMutationLock = async <T>(
   rootDropId: string,
   branchId: string,
   work: (context: BranchMutationLockContext) => Promise<T>,
+  timing: Timing = unobserved,
 ): Promise<T> => {
-  const lock = await acquireBranchMutationLock(bucket, rootDropId, branchId);
+  const lock = await timing.phase("lock.acquire", () =>
+    acquireBranchMutationLock(bucket, rootDropId, branchId),
+  );
   let stopped = false;
   let renewalTimer: ReturnType<typeof setTimeout> | null = null;
   let activeRenewal = Promise.resolve();
@@ -324,11 +331,14 @@ export const withBranchMutationLock = async <T>(
   }
 
   const ownershipAfterWork = await renewBranchMutationLock(bucket, lock);
-  const releaseOutcome = ownershipAfterWork === "held"
-    ? await releaseBranchMutationLock(bucket, lock)
-    : ownershipAfterWork === "not_held"
-      ? "not_held"
-      : "unknown";
+  const releaseOutcome =
+    ownershipAfterWork === "held"
+      ? await timing.phase("lock.release", () =>
+          releaseBranchMutationLock(bucket, lock),
+        )
+      : ownershipAfterWork === "not_held"
+        ? "not_held"
+        : "unknown";
 
   if (workError) {
     if (commitStarted) {

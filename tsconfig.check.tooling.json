@@ -19,5 +19,12 @@
     "scripts/**/*.mjs",
     "packages/*/scripts/**/*.ts"
   ],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "scripts/profiling/tests/**",
+    ".profiling/**"
+  ]
 }

@@ -17,6 +17,8 @@ import {
   registerCloudflareSnapshotter,
 } from "./snapshotters";
 
+import { unobserved, type Timing } from "../../../observability/profiling";
+
 const branchCommitBuffer = createInMemoryBranchCommitBuffer();
 
 /** Creates Nulledit operations backed by Cloudflare storage bindings. */
@@ -24,6 +26,7 @@ export const createCloudflareNulleditRuntime = (
   bindings: CloudflareBackendRuntimeBindings,
   data: RuntimeDataStore,
   memory: NulldownServerRuntime["memory"],
+  timing: Timing = unobserved,
 ): NulldownServerRuntime["nulledit"] => {
   const blobs = createCloudflareBlobStore(bindings.R2_BUCKET);
   const sql = createCloudflareSqlStore(bindings.DB);
@@ -54,6 +57,7 @@ export const createCloudflareNulleditRuntime = (
               : undefined,
         },
         sql,
+        timing,
       );
     },
   };

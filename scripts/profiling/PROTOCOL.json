@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "scope": "Maintained current-tree LOCAL native D1/R2 authenticated Pages read/append and completion compatibility; NOT production admission",
+  "correctnessEvents": 100,
+  "benchmarkEvents": 16,
+  "warmups": 20,
+  "warmSamples": 100,
+  "order": "rotate mode order by round; one append then one authenticated read on fresh per-mode-unique branch per round; assert snapshot0-to1,accepted16,deduplicated0",
+  "temperature": "one first request after schema/binding initialization per mode;20 warmups separate from100 warm samples; not a clean-process CPU startup",
+  "wallBudgetMs": {
+    "summary": { "read": 5, "append": 10 },
+    "detailed": { "read": 10, "append": 20 }
+  },
+  "relativeLimit": 0.3,
+  "relativeBaselineMs": 50,
+  "cpuProxyBudgetMs": { "summary": 2, "detailed": 5 },
+  "cpuProxyRelativeLimit": 0.2,
+  "cpuProxyRelativeBaselineMs": 10,
+  "cpuProxy": "128 synchronous observed operations+finish serialization on host Bun; excludes async exporter; elapsed time not true CPU",
+  "trueCpuMeasurement": "not available; no Workers billed CPU attribution",
+  "export": "single service-binding batch; manual redirect; strict204;500ms bounded waitUntil; no retries; drain excluded from response wall",
+  "deadlineTestAllowanceMs": 150,
+  "auth": "random in-memory fixture-only ACCOUNT_AUTH_SECRET; production HMAC bearer issue/verify; insecure header0; invalid bearer401",
+  "storage": "all15 pinned migrations applied to disposable local nativeD1;nativeR2;fixture lifecycle owner creation;real100-event append for saturation (pinned envelope maximum100);no synthetic timing calls",
+  "comparisons": "canonical head/content,receipts,ordered native operation transcript with conditional ETag provenance;UUID and >1e12 clock values normalized before digest;raw values unchanged to native methods",
+  "controls": {
+    "STAGING_TELEMETRY_ENABLED": "1",
+    "STAGING_TELEMETRY_ENVIRONMENT": "staging",
+    "STAGING_PROFILING_SAMPLE_PERMILLE": "1000",
+    "LOG_LEVEL": "error (local fixture only)",
+    "modes": ["off", "summary", "detailed"]
+  },
+  "claim": "predeclared engineering review thresholds,not productSLO;failure reported not adjusted after results"
+}

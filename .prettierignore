@@ -12,6 +12,8 @@
 **/.dev.vars*
 **/*.tsbuildinfo
 src/__embedded.ts
+packages/nulldown-telemetry/worker-configuration.d.ts
+.profiling/
 
 # Public assets/themes have not been classified as authored formatter inputs.
 public/

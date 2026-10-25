@@ -19,6 +19,7 @@ import {
   repairCloudflareBufferedCommitsForQuery,
 } from "./nulledit";
 import { getCloudflareSnapshotterYieldNext } from "./snapshotters";
+import { unobserved, type Timing } from "../../../observability/profiling";
 
 export type {
   CloudflareBackendRuntime,
@@ -29,12 +30,18 @@ export type {
 /** Creates the composed Cloudflare backend runtime for Pages route adapters. */
 export const createCloudflareBackendRuntime = (
   bindings: CloudflareBackendRuntimeBindings,
+  timing: Timing = unobserved,
 ): CloudflareBackendRuntime => {
   const data = createCloudflareRuntimeDataStore(bindings);
   const blobs = createCloudflareBlobStore(bindings.R2_BUCKET);
   const sql = createCloudflareSqlStore(bindings.DB);
   const memory = createNullMemService({ blobs, sql, data });
-  const nulledit = createCloudflareNulleditRuntime(bindings, data, memory);
+  const nulledit = createCloudflareNulleditRuntime(
+    bindings,
+    data,
+    memory,
+    timing,
+  );
   const policy = createCloudflareRuntimePolicy({
     bindings,
     trustedPluginIds: ["nd"],

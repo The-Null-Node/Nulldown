@@ -2,6 +2,7 @@ import {
   canReadBranch,
   resolveRootReadAuthorization,
 } from "../../security/read-authorization";
+import { unobserved, type Timing } from "../../core/observability/profiling";
 import {
   createBranchRouteStatePlane,
   resolveBranchTarget,
@@ -14,48 +15,55 @@ export const getBranchContent = async (
   env: BranchRouteEnv,
   params: BranchTargetParams,
   request: Request,
+  timing: Timing = unobserved,
 ): Promise<Response> => {
   if (!env.R2_BUCKET) {
     return new Response("R2 bucket binding is required.", { status: 500 });
   }
 
-  const target = await resolveBranchTarget(env, params);
+  const target = await timing.phase("content.target", () =>
+    resolveBranchTarget(env, params),
+  );
   if ("error" in target) return target.error;
   const { rootDropId, branchId } = target;
 
-  const authorization = await resolveRootReadAuthorization(
-    request,
-    env,
-    rootDropId,
+  const authorization = await timing.phase("content.authority", () =>
+    resolveRootReadAuthorization(request, env, rootDropId),
   );
   if (authorization.kind === "denied") {
     return new Response("Branch not found.", { status: 404 });
   }
 
   const statePlane = createBranchRouteStatePlane(env);
-  const branch = await statePlane.branches.readBranch(rootDropId, branchId);
+  const branch = await timing.phase("content.branch", () =>
+    statePlane.branches.readBranch(rootDropId, branchId),
+  );
   if (!branch || !canReadBranch(authorization, branch)) {
     return new Response("Branch not found.", { status: 404 });
   }
 
-  const content = await statePlane.snapshots.readContent(
-    rootDropId,
-    branchId,
-    branch.headSnapshotId,
+  const content = await timing.phase("content.materialize", (child) =>
+    createBranchRouteStatePlane(env, child).snapshots.readContent(
+      rootDropId,
+      branchId,
+      branch.headSnapshotId,
+    ),
   );
   if (content === null) {
     return new Response("Branch content not found.", { status: 404 });
   }
 
   return new Response(
-    JSON.stringify({
-      rootDropId,
-      branchId,
-      snapshotId: branch.headSnapshotId,
-      headEventSeq:
-        typeof branch.headEventSeq === "number" ? branch.headEventSeq : null,
-      content,
-    }),
+    timing.sync("content.serialize", () =>
+      JSON.stringify({
+        rootDropId,
+        branchId,
+        snapshotId: branch.headSnapshotId,
+        headEventSeq:
+          typeof branch.headEventSeq === "number" ? branch.headEventSeq : null,
+        content,
+      }),
+    ),
     {
       status: 200,
       headers: { "Content-Type": "application/json" },

@@ -1,10 +1,17 @@
 import type { DropSnapshotRecord } from "../../../../../shared/drop/branch";
-import { type DropDiffEvent, dropDiffOpToDiff } from "../../../../../shared/drop/diff";
+import {
+  type DropDiffEvent,
+  dropDiffOpToDiff,
+} from "../../../../../shared/drop/diff";
 import { applyDiff } from "../../../../../shared/nulledit/textDiff";
 import { DiffOp, type Diff } from "../../../../../shared/nulledit/types";
-import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
+import type {
+  BlobObjectStore,
+  SqlMetadataStore,
+} from "../../../../../src/server/ports";
 import { createBranchDiffRepository } from "../storage/diff-log";
 import { createBranchRepository } from "../storage/repository";
+import { unobserved, type Timing } from "../../core/observability/profiling";
 
 const toEditableDiff = (op: DropDiffEvent["ops"][number]): Diff | null => {
   const converted = dropDiffOpToDiff(op);
@@ -84,7 +91,14 @@ export const readBranchEventsBySeqRange = async (
   endSeq: number,
   db?: SqlMetadataStore,
 ): Promise<DropDiffEvent[]> =>
-  (await readEventsBySeqRange(bucket, rootDropId, branchId, startSeq, endSeq, db)) ?? [];
+  (await readEventsBySeqRange(
+    bucket,
+    rootDropId,
+    branchId,
+    startSeq,
+    endSeq,
+    db,
+  )) ?? [];
 
 /** Rebuilds branch content for a snapshot from checkpoints and compact event ranges. */
 export const readBranchContent = async (
@@ -93,21 +107,18 @@ export const readBranchContent = async (
   branchId: string,
   snapshotId: number,
   db?: SqlMetadataStore,
+  timing: Timing = unobserved,
 ): Promise<string | null> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
-  const direct = await branchRepository.readSnapshotCheckpoint(
-    rootDropId,
-    branchId,
-    snapshotId,
+  const direct = await timing.phase("replay.direct", () =>
+    branchRepository.readSnapshotCheckpoint(rootDropId, branchId, snapshotId),
   );
   if (direct !== null) {
     return direct;
   }
 
-  const targetSnapshot = await branchRepository.readSnapshot(
-    rootDropId,
-    branchId,
-    snapshotId,
+  const targetSnapshot = await timing.phase("replay.snapshot", () =>
+    branchRepository.readSnapshot(rootDropId, branchId, snapshotId),
   );
   if (!targetSnapshot) {
     return null;
@@ -118,11 +129,14 @@ export const readBranchContent = async (
   let baseContent: string | null = null;
 
   while (cursor) {
-    const checkpoint = await branchRepository.readSnapshotCheckpoint(
-      rootDropId,
-      branchId,
-      cursor.snapshotId,
-      cursor.checkpointKey,
+    const currentCursor = cursor;
+    const checkpoint = await timing.phase("replay.checkpoint", () =>
+      branchRepository.readSnapshotCheckpoint(
+        rootDropId,
+        branchId,
+        currentCursor.snapshotId,
+        currentCursor.checkpointKey,
+      ),
     );
     if (checkpoint !== null) {
       baseContent = checkpoint;
@@ -134,10 +148,9 @@ export const readBranchContent = async (
       break;
     }
 
-    cursor = await branchRepository.readSnapshot(
-      rootDropId,
-      branchId,
-      cursor.parentSnapshotId,
+    const parentSnapshotId: number = cursor.parentSnapshotId;
+    cursor = await timing.phase("replay.snapshot", () =>
+      branchRepository.readSnapshot(rootDropId, branchId, parentSnapshotId),
     );
   }
 
@@ -155,26 +168,34 @@ export const readBranchContent = async (
       snapshot.patchEndSeq >= snapshot.patchStartSeq
     ) {
       // Heap v2 snapshots prefer replaying compact event ranges over materializing every checkpoint.
-      const events = await readEventsBySeqRange(
-        bucket,
-        rootDropId,
-        branchId,
-        snapshot.patchStartSeq,
-        snapshot.patchEndSeq,
-        db,
+      const patchStartSeq = snapshot.patchStartSeq,
+        patchEndSeq = snapshot.patchEndSeq;
+      const events = await timing.phase("replay.events", () =>
+        readEventsBySeqRange(
+          bucket,
+          rootDropId,
+          branchId,
+          patchStartSeq,
+          patchEndSeq,
+          db,
+        ),
       );
       if (!events) {
         return null;
       }
-      rebuiltContent = applyBranchDiffEvents(rebuiltContent, events);
+      rebuiltContent = timing.sync("replay.apply", () =>
+        applyBranchDiffEvents(rebuiltContent, events),
+      );
       continue;
     }
 
-    const fallbackCheckpoint = await branchRepository.readSnapshotCheckpoint(
-      rootDropId,
-      branchId,
-      snapshot.snapshotId,
-      snapshot.checkpointKey,
+    const fallbackCheckpoint = await timing.phase("replay.checkpoint", () =>
+      branchRepository.readSnapshotCheckpoint(
+        rootDropId,
+        branchId,
+        snapshot.snapshotId,
+        snapshot.checkpointKey,
+      ),
     );
     if (fallbackCheckpoint === null) {
       return null;

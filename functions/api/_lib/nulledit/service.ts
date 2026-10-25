@@ -34,6 +34,7 @@ import {
 } from "../branches/content/replay";
 import { ensureBranchHeapV2ForMutation } from "../branches/lifecycle";
 import { withBranchMutationLock } from "../branches/storage/mutation-lock";
+import { unobserved, type Timing } from "../core/observability/profiling";
 import { createBranchDiffRepository } from "../branches/storage/diff-log";
 import {
   createBranchRepository,
@@ -218,7 +219,8 @@ const committedAcknowledgementFor = async (
     }
     if (snapshot.eventIds.includes(event.eventId)) {
       if (
-        (event.snapshotId !== undefined && event.snapshotId !== snapshot.snapshotId) ||
+        (event.snapshotId !== undefined &&
+          event.snapshotId !== snapshot.snapshotId) ||
         (snapshot.patchStartSeq !== null &&
           snapshot.patchStartSeq !== undefined &&
           event.seq < snapshot.patchStartSeq) ||
@@ -253,6 +255,7 @@ export const appendEventsToBranch = async (
   events: DropDiffEvent[],
   options?: BranchAppendOptions,
   db?: SqlMetadataStore,
+  timing: Timing = unobserved,
 ): Promise<BranchAppendResult> => {
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const branchDiffRepository = createBranchDiffRepository({
@@ -264,27 +267,31 @@ export const appendEventsToBranch = async (
     branch.rootDropId,
     branch.branchId,
     async (lock) => {
-      const current = await branchRepository.readBranchWithEtag(
-        branch.rootDropId,
-        branch.branchId,
+      const current = await timing.phase("append.head", () =>
+        branchRepository.readBranchWithEtag(branch.rootDropId, branch.branchId),
       );
       if (!current) {
         throw new Error("Branch not found.");
       }
 
-      const upgradedBranch = await ensureBranchHeapV2ForMutation(
-        bucket,
-        current.branch,
-        lock,
-        db,
-        current.etag,
+      const upgradedBranch = await timing.phase("append.upgrade", () =>
+        ensureBranchHeapV2ForMutation(
+          bucket,
+          current.branch,
+          lock,
+          db,
+          current.etag,
+        ),
       );
-      const currentContent = await readBranchContent(
-        bucket,
-        upgradedBranch.rootDropId,
-        upgradedBranch.branchId,
-        upgradedBranch.headSnapshotId,
-        db,
+      const currentContent = await timing.phase("append.content", (child) =>
+        readBranchContent(
+          bucket,
+          upgradedBranch.rootDropId,
+          upgradedBranch.branchId,
+          upgradedBranch.headSnapshotId,
+          db,
+          child,
+        ),
       );
       if (currentContent === null) {
         throw new Error("Branch head content is missing.");
@@ -324,10 +331,12 @@ export const appendEventsToBranch = async (
         seenEvents.set(event.eventId, event);
         uniqueInputEvents.push(event);
 
-        const existing = await branchDiffRepository.lookupBranchDiffEventIdentity(
-          upgradedBranch.rootDropId,
-          upgradedBranch.branchId,
-          event.eventId,
+        const existing = await timing.phase("append.identities", () =>
+          branchDiffRepository.lookupBranchDiffEventIdentity(
+            upgradedBranch.rootDropId,
+            upgradedBranch.branchId,
+            event.eventId,
+          ),
         );
 
         if (existing.status === "invalid") {
@@ -439,8 +448,7 @@ export const appendEventsToBranch = async (
       }
 
       const nextSnapshotId = upgradedBranch.headSnapshotId + 1;
-      const nextSeqStart =
-        headSeq + 1;
+      const nextSeqStart = headSeq + 1;
 
       const acceptedEvents = acceptedInput.map((event, index) => ({
         ...event,
@@ -448,16 +456,19 @@ export const appendEventsToBranch = async (
         snapshotId: nextSnapshotId,
       }));
 
-      const nextContent = applyBranchDiffEvents(currentContent, acceptedEvents);
+      const nextContent = timing.sync("append.apply", () =>
+        applyBranchDiffEvents(currentContent, acceptedEvents),
+      );
       const patchStartSeq = acceptedEvents[0].seq;
       const patchEndSeq = acceptedEvents[acceptedEvents.length - 1].seq;
 
       for (const event of acceptedEvents) {
-        const storedAtSequence = await branchDiffRepository.readBranchDiffEventBySeq(
-          upgradedBranch.rootDropId,
-          upgradedBranch.branchId,
-          event.seq,
-        );
+        const storedAtSequence =
+          await branchDiffRepository.readBranchDiffEventBySeq(
+            upgradedBranch.rootDropId,
+            upgradedBranch.branchId,
+            event.seq,
+          );
         if (storedAtSequence && !hasSameEventPayload(event, storedAtSequence)) {
           throw new Error("diff_predecessor_mismatch");
         }
@@ -491,7 +502,9 @@ export const appendEventsToBranch = async (
         patchEndSeq,
         checkpointKey: checkpointObjectKey,
         textLength: nextContent.length,
-        sourceContentHash: await hashNulldownSourceContent(nextContent),
+        sourceContentHash: await timing.phase("append.hash", () =>
+          hashNulldownSourceContent(nextContent),
+        ),
         createdAt,
       };
 
@@ -504,61 +517,81 @@ export const appendEventsToBranch = async (
         updatedAt: createdAt,
       };
 
-      await lock.beginCommit();
-      await Promise.all(
-        acceptedEvents.map((event) =>
-          branchDiffRepository.writeBranchDiffEvent(
-            upgradedBranch.rootDropId,
-            upgradedBranch.branchId,
-            event,
+      await timing.phase("append.begin_commit", () => lock.beginCommit());
+      await timing.phase("append.events", () =>
+        Promise.all(
+          acceptedEvents.map((event) =>
+            branchDiffRepository.writeBranchDiffEvent(
+              upgradedBranch.rootDropId,
+              upgradedBranch.branchId,
+              event,
+            ),
           ),
         ),
       );
 
-      await branchRepository.writeSnapshot(snapshot);
+      await timing.phase("append.snapshot", () =>
+        branchRepository.writeSnapshot(snapshot),
+      );
 
       if (shouldCheckpoint) {
-        await branchRepository.writeSnapshotCheckpoint(
-          upgradedBranch.rootDropId,
-          upgradedBranch.branchId,
-          nextSnapshotId,
-          nextContent,
-          checkpointObjectKey,
+        await timing.phase("append.checkpoint", () =>
+          branchRepository.writeSnapshotCheckpoint(
+            upgradedBranch.rootDropId,
+            upgradedBranch.branchId,
+            nextSnapshotId,
+            nextContent,
+            checkpointObjectKey,
+          ),
         );
       }
 
-      const branchEtag = upgradedBranch === current.branch
-        ? current.etag
-        : (await branchRepository.readBranchWithEtag(
-            upgradedBranch.rootDropId,
-            upgradedBranch.branchId,
-          ))?.etag;
-      if (!branchEtag || !(await branchRepository.writeBranch(nextBranch, branchEtag))) {
+      const branchEtag =
+        upgradedBranch === current.branch
+          ? current.etag
+          : (
+              await timing.phase("append.fence_read", () =>
+                branchRepository.readBranchWithEtag(
+                  upgradedBranch.rootDropId,
+                  upgradedBranch.branchId,
+                ),
+              )
+            )?.etag;
+      if (
+        !branchEtag ||
+        !(await timing.phase("append.publish", () =>
+          branchRepository.writeBranch(nextBranch, branchEtag),
+        ))
+      ) {
         throw new Error("branch_head_fenced_write_failed");
       }
 
-      await Promise.all(
-        acceptedEvents.map((event) =>
-          branchDiffRepository.writeBranchDiffEventIdMarker(
-            upgradedBranch.rootDropId,
-            upgradedBranch.branchId,
-            event,
+      await timing.phase("append.markers", () =>
+        Promise.all(
+          acceptedEvents.map((event) =>
+            branchDiffRepository.writeBranchDiffEventIdMarker(
+              upgradedBranch.rootDropId,
+              upgradedBranch.branchId,
+              event,
+            ),
           ),
         ),
       );
-      await Promise.all(
-        acceptedEvents.map((event) =>
-          bucket.put(
-            createBranchDiffEventIdKey(
-              upgradedBranch.rootDropId,
-              upgradedBranch.branchId,
-              event.eventId,
+      await timing.phase("append.markers", () =>
+        Promise.all(
+          acceptedEvents.map((event) =>
+            bucket.put(
+              createBranchDiffEventIdKey(
+                upgradedBranch.rootDropId,
+                upgradedBranch.branchId,
+                event.eventId,
+              ),
+              String(event.seq),
+              {
+                httpMetadata: { contentType: "text/plain" },
+                onlyIf: { etagDoesNotMatch: "*" },
+              },
             ),
-            String(event.seq),
-            {
-              httpMetadata: { contentType: "text/plain" },
-              onlyIf: { etagDoesNotMatch: "*" },
-            },
           ),
         ),
       );
@@ -573,8 +606,11 @@ export const appendEventsToBranch = async (
         totalStored: patchEndSeq + 1,
       };
     },
+    timing,
   );
 
-  await dispatchBranchAppendSnapshotters(result, options);
+  await timing.phase("append.dispatch", () =>
+    dispatchBranchAppendSnapshotters(result, options),
+  );
   return result;
 };

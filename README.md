@@ -347,6 +347,11 @@ nd --base=http://127.0.0.1:8788 get <id> --json
 
 ### Operational telemetry
 
+Optional bounded request profiling, protocol compatibility and the local
+baseline/profile/compare workflow are documented in [Observability](docs/OBSERVABILITY.md).
+Run `bun run test:profiling` for current-tree native fixture coverage; all profiling
+flags remain deployment-owned and default off.
+
 The API middleware emits request summaries to the private `nulldown-telemetry`
 Worker through the `TELEMETRY` service binding. Deploy the collector with
 `bunx wrangler deploy --config packages/nulldown-telemetry/wrangler.jsonc`

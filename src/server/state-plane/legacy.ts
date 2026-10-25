@@ -10,6 +10,10 @@ import { createBranchRepository } from "../../../functions/api/_lib/branches/sto
 import type { BlobObjectStore, SqlMetadataStore } from "../ports";
 import type { BranchStatePlane } from "./contracts";
 import { createLegacyBranchDiffPolling } from "./legacy-diffs";
+import {
+  unobserved,
+  type Timing,
+} from "../../../functions/api/_lib/core/observability/profiling";
 
 /** Existing platform ports retained for the lifetime of a legacy request adapter. */
 export interface LegacyBranchStatePlaneOptions {
@@ -19,6 +23,8 @@ export interface LegacyBranchStatePlaneOptions {
   sql?: SqlMetadataStore;
   /** Existing escrow credential used only by actor branch initialization. */
   providerPrivateKey?: string;
+  /** Optional request-owned observer; omitted preserves the unobserved adapter. */
+  timing?: Timing;
 }
 
 /** Adapts existing branch services for one request without adding transaction guarantees. */
@@ -26,6 +32,7 @@ export const createLegacyBranchStatePlane = ({
   blobs,
   sql,
   providerPrivateKey,
+  timing = unobserved,
 }: LegacyBranchStatePlaneOptions): BranchStatePlane => {
   const repository = createBranchRepository({ blobs, sql });
   return {
@@ -60,7 +67,7 @@ export const createLegacyBranchStatePlane = ({
       listSnapshotsForBranch: (rootDropId, branchId) =>
         repository.listSnapshotsForBranch(rootDropId, branchId),
       readContent: (rootDropId, branchId, snapshotId) =>
-        readBranchContent(blobs, rootDropId, branchId, snapshotId, sql),
+        readBranchContent(blobs, rootDropId, branchId, snapshotId, sql, timing),
     },
     maintenance: {
       listBranchesForRootPage: (rootDropId, limit, cursor) =>

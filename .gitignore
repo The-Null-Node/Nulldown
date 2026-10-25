@@ -14,3 +14,5 @@ macos/
 .diff-auth/
 .nulldown-data/
 output.txt
+# Local profiling fixtures, raw samples and sealed benchmark artifacts.
+.profiling/
