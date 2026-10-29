@@ -1,0 +1,10 @@
+{
+  "name": "@thenullnode/nulldown-state-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "types": "wrangler types --config wrangler.jsonc --strict-vars=false"
+  }
+}

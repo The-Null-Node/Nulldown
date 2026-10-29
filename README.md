@@ -535,6 +535,30 @@ Use `fromDiff()` for editor operations, `fromRecord()` for incoming records, and
 `toRecord()` at transport and persistence boundaries. The existing v1 wire format
 is preserved.
 
+### Local transactional State Plane
+
+`src/server/state-plane/sqlite-commits.ts` provides single-event append, head,
+exact-version content, and bounded event-range reads. Events, snapshots, heads,
+immutable receipts, and outbox records commit in one SQLite transaction. A bounded
+exact-version cache reuses content while durable reads check placement and identity.
+
+`packages/nulldown-state-plane` adapts this port to SQLite-backed Durable Objects
+and internal RPC, using a fixed 16-shard routing layout. HTTP, MCP, and CLI continue
+to use the legacy backend. The local Worker has no public state endpoints; fixture
+seeding requires an explicit test binding. Migration and outbox consumers are not
+implemented.
+
+With Bun and a Node.js version supporting `node:sqlite`, run:
+
+```bash
+bun run test:state-plane
+bun run test:state-plane:native
+bun run typecheck:state-plane
+```
+
+The native harness uses disposable local workerd storage. Regenerate Worker types
+after configuration changes with `bun run --cwd packages/nulldown-state-plane types`.
+
 ## License
 
 MIT
