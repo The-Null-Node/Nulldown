@@ -2,6 +2,9 @@ import type { NulldownServerRuntime } from "../../../../../../../src/server/runt
 import { createInMemoryBranchCommitBuffer } from "../../../../../../../src/server/nulledit/commit-buffer";
 import { flushBranchCommitBufferSnapshotters } from "../../../../../../../src/server/nulledit/dispatch";
 import type { RuntimeDataStore } from "../../../../../../../src/server/ports";
+import { createNulleditSnapshotterRegistry } from "../../../../../../../src/server/nulledit/registry";
+import { createCommitApplicationStatePlane } from "../../../../../../../src/server/state-plane/commit-application";
+import { BranchStateError } from "../../../../../../../shared/drop/branch-state";
 import { appendEventsToBranch } from "../../../../nulledit/service";
 import {
   createCloudflareBlobStore,
@@ -28,6 +31,20 @@ export const createCloudflareNulleditRuntime = (
   memory: NulldownServerRuntime["memory"],
   timing: Timing = unobserved,
 ): NulldownServerRuntime["nulledit"] => {
+  const selection = bindings.localBranchApplication;
+  if (selection) {
+    const registry = createNulleditSnapshotterRegistry(selection.snapshotters);
+    return {
+      registerSnapshotter: registry.register,
+      yieldNext: (id, request) => registry.yieldNext?.(id, request),
+      appendDiffEvents: (request) =>
+        createCommitApplicationStatePlane({
+          ...selection,
+          snapshotters: registry.list(),
+        }).appendDiffEvents(request),
+    };
+  }
+
   const blobs = createCloudflareBlobStore(bindings.R2_BUCKET);
   const sql = createCloudflareSqlStore(bindings.DB);
 
@@ -70,6 +87,9 @@ export const repairCloudflareBufferedCommitsForQuery = async (
   memory: NulldownServerRuntime["memory"],
   { rootDropId, branchId }: CloudflareBufferedCommitRepairTarget,
 ): Promise<void> => {
+  if (bindings.localBranchApplication) {
+    throw new BranchStateError("capability_unsupported");
+  }
   if (!bindings.DB) return;
 
   await flushBranchCommitBufferSnapshotters({

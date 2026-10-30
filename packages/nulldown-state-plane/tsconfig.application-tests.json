@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.check.functions.json",
+  "include": ["test/application-*.fixture.ts"]
+}

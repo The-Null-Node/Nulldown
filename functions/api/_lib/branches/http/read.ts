@@ -3,6 +3,8 @@ import {
   resolveRootReadAuthorization,
 } from "../../security/read-authorization";
 import { unobserved, type Timing } from "../../core/observability/profiling";
+import { BranchStateError } from "../../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "./state-plane-errors";
 import {
   createBranchRouteStatePlane,
   resolveBranchTarget,
@@ -16,6 +18,21 @@ export const getBranchContent = async (
   params: BranchTargetParams,
   request: Request,
   timing: Timing = unobserved,
+): Promise<Response> => {
+  try {
+    return await readBranchContent(env, params, request, timing);
+  } catch (error) {
+    if (error instanceof BranchStateError)
+      return branchStateErrorResponse(error);
+    throw error;
+  }
+};
+
+const readBranchContent = async (
+  env: BranchRouteEnv,
+  params: BranchTargetParams,
+  request: Request,
+  timing: Timing,
 ): Promise<Response> => {
   if (!env.R2_BUCKET) {
     return new Response("R2 bucket binding is required.", { status: 500 });
@@ -43,11 +60,10 @@ export const getBranchContent = async (
   }
 
   const content = await timing.phase("content.materialize", (child) =>
-    createBranchRouteStatePlane(env, child).snapshots.readContent(
-      rootDropId,
-      branchId,
-      branch.headSnapshotId,
-    ),
+    (env.localBranchApplication
+      ? statePlane
+      : createBranchRouteStatePlane(env, child)
+    ).snapshots.readContent(rootDropId, branchId, branch.headSnapshotId),
   );
   if (content === null) {
     return new Response("Branch content not found.", { status: 404 });
@@ -73,6 +89,20 @@ export const getBranchContent = async (
 
 /** Lists stored snapshots for a branch visible to the caller. */
 export const listBranchSnapshots = async (
+  env: BranchRouteEnv,
+  params: BranchTargetParams,
+  request: Request,
+): Promise<Response> => {
+  try {
+    return await readBranchSnapshots(env, params, request);
+  } catch (error) {
+    if (error instanceof BranchStateError)
+      return branchStateErrorResponse(error);
+    throw error;
+  }
+};
+
+const readBranchSnapshots = async (
   env: BranchRouteEnv,
   params: BranchTargetParams,
   request: Request,

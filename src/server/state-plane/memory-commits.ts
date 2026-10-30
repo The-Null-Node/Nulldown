@@ -6,13 +6,21 @@ import type { DropDiffEvent } from "../../../shared/drop/diff";
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { prepareBranchCommit } from "../../../shared/drop/branch-commit";
 import {
+  captureBranchBatchAppend,
+  hashBranchBatchEvents,
+  prepareBranchBatch,
+} from "../../../shared/drop/branch-batch";
+import {
   BranchAppendCommand,
   BranchStateError,
   BranchStateQuery,
   sameBranchStateVersion,
   type BranchAppendRecord,
   type BranchAppendOutcome,
-  type BranchCommitStatePlane,
+  type BranchBatchStatePlane,
+  type BranchBatchAppendRecord,
+  type BranchBatchAppendResult,
+  type BranchBatchCommitOutboxRecord,
   type BranchCommitReceipt,
   type BranchCommitOutboxRecord,
   type BranchContentQuery,
@@ -35,7 +43,7 @@ type State = {
   snapshots: Map<number, BranchStateContent>;
   events: Map<number, DropDiffEvent>;
   receipts: Map<string, BranchCommitReceipt>;
-  outbox: Map<string, BranchCommitOutboxRecord>;
+  outbox: Map<string, BranchCommitOutboxRecord | BranchBatchCommitOutboxRecord>;
 };
 
 const key = (target: BranchHeadQuery["target"]): string =>
@@ -45,7 +53,7 @@ const key = (target: BranchHeadQuery["target"]): string =>
  * Deterministic in-memory reference for local contract tests, not durable authority or a production cache.
  * Each instance owns seeded branches; returned values never share mutable state with storage.
  */
-export class MemoryBranchCommitStatePlane implements BranchCommitStatePlane {
+export class MemoryBranchCommitStatePlane implements BranchBatchStatePlane {
   private readonly states = new Map<string, State>();
 
   private constructor(private readonly now: () => number) {}
@@ -161,6 +169,56 @@ export class MemoryBranchCommitStatePlane implements BranchCommitStatePlane {
     return { status: "accepted", receipt: structuredClone(prepared.receipt) };
   }
 
+  /** Prepares an entire envelope and publishes it with one synchronous state replacement; contention restarts classification. */
+  async appendBatch(
+    input: BranchBatchAppendRecord,
+  ): Promise<BranchBatchAppendResult> {
+    const command = captureBranchBatchAppend(input);
+    const identities = await hashBranchBatchEvents(command.events);
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const state = this.state(command);
+      const current = state.snapshots.get(state.head.version.snapshotId);
+      if (!current) throw new BranchStateError("state_corrupt");
+      const prepared = await prepareBranchBatch(
+        command,
+        identities,
+        state.head,
+        current.content,
+        state.receipts,
+        this.now(),
+      );
+      const latest = this.state(command);
+      if (latest !== state) continue;
+      if (!prepared.result.snapshot) return structuredClone(prepared.result);
+      const next: State = {
+        head: {
+          target: command.target,
+          placement: command.placement,
+          branch: prepared.result.branch,
+          version: prepared.version,
+        },
+        snapshots: new Map(state.snapshots),
+        events: new Map(state.events),
+        receipts: new Map(state.receipts),
+        outbox: new Map(state.outbox),
+      };
+      next.snapshots.set(prepared.version.snapshotId, {
+        target: command.target,
+        placement: command.placement,
+        version: prepared.version,
+        content: prepared.result.content,
+      });
+      for (const event of prepared.result.acceptedEvents)
+        next.events.set(event.seq, event);
+      for (const receipt of prepared.receipts)
+        next.receipts.set(receipt.eventId, receipt);
+      next.outbox.set(prepared.outbox!.id, prepared.outbox!);
+      this.states.set(key(command.target), next);
+      return structuredClone(prepared.result);
+    }
+    throw new BranchStateError("state_unavailable");
+  }
+
   /** Returns the exact current head without resolving or creating missing branches. */
   async readHead(input: BranchHeadQuery): Promise<BranchStateHead> {
     return structuredClone(this.state(BranchStateQuery.head(input)).head);
@@ -195,8 +253,21 @@ export class MemoryBranchCommitStatePlane implements BranchCommitStatePlane {
 
   /** Local test diagnostics only; queue delivery and outbox acknowledgement are not selected capabilities. */
   inspectOutbox(input: BranchHeadQuery): BranchCommitOutboxRecord[] {
-    return structuredClone([
-      ...this.state(BranchStateQuery.head(input)).outbox.values(),
-    ]);
+    return structuredClone(
+      [...this.state(BranchStateQuery.head(input)).outbox.values()].filter(
+        (intent): intent is BranchCommitOutboxRecord =>
+          intent.kind === "branch.commit.v1",
+      ),
+    );
+  }
+
+  /** Local batch-intent diagnostics; does not acknowledge or deliver outbox records. */
+  inspectBatchOutbox(input: BranchHeadQuery): BranchBatchCommitOutboxRecord[] {
+    return structuredClone(
+      [...this.state(BranchStateQuery.head(input)).outbox.values()].filter(
+        (intent): intent is BranchBatchCommitOutboxRecord =>
+          intent.kind === "branch.batch-commit.v1",
+      ),
+    );
   }
 }

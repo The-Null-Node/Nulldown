@@ -537,27 +537,41 @@ is preserved.
 
 ### Local transactional State Plane
 
-`src/server/state-plane/sqlite-commits.ts` provides single-event append, head,
-exact-version content, and bounded event-range reads. Events, snapshots, heads,
+`src/server/state-plane/sqlite-commits.ts` provides single-event and atomic batch
+append, head, exact-version content, and bounded event-range reads. Events, snapshots, heads,
 immutable receipts, and outbox records commit in one SQLite transaction. A bounded
 exact-version cache reuses content while durable reads check placement and identity.
 
 `packages/nulldown-state-plane` adapts this port to SQLite-backed Durable Objects
-and internal RPC, using a fixed 16-shard routing layout. HTTP, MCP, and CLI continue
-to use the legacy backend. The local Worker has no public state endpoints; fixture
+and internal RPC, using a fixed 16-shard routing layout. HTTP, MCP, and CLI use the
+legacy backend by default. The local Worker has no public state endpoints; fixture
 seeding requires an explicit test binding. Migration and outbox consumers are not
 implemented.
+
+For local application testing, `src/server/state-plane/commit-application.ts`
+connects explicitly seeded branches to the existing authenticated diff and content
+routes. Public batches share one snapshot and retain per-event retry acknowledgements.
+Selection is an in-process dependency, not a request header or deployment variable.
+Lifecycle, snapshot listing, runtime facts, memory, and plugin operations remain
+unsupported on this local path. Snapshotters must be supplied explicitly with a
+derived-data store; durable outbox delivery is separate work.
 
 With Bun and a Node.js version supporting `node:sqlite`, run:
 
 ```bash
 bun run test:state-plane
 bun run test:state-plane:native
+bun run test:state-plane:application
 bun run typecheck:state-plane
 ```
 
-The native harness uses disposable local workerd storage. Regenerate Worker types
-after configuration changes with `bun run --cwd packages/nulldown-state-plane types`.
+The application harness runs two clients through HTTP, the application routes,
+the Worker service binding, and SQLite Durable Objects. It exercises batch edits,
+authorization, lost-response retries, reconnects, and restarts on disposable local
+storage. The native storage harness tests the lower-level commit boundary.
+
+Regenerate Worker types after configuration changes with
+`bun run --cwd packages/nulldown-state-plane types`.
 
 ## License
 

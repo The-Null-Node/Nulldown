@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type {
   BranchAppendRecord,
+  BranchBatchAppendRecord,
   BranchContentQuery,
   BranchEventRangeQuery,
   BranchHeadQuery,
@@ -23,6 +24,7 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
       );
       return {
         append: async (command) => await stub.append(command),
+        appendBatch: async (command) => await stub.appendBatch(command),
         readHead: async (query) => await stub.readHead(query),
         readContent: async (query) => await stub.readContent(query),
         readEvents: async (query) => await stub.readEvents(query),
@@ -32,6 +34,13 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
   /** Publishes one event through typed internal RPC. */
   async append(command: BranchAppendRecord) {
     return branchStateRpcResult(() => this.#plane().append(command));
+  }
+  /** Publishes one whole public envelope through internal batch RPC. */
+  async appendBatch(
+    command: BranchBatchAppendRecord,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    const captured = structuredClone(command);
+    return branchStateRpcResult(() => this.#plane().appendBatch(captured));
   }
   /** Reads a branch head through typed internal RPC. */
   async readHead(query: BranchHeadQuery) {

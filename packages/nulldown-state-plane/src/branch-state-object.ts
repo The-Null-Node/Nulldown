@@ -3,6 +3,7 @@ import {
   BranchStateError,
   BranchStateQuery,
   type BranchAppendRecord,
+  type BranchBatchAppendRecord,
   type BranchContentQuery,
   type BranchEventRangeQuery,
   type BranchHeadQuery,
@@ -75,6 +76,21 @@ export class BranchStateObject extends DurableObject<BranchStateBindings> {
         }),
       );
       return this.#plane.append(command);
+    });
+  }
+  /** One public envelope crosses RPC by value and commits as one SQLite transaction. */
+  async appendBatch(
+    input: BranchBatchAppendRecord,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(async () => {
+      const command = structuredClone(input);
+      await this.#placement(
+        BranchStateQuery.head({
+          target: command?.target,
+          placement: command?.placement,
+        }),
+      );
+      return this.#plane.appendBatch(command);
     });
   }
   /** Read-only head RPC with explicit result envelope. */
