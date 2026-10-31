@@ -1,65 +1,79 @@
 # Nulldown
 
-**Persistent Markdown state for AI agents, applications, and collaborative workflows.**
+**Persistent Markdown-based state for AI agents, applications, and collaborative workflows.**
 
-Nulldown lets agents and applications work with Markdown as durable, versioned state—not just text passed between prompts.
+Nulldown turns Markdown into a shared, queryable workspace for agents and applications.
 
-An agent can read a plan, make a change, record what happened, and retrieve that information in a later session. Other agents can work from the same document without depending on the original conversation.
+Agents can create documents, update individual sections, retrieve relevant information, track revisions, and reference the evidence behind their decisions. Multiple agents can work with the same evolving state without passing entire conversation histories between them.
 
-Nulldown provides:
+It's not just about remembering what happened. It's about maintaining something that can be worked on.
 
-- **Persistent state** — Keep documents, changes, decisions, and results beyond an agent session.
-- **Structured retrieval** — Retrieve relevant sections and their source locations instead of loading entire documents.
-- **Versioned changes** — Record edits as events, reconstruct previous states, and work across independent branches.
-- **Reusable memory** — Preserve facts, procedures, and supporting references for later tasks.
-- **Execution context** — Connect documents to agent procedures, tools, and interactive workflows.
+## A workspace, not a transcript
 
-Your existing agent framework still executes the work. **Nulldown maintains the shared state that makes the work inspectable and reusable.**
+An agent doesn't always need to know everything that happened before it. It needs the current state of the work, the constraints that matter, the decisions already made, and the information required to proceed.
 
-## Why Nulldown?
+Nulldown makes that state explicit.
 
-Consider a team of agents researching a question and preparing a recommendation.
+A document might contain requirements, implementation progress, open questions, research findings, decisions, or task-specific data. Agents can retrieve the relevant sections, update what has changed, and leave the rest intact.
 
-You give them a Markdown brief:
+The document evolves as the work evolves.
 
-```markdown
-# Research brief
+## Read, write, revise
 
-## Question
-Which option best meets our requirements?
+Nulldown provides a common interface for working with persistent Markdown-based state.
 
-## Tasks
-- [ ] Gather sources and compare the options
-- [ ] Investigate alternatives and counterevidence
-- [ ] Review the findings
-- [ ] Write a recommendation with supporting sources
-
-## Open questions
-Which claims still need evidence?
-```
-
-One agent gathers sources and records findings. Another looks for alternatives and counterevidence. A reviewer checks their claims and identifies gaps. A synthesis agent uses the reviewed findings to explain the options and recommend a path forward.
+- **Write:** Create and update structured documents as work progresses.
+- **Query:** Retrieve relevant content and source locations without loading the entire workspace into context.
+- **Revise:** Modify existing state through recorded changes while retaining access to earlier versions.
+- **Reference:** Connect findings and decisions to the sources that support them.
+- **Share:** Let different agents and applications operate on the same information.
 
 ```mermaid
-flowchart TB
-  brief["Research brief<br/>Question, scope, and requirements"]
-  brief --> researcher["Research agent<br/>Gather sources and findings"]
-  brief --> challenger["Independent research agent<br/>Find alternatives and counterevidence"]
-  researcher --> findings["Shared findings<br/>Claims, sources, and uncertainties"]
-  challenger --> findings
-  findings --> reviewer["Review agent<br/>Check evidence and contradictions"]
-  reviewer -->|Open questions| followup["Targeted research<br/>Fill evidence gaps"]
-  followup --> findings
-  reviewer -->|Reviewed findings| writer["Synthesis agent<br/>Compare options and explain trade-offs"]
-  writer --> report["Recommendation<br/>Evidence and remaining uncertainty"]
-  report --> reuse["Later research<br/>Revisit findings and reuse the method"]
+flowchart LR
+  A["Agent"] -->|Record evidence and decisions| N["Nulldown<br/>Queryable, versioned state"]
+  N -->|Retrieve relevant context| B["Next agent"]
+  B -->|Record results and revisions| N
 ```
 
-The arrows show handoffs; your orchestrator runs the agents and coordinates writes. Nulldown preserves the brief, findings, source references, review notes, and results as the work progresses.
+Your agent framework runs the agents and coordinates writes. Nulldown keeps the state they work on.
 
-Tomorrow, a new agent can retrieve what was found, what is disputed, and what still needs investigation. It can inspect the evidence and continue without reconstructing the original conversation. A later task can revisit those findings and reuse a reviewed research procedure.
+## Work that carries forward
 
-**Read context → perform work → record changes → retrieve and reuse.**
+### Engineering: test what matters
+
+The priority is a working job API that handles duplicate requests and survives worker restarts. Throughput can wait.
+
+An implementation agent chooses to save jobs before acknowledging them. It records why, links the relevant code, and notes the trade-off: an extra storage operation on each request.
+
+A testing agent retrieves those priorities and decisions. It tests completion, duplicate handling, and restart recovery, then records the results and why load testing was deferred.
+
+When performance becomes the priority, another agent can retrieve that context. It knows which guarantee to preserve and which coverage still needs adding.
+
+### Sales: turn a finding into an informed next step
+
+A discovery agent finds a company hiring several support engineers. It records the job listings and dates as evidence that the support team is growing.
+
+A qualification agent checks the company against your target market. It prioritizes the lead because the company fits your size and industry criteria, but records an important uncertainty: hiring doesn't establish buying intent.
+
+An outreach agent retrieves the qualification decision and its sources. It drafts a message around the team's growth rather than assuming the company needs a replacement product. A later response can update the same record, giving the next agent a reason to follow up, wait, or move on.
+
+### Research: revise the conclusion without restarting the investigation
+
+A research agent compares products against a budget and a list of required features. It records prices, feature availability, sources, and a preliminary shortlist.
+
+A reviewer discovers that one candidate's quoted plan excludes a required feature. It records the correction and a decision: defer that candidate until a qualifying quote is available.
+
+A writing agent retrieves the updated comparison and explains the recommendation using the reviewed evidence. When the quote arrives, another agent can revisit the deferred option, update the comparison, and retain the earlier version for reference.
+
+## Beyond agent memory
+
+Conversation memory is about recalling information from the past.
+
+Nulldown is about giving agents and applications a persistent, inspectable, and editable representation of work in progress. Decisions can live in the document alongside their evidence; useful findings and procedures can also become source-linked memory for later tasks.
+
+A Markdown file can hold these notes. Nulldown adds targeted queries, recorded changes, exact versions, and reusable facts and procedures.
+
+**Markdown is the interface. State is the primitive.**
 
 ## How It Works
 
