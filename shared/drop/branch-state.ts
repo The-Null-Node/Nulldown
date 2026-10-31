@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { DropBranchRecord, DropSnapshotRecord } from "./branch";
-import type { DropDiffEvent } from "./diff";
+import type { DropDiffEvent, DropDiffEventAcknowledgement } from "./diff";
 import { DropDiffAppendEnvelopeSchema } from "./codecs/diff-v1";
 import { DropDiffOperation } from "./diff-operation";
 import { hashNulldownSourceContent } from "./resolved/hash";
@@ -76,7 +76,36 @@ export interface BranchAppendRecord extends BranchHeadQuery {
 export interface BranchCommitReceipt extends BranchHeadQuery {
   eventId: string;
   payloadHash: NulldownSourceHash;
+  /** Assigned event sequence; absent on legacy single-event receipts, where version.eventSeq is identical. */
+  eventSeq?: number;
   version: BranchStateVersion;
+}
+
+/** One authorized public envelope, captured before async work; predecessors remain optional event metadata. */
+export interface BranchBatchAppendRecord extends BranchHeadQuery {
+  events: DropDiffEvent[];
+}
+
+/** Data-only result for one atomic envelope; duplicate receipts retain their original snapshot identities. */
+export interface BranchBatchAppendResult {
+  branch: DropBranchRecord;
+  snapshot: DropSnapshotRecord | null;
+  content: string;
+  acceptedEvents: DropDiffEvent[];
+  deduplicatedCount: number;
+  totalStored: number;
+  acknowledgements: DropDiffEventAcknowledgement[];
+}
+
+/** One durable batch intent, sufficient to load its exact snapshot and accepted events for future delivery. */
+export interface BranchBatchCommitOutboxRecord extends BranchContentQuery {
+  id: string;
+  kind: "branch.batch-commit.v1";
+  parentSnapshotId: number;
+  eventIds: string[];
+  receipts: BranchCommitReceipt[];
+  deduplicated: number;
+  totalStored: number;
 }
 
 /** Per-call replay disposition is deliberately outside the immutable receipt. */
@@ -123,6 +152,14 @@ export interface BranchCommitStatePlane {
   readContent(query: BranchContentQuery): Promise<BranchStateContent>;
   /** Missing events within a valid range are state_corrupt, never a silently partial range. */
   readEvents(query: BranchEventRangeQuery): Promise<DropDiffEvent[]>;
+}
+
+/** Branch authority with atomic public-envelope publication in addition to the original four capabilities. */
+export interface BranchBatchStatePlane extends BranchCommitStatePlane {
+  /** Deduplicates before checking optional predecessors; publishes one snapshot and no partial prefix. */
+  appendBatch(
+    command: BranchBatchAppendRecord,
+  ): Promise<BranchBatchAppendResult>;
 }
 
 /** Local capability allowlist; every other capability fails explicitly instead of using legacy authority. */

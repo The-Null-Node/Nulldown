@@ -5,7 +5,9 @@ import {
   BranchStateQuery,
   type BranchAppendRecord,
   type BranchAppendOutcome,
-  type BranchCommitStatePlane,
+  type BranchBatchStatePlane,
+  type BranchBatchAppendRecord,
+  type BranchBatchAppendResult,
   type BranchContentQuery,
   type BranchEventRangeQuery,
   type BranchHeadQuery,
@@ -13,6 +15,11 @@ import {
   type BranchStateHead,
 } from "../../../shared/drop/branch-state";
 import { isDropDiffEvent, type DropDiffEvent } from "../../../shared/drop/diff";
+import {
+  isDropBranchRecord,
+  isDropSnapshotRecord,
+} from "../../../shared/drop/branch";
+import { captureBranchBatchAppend } from "../../../shared/drop/branch-batch";
 
 /** Frozen routing-v1 pool size. Changing this requires a new routing version and explicit migration. */
 export const BRANCH_STATE_SHARD_COUNT = 16;
@@ -81,6 +88,10 @@ export function decodeBranchStateRpcResult<T>(
 
 /** The selected typed RPC methods on a shard stub; no HTTP or lifecycle capabilities. */
 export interface BranchStateRpcStub {
+  /** Optional only for original four-capability callers; batch requests reject an unextended stub explicitly. */
+  appendBatch?(
+    command: BranchBatchAppendRecord,
+  ): Promise<BranchStateRpcResult<unknown>>;
   append(
     command: BranchAppendRecord,
   ): Promise<BranchStateRpcResult<BranchAppendOutcome>>;
@@ -96,7 +107,7 @@ export interface BranchStateRpcStub {
 }
 
 /** Per-caller RPC adapter. The supplied resolver is an internal binding boundary, not a public URL. */
-export class RpcBranchCommitStatePlane implements BranchCommitStatePlane {
+export class RpcBranchCommitStatePlane implements BranchBatchStatePlane {
   constructor(
     private readonly resolve: (shardName: string) => BranchStateRpcStub,
   ) {}
@@ -121,6 +132,94 @@ export class RpcBranchCommitStatePlane implements BranchCommitStatePlane {
   async append(command: BranchAppendRecord): Promise<BranchAppendOutcome> {
     const captured = (await BranchAppendCommand.fromRecord(command)).toRecord();
     return this.call(captured, (stub) => stub.append(captured));
+  }
+  /** Captures the whole envelope before routing; one RPC preserves the backend transaction boundary. */
+  async appendBatch(
+    input: BranchBatchAppendRecord,
+  ): Promise<BranchBatchAppendResult> {
+    const command = captureBranchBatchAppend(input);
+    const value = await this.call(command, (stub) => {
+      if (!stub.appendBatch)
+        throw new BranchStateError("capability_unsupported");
+      return stub.appendBatch(command);
+    });
+    if (!value || typeof value !== "object")
+      throw new BranchStateError("state_corrupt");
+    const result = value as BranchBatchAppendResult;
+    if (
+      !isDropBranchRecord(result.branch) ||
+      result.branch.rootDropId !== command.target.rootDropId ||
+      result.branch.branchId !== command.target.branchId ||
+      (result.snapshot !== null &&
+        (!isDropSnapshotRecord(result.snapshot) ||
+          result.snapshot.rootDropId !== command.target.rootDropId ||
+          result.snapshot.branchId !== command.target.branchId ||
+          result.snapshot.snapshotId !== result.branch.headSnapshotId)) ||
+      typeof result.content !== "string" ||
+      !Array.isArray(result.acceptedEvents) ||
+      !result.acceptedEvents.every(isDropDiffEvent) ||
+      !Number.isSafeInteger(result.deduplicatedCount) ||
+      result.deduplicatedCount < 0 ||
+      result.deduplicatedCount !==
+        command.events.length - result.acceptedEvents.length ||
+      !Number.isSafeInteger(result.totalStored) ||
+      result.totalStored !== Number(result.branch.headEventSeq) + 1 ||
+      !Array.isArray(result.acknowledgements) ||
+      result.acknowledgements.length !==
+        new Set(command.events.map((event) => event.eventId)).size ||
+      result.acknowledgements.some(
+        (ack) =>
+          !ack ||
+          typeof ack.eventId !== "string" ||
+          !Number.isSafeInteger(ack.seq) ||
+          ack.seq < 0 ||
+          !Number.isSafeInteger(ack.snapshotId) ||
+          ack.snapshotId < 1 ||
+          (ack.status !== "accepted" && ack.status !== "duplicate"),
+      )
+    ) {
+      throw new BranchStateError("state_corrupt");
+    }
+    const inputIds = [...new Set(command.events.map((event) => event.eventId))];
+    const acceptedById = new Map(
+      result.acceptedEvents.map((event) => [event.eventId, event]),
+    );
+    if (
+      acceptedById.size !== result.acceptedEvents.length ||
+      (result.snapshot === null) !== (result.acceptedEvents.length === 0) ||
+      result.acknowledgements.some((ack, index) => {
+        const accepted = acceptedById.get(ack.eventId);
+        return (
+          ack.eventId !== inputIds[index] ||
+          ack.seq >= result.totalStored ||
+          ack.snapshotId > result.branch.headSnapshotId ||
+          (accepted
+            ? ack.status !== "accepted" ||
+              ack.seq !== accepted.seq ||
+              ack.snapshotId !== accepted.snapshotId
+            : ack.status !== "duplicate")
+        );
+      }) ||
+      (result.snapshot !== null &&
+        (result.snapshot.textLength !== result.content.length ||
+          result.snapshot.patchStartSeq !==
+            result.totalStored - result.acceptedEvents.length ||
+          result.snapshot.patchEndSeq !== result.totalStored - 1 ||
+          result.snapshot.eventIds.length !== result.acceptedEvents.length ||
+          result.acceptedEvents.some(
+            (event, index) =>
+              event.dropId !== command.target.rootDropId ||
+              !inputIds.includes(event.eventId) ||
+              event.seq !== result.snapshot!.patchStartSeq! + index ||
+              event.snapshotId !== result.snapshot!.snapshotId ||
+              result.snapshot!.eventIds[index] !== event.eventId ||
+              (event.metadata?.followsSeq !== undefined &&
+                event.metadata.followsSeq !== event.seq - 1),
+          )))
+    ) {
+      throw new BranchStateError("state_corrupt");
+    }
+    return result;
   }
   /** Returns the authoritative head via the fixed routing layout. */
   async readHead(query: BranchHeadQuery): Promise<BranchStateHead> {
@@ -152,7 +251,11 @@ export class RpcBranchCommitStatePlane implements BranchCommitStatePlane {
         (event, index) =>
           event.seq !== captured.startSeq + index ||
           event.dropId !== captured.target.rootDropId ||
-          event.snapshotId !== event.seq + 1,
+          event.snapshotId === undefined ||
+          event.snapshotId < 1 ||
+          event.snapshotId > captured.version.snapshotId ||
+          (event.metadata?.followsSeq !== undefined &&
+            event.metadata.followsSeq !== event.seq - 1),
       )
     ) {
       throw new BranchStateError("state_corrupt");

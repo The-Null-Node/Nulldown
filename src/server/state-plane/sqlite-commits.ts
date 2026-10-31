@@ -7,13 +7,20 @@ import { isDropDiffEvent, type DropDiffEvent } from "../../../shared/drop/diff";
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { prepareBranchCommit } from "../../../shared/drop/branch-commit";
 import {
+  captureBranchBatchAppend,
+  hashBranchBatchEvents,
+  prepareBranchBatch,
+} from "../../../shared/drop/branch-batch";
+import {
   BranchAppendCommand,
   BranchStateError,
   BranchStateQuery,
   sameBranchStateVersion,
   type BranchAppendRecord,
   type BranchAppendOutcome,
-  type BranchCommitStatePlane,
+  type BranchBatchStatePlane,
+  type BranchBatchAppendRecord,
+  type BranchBatchAppendResult,
   type BranchCommitReceipt,
   type BranchContentQuery,
   type BranchEventRangeQuery,
@@ -76,7 +83,7 @@ export interface SqliteBranchCommitOptions {
 }
 
 /** SQL-authoritative branch commits shared by local SQLite and SQLite-backed Durable Objects. */
-export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
+export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
   private readonly now: () => number;
   private readonly cache: ExactContentCache;
 
@@ -245,11 +252,23 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
     content?: string;
   } {
     const row = this.sql.rows(
-      `SELECT snapshot_id, event_seq, source_content_hash, snapshot_json${includeContent ? ", content" : ""} FROM branch_snapshots WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ?`,
+      `SELECT s.snapshot_id, s.event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq${includeContent ? ", s.content" : ""} FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE s.root_drop_id = ? AND s.branch_id = ? AND s.snapshot_id = ?`,
       ...scope(query),
       query.version.snapshotId,
     )[0];
     if (!row) throw new BranchStateError("snapshot_not_found");
+    return this.snapshotRecord(query, row, includeContent);
+  }
+
+  private snapshotRecord(
+    query: BranchContentQuery,
+    row: Row,
+    includeContent: boolean,
+  ): {
+    identity: BranchContentQuery;
+    snapshot: DropSnapshotRecord;
+    content?: string;
+  } {
     const identity = storedQuery({
       target: query.target,
       placement: query.placement,
@@ -279,14 +298,21 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
         snapshot.patchEndSeq !== null
       )
         return corrupt();
-    } else if (
-      snapshot.parentSnapshotId !== snapshot.snapshotId - 1 ||
-      snapshot.eventIds.length !== 1 ||
-      snapshot.patchStartSeq !== identity.version.eventSeq ||
-      snapshot.patchEndSeq !== identity.version.eventSeq ||
-      identity.version.eventSeq !== snapshot.snapshotId - 1
-    )
-      return corrupt();
+    } else {
+      if (
+        snapshot.parentSnapshotId !== snapshot.snapshotId - 1 ||
+        !Number.isSafeInteger(snapshot.patchStartSeq) ||
+        snapshot.patchStartSeq! < 0 ||
+        snapshot.patchEndSeq !== identity.version.eventSeq ||
+        snapshot.patchEndSeq! < snapshot.patchStartSeq! ||
+        snapshot.eventIds.length !==
+          snapshot.patchEndSeq! - snapshot.patchStartSeq! + 1 ||
+        new Set(snapshot.eventIds).size !== snapshot.eventIds.length
+      )
+        return corrupt();
+      if (row.parent_event_seq !== snapshot.patchStartSeq! - 1)
+        return corrupt();
+    }
     if (!sameBranchStateVersion(identity.version, query.version))
       throw new BranchStateError("snapshot_version_mismatch");
     const content = includeContent
@@ -316,7 +342,8 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
   }
 
   private duplicate(
-    command: BranchAppendRecord,
+    command: BranchHeadQuery &
+      Pick<BranchAppendRecord, "event" | "payloadHash">,
   ): BranchAppendOutcome | undefined {
     const row = this.sql.rows(
       "SELECT event_id, payload_hash, receipt_json FROM branch_receipts WHERE root_drop_id = ? AND branch_id = ? AND event_id = ?",
@@ -330,7 +357,10 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
       !sameScope(identity, command) ||
       !samePlacement(identity, command) ||
       identity.version.snapshotId < 1 ||
-      identity.version.eventSeq !== identity.version.snapshotId - 1 ||
+      !Number.isSafeInteger(value.eventSeq ?? identity.version.eventSeq) ||
+      Number(value.eventSeq ?? identity.version.eventSeq) < 0 ||
+      Number(value.eventSeq ?? identity.version.eventSeq) >
+        identity.version.eventSeq ||
       value.eventId !== command.event.eventId ||
       row.event_id !== encodeBranchSqlText(command.event.eventId) ||
       value.payloadHash !== row.payload_hash ||
@@ -344,7 +374,44 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
       ...identity,
       eventId: value.eventId as string,
       payloadHash: command.payloadHash,
+      ...(value.eventSeq !== undefined
+        ? { eventSeq: value.eventSeq as number }
+        : {}),
     };
+    const head = this.head(command);
+    if (
+      identity.version.snapshotId > head.version.snapshotId ||
+      identity.version.eventSeq > head.version.eventSeq
+    )
+      return corrupt();
+    let snapshot: DropSnapshotRecord;
+    try {
+      snapshot = this.snapshot(identity, false).snapshot;
+    } catch (error) {
+      if (
+        error instanceof BranchStateError &&
+        (error.code === "snapshot_not_found" ||
+          error.code === "snapshot_version_mismatch")
+      )
+        return corrupt();
+      throw error;
+    }
+    const eventSeq = receipt.eventSeq ?? receipt.version.eventSeq;
+    const eventRow = this.sql.rows(
+      "SELECT event_json FROM branch_events WHERE root_drop_id = ? AND branch_id = ? AND event_seq = ?",
+      ...scope(command),
+      eventSeq,
+    )[0];
+    const event = eventRow ? json(eventRow.event_json) : null;
+    if (
+      !isDropDiffEvent(event) ||
+      event.eventId !== receipt.eventId ||
+      event.seq !== eventSeq ||
+      event.snapshotId !== receipt.version.snapshotId ||
+      event.dropId !== command.target.rootDropId ||
+      snapshot.eventIds[eventSeq - snapshot.patchStartSeq!] !== receipt.eventId
+    )
+      return corrupt();
     return { status: "duplicate", receipt };
   }
 
@@ -422,6 +489,99 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
     });
   }
 
+  /** Atomically publishes a whole envelope. Async preparation retries a changed head before any rows are written. */
+  async appendBatch(
+    input: BranchBatchAppendRecord,
+  ): Promise<BranchBatchAppendResult> {
+    return this.available(async () => {
+      const command = captureBranchBatchAppend(input);
+      const identities = await hashBranchBatchEvents(command.events);
+      for (let attempt = 0; attempt < 32; attempt++) {
+        const initial = this.sql.transaction(() => {
+          const head = this.head(command);
+          const receipts = new Map<string, BranchCommitReceipt>();
+          for (const identity of identities) {
+            const duplicate = this.duplicate({ ...command, ...identity });
+            if (duplicate)
+              receipts.set(identity.event.eventId, duplicate.receipt);
+          }
+          return { head, receipts, content: this.currentSnapshot(head) };
+        });
+        const prepared = await prepareBranchBatch(
+          command,
+          identities,
+          initial.head,
+          initial.content,
+          initial.receipts,
+          this.now(),
+        );
+        const committed = this.sql.transaction(() => {
+          const head = this.head(command);
+          if (!sameBranchStateVersion(head.version, initial.head.version))
+            return false;
+          if (this.currentSnapshot(head) !== initial.content) return corrupt();
+          // Receipts are immutable, but validate them again after preparation yields.
+          for (const identity of identities) {
+            const duplicate = this.duplicate({ ...command, ...identity });
+            if (
+              JSON.stringify(duplicate?.receipt) !==
+              JSON.stringify(initial.receipts.get(identity.event.eventId))
+            )
+              return corrupt();
+          }
+          if (!prepared.result.snapshot) return true;
+          const { result, version, receipts, outbox } = prepared;
+          for (const event of result.acceptedEvents)
+            this.sql.execute(
+              "INSERT INTO branch_events (root_drop_id, branch_id, event_seq, event_id, snapshot_id, event_json) VALUES (?, ?, ?, ?, ?, ?)",
+              ...scope(command),
+              event.seq,
+              encodeBranchSqlText(event.eventId),
+              version.snapshotId,
+              JSON.stringify(event),
+            );
+          this.sql.execute(
+            "INSERT INTO branch_snapshots (root_drop_id, branch_id, snapshot_id, event_seq, source_content_hash, content, snapshot_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ...scope(command),
+            version.snapshotId,
+            version.eventSeq,
+            version.sourceContentHash,
+            encodeBranchSqlText(result.content),
+            JSON.stringify(result.snapshot),
+          );
+          this.sql.execute(
+            "UPDATE branch_heads SET head_json = ? WHERE root_drop_id = ? AND branch_id = ?",
+            JSON.stringify({
+              target: command.target,
+              placement: command.placement,
+              branch: result.branch,
+              version,
+            }),
+            ...scope(command),
+          );
+          for (const receipt of receipts)
+            this.sql.execute(
+              "INSERT INTO branch_receipts (root_drop_id, branch_id, event_id, payload_hash, receipt_json) VALUES (?, ?, ?, ?, ?)",
+              ...scope(command),
+              encodeBranchSqlText(receipt.eventId),
+              receipt.payloadHash,
+              JSON.stringify(receipt),
+            );
+          this.sql.execute(
+            "INSERT INTO branch_outbox (root_drop_id, branch_id, event_id, outbox_id, outbox_json) VALUES (?, ?, ?, ?, ?)",
+            ...scope(command),
+            encodeBranchSqlText(receipts[0].eventId),
+            outbox!.id,
+            JSON.stringify(outbox),
+          );
+          return true;
+        });
+        if (committed) return prepared.result;
+      }
+      throw new BranchStateError("state_unavailable");
+    });
+  }
+
   /** Reads a persisted head and verifies that its exact snapshot exists; no cache authority or initialization. */
   async readHead(input: BranchHeadQuery): Promise<BranchStateHead> {
     return this.available(() =>
@@ -482,7 +642,7 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
         this.head(query);
         this.snapshot(query, false);
         const rows = this.sql.rows(
-          "SELECT event_seq, event_id, snapshot_id, event_json FROM branch_events WHERE root_drop_id = ? AND branch_id = ? AND event_seq >= ? AND event_seq <= ? ORDER BY event_seq ASC LIMIT 200",
+          "SELECT branch_events.event_seq, branch_events.event_id, branch_events.snapshot_id, branch_events.event_json, s.event_seq AS snapshot_event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq FROM branch_events LEFT JOIN branch_snapshots s ON s.root_drop_id = branch_events.root_drop_id AND s.branch_id = branch_events.branch_id AND s.snapshot_id = branch_events.snapshot_id LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE branch_events.root_drop_id = ? AND branch_events.branch_id = ? AND branch_events.event_seq >= ? AND branch_events.event_seq <= ? ORDER BY branch_events.event_seq ASC LIMIT 200",
           ...scope(query),
           query.startSeq,
           query.endSeq,
@@ -496,9 +656,30 @@ export class SqliteBranchCommitStatePlane implements BranchCommitStatePlane {
             event.seq !== row.event_seq ||
             encodeBranchSqlText(event.eventId) !== row.event_id ||
             event.snapshotId !== row.snapshot_id ||
-            event.snapshotId !== event.seq + 1 ||
             event.dropId !== query.target.rootDropId ||
-            event.metadata?.followsSeq !== event.seq - 1
+            event.snapshotId === undefined ||
+            event.snapshotId > query.version.snapshotId ||
+            (event.metadata?.followsSeq !== undefined &&
+              event.metadata.followsSeq !== event.seq - 1)
+          )
+            return corrupt();
+          const eventQuery = storedQuery({
+            target: query.target,
+            placement: query.placement,
+            version: {
+              snapshotId: event.snapshotId,
+              eventSeq: row.snapshot_event_seq,
+              sourceContentHash: row.source_content_hash,
+            },
+          });
+          const eventSnapshot = this.snapshotRecord(
+            eventQuery,
+            { ...row, event_seq: row.snapshot_event_seq },
+            false,
+          ).snapshot;
+          if (
+            eventSnapshot.eventIds[event.seq - eventSnapshot.patchStartSeq!] !==
+            event.eventId
           )
             return corrupt();
           return event;

@@ -6,9 +6,12 @@ import type {
 } from "../../../../../../../src/server/nulledit/types";
 import type { RuntimeDataStore } from "../../../../../../../src/server/ports";
 import type { AccountAuthRequest } from "../../../../accounts/session/authentication";
+import type { LocalBranchApplicationSelection } from "../../../../../../../src/server/state-plane/commit-application";
 
 /** Cloudflare bindings required to compose the server runtime. */
 export interface CloudflareBackendRuntimeBindings {
+  /** In-process local composition only; no deployment binding enables this authority. */
+  localBranchApplication?: LocalBranchApplicationSelection;
   /** R2 bucket for canonical branch and drop records. */
   R2_BUCKET: R2Bucket;
   /** Optional D1 database for queryable metadata and derived data. */

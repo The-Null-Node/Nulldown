@@ -12,6 +12,8 @@ import {
 } from "../../security/read-authorization";
 import { createBranchRouteStatePlane } from "./request-context";
 import type { BranchRootParams, BranchRouteEnv } from "./request-context";
+import { BranchStateError } from "../../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "./state-plane-errors";
 
 /** Resolves or creates the branch assigned to the authenticated account/client. */
 export const resolveBranchForRequest = async (
@@ -72,6 +74,8 @@ export const resolveBranchForRequest = async (
       },
     );
   } catch (error: unknown) {
+    if (error instanceof BranchStateError)
+      return branchStateErrorResponse(error);
     if (isApiHttpError(error)) return apiHttpErrorResponse(error);
     const message = error instanceof Error ? error.message : String(error);
     return new Response(`Failed to resolve branch: ${message}`, {

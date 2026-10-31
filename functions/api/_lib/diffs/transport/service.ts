@@ -22,10 +22,12 @@ import {
 } from "../../accounts/session/authentication";
 import { type DropBranchRecord } from "../../../../../shared/drop/branch";
 import { BranchMutationLockError } from "../../branches/storage/mutation-lock";
-import {
-  createBranchStatePlane,
-  createDiffCommandStatePlane,
-} from "../../../../../src/server/state-plane/gateway";
+import { createDiffCommandStatePlane } from "../../../../../src/server/state-plane/gateway";
+import type { BranchStatePlane } from "../../../../../src/server/state-plane/contracts";
+import { BranchStateError } from "../../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../../branches/http/state-plane-errors";
+import { createBranchRouteStatePlane } from "../../branches/http/request-context";
+import type { LocalBranchApplicationSelection } from "../../../../../src/server/state-plane/commit-application";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import {
   canReadBranch,
@@ -52,6 +54,8 @@ import {
 
 /** Environment required by the diff transport service. */
 export interface DiffTransportEnv extends AccountAuthEnv {
+  /** Explicit request-owned local authority for disposable application acceptance. */
+  localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
   DIFF_WEBHOOK_SECRET?: string;
@@ -163,6 +167,7 @@ const resolveBranchForDiffRequest = async (
   dropId: string,
   request: Request,
   auth: Pick<DiffRequestAuthSuccess, "mode" | "branchId" | "clientId">,
+  statePlane: BranchStatePlane,
 ): Promise<DropBranchRecord> => {
   const requestedBranchId = resolveRequestedBranchId(request);
   if (
@@ -176,11 +181,6 @@ const resolveBranchForDiffRequest = async (
       message: "The requested branch does not match the branch credential.",
     });
   }
-  const statePlane = createBranchStatePlane({
-    blobs: env.R2_BUCKET,
-    sql: env.DB,
-    providerPrivateKey: env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
-  });
   if (auth.branchId) {
     const branch = await statePlane.branches.readBranch(dropId, auth.branchId);
     if (!branch) {
@@ -289,8 +289,9 @@ export const postDiffEvents = async (
       ),
     );
 
+    const statePlane = createBranchRouteStatePlane(env, timing);
     const branch = await timing.phase("diff.branch", () =>
-      resolveBranchForDiffRequest(env, id, request, auth),
+      resolveBranchForDiffRequest(env, id, request, auth, statePlane),
     );
 
     if (auth.mode === "account") {
@@ -443,6 +444,11 @@ export const postDiffEvents = async (
       );
     }
 
+    if (error instanceof BranchStateError) {
+      logger.logEnd(error.toRecord().status, { reason: error.code });
+      return branchStateErrorResponse(error);
+    }
+
     logger.logError("diff.post.unhandled_error", error, {
       requestedDropRef: toLogRef(requestedId),
     });
@@ -498,11 +504,18 @@ export const pollDiffEvents = async (
     const query = parseDiffPollQuery(request);
     const cursorParam = query.cursor;
     const factCursorParam = query.factCursor;
-    const branch = await resolveBranchForDiffRequest(env, id, request, {
-      mode: "none",
-      branchId: resolveRequestedBranchId(request),
-      clientId: sanitizeDiffAuthToken(query.excludeClient ?? null),
-    });
+    const statePlane = createBranchRouteStatePlane(env);
+    const branch = await resolveBranchForDiffRequest(
+      env,
+      id,
+      request,
+      {
+        mode: "none",
+        branchId: resolveRequestedBranchId(request),
+        clientId: sanitizeDiffAuthToken(query.excludeClient ?? null),
+      },
+      statePlane,
+    );
     if (!canReadBranch(authorization, branch)) {
       logger.logEnd(404, {
         reason: "branch_not_found",
@@ -526,10 +539,6 @@ export const pollDiffEvents = async (
       );
     }
 
-    const statePlane = createBranchStatePlane({
-      blobs: env.R2_BUCKET,
-      sql: env.DB,
-    });
     const polled = await statePlane.diffs.poll({
       rootDropId: id,
       branch,
@@ -570,6 +579,11 @@ export const pollDiffEvents = async (
         requestedDropRef: toLogRef(requestedId),
       });
       return apiHttpErrorResponse(error);
+    }
+
+    if (error instanceof BranchStateError) {
+      logger.logEnd(error.toRecord().status, { reason: error.code });
+      return branchStateErrorResponse(error);
     }
 
     logger.logError("diff.get.unhandled_error", error, {

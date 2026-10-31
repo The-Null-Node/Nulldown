@@ -7,10 +7,13 @@ import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { resolveParam } from "../../core/http/responses";
 import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
+import type { LocalBranchApplicationSelection } from "../../../../../src/server/state-plane/commit-application";
 import { unobserved, type Timing } from "../../core/observability/profiling";
 
 /** Environment required by branch HTTP application services. */
 export interface BranchRouteEnv extends AccountAuthEnv {
+  /** Request-owned local application authority; never selected by HTTP headers or deployment vars. */
+  localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
@@ -76,5 +79,6 @@ export const createBranchRouteStatePlane = (
     blobs: env.R2_BUCKET,
     sql: env.DB,
     providerPrivateKey: env.PROVIDER_ENCRYPTION_PRIVATE_JWK,
+    localBranchApplication: env.localBranchApplication,
     timing,
   });

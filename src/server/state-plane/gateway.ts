@@ -1,5 +1,9 @@
 import type { BranchStatePlane } from "./contracts";
 import {
+  createCommitApplicationStatePlane,
+  type LocalBranchApplicationSelection,
+} from "./commit-application";
+import {
   BranchStateError,
   type BranchCommitStatePlane,
 } from "../../../shared/drop/branch-state";
@@ -13,12 +17,17 @@ import {
   type LegacyBranchStatePlaneOptions,
 } from "./legacy";
 
-/** Creates a request-scoped branch boundary; legacy is the sole current backend. */
+/** Creates a request-scoped branch boundary with explicit in-process local selection. */
 export const createBranchStatePlane = (
-  options: LegacyBranchStatePlaneOptions,
-): BranchStatePlane => createLegacyBranchStatePlane(options);
+  options: LegacyBranchStatePlaneOptions & {
+    localBranchApplication?: LocalBranchApplicationSelection;
+  },
+): BranchStatePlane =>
+  options.localBranchApplication
+    ? createCommitApplicationStatePlane(options.localBranchApplication)
+    : createLegacyBranchStatePlane(options);
 
-/** Routes authorized append commands through an injected request-lifetime legacy service. */
+/** Routes authorized append commands through the selected request-lifetime application service. */
 export const createDiffCommandStatePlane = (
   commands: BranchDiffCommands,
 ): BranchDiffCommands => createLegacyBranchDiffCommands(commands);
