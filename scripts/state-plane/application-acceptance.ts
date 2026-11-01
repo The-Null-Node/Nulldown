@@ -29,10 +29,24 @@ import {
 import { sealDropForAuthoring } from "../../shared/drop/authoring-crypto";
 import { decodeDropEnvelope } from "../../shared/drop/codecs/envelope-v1";
 import type { DropVisibility } from "../../shared/drop/types";
+import {
+  nullplugUiRuntimeFactId,
+  nullplugUiStatePatchFactKey,
+  nullplugUiStateSnapshotKey,
+  nullplugUiResponseFactKey,
+  type NullplugUiRuntimeFact,
+  type NullplugUiResponseFact,
+  type NullplugUiStatePatchFact,
+  type NullplugUiStateSnapshot,
+} from "../../shared/nullplug/ui";
 import type {
   BranchAuthorityRecord,
   BranchInitializationReceipt,
 } from "../../shared/drop/branch-lifecycle";
+import type {
+  BranchRuntimeFactReceipt,
+  BranchRuntimeFactOutbox,
+} from "../../shared/drop/branch-runtime-facts";
 import { issueAccountSessionToken } from "../../functions/api/_lib/accounts/session/token";
 import { canonicalizeAccountEncryptionRecipient } from "../../functions/api/_lib/accounts/identity/records";
 import {
@@ -40,10 +54,12 @@ import {
   decodeBranchStateRpcResult,
   type BranchStateRpcResult,
 } from "../../packages/nulldown-state-plane/src/shard-router";
-import type {
-  DropDiffAppendResponse,
-  DropDiffEvent,
-  DropDiffPollResponse,
+import {
+  isDropBranchRuntimeFact,
+  type DropBranchRuntimeFact,
+  type DropDiffAppendResponse,
+  type DropDiffEvent,
+  type DropDiffPollResponse,
 } from "../../shared/drop/diff";
 import {
   isDropBranchContentResponse,
@@ -59,6 +75,9 @@ import {
   applicationSeed,
   applicationLifecycleFixture as lifecycle,
   applicationLifecycleRoots,
+  applicationRuntimeFixture as runtimeFacts,
+  applicationRuntimeRoots,
+  applicationUnseededRoots,
   inspectApplicationRootStorage,
   type ApplicationRequestEvidence,
 } from "../../packages/nulldown-state-plane/test/application-scenarios.fixture";
@@ -187,6 +206,10 @@ interface Command {
   json?: Record<string, unknown>;
   cursor?: string;
   limit?: number;
+  factCursor?: string | null;
+  factLimit?: number;
+  stateFact?: NullplugUiStatePatchFact | NullplugUiStateSnapshot;
+  responseFact?: NullplugUiResponseFact;
   excludeClient?: string;
   loseAck?: boolean;
   snapshotId?: number;
@@ -200,7 +223,13 @@ interface Command {
     encryptionPublicJwk: JsonWebKey;
   };
   fault?: {
-    method: "reserve" | "initialize" | "readPlacement" | "readHead";
+    method:
+      | "reserve"
+      | "initialize"
+      | "readPlacement"
+      | "readHead"
+      | "appendRuntimeFact"
+      | "readRuntimeFactHead";
     stage: "before" | "after";
     mode: "fail" | "hold" | "pause" | "stale-generation";
   };
@@ -239,6 +268,23 @@ interface Inspection {
   outbox: unknown[];
   authority?: BranchAuthorityRecord | null;
   initializationReceipt?: BranchInitializationReceipt | null;
+}
+
+interface FactSubmission {
+  stored: boolean;
+  duplicate: boolean;
+  indexed: boolean;
+  key: string;
+  fact: NullplugUiRuntimeFact;
+  runtimeFact: { event: DropBranchRuntimeFact; appended: boolean };
+}
+
+interface RuntimeFactInspection {
+  counts: Record<string, number>;
+  headSeq: number;
+  facts: DropBranchRuntimeFact[];
+  receipts: BranchRuntimeFactReceipt[];
+  outbox: BranchRuntimeFactOutbox[];
 }
 
 function value<T>(result: Result<T>): T {
@@ -1476,7 +1522,7 @@ async function runtimeMode() {
     const name = await branchStateShardName(query);
     if (command.action === "seed") {
       assert.ok(
-        !applicationLifecycleRoots.includes(query.target.rootDropId),
+        !applicationUnseededRoots.includes(query.target.rootDropId),
         "lifecycle roots cannot be fixture seeded",
       );
       const seed = applicationSeed(
@@ -1550,6 +1596,77 @@ async function runtimeMode() {
       } else await storage.exec("DROP TRIGGER acceptance_later_event_abort");
       return { armed: command.action === "arm-sql-fault" };
     }
+    if (
+      command.action === "inspect-runtime-facts" ||
+      command.action === "arm-runtime-fact-sql-fault" ||
+      command.action === "clear-runtime-fact-sql-fault"
+    ) {
+      assert.ok(applicationRuntimeRoots.includes(query.target.rootDropId));
+      const storage = await mf.unsafeGetDurableObjectStorage(
+        "state",
+        "BranchStateObject",
+        { name },
+      );
+      if (command.action === "arm-runtime-fact-sql-fault") {
+        await storage.exec(`CREATE TRIGGER acceptance_runtime_fact_abort AFTER INSERT ON branch_runtime_fact_outbox
+          WHEN json_extract(NEW.outbox_json, '$.receipt.event.fact.id') = 'native-fact-rollback'
+          BEGIN SELECT RAISE(ABORT, 'SYNTHETIC_RUNTIME_FACT_ABORT'); END`);
+        return { armed: true };
+      }
+      if (command.action === "clear-runtime-fact-sql-fault") {
+        await storage.exec("DROP TRIGGER acceptance_runtime_fact_abort");
+        return { armed: false };
+      }
+      const scope = [
+        JSON.stringify(query.target.rootDropId),
+        JSON.stringify(query.target.branchId),
+      ];
+      const counts: Record<string, number> = {};
+      for (const table of [
+        "branch_runtime_fact_heads",
+        "branch_runtime_facts",
+        "branch_runtime_fact_receipts",
+        "branch_runtime_fact_outbox",
+      ])
+        counts[table] = (
+          await storage.exec<{ n: number }>(
+            `SELECT COUNT(*) AS n FROM ${table} WHERE root_drop_id=? AND branch_id=?`,
+            ...scope,
+          )
+        )[0].n;
+      const heads = await storage.exec<{ head_seq: number }>(
+        "SELECT head_seq FROM branch_runtime_fact_heads WHERE root_drop_id=? AND branch_id=?",
+        ...scope,
+      );
+      return {
+        counts,
+        headSeq: heads[0]?.head_seq ?? -1,
+        facts: (
+          await storage.exec<{ event_json: string }>(
+            "SELECT event_json FROM branch_runtime_facts WHERE root_drop_id=? AND branch_id=? ORDER BY seq",
+            ...scope,
+          )
+        ).map((row) => JSON.parse(row.event_json) as DropBranchRuntimeFact),
+        receipts: (
+          await storage.exec<{ receipt_json: string }>(
+            "SELECT receipt_json FROM branch_runtime_fact_receipts WHERE root_drop_id=? AND branch_id=? ORDER BY identity",
+            ...scope,
+          )
+        )
+          .map(
+            (row) => JSON.parse(row.receipt_json) as BranchRuntimeFactReceipt,
+          )
+          .sort((a, b) => a.event.seq - b.event.seq),
+        outbox: (
+          await storage.exec<{ outbox_json: string }>(
+            "SELECT outbox_json FROM branch_runtime_fact_outbox WHERE root_drop_id=? AND branch_id=? ORDER BY identity",
+            ...scope,
+          )
+        )
+          .map((row) => JSON.parse(row.outbox_json) as BranchRuntimeFactOutbox)
+          .sort((a, b) => a.receipt.event.seq - b.receipt.event.seq),
+      } satisfies RuntimeFactInspection;
+    }
     if (command.action === "inspect") {
       console.error(
         JSON.stringify({
@@ -1584,7 +1701,7 @@ async function runtimeMode() {
         )[0].n;
       return {
         counts,
-        ...(applicationLifecycleRoots.includes(query.target.rootDropId)
+        ...(applicationUnseededRoots.includes(query.target.rootDropId)
           ? await (async () => {
               const rows = await storage.exec<{
                 authority_json: string;
@@ -1633,6 +1750,7 @@ async function clientMode() {
   let client: NulldownClient | undefined;
   let visibility: DropVisibility = "unlisted";
   let cursor = "-1",
+    factCursor: string | undefined,
     serial = 0,
     clientId = "",
     loseNextAck = false;
@@ -1640,6 +1758,7 @@ async function clientMode() {
     if (command.action === "configure") {
       clientId = command.clientId!;
       cursor = command.cursor ?? "-1";
+      factCursor = command.factCursor ?? undefined;
       const material = command.authoring;
       const authoring = material
         ? {
@@ -1728,8 +1847,18 @@ async function clientMode() {
       });
       return { pid: process.pid };
     }
-    if (command.action === "close") return { closed: true, cursor };
+    if (command.action === "close") return { closed: true, cursor, factCursor };
     assert.ok(client, "client configured");
+    if (command.action === "store-state") {
+      assert.ok(command.stateFact);
+      loseNextAck = command.loseAck ?? false;
+      return client.storeNullplugState(command.stateFact);
+    }
+    if (command.action === "submit-response") {
+      assert.ok(command.responseFact);
+      loseNextAck = command.loseAck ?? false;
+      return client.submitNullplugResponse(command.responseFact);
+    }
     if (command.action === "create-root") {
       visibility = command.visibility ?? "unlisted";
       assert.ok(command.create);
@@ -1793,6 +1922,14 @@ async function clientMode() {
       });
       if (command.limit !== undefined)
         params.set("limit", String(command.limit));
+      const requestedFactCursor =
+        command.factCursor === null
+          ? undefined
+          : (command.factCursor ?? factCursor);
+      if (requestedFactCursor !== undefined)
+        params.set("factCursor", requestedFactCursor);
+      if (command.factLimit !== undefined)
+        params.set("factLimit", String(command.factLimit));
       if (command.excludeClient !== undefined)
         params.set("excludeClient", command.excludeClient);
       const result = (
@@ -1801,6 +1938,7 @@ async function clientMode() {
         )
       ).data!;
       if (result.cursor !== null) cursor = result.cursor;
+      if (result.factCursor != null) factCursor = result.factCursor;
       return result;
     }
     if (command.action === "request")
@@ -2148,13 +2286,13 @@ async function main() {
   const records: RequestRecord[] = [];
   const checks: {
     name: string;
-    workload: "baseline" | "lifecycle";
+    workload: "baseline" | "lifecycle" | "runtime-facts";
     passed: boolean;
     ms: number;
     error?: string;
   }[] = [];
-  let workload: "baseline" | "lifecycle" = "baseline";
-  const expectedGroups = { baseline: 13, lifecycle: 8 };
+  let workload: "baseline" | "lifecycle" | "runtime-facts" = "baseline";
+  const expectedGroups = { baseline: 13, lifecycle: 8, "runtime-facts": 8 };
   const completeGroups = () =>
     Object.entries(expectedGroups).every(
       ([name, count]) =>
@@ -3880,6 +4018,1088 @@ async function main() {
           );
           assert.equal(record.background.failed, 0);
         }
+      },
+    );
+    workload = "runtime-facts";
+    const runtimeRequestOffset = records.length;
+    const factMarker = `sensitive-runtime-${randomBytes(24).toString("hex")}`;
+    sensitiveValues.add(factMarker);
+    const sourceHash = (text: string) =>
+      `sha256:${createHash("sha256").update(`nulldown.source-content.v1\n${text}`).digest("base64url")}`;
+    const makePatch = (
+      id: string,
+      rootId: string = runtimeFacts.root,
+      text: string = runtimeFacts.initial,
+      callId = "runtime-call",
+    ): NullplugUiStatePatchFact => ({
+      version: 1,
+      kind: "ui.state.patch",
+      id,
+      callId,
+      createdAt: 123,
+      source: {
+        rootDropId: rootId,
+        branchId: "owner",
+        snapshotId: 999,
+        sourceContentHash: sourceHash(text),
+        callId,
+      },
+      patch: [{ op: "set", path: ["privateValue"], value: factMarker }],
+      metadata: { actorAccountId: "must-be-overridden" },
+    });
+    const factCommand = (
+      fact: NullplugUiRuntimeFact,
+      loseAck = false,
+    ): Command =>
+      fact.kind === "ui.response"
+        ? { action: "submit-response", responseFact: fact, loseAck }
+        : { action: "store-state", stateFact: fact, loseAck };
+    const submitFact = async (peer: Peer, fact: NullplugUiRuntimeFact) =>
+      value(await peer.call<FactSubmission>(factCommand(fact)));
+    const pollFacts = async (
+      peer: Peer,
+      rootId: string = runtimeFacts.root,
+      branch = "owner",
+      after = "-1",
+      factLimit = 200,
+    ) => {
+      const response = value(
+        await peer.call<DropDiffPollResponse>({
+          action: "poll",
+          rootId,
+          branch,
+          cursor: "-1",
+          factCursor: after,
+          factLimit,
+        }),
+      );
+      assert.ok(Array.isArray(response.facts));
+      for (const event of response.facts)
+        assert.ok(isDropBranchRuntimeFact(event));
+      return response;
+    };
+    const assertSubmission = (
+      result: FactSubmission,
+      requested: NullplugUiRuntimeFact,
+      snapshotId: number,
+      duplicate = false,
+      actor = lifecycle.owner as string,
+    ) => {
+      assert.equal(result.stored, true);
+      assert.equal(result.indexed, false);
+      assert.equal(result.duplicate, duplicate);
+      assert.equal(result.runtimeFact.appended, !duplicate);
+      assert.ok(isDropBranchRuntimeFact(result.runtimeFact.event));
+      assert.equal(
+        result.runtimeFact.event.factId,
+        nullplugUiRuntimeFactId(requested),
+      );
+      assert.deepEqual(result.runtimeFact.event.fact, result.fact);
+      assert.equal(result.fact.metadata?.actorAccountId, actor);
+      assert.equal(result.fact.source.snapshotId, snapshotId);
+      assert.equal(
+        result.fact.source.sourceContentHash,
+        requested.source.sourceContentHash,
+      );
+      assert.ok(result.fact.createdAt > requested.createdAt);
+      assert.equal(
+        result.key,
+        requested.kind === "ui.response"
+          ? nullplugUiResponseFactKey(requested)
+          : requested.kind === "ui.state.patch"
+            ? nullplugUiStatePatchFactKey(requested)
+            : nullplugUiStateSnapshotKey(requested),
+      );
+      assert.deepEqual(result.fact, {
+        ...requested,
+        createdAt: result.fact.createdAt,
+        source: { ...requested.source, snapshotId },
+        metadata: { ...requested.metadata, actorAccountId: actor },
+      });
+    };
+    const inspectRuntimeFacts = async (
+      rootId: string = runtimeFacts.root,
+      branch = "owner",
+    ) =>
+      value(
+        await runtime.call<RuntimeFactInspection>({
+          action: "inspect-runtime-facts",
+          rootId,
+          branch,
+        }),
+      );
+    const factState = async (rootId: string = runtimeFacts.root) => ({
+      branch: await inspect("owner", rootId),
+      runtime: await inspectRuntimeFacts(rootId),
+      content: await lifecycleContent(a, rootId),
+      poll: await pollFacts(a, rootId),
+    });
+    const appendRuntimeEdit = async (eventId: string, line: string) => {
+      const before = await lifecycleContent(a, runtimeFacts.root);
+      const branch = await inspect("owner", runtimeFacts.root);
+      const event = applicationEvent(
+        eventId,
+        [
+          {
+            type: "insert",
+            start: before.content.length,
+            end: before.content.length,
+            text: line,
+          },
+        ],
+        branch.events.at(-1)?.event_seq ?? -1,
+        "runtime-B",
+        runtimeFacts.root,
+      );
+      const result = value(
+        await b.call<DropDiffAppendResponse>({
+          action: "apply",
+          branch: "owner",
+          event,
+        }),
+      );
+      assert.equal(result.accepted, 1);
+      assert.equal(
+        (await lifecycleContent(a, runtimeFacts.root)).content,
+        before.content + line,
+      );
+      return before.content + line;
+    };
+    const originalFacts: {
+      requested: NullplugUiRuntimeFact;
+      response: FactSubmission;
+    }[] = [];
+    const runtimeTargets = applicationRuntimeRoots.map((rootId) => ({
+      rootId,
+      branch: "owner",
+    }));
+    await run(
+      "runtime facts use isolated signed SDK roots and normal branch initialization",
+      async () => {
+        await configure(a, tokens[3], "runtime-A", undefined, authoring);
+        await configure(b, tokens[3], "runtime-B");
+        for (const rootId of applicationRuntimeRoots) {
+          const privateRoot = rootId === runtimeFacts.privateRoot;
+          const initial = privateRoot
+            ? runtimeFacts.privateInitial
+            : runtimeFacts.initial;
+          const visibility = privateRoot ? "private" : "unlisted";
+          const before = await inspectRoot(rootId);
+          assert.equal(before.exists, false);
+          assert.equal(before.projection, null);
+          assert.equal(before.legacyBranches, 0);
+          const created = value(
+            await a.call<{ id: string }>({
+              action: "create-root",
+              visibility,
+              create: {
+                id: rootId,
+                content: initial,
+                metadata: { themeId: "system" },
+              },
+            }),
+          );
+          assert.equal(created.id, rootId);
+          const stored = value(
+            await runtime.call<RootInspection>({
+              action: "inspect-root",
+              rootId,
+              content: initial,
+            }),
+          );
+          assert.equal(stored.sealed, true);
+          assert.equal(stored.containsPlaintext, false);
+          assert.deepEqual(stored.unexpectedFields, []);
+          assert.deepEqual(stored.projection, {
+            account_id: lifecycle.owner,
+            visibility,
+            deleted_at: null,
+          });
+          const initialized = await resolveBranch(a, rootId);
+          assert.equal(initialized.branchId, "owner");
+          assert.equal(initialized.created, true);
+          const sameAccount = await resolveBranch(b, rootId);
+          assert.equal(sameAccount.branchId, initialized.branchId);
+          assert.equal(sameAccount.created, false);
+          const offset = records.length;
+          assert.equal((await lifecycleContent(b, rootId)).content, initial);
+          assert.equal(records[offset].phase, "runtime-facts");
+          assert.equal(records[offset].sqlWrites, 0);
+          assert.equal(
+            Object.keys(records[offset].calls).some((name) =>
+              name.startsWith("r2."),
+            ),
+            false,
+          );
+          const initializedState = await inspect("owner", rootId);
+          assert.equal(initializedState.authority?.state, "active");
+          assert.equal(initializedState.counts.branch_snapshots, 1);
+          assert.equal(initializedState.counts.branch_events, 0);
+          assert.equal(initializedState.counts.branch_outbox, 0);
+          assert.equal((await inspectRoot(rootId)).legacyBranches, 0);
+        }
+        const patch = makePatch("first-patch");
+        const snapshot: NullplugUiStateSnapshot = {
+          version: 1,
+          kind: "ui.state.snapshot",
+          id: "first-snapshot",
+          callId: patch.callId,
+          createdAt: 123,
+          source: { ...patch.source },
+          state: { privateValue: factMarker },
+          patchIds: [patch.id],
+        };
+        const response: NullplugUiResponseFact = {
+          version: 1,
+          kind: "ui.response",
+          id: "first-response",
+          primitiveId: "approval",
+          createdAt: 123,
+          source: { ...patch.source },
+          data: { privateValue: factMarker },
+          proposedDiffs: {
+            version: 1,
+            events: [
+              applicationEvent(
+                "unapproved-proposal",
+                [
+                  {
+                    type: "insert",
+                    start: 0,
+                    end: 0,
+                    text: "must not execute\n",
+                  },
+                ],
+                -1,
+                "runtime-A",
+                runtimeFacts.root,
+              ),
+            ],
+          },
+        };
+        const before = await inspect("owner", runtimeFacts.root);
+        for (const requested of [patch, snapshot, response]) {
+          const stored = await submitFact(a, requested);
+          assertSubmission(stored, requested, 0);
+          originalFacts.push({ requested, response: stored });
+        }
+        const polled = await pollFacts(b);
+        assert.deepEqual(
+          polled.facts,
+          originalFacts.map((entry) => entry.response.runtimeFact.event),
+        );
+        assert.deepEqual(
+          polled.facts!.map((event) => event.seq),
+          [0, 1, 2],
+        );
+        assert.equal(polled.factCursor, "2");
+        assert.deepEqual(polled.events, []);
+        assert.equal(
+          (await lifecycleContent(a, runtimeFacts.root)).content,
+          runtimeFacts.initial,
+        );
+        const after = await inspect("owner", runtimeFacts.root);
+        assert.deepEqual(after.events, before.events);
+        assert.equal(
+          after.counts.branch_snapshots,
+          before.counts.branch_snapshots,
+        );
+        const privatePatch = makePatch(
+          "private-patch",
+          runtimeFacts.privateRoot,
+          runtimeFacts.privateInitial,
+        );
+        assertSubmission(await submitFact(a, privatePatch), privatePatch, 0);
+        assert.equal(
+          (await pollFacts(b, runtimeFacts.privateRoot)).facts!.length,
+          1,
+        );
+        const empty = await pollFacts(a, runtimeFacts.pageRoot);
+        assert.deepEqual(empty.facts, []);
+        assert.deepEqual(empty.events, []);
+      },
+    );
+    await run(
+      "runtime fact concurrency preserves one receipt per identity and scoped immutable data",
+      async () => {
+        const same = makePatch("concurrent-same");
+        const results = await Promise.all([
+          submitFact(a, same),
+          submitFact(b, same),
+        ]);
+        assert.deepEqual(results.map((result) => result.duplicate).sort(), [
+          false,
+          true,
+        ]);
+        for (const result of results)
+          assertSubmission(result, same, 0, result.duplicate);
+        assert.deepEqual(results[0].fact, results[1].fact);
+        assert.deepEqual(
+          results[0].runtimeFact.event,
+          results[1].runtimeFact.event,
+        );
+        const distinct = [
+          makePatch("same-id", undefined, undefined, "call-A"),
+          makePatch("same-id", undefined, undefined, "call-B"),
+        ];
+        const distinctResults = await Promise.all(
+          distinct.map((fact, index) => submitFact(index ? b : a, fact)),
+        );
+        distinctResults.forEach((result, index) =>
+          assertSubmission(result, distinct[index], 0),
+        );
+        assert.notEqual(
+          distinctResults[0].runtimeFact.event.factId,
+          distinctResults[1].runtimeFact.event.factId,
+        );
+        const alias = makePatch("tail", undefined, undefined, "alias:part");
+        assertSubmission(await submitFact(a, alias), alias, 0);
+        await rejected(
+          b,
+          factCommand(makePatch("part:tail", undefined, undefined, "alias")),
+          409,
+          "idempotency_key_reused",
+        );
+        const polled = await pollFacts(a);
+        assert.deepEqual(
+          polled.facts!.map((event) => event.seq),
+          Array.from({ length: 7 }, (_, index) => index),
+        );
+        assert.equal(
+          new Set(polled.facts!.map((event) => event.factId)).size,
+          7,
+        );
+        assert.equal(
+          (await lifecycleContent(a, runtimeFacts.root)).content,
+          runtimeFacts.initial,
+        );
+      },
+    );
+    await run(
+      "runtime state and response lost acknowledgements replay original facts after intervening edits",
+      async () => {
+        for (const kind of ["state", "response"] as const) {
+          const head = await lifecycleContent(a, runtimeFacts.root);
+          const requested: NullplugUiRuntimeFact =
+            kind === "state"
+              ? makePatch("lost-state", runtimeFacts.root, head.content)
+              : {
+                  version: 1,
+                  kind: "ui.response",
+                  id: "lost-response",
+                  primitiveId: "approval",
+                  createdAt: 123,
+                  source: makePatch("source", runtimeFacts.root, head.content)
+                    .source,
+                  data: { privateValue: factMarker },
+                };
+          const offset = records.length;
+          const failed = await a.call(factCommand(requested, true));
+          assert.equal(
+            failed.ok,
+            false,
+            "real relay drops only a completed successful response",
+          );
+          const lost = proxy.lostResponse() as FactSubmission;
+          assertSubmission(lost, requested, head.snapshotId);
+          assert.equal(records[offset].lostAck, true);
+          await appendRuntimeEdit(`after-lost-${kind}`, `after ${kind}\n`);
+          const beforeRetry = await factState();
+          const retried = await submitFact(a, requested);
+          assertSubmission(retried, requested, head.snapshotId, true);
+          assert.deepEqual(retried.fact, lost.fact);
+          assert.deepEqual(retried.runtimeFact.event, lost.runtimeFact.event);
+          assert.equal(records.at(-1)!.bodyHash, records[offset].bodyHash);
+          assert.deepEqual(
+            records.at(-1)!.factCommits?.map((row) => row.identityHash),
+            records[offset].factCommits?.map((row) => row.identityHash),
+          );
+          assert.deepEqual(await factState(), beforeRetry);
+          const changed =
+            requested.kind === "ui.response"
+              ? { ...requested, data: { privateValue: "changed" } }
+              : {
+                  ...requested,
+                  patch: [
+                    {
+                      op: "set" as const,
+                      path: ["privateValue"],
+                      value: "changed",
+                    },
+                  ],
+                };
+          await rejected(
+            a,
+            factCommand(changed),
+            409,
+            "idempotency_key_reused",
+          );
+          assert.deepEqual(await factState(), beforeRetry);
+          originalFacts.push({ requested, response: lost });
+        }
+      },
+    );
+    await run(
+      "runtime fact source hashes are checked atomically against an interleaved edit",
+      async () => {
+        const head = await lifecycleContent(a, runtimeFacts.root);
+        const stale = makePatch("stale-hash");
+        const missing = makePatch(
+          "missing-hash",
+          runtimeFacts.root,
+          head.content,
+        );
+        delete missing.source.sourceContentHash;
+        const before = await factState();
+        await rejected(a, factCommand(stale), 409, "stale_source");
+        await rejected(a, factCommand(missing), 400, "source_hash_required");
+        assert.deepEqual(await factState(), before);
+        const raced = makePatch("raced-hash", runtimeFacts.root, head.content);
+        await armFault(
+          runtimeFacts.root,
+          "appendRuntimeFact",
+          "pause",
+          "before",
+        );
+        const pending = a.call(factCommand(raced));
+        value(await runtime.call({ action: "wait-rpc-fault" }));
+        try {
+          await appendRuntimeEdit(
+            "hash-race-edit",
+            "edit wins freshness race\n",
+          );
+        } finally {
+          value(await runtime.call({ action: "release-rpc-fault" }));
+        }
+        const failure = await pending;
+        assert.equal(failure.ok, false);
+        assert.equal((failure as Failure).error.status, 409);
+        assert.equal((failure as Failure).error.code, "stale_source");
+        assert.deepEqual((await pollFacts(a)).facts, before.poll.facts);
+        const after = await lifecycleContent(a, runtimeFacts.root);
+        const fresh = makePatch(
+          "fresh-after-race",
+          runtimeFacts.root,
+          after.content,
+        );
+        assertSubmission(await submitFact(a, fresh), fresh, after.snapshotId);
+      },
+    );
+    await run(
+      "runtime facts require sensitive branch access and remain isolated across private roots and account clones",
+      async () => {
+        const current = await lifecycleContent(a, runtimeFacts.root);
+        const blocked = makePatch(
+          "must-not-write",
+          runtimeFacts.root,
+          current.content,
+        );
+        const blockedResponse: NullplugUiResponseFact = {
+          version: 1,
+          kind: "ui.response",
+          id: "must-not-submit",
+          primitiveId: "approval",
+          createdAt: 123,
+          source: { ...blocked.source },
+          data: { privateValue: factMarker },
+        };
+        const before = await factState();
+        const beforePrivate = await factState(runtimeFacts.privateRoot);
+        const privatePatch = makePatch(
+          "must-not-write-private",
+          runtimeFacts.privateRoot,
+          runtimeFacts.privateInitial,
+        );
+        for (const token of [undefined, "invalid-session", tokens[2]]) {
+          await configure(b, token, "runtime-denied");
+          await rejected(
+            b,
+            factCommand(blocked),
+            token === tokens[2] ? 403 : 401,
+          );
+          await rejected(
+            b,
+            factCommand(blockedResponse),
+            token === tokens[2] ? 403 : 401,
+          );
+          const privateWriteOffset = records.length;
+          await rejected(
+            b,
+            factCommand(privatePatch),
+            token === tokens[2] ? 404 : 401,
+          );
+          assert.equal(
+            records[privateWriteOffset].calls["rpc.appendRuntimeFact"],
+            undefined,
+          );
+          if (token === tokens[2]) {
+            assert.ok(records[privateWriteOffset].sqlReads > 0);
+            assert.equal(
+              records[privateWriteOffset].calls["rpc.readHead"].count,
+              1,
+            );
+          }
+          await rejected(
+            b,
+            {
+              action: "request",
+              path: "/api/nullplug/state",
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-nulldown-account-id": lifecycle.owner,
+              },
+              json: { ...blocked },
+            },
+            token === tokens[2] ? 403 : 401,
+          );
+          const ordinary = value(
+            await b.call<DropDiffPollResponse>({
+              action: "poll",
+              rootId: runtimeFacts.root,
+              branch: "owner",
+              cursor: "-1",
+              factCursor: null,
+            }),
+          );
+          assert.ok(ordinary.events.length > 0);
+          assert.equal(ordinary.facts, undefined);
+          await rejected(
+            b,
+            {
+              action: "poll",
+              rootId: runtimeFacts.root,
+              branch: "owner",
+              cursor: "-1",
+              factCursor: "-1",
+            },
+            403,
+          );
+          await rejected(
+            b,
+            {
+              action: "poll",
+              rootId: runtimeFacts.privateRoot,
+              branch: "owner",
+              cursor: "-1",
+              factCursor: "-1",
+            },
+            404,
+          );
+        }
+        assert.deepEqual(await factState(), before);
+        assert.deepEqual(
+          await factState(runtimeFacts.privateRoot),
+          beforePrivate,
+        );
+        await configure(b, tokens[4], "runtime-writer-A");
+        const firstClone = await resolveBranch(b, runtimeFacts.root);
+        runtimeTargets.push({
+          rootId: runtimeFacts.root,
+          branch: firstClone.branchId,
+        });
+        const firstFact = makePatch("clone-same-id");
+        firstFact.source.branchId = firstClone.branchId;
+        assertSubmission(
+          await submitFact(b, firstFact),
+          firstFact,
+          0,
+          false,
+          lifecycle.writer,
+        );
+        assert.equal(
+          (await pollFacts(b, runtimeFacts.root, firstClone.branchId)).facts!
+            .length,
+          1,
+        );
+        assert.equal(
+          (await pollFacts(a, runtimeFacts.root, firstClone.branchId)).facts!
+            .length,
+          1,
+        );
+        await configure(b, tokens[5], "runtime-writer-B");
+        const secondClone = await resolveBranch(b, runtimeFacts.root);
+        runtimeTargets.push({
+          rootId: runtimeFacts.root,
+          branch: secondClone.branchId,
+        });
+        assert.notEqual(secondClone.branchId, firstClone.branchId);
+        await rejected(
+          b,
+          {
+            action: "poll",
+            rootId: runtimeFacts.root,
+            branch: firstClone.branchId,
+            cursor: "-1",
+            factCursor: "-1",
+          },
+          403,
+        );
+        await rejected(b, factCommand(firstFact), 403, "forbidden");
+        const secondFact = {
+          ...firstFact,
+          source: { ...firstFact.source, branchId: secondClone.branchId },
+        };
+        assertSubmission(
+          await submitFact(b, secondFact),
+          secondFact,
+          0,
+          false,
+          lifecycle.otherWriter,
+        );
+        const isolated = await pollFacts(
+          b,
+          runtimeFacts.root,
+          secondClone.branchId,
+        );
+        assert.equal(isolated.facts!.length, 1);
+        assert.equal(isolated.facts![0].branchId, secondClone.branchId);
+        assert.equal(
+          isolated.facts![0].fact.metadata?.actorAccountId,
+          lifecycle.otherWriter,
+        );
+        assert.deepEqual((await pollFacts(a)).facts, before.poll.facts);
+        await configure(b, tokens[3], "runtime-B");
+      },
+    );
+    await run(
+      "201 SDK fact writes paginate independently and captured fact heads exclude later commits",
+      async () => {
+        await configure(b, tokens[3], "runtime-B");
+        const pageRoot = runtimeFacts.pageRoot;
+        const initial = await inspect("owner", pageRoot);
+        const expected: DropBranchRuntimeFact[] = [];
+        for (let index = 0; index < runtimeFacts.pageFactCount; index++) {
+          const requested = makePatch(`page-${index}`, pageRoot);
+          const stored = await submitFact(index % 2 ? b : a, requested);
+          assertSubmission(stored, requested, 0);
+          assert.equal(stored.runtimeFact.event.seq, index);
+          expected.push(stored.runtimeFact.event);
+        }
+        const first = await pollFacts(b, pageRoot);
+        assert.equal(first.facts!.length, 200);
+        assert.equal(first.factCursor, "199");
+        assert.equal(first.cursor, null);
+        assert.deepEqual(first.events, []);
+        const second = await pollFacts(b, pageRoot, "owner", first.factCursor!);
+        assert.equal(second.facts!.length, 1);
+        assert.equal(second.factCursor, "200");
+        assert.deepEqual([...first.facts!, ...second.facts!], expected);
+        const empty = await pollFacts(b, pageRoot, "owner", second.factCursor!);
+        assert.deepEqual(empty.facts, []);
+        assert.equal(empty.factCursor, null);
+        const beyondHeadOffset = records.length;
+        const beyondHead = await pollFacts(
+          b,
+          pageRoot,
+          "owner",
+          "9007199254740993",
+        );
+        assert.deepEqual(beyondHead.facts, []);
+        assert.equal(beyondHead.factCursor, null);
+        assert.equal(
+          records[beyondHeadOffset].calls["rpc.readRuntimeFacts"],
+          undefined,
+        );
+        const omittedOffset = records.length;
+        const omitted = value(
+          await b.call<DropDiffPollResponse>({
+            action: "poll",
+            rootId: pageRoot,
+            branch: "owner",
+            cursor: "-1",
+            factCursor: null,
+          }),
+        );
+        assert.equal(omitted.facts, undefined);
+        assert.equal(omitted.factCursor, undefined);
+        assert.equal(
+          records[omittedOffset].calls["rpc.readRuntimeFactHead"],
+          undefined,
+        );
+        assert.equal(
+          records[omittedOffset].calls["rpc.readRuntimeFacts"],
+          undefined,
+        );
+        for (const [cursor, factCursor] of [
+          ["__latest__", "-1"],
+          ["-1", "__latest__"],
+        ]) {
+          const latest = value(
+            await b.call<DropDiffPollResponse>({
+              action: "poll",
+              rootId: pageRoot,
+              branch: "owner",
+              cursor,
+              factCursor,
+            }),
+          );
+          assert.deepEqual(latest.facts, []);
+          assert.equal(latest.factCursor, "200");
+        }
+        const excluded = value(
+          await b.call<DropDiffPollResponse>({
+            action: "poll",
+            rootId: pageRoot,
+            branch: "owner",
+            cursor: "-1",
+            factCursor: "-1",
+            factLimit: 2,
+            excludeClient: "runtime-A",
+          }),
+        );
+        assert.deepEqual(excluded.facts, expected.slice(0, 2));
+        const pageState = await inspect("owner", pageRoot);
+        assert.equal(
+          pageState.counts.branch_snapshots,
+          initial.counts.branch_snapshots,
+        );
+        assert.deepEqual(pageState.events, initial.events);
+        assert.equal(
+          (await lifecycleContent(a, pageRoot)).content,
+          runtimeFacts.initial,
+        );
+        const before = await pollFacts(a);
+        await armFault(
+          runtimeFacts.root,
+          "readRuntimeFactHead",
+          "pause",
+          "after",
+        );
+        const pending = pollFacts(a);
+        value(await runtime.call({ action: "wait-rpc-fault" }));
+        let appended: FactSubmission;
+        try {
+          const head = await lifecycleContent(b, runtimeFacts.root);
+          appended = await submitFact(
+            b,
+            makePatch(
+              "after-captured-fact-head",
+              runtimeFacts.root,
+              head.content,
+            ),
+          );
+        } finally {
+          value(await runtime.call({ action: "release-rpc-fault" }));
+        }
+        const captured = await pending;
+        assert.deepEqual(captured.facts, before.facts);
+        assert.equal(captured.factCursor, before.factCursor);
+        const next = await pollFacts(
+          a,
+          runtimeFacts.root,
+          "owner",
+          captured.factCursor!,
+        );
+        assert.deepEqual(next.facts, [appended!.runtimeFact.event]);
+      },
+    );
+    await run(
+      "native runtime fact outbox abort and selected failures roll back without fallback or consuming a sequence",
+      async () => {
+        const head = await lifecycleContent(a, runtimeFacts.root);
+        const candidate = makePatch(
+          "selected-failure-retry",
+          runtimeFacts.root,
+          head.content,
+        );
+        const before = await factState();
+        const rollback = makePatch(
+          "native-fact-rollback",
+          runtimeFacts.root,
+          head.content,
+        );
+        value(
+          await runtime.call({
+            action: "arm-runtime-fact-sql-fault",
+            rootId: runtimeFacts.root,
+            branch: "owner",
+          }),
+        );
+        try {
+          await rejected(a, factCommand(rollback), 503, "state_unavailable");
+          assert.deepEqual(await factState(), before);
+        } finally {
+          value(
+            await runtime.call({
+              action: "clear-runtime-fact-sql-fault",
+              rootId: runtimeFacts.root,
+              branch: "owner",
+            }),
+          );
+        }
+        for (const mode of ["fail", "stale-generation"] as const) {
+          await armFault(
+            runtimeFacts.root,
+            "appendRuntimeFact",
+            mode,
+            "before",
+          );
+          const offset = records.length;
+          await rejected(
+            a,
+            factCommand(candidate),
+            mode === "fail" ? 503 : 409,
+            mode === "fail"
+              ? "state_unavailable"
+              : "routing_generation_mismatch",
+          );
+          assert.equal(
+            records[offset].calls["rpc.appendRuntimeFact"].errors,
+            1,
+          );
+          assert.deepEqual(await factState(), before);
+        }
+        await armFault(
+          runtimeFacts.root,
+          "readRuntimeFactHead",
+          "fail",
+          "before",
+        );
+        await rejected(
+          a,
+          {
+            action: "poll",
+            rootId: runtimeFacts.root,
+            branch: "owner",
+            cursor: "-1",
+            factCursor: "-1",
+          },
+          503,
+          "state_unavailable",
+        );
+        assert.deepEqual(await factState(), before);
+        const stored = await submitFact(a, candidate);
+        assertSubmission(stored, candidate, head.snapshotId);
+        assert.equal(stored.runtimeFact.event.seq, before.poll.facts!.length);
+        const recovered = await submitFact(a, rollback);
+        assertSubmission(recovered, rollback, head.snapshotId);
+        assert.equal(
+          recovered.runtimeFact.event.seq,
+          stored.runtimeFact.event.seq + 1,
+        );
+        const durable = await inspectRuntimeFacts();
+        assert.equal(durable.headSeq, recovered.runtimeFact.event.seq);
+        assert.equal(
+          durable.counts.branch_runtime_facts,
+          before.runtime.counts.branch_runtime_facts + 2,
+        );
+        assert.equal(
+          durable.counts.branch_runtime_fact_receipts,
+          durable.counts.branch_runtime_facts,
+        );
+        assert.equal(
+          durable.counts.branch_runtime_fact_outbox,
+          durable.counts.branch_runtime_facts,
+        );
+        assert.deepEqual(
+          durable.receipts.map((receipt) => receipt.event),
+          durable.facts,
+        );
+        assert.deepEqual(
+          durable.outbox.map((row) => row.receipt),
+          durable.receipts,
+        );
+      },
+    );
+    await run(
+      "runtime fact receipts survive runtime and process restart with measured local-only dependencies",
+      async () => {
+        const before = await factState();
+        const beforePrivate = await factState(runtimeFacts.privateRoot);
+        const beforePages = await inspectRuntimeFacts(runtimeFacts.pageRoot);
+        const pageTail = await pollFacts(
+          a,
+          runtimeFacts.pageRoot,
+          "owner",
+          "199",
+        );
+        const reset = value(
+          await runtime.call<{ baseUrl: string }>({ action: "reset-runtime" }),
+        );
+        upstream = reset.baseUrl;
+        assert.deepEqual(await factState(), before);
+        assert.deepEqual(
+          await factState(runtimeFacts.privateRoot),
+          beforePrivate,
+        );
+        assert.deepEqual(
+          await inspectRuntimeFacts(runtimeFacts.pageRoot),
+          beforePages,
+        );
+        const oldPid = await runtime.ready;
+        await runtime.close();
+        runtime = new Peer("runtime");
+        await startRuntime();
+        assert.notEqual(await runtime.ready, oldPid);
+        assert.deepEqual(await factState(), before);
+        assert.deepEqual(
+          await factState(runtimeFacts.privateRoot),
+          beforePrivate,
+        );
+        assert.deepEqual(
+          await pollFacts(a, runtimeFacts.pageRoot, "owner", "199"),
+          pageTail,
+        );
+        assert.deepEqual(
+          await inspectRuntimeFacts(runtimeFacts.pageRoot),
+          beforePages,
+        );
+        for (const original of originalFacts) {
+          const duplicate = await submitFact(a, original.requested);
+          assertSubmission(
+            duplicate,
+            original.requested,
+            original.response.fact.source.snapshotId!,
+            true,
+          );
+          assert.deepEqual(
+            duplicate.runtimeFact.event,
+            original.response.runtimeFact.event,
+          );
+        }
+        assert.deepEqual(await factState(), before);
+        await b.close();
+        b = new Peer("client");
+        value(
+          await b.call({
+            action: "configure",
+            token: tokens[3],
+            clientId: "runtime-reconnected",
+            baseUrl: proxy.baseUrl,
+            cursor: "-1",
+            factCursor: "199",
+          }),
+        );
+        const resumed = value(
+          await b.call<DropDiffPollResponse>({
+            action: "poll",
+            rootId: runtimeFacts.pageRoot,
+            branch: "owner",
+          }),
+        );
+        assert.deepEqual(resumed, pageTail);
+        const head = await lifecycleContent(a, runtimeFacts.root);
+        const next = makePatch(
+          "after-process-restart",
+          runtimeFacts.root,
+          head.content,
+        );
+        const stored = await submitFact(a, next);
+        assertSubmission(stored, next, head.snapshotId);
+        assert.equal(stored.runtimeFact.event.seq, before.poll.facts!.length);
+        const rows = records.slice(runtimeRequestOffset);
+        const steady = rows.filter((row) => row.phase === "runtime-facts");
+        assert.ok(steady.length > runtimeFacts.pageFactCount);
+        for (const row of steady) {
+          assert.equal(row.sqlWrites, 0, row.requestId);
+          assert.equal(
+            Object.keys(row.calls).some((name) => name.startsWith("r2.")),
+            false,
+            row.requestId,
+          );
+          assert.equal(
+            row.background.scheduled,
+            row.background.completed + row.background.failed,
+          );
+          assert.equal(row.background.failed, 0);
+        }
+        assert.ok(
+          steady.some((row) => row.sqlReads > 0),
+          "authorization reads remain separately measured",
+        );
+        assert.ok(
+          steady.some((row) =>
+            row.rpcFailures.some((failure) => failure.code === "stale_source"),
+          ),
+        );
+        assert.ok(
+          steady.some((row) =>
+            row.rpcFailures.some(
+              (failure) => failure.code === "state_unavailable",
+            ),
+          ),
+        );
+        const commits = steady.flatMap((row) =>
+          (row.factCommits ?? []).map((commit) => ({
+            requestId: row.requestId,
+            ...commit,
+          })),
+        );
+        assert.ok(commits.some((row) => !row.appended));
+        const durableSummaries = [];
+        for (const { rootId, branch } of runtimeTargets) {
+          const durable = await inspectRuntimeFacts(rootId, branch);
+          assert.equal(durable.headSeq, durable.facts.length - 1);
+          assert.equal(
+            durable.counts.branch_runtime_facts,
+            durable.facts.length,
+          );
+          assert.equal(
+            durable.counts.branch_runtime_fact_receipts,
+            durable.facts.length,
+          );
+          assert.equal(
+            durable.counts.branch_runtime_fact_outbox,
+            durable.facts.length,
+          );
+          assert.deepEqual(
+            durable.receipts.map((receipt) => receipt.event),
+            durable.facts,
+          );
+          assert.deepEqual(
+            durable.outbox.map((row) => row.receipt),
+            durable.receipts,
+          );
+          assert.equal(
+            new Set(durable.outbox.map((row) => row.id)).size,
+            durable.facts.length,
+          );
+          const receipts = durable.receipts.map((receipt, index) => {
+            const identityHash = sha256(
+              JSON.stringify([rootId, branch, receipt.identity]),
+            );
+            const correlated = commits.filter(
+              (row) => row.identityHash === identityHash,
+            );
+            assert.equal(correlated.filter((row) => row.appended).length, 1);
+            assert.ok(correlated.every((row) => row.seq === receipt.event.seq));
+            assert.equal(receipt.event.seq, index);
+            assert.equal(durable.outbox[index].kind, "branch.runtime-fact.v1");
+            return {
+              identityHash,
+              seq: receipt.event.seq,
+              outboxIdHash: sha256(durable.outbox[index].id),
+            };
+          });
+          durableSummaries.push({
+            scopeHash: sha256(JSON.stringify([rootId, branch])),
+            headSeq: durable.headSeq,
+            counts: durable.counts,
+            receipts,
+          });
+        }
+        writeFileSync(
+          resolve(evidence, "application-runtime-facts.json"),
+          JSON.stringify(
+            {
+              scope:
+                "local signed SDK / actual Pages / Worker RPC / native SQLite",
+              groups: 8,
+              pageFactWrites: runtimeFacts.pageFactCount,
+              eventCorrelation: commits,
+              atomicOutboxRecords: durableSummaries,
+              syntheticPayloadMarkerRegistered: sensitiveValues.has(factMarker),
+              projectionIndexed: false,
+              outboxDelivery: false,
+              production: false,
+              dependencyPhases: [...new Set(rows.map((row) => row.phase))],
+              runtimeResetAndProcessRestart: true,
+            },
+            null,
+            2,
+          ),
+        );
       },
     );
   } finally {

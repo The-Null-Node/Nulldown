@@ -11,10 +11,12 @@ import { onRequest as publishRoute } from "../../../functions/api/branches/[root
 import { onRequest as promoteRoute } from "../../../functions/api/branches/[rootId]/[branchId]/promote";
 import { onRequest as registerRoute } from "../../../functions/api/diff-auth/register/[id]";
 import { onRequest as nullplugStateRoute } from "../../../functions/api/nullplug/state";
+import { onRequest as nullplugSubmitRoute } from "../../../functions/api/nullplug/submit";
 import { onRequest as resolvedQueryRoute } from "../../../functions/api/branches/[rootId]/[branchId]/resolved/query";
 import type { LocalBranchApplicationSelection } from "../../../src/server/state-plane/commit-application";
 import { createLocalBranchLifecycle } from "../../../src/server/state-plane/application-lifecycle";
 import type { BranchLifecycleStatePlane } from "../../../shared/drop/branch-lifecycle";
+import type { BranchRuntimeFactStatePlane } from "../../../shared/drop/branch-runtime-facts";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
@@ -28,15 +30,15 @@ import {
 import {
   applicationFixture,
   applicationLifecycleFixture,
-  applicationLifecycleRoots,
+  applicationRuntimeRoots,
+  applicationUnseededRoots,
   type ApplicationRequestEvidence,
 } from "./application-scenarios.fixture";
 
 type Commits = LocalBranchApplicationSelection["commits"];
+type Backend = BranchLifecycleStatePlane & BranchRuntimeFactStatePlane;
 type RpcBinding = {
-  [K in keyof BranchLifecycleStatePlane]: BranchLifecycleStatePlane[K] extends (
-    ...args: infer A
-  ) => infer R
+  [K in keyof Backend]: Backend[K] extends (...args: infer A) => infer R
     ? (...args: A) => Promise<BranchStateRpcResult<Awaited<R>>>
     : never;
 };
@@ -70,7 +72,7 @@ function measured<T extends object>(
         row.count++;
         if (
           label === "r2" &&
-          ["baseline", "steady-state"].includes(evidence.phase)
+          ["baseline", "steady-state", "runtime-facts"].includes(evidence.phase)
         ) {
           row.errors++;
           throw Error("FIXTURE_R2_FORBIDDEN");
@@ -148,7 +150,29 @@ export default {
       /^\/api\/branches\/([^/]+)\/([^/]+)\/(content|snapshots|publish|promote|resolved\/query)$/.exec(
         path,
       );
-    const rootId = decodeURIComponent((diff ?? branch)?.[1] ?? "");
+    let rootId = decodeURIComponent((diff ?? branch)?.[1] ?? "");
+    if (
+      request.method === "POST" &&
+      ["/api/nullplug/state", "/api/nullplug/submit"].includes(path)
+    ) {
+      // The local relay bounds bodies to 2 MB. This clone selects fixture composition
+      // only; the untouched request still reaches the real schema/auth checks.
+      try {
+        const body: unknown = await request.clone().json();
+        if (body && typeof body === "object" && "source" in body) {
+          const source = body.source;
+          if (
+            source &&
+            typeof source === "object" &&
+            "rootDropId" in source &&
+            typeof source.rootDropId === "string"
+          )
+            rootId = source.rootDropId;
+        }
+      } catch {
+        // Invalid bodies retain the actual Pages handler's public error contract.
+      }
+    }
     const evidence: ApplicationRequestEvidence = {
       requestId:
         request.headers.get("x-acceptance-request") ??
@@ -166,7 +190,9 @@ export default {
                 : rootId === applicationFixture.root ||
                     rootId === applicationFixture.publicRoot
                   ? "baseline"
-                  : "steady-state",
+                  : applicationRuntimeRoots.includes(rootId)
+                    ? "runtime-facts"
+                    : "steady-state",
       status: 500,
       calls: {},
       rpcFailures: [],
@@ -241,7 +267,7 @@ export default {
       readHead: (query) =>
         call("readHead", async () => {
           const stale =
-            applicationLifecycleRoots.includes(query.target.rootDropId) &&
+            applicationUnseededRoots.includes(query.target.rootDropId) &&
             (await fault("readHead", "before", query.target));
           const result = await service.readHead(
             stale
@@ -256,7 +282,7 @@ export default {
           );
           if (
             result.ok &&
-            applicationLifecycleRoots.includes(query.target.rootDropId)
+            applicationUnseededRoots.includes(query.target.rootDropId)
           )
             await fault(
               "readHead",
@@ -271,7 +297,7 @@ export default {
       readEvents: (query) =>
         call("readEvents", () => service.readEvents(query)),
     };
-    const backend: BranchLifecycleStatePlane = {
+    const backend: Backend = {
       ...commits,
       readPlacement: (query) =>
         call("readPlacement", async () => {
@@ -294,6 +320,58 @@ export default {
         call("readSnapshot", () => service.readSnapshot(query)),
       listSnapshots: (query) =>
         call("listSnapshots", () => service.listSnapshots(query)),
+      appendRuntimeFact: (command) =>
+        call("appendRuntimeFact", async () => {
+          const stale = await fault(
+            "appendRuntimeFact",
+            "before",
+            command.target,
+          );
+          const result = await service.appendRuntimeFact(
+            stale
+              ? {
+                  ...command,
+                  placement: {
+                    ...command.placement,
+                    generation: command.placement.generation + 1,
+                  },
+                }
+              : command,
+          );
+          if (result.ok) {
+            const digest = await crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(
+                JSON.stringify([
+                  command.target.rootDropId,
+                  command.target.branchId,
+                  result.value.receipt.identity,
+                ]),
+              ),
+            );
+            evidence.factCommits = [
+              {
+                identityHash: Array.from(new Uint8Array(digest), (byte) =>
+                  byte.toString(16).padStart(2, "0"),
+                ).join(""),
+                seq: result.value.receipt.event.seq,
+                appended: result.value.appended,
+              },
+            ];
+            await fault("appendRuntimeFact", "after", command.target);
+          }
+          return result;
+        }),
+      readRuntimeFactHead: (query) =>
+        call("readRuntimeFactHead", async () => {
+          await fault("readRuntimeFactHead", "before", query.target);
+          const result = await service.readRuntimeFactHead(query);
+          if (result.ok)
+            await fault("readRuntimeFactHead", "after", query.target);
+          return result;
+        }),
+      readRuntimeFacts: (query) =>
+        call("readRuntimeFacts", () => service.readRuntimeFacts(query)),
     };
     const observer = (
       id: string,
@@ -328,6 +406,9 @@ export default {
       mode: "local-test",
       commits,
       placement: { ...applicationFixture.placement },
+      ...(applicationRuntimeRoots.includes(rootId)
+        ? { runtimeFacts: backend }
+        : {}),
       ...(!baseline
         ? {
             lifecycle: createLocalBranchLifecycle({
@@ -336,7 +417,7 @@ export default {
               sql,
               providerPrivateKey: bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK,
               backend,
-              isEligibleRoot: (id) => applicationLifecycleRoots.includes(id),
+              isEligibleRoot: (id) => applicationUnseededRoots.includes(id),
               initialPlacement: { ...applicationFixture.placement },
             }),
             history: backend,
@@ -390,6 +471,8 @@ export default {
       response = await storeRoute({ ...pagesContext, params: {} });
     } else if (path === "/api/nullplug/state") {
       response = await nullplugStateRoute({ ...pagesContext, params: {} });
+    } else if (path === "/api/nullplug/submit") {
+      response = await nullplugSubmitRoute({ ...pagesContext, params: {} });
     } else if (resolve || get || deletion || registration) {
       const match = (resolve ?? get ?? deletion ?? registration)!;
       const handler = resolve
