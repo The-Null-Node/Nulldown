@@ -24,6 +24,7 @@ import {
   type BranchStateVersion,
 } from "../../../shared/drop/branch-state";
 import type { BranchInitializeRecord } from "../../../shared/drop/branch-lifecycle";
+import type { BranchRuntimeFactAppendCommand } from "../../../shared/drop/branch-runtime-facts";
 import { observeBranchSql } from "../../../src/server/state-plane/sqlite-port";
 
 interface Trace {
@@ -55,6 +56,76 @@ export class TestBranchStateObject extends BranchStateObject {
   private fixture(): void {
     if (this.env.STATE_PLANE_LOCAL_TEST !== "1")
       throw new BranchStateError("capability_unsupported");
+  }
+
+  /** Native fact publication cutpoints; all four runtime tables share the production SQLite transaction. */
+  async runtimeFactCutFixture(
+    command: BranchRuntimeFactAppendCommand,
+    cut: number | null = null,
+    loseResponse = false,
+  ) {
+    this.fixture();
+    let armed = false,
+      index = 0,
+      fired = false;
+    const trace: Trace[] = [];
+    const port = observeBranchSql(
+      new DurableObjectBranchSqlite(this.ctx.storage),
+      (row) => {
+        if (!armed) return;
+        trace.push(row);
+        if (row.operation !== "transaction" && index++ === cut) {
+          fired = true;
+          throw Error("FIXTURE_RUNTIME_FACT_CUT");
+        }
+      },
+    );
+    const plane = new SqliteBranchCommitStatePlane(port);
+    armed = true;
+    const result = await branchStateRpcResult(async () => {
+      const accepted = await plane.appendRuntimeFact(command);
+      await this.ctx.storage.sync();
+      if (loseResponse) throw Error("FIXTURE_RUNTIME_FACT_RESPONSE_LOST");
+      return accepted;
+    });
+    this.lastTrace = trace;
+    return { result, trace, fired };
+  }
+
+  /** Reads actual runtime-fact rows for native rollback, restart and outbox acceptance assertions. */
+  async inspectRuntimeFactsFixture(query: BranchHeadQuery) {
+    this.fixture();
+    const scope = [
+      JSON.stringify(query.target.rootDropId),
+      JSON.stringify(query.target.branchId),
+    ];
+    return {
+      bootId: this.bootId,
+      counts: Object.fromEntries(
+        [
+          "branch_runtime_facts",
+          "branch_runtime_fact_receipts",
+          "branch_runtime_fact_heads",
+          "branch_runtime_fact_outbox",
+        ].map((table) => [
+          table,
+          this.ctx.storage.sql
+            .exec<{ n: number }>(
+              `SELECT COUNT(*) AS n FROM ${table} WHERE root_drop_id=? AND branch_id=?`,
+              ...scope,
+            )
+            .one().n,
+        ]),
+      ),
+      outbox: this.ctx.storage.sql
+        .exec<{ outbox_json: string }>(
+          "SELECT outbox_json FROM branch_runtime_fact_outbox WHERE root_drop_id=? AND branch_id=? ORDER BY identity",
+          ...scope,
+        )
+        .toArray()
+        .map((row) => JSON.parse(row.outbox_json)),
+      trace: this.lastTrace,
+    };
   }
 
   /** Native transaction cutpoints for activation; an interrupted attempt retains its durable pending reservation. */
@@ -410,6 +481,15 @@ export default {
         readHead(value: unknown): Promise<unknown>;
         readContent(value: unknown): Promise<unknown>;
         readEvents(value: unknown): Promise<unknown>;
+        appendRuntimeFact(value: unknown): Promise<unknown>;
+        readRuntimeFactHead(value: unknown): Promise<unknown>;
+        readRuntimeFacts(value: unknown): Promise<unknown>;
+        runtimeFactCutFixture(
+          command: unknown,
+          cut: number | null,
+          loseResponse: boolean,
+        ): Promise<unknown>;
+        inspectRuntimeFactsFixture(query: BranchHeadQuery): Promise<unknown>;
         inspectFixture(query: BranchHeadQuery): Promise<unknown>;
         appendCutFixture(
           command: unknown,
@@ -427,6 +507,25 @@ export default {
       };
       let result: unknown;
       switch (q.action) {
+        case "runtime-fact-append":
+          result = await stub.appendRuntimeFact(q.value);
+          break;
+        case "runtime-fact-head":
+          result = await stub.readRuntimeFactHead(q.value ?? q.query);
+          break;
+        case "runtime-facts":
+          result = await stub.readRuntimeFacts(q.value);
+          break;
+        case "runtime-fact-cut":
+          result = await stub.runtimeFactCutFixture(
+            q.value,
+            q.cut ?? null,
+            q.loseResponse ?? false,
+          );
+          break;
+        case "runtime-fact-inspect":
+          result = await stub.inspectRuntimeFactsFixture(q.query);
+          break;
         case "placement":
           result = await stub.readPlacement(
             q.value ?? { target: q.query.target },

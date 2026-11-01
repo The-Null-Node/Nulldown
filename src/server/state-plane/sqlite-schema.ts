@@ -31,8 +31,34 @@ export function decodeBranchSqlText(value: unknown): string {
  * *_json records retain their single JSON-object encoding; outbox_id retains its
  * already lossless JSON-tuple encoding. No raw-text fallback, conversion of old
  * local fixtures, migration or projection consumer is supplied by this schema.
+ * Runtime fact identity is an exact JSON tuple; public fact_id/fact_key columns
+ * use encodeBranchSqlText, intent is canonical JSON, and *_json stores records.
  */
 export const BRANCH_SQL_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS branch_runtime_fact_heads (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    head_seq INTEGER NOT NULL CHECK (head_seq >= 0),
+    PRIMARY KEY (root_drop_id, branch_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_runtime_facts (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    identity TEXT NOT NULL, fact_id TEXT NOT NULL, fact_key TEXT NOT NULL,
+    seq INTEGER NOT NULL CHECK (seq >= 0), event_json TEXT NOT NULL,
+    PRIMARY KEY (root_drop_id, branch_id, identity),
+    UNIQUE (root_drop_id, branch_id, fact_id),
+    UNIQUE (root_drop_id, branch_id, fact_key),
+    UNIQUE (root_drop_id, branch_id, seq)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_runtime_fact_receipts (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    identity TEXT NOT NULL, intent TEXT NOT NULL, receipt_json TEXT NOT NULL,
+    PRIMARY KEY (root_drop_id, branch_id, identity)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_runtime_fact_outbox (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    identity TEXT NOT NULL, outbox_id TEXT NOT NULL, outbox_json TEXT NOT NULL,
+    PRIMARY KEY (root_drop_id, branch_id, identity), UNIQUE (outbox_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS branch_fixture_seeds (
     root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
     PRIMARY KEY (root_drop_id, branch_id)

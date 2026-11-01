@@ -4,6 +4,8 @@ import type {
 } from "../../../shared/drop/branch";
 import type { DropDiffEvent } from "../../../shared/drop/diff";
 import type { DropDiffPollResponse } from "../../../shared/drop/diff";
+import type { DropBranchRuntimeFact } from "../../../shared/drop/diff";
+import type { NullplugUiRuntimeFact } from "../../../shared/nullplug/ui";
 import type {
   BranchMemoryService,
   ServerNulleditAppendRequest,
@@ -47,6 +49,24 @@ export interface BranchDiffPollResult {
 export interface BranchDiffPolling {
   /** Polls both streams with their existing cursor, exclusion, and latest-handshake semantics. */
   poll(request: BranchDiffPollRequest): Promise<BranchDiffPollResult>;
+}
+
+/** Request-scoped commands for immutable UI facts; actor identity comes from authentication. */
+export interface BranchRuntimeFactCommands {
+  /** Stores a fact and its independent stream event atomically under selected authority. */
+  storeUiFact(request: {
+    rootDropId: string;
+    branchId: string;
+    actorAccountId: string;
+    fact: NullplugUiRuntimeFact;
+  }): Promise<{
+    stored: true;
+    duplicate: boolean;
+    indexed: false;
+    key: string;
+    fact: NullplugUiRuntimeFact;
+    runtimeFact: { event: DropBranchRuntimeFact; appended: boolean };
+  }>;
 }
 
 /** Branch timeline operations for one application request; callers own access checks. */
@@ -115,6 +135,8 @@ export interface BranchMaintenanceCapability {
 
 /** Request-scoped application routing boundary for branch timelines and snapshots. */
 export interface BranchStatePlane {
+  /** Optional atomic UI-fact commands; unavailable capabilities must reject without fallback. */
+  runtimeFacts?: BranchRuntimeFactCommands;
   /** Event and optional sensitive runtime-fact polling. */
   diffs: BranchDiffPolling;
   /** Timeline discovery and actor resolution. */

@@ -4,6 +4,18 @@ import type {
   DropSnapshotRecord,
 } from "../../../shared/drop/branch";
 import type { DropDiffEvent } from "../../../shared/drop/diff";
+import type { DropBranchRuntimeFact } from "../../../shared/drop/diff";
+import {
+  hashRuntimeFactIntent,
+  runtimeFactIdentity,
+  runtimeFactIntent,
+  runtimeFactKey,
+  type BranchRuntimeFactStatePlane,
+} from "../../../shared/drop/branch-runtime-facts";
+import {
+  nullplugUiRuntimeFactId,
+  type NullplugUiRuntimeFact,
+} from "../../../shared/nullplug/ui";
 import {
   BranchStateError,
   type BranchBatchStatePlane,
@@ -128,6 +140,309 @@ const historyFixture = async (count: number) => {
   };
   return { states, history };
 };
+
+const runtimeFixture = async (count = 3) => {
+  const base = await fixture([makeEvent(0)]);
+  const facts: DropBranchRuntimeFact[] = Array.from(
+    { length: count },
+    (_, seq) => {
+      const fact: NullplugUiRuntimeFact = {
+        version: 1,
+        kind: "ui.state.snapshot",
+        id: `fact-${seq}`,
+        callId: "call",
+        state: { seq },
+        createdAt: 20 + seq,
+        source: {
+          ...base.head.target,
+          snapshotId: 7,
+          sourceContentHash: base.head.version.sourceContentHash,
+        },
+        metadata: { actorAccountId: "account" },
+      };
+      return {
+        version: 1,
+        ...base.head.target,
+        seq,
+        factId: nullplugUiRuntimeFactId(fact),
+        createdAt: fact.createdAt,
+        fact,
+      };
+    },
+  );
+  const runtimeFacts = {
+    appendRuntimeFact:
+      jest.fn<BranchRuntimeFactStatePlane["appendRuntimeFact"]>(),
+    readRuntimeFactHead: jest
+      .fn<BranchRuntimeFactStatePlane["readRuntimeFactHead"]>()
+      .mockImplementation(async (query) => ({
+        ...structuredClone(query),
+        headSeq: facts.length - 1,
+      })),
+    readRuntimeFacts: jest
+      .fn<BranchRuntimeFactStatePlane["readRuntimeFacts"]>()
+      .mockImplementation(async (query) => {
+        const page = facts.slice(
+          query.afterSeq + 1,
+          Math.min(query.headSeq + 1, query.afterSeq + query.limit + 1),
+        );
+        return {
+          ...structuredClone(query),
+          facts: structuredClone(page),
+          nextCursor: page.at(-1)?.seq ?? null,
+        };
+      }),
+  };
+  return {
+    ...base,
+    facts,
+    runtimeFacts,
+    plane: createCommitApplicationStatePlane({
+      ...base.selection,
+      runtimeFacts,
+    }),
+  };
+};
+
+describe("local runtime fact application boundary", () => {
+  it("rejects substituted branch heads and placements before exposing branch authority", async () => {
+    const { plane, head, commits, runtimeFacts } = await runtimeFixture();
+    for (const invalid of [
+      {
+        ...head,
+        target: { ...head.target, branchId: "sibling" },
+        branch: { ...head.branch, branchId: "sibling" },
+      },
+      { ...head, placement: { ...placement, generation: 99 } },
+      { ...head, branch: { ...head.branch, rootDropId: "other" } },
+    ]) {
+      commits.readHead.mockResolvedValueOnce(invalid);
+      await expect(plane.branches.readBranch("root", "owner")).rejects.toThrow(
+        "state_corrupt",
+      );
+    }
+    expect(runtimeFacts.readRuntimeFactHead).not.toHaveBeenCalled();
+    expect(runtimeFacts.readRuntimeFacts).not.toHaveBeenCalled();
+  });
+
+  it("keeps independent cursors, event-only exclusions, latest handshakes and empty tails", async () => {
+    const { plane, facts, runtimeFacts } = await runtimeFixture();
+    const request = {
+      rootDropId: "root",
+      branch,
+      cursor: null,
+      limit: 1,
+      factCursor: "-1",
+      factLimit: 2,
+      excludeClient: "writer",
+    };
+    expect(await plane.diffs.poll(request)).toEqual({
+      response: {
+        events: [],
+        cursor: "0",
+        facts: facts.slice(0, 2),
+        factCursor: "1",
+      },
+      totalStored: 1,
+      totalFacts: 3,
+    });
+    expect(
+      (await plane.diffs.poll({ ...request, cursor: "0", factCursor: "1" }))
+        .response,
+    ).toEqual({ events: [], cursor: null, facts: [facts[2]], factCursor: "2" });
+    expect(
+      (await plane.diffs.poll({ ...request, cursor: "0", factCursor: "2" }))
+        .response,
+    ).toEqual({ events: [], cursor: null, facts: [], factCursor: null });
+    runtimeFacts.readRuntimeFacts.mockClear();
+    expect(
+      (await plane.diffs.poll({ ...request, cursor: "__latest__" })).response,
+    ).toEqual({ events: [], cursor: "0", facts: [], factCursor: "2" });
+    expect(
+      (
+        await plane.diffs.poll({
+          ...request,
+          excludeClient: undefined,
+          factCursor: "__latest__",
+        })
+      ).response,
+    ).toEqual({
+      events: [makeEvent(0)],
+      cursor: "0",
+      facts: [],
+      factCursor: "2",
+    });
+    expect(runtimeFacts.readRuntimeFacts).not.toHaveBeenCalled();
+    runtimeFacts.readRuntimeFactHead.mockClear();
+    expect(
+      (await plane.diffs.poll({ ...request, factCursor: undefined })).response,
+    ).not.toHaveProperty("facts");
+    expect(runtimeFacts.readRuntimeFactHead).not.toHaveBeenCalled();
+    const empty = await runtimeFixture(0);
+    expect(
+      (await empty.plane.diffs.poll({ ...request, factCursor: "__latest__" }))
+        .response.factCursor,
+    ).toBe("-1");
+  });
+
+  it("pins fact reads to authorized placement and a captured horizon despite later appends", async () => {
+    const { selection, facts, runtimeFacts } = await runtimeFixture();
+    const lifecycle = {
+      resolveForActor: jest.fn<LocalBranchLifecycle["resolveForActor"]>(),
+      readPlacement: jest.fn<LocalBranchLifecycle["readPlacement"]>(),
+      requireActivePlacement: jest
+        .fn<LocalBranchLifecycle["requireActivePlacement"]>()
+        .mockResolvedValueOnce(placement)
+        .mockResolvedValue({ routingVersion: 1, generation: 99 }),
+    };
+    const original = runtimeFacts.readRuntimeFacts.getMockImplementation()!;
+    runtimeFacts.readRuntimeFacts.mockImplementation(async (query) => {
+      facts.push({ ...facts[2], seq: 3 });
+      return original(query);
+    });
+    const plane = createCommitApplicationStatePlane({
+      ...selection,
+      lifecycle,
+      runtimeFacts,
+    });
+    const captured = (await plane.branches.readBranch("root", "owner"))!;
+    const page = await plane.diffs.poll({
+      rootDropId: "root",
+      branch: captured,
+      cursor: null,
+      limit: 1,
+      factCursor: "-1",
+      factLimit: 200,
+    });
+    expect(page.response.facts).toHaveLength(3);
+    expect(page.totalFacts).toBe(3);
+    expect(lifecycle.requireActivePlacement).toHaveBeenCalledTimes(1);
+    expect(runtimeFacts.readRuntimeFacts).toHaveBeenCalledWith({
+      target: { rootDropId: "root", branchId: "owner" },
+      placement,
+      headSeq: 2,
+      afterSeq: -1,
+      limit: 200,
+    });
+  });
+
+  it("rejects malformed fact heads, pages, nested scopes and identities", async () => {
+    const { plane, runtimeFacts, facts } = await runtimeFixture(1);
+    const request = {
+      rootDropId: "root",
+      branch,
+      cursor: null,
+      limit: 1,
+      factCursor: "-1",
+      factLimit: 200,
+    };
+    runtimeFacts.readRuntimeFactHead.mockResolvedValueOnce({
+      target: { rootDropId: "other", branchId: "owner" },
+      placement,
+      headSeq: 0,
+    });
+    await expect(plane.diffs.poll(request)).rejects.toThrow("state_corrupt");
+    const valid = {
+      target: { rootDropId: "root", branchId: "owner" },
+      placement,
+      headSeq: 0,
+      facts,
+      nextCursor: 0,
+    };
+    for (const invalid of [
+      { ...valid, facts: [] },
+      { ...valid, nextCursor: null },
+      { ...valid, headSeq: 1 },
+      { ...valid, placement: { ...placement, generation: 99 } },
+      { ...valid, facts: [{ ...facts[0], seq: 1 }] },
+      { ...valid, facts: [{ ...facts[0], factId: "wrong" }] },
+      {
+        ...valid,
+        facts: [
+          {
+            ...facts[0],
+            fact: {
+              ...facts[0].fact,
+              source: { ...facts[0].fact.source, rootDropId: "other" },
+            },
+          },
+        ],
+      },
+    ]) {
+      runtimeFacts.readRuntimeFacts.mockResolvedValueOnce(invalid);
+      await expect(plane.diffs.poll(request)).rejects.toThrow("state_corrupt");
+    }
+  });
+
+  it("validates immutable append acknowledgements against the captured authenticated intent", async () => {
+    const { plane, facts, runtimeFacts } = await runtimeFixture(1);
+    const fact = facts[0].fact;
+    const receipt = {
+      identity: runtimeFactIdentity(fact),
+      key: runtimeFactKey(fact),
+      payloadHash: await hashRuntimeFactIntent(runtimeFactIntent(fact)),
+      event: facts[0],
+    };
+    const result = {
+      target: { rootDropId: "root", branchId: "owner" },
+      placement,
+      appended: false,
+      receipt,
+    };
+    runtimeFacts.appendRuntimeFact.mockResolvedValue(result);
+    const request = {
+      rootDropId: "root",
+      branchId: "owner",
+      actorAccountId: "account",
+      fact: {
+        ...fact,
+        createdAt: 999,
+        source: { ...fact.source, snapshotId: 999 },
+      },
+    };
+    expect(await plane.runtimeFacts!.storeUiFact(request)).toEqual({
+      stored: true,
+      duplicate: true,
+      indexed: false,
+      key: receipt.key,
+      fact,
+      runtimeFact: { event: facts[0], appended: false },
+    });
+    for (const invalid of [
+      { ...result, target: { ...result.target, rootDropId: "other" } },
+      { ...result, placement: { ...placement, generation: 99 } },
+      {
+        ...result,
+        receipt: {
+          ...receipt,
+          payloadHash: await hashRuntimeFactIntent("different"),
+        },
+      },
+      { ...result, receipt: { ...receipt, identity: "other" } },
+      {
+        ...result,
+        receipt: {
+          ...receipt,
+          event: {
+            ...facts[0],
+            fact: { ...fact, metadata: { actorAccountId: "other" } },
+          },
+        },
+      },
+    ]) {
+      runtimeFacts.appendRuntimeFact.mockResolvedValueOnce(invalid);
+      await expect(plane.runtimeFacts!.storeUiFact(request)).rejects.toThrow(
+        "state_corrupt",
+      );
+    }
+    runtimeFacts.appendRuntimeFact.mockRejectedValueOnce(
+      new BranchStateError("state_unavailable"),
+    );
+    await expect(plane.runtimeFacts!.storeUiFact(request)).rejects.toThrow(
+      "state_unavailable",
+    );
+  });
+});
 
 describe("local commit application adapter", () => {
   it("pins historical discovery to the placement captured with the authorized head", async () => {
@@ -288,7 +603,8 @@ describe("local commit application adapter", () => {
   });
 
   it("discovers durable placement for commands and rejects unavailable authority without touching commits", async () => {
-    const { selection, commits } = await fixture();
+    const { selection, commits, head } = await fixture();
+    head.placement = { routingVersion: 1, generation: 42 };
     const lifecycle = {
       resolveForActor: jest.fn<LocalBranchLifecycle["resolveForActor"]>(),
       readPlacement: jest.fn<LocalBranchLifecycle["readPlacement"]>(),

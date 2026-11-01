@@ -51,6 +51,29 @@ export const applicationLifecycleRoots: readonly string[] = [
   applicationLifecycleFixture.legacyRoot,
 ];
 
+/** Disposable runtime-fact roots created and resolved through the signed SDK during local acceptance. */
+export const applicationRuntimeFixture = {
+  root: "FactsMainRoot01",
+  privateRoot: "FactPrivateRoot01",
+  pageRoot: "FactPageRoot01",
+  initial: "# Runtime facts\nSDK-created branch content\n",
+  privateInitial: "# Private runtime facts\nowner only\n",
+  pageFactCount: 201,
+} as const;
+
+/** Only these synthetic roots may select the optional runtime-fact capability in the fixture. */
+export const applicationRuntimeRoots: readonly string[] = [
+  applicationRuntimeFixture.root,
+  applicationRuntimeFixture.privateRoot,
+  applicationRuntimeFixture.pageRoot,
+];
+
+/** Local bootstrap allowlist; the original lifecycle scenario's root set stays independent. */
+export const applicationUnseededRoots: readonly string[] = [
+  ...applicationLifecycleRoots,
+  ...applicationRuntimeRoots,
+];
+
 /** Inspects one synthetic stored root without trusting permissive envelope decoding to exclude plaintext. */
 export function inspectApplicationRootStorage(
   raw: string,
@@ -107,6 +130,7 @@ export type ApplicationRequestPhase =
   | "root-read"
   | "bootstrap"
   | "steady-state"
+  | "runtime-facts"
   | "legacy";
 
 /** Fixture setup data; production initialization and lifecycle remain outside this test. */
@@ -205,6 +229,7 @@ export interface ApplicationRequestEvidence {
   status: number;
   calls: Record<string, { count: number; errors: number }>;
   rpcFailures: { method: string; code: string }[];
+  factCommits?: { identityHash: string; seq: number; appended: boolean }[];
   sqlReads: number;
   sqlWrites: number;
   background: { scheduled: number; completed: number; failed: number };

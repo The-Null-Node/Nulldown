@@ -1,6 +1,14 @@
 import type { DropBranchRecord } from "../../../shared/drop/branch";
 import type { DropDiffEvent } from "../../../shared/drop/diff";
 import {
+  captureRuntimeFactAppend,
+  hashRuntimeFactIntent,
+  runtimeFactIntent,
+  validateRuntimeFactEvent,
+  validateRuntimeFactReceipt,
+  type BranchRuntimeFactStatePlane,
+} from "../../../shared/drop/branch-runtime-facts";
+import {
   BranchStateError,
   BranchStateQuery,
   sameBranchStateVersion,
@@ -8,6 +16,7 @@ import {
   type BranchContentQuery,
   type BranchStateHead,
   type BranchStatePlacement,
+  type BranchHeadQuery,
 } from "../../../shared/drop/branch-state";
 import { dispatchNulleditSnapshottersForCommit } from "../nulledit/dispatch";
 import type { NulleditSnapshotter } from "../nulledit/types";
@@ -28,6 +37,8 @@ export interface LocalBranchApplicationSelection {
   lifecycle?: LocalBranchLifecycle;
   /** Exact immutable snapshot metadata and bounded history discovery. */
   history?: BranchSnapshotStatePlane;
+  /** Atomic immutable UI facts and their independently sequenced branch stream. */
+  runtimeFacts?: BranchRuntimeFactStatePlane;
   data?: RuntimeDataStore;
   snapshotters?: NulleditSnapshotter[];
 }
@@ -41,6 +52,16 @@ const snapshotKey = (
   branchId: string,
   snapshotId: number,
 ): string => JSON.stringify([rootDropId, branchId, snapshotId]);
+
+const validateScope = (actual: BranchHeadQuery, expected: BranchHeadQuery) => {
+  if (
+    actual?.target?.rootDropId !== expected.target.rootDropId ||
+    actual?.target?.branchId !== expected.target.branchId ||
+    actual?.placement?.routingVersion !== expected.placement.routingVersion ||
+    actual?.placement?.generation !== expected.placement.generation
+  )
+    throw new BranchStateError("state_corrupt");
+};
 
 /**
  * Adapts explicitly selected local commits to request-scoped application reads and appends.
@@ -66,7 +87,16 @@ export const createCommitApplicationStatePlane = (
   };
 
   const readHead = async (rootDropId: string, branchId: string) => {
-    const head = await commits.readHead(await query(rootDropId, branchId));
+    const selected = await query(rootDropId, branchId);
+    const head = await commits.readHead(structuredClone(selected));
+    validateScope(head, selected);
+    if (
+      head.branch?.rootDropId !== rootDropId ||
+      head.branch?.branchId !== branchId ||
+      head.branch.headSnapshotId !== head.version?.snapshotId ||
+      head.branch.headEventSeq !== head.version?.eventSeq
+    )
+      throw new BranchStateError("state_corrupt");
     const captured = structuredClone(head);
     heads.set(head.branch, captured);
     capturedHeads.set(JSON.stringify([rootDropId, branchId]), captured);
@@ -169,6 +199,43 @@ export const createCommitApplicationStatePlane = (
   };
 
   return {
+    runtimeFacts: selection.runtimeFacts
+      ? {
+          async storeUiFact(request) {
+            const captured = structuredClone(request);
+            const command = captureRuntimeFactAppend({
+              ...(await query(captured.rootDropId, captured.branchId)),
+              actorAccountId: captured.actorAccountId,
+              fact: captured.fact,
+            });
+            const result = await selection.runtimeFacts!.appendRuntimeFact(
+              structuredClone(command),
+            );
+            validateScope(result, command);
+            if (typeof result.appended !== "boolean")
+              throw new BranchStateError("state_corrupt");
+            validateRuntimeFactReceipt(result.receipt, command);
+            const intent = runtimeFactIntent(command.fact);
+            if (
+              runtimeFactIntent(result.receipt.event.fact) !== intent ||
+              result.receipt.payloadHash !==
+                (await hashRuntimeFactIntent(intent))
+            )
+              throw new BranchStateError("state_corrupt");
+            return {
+              stored: true,
+              duplicate: !result.appended,
+              indexed: false,
+              key: result.receipt.key,
+              fact: result.receipt.event.fact,
+              runtimeFact: {
+                event: result.receipt.event,
+                appended: result.appended,
+              },
+            };
+          },
+        }
+      : undefined,
     branches: {
       async readBranch(rootDropId, branchId) {
         try {
@@ -277,21 +344,98 @@ export const createCommitApplicationStatePlane = (
         excludeClient,
         limit,
         factCursor,
+        factLimit,
       }) {
-        if (factCursor !== undefined) return unsupported();
+        if (factCursor !== undefined && !selection.runtimeFacts)
+          return unsupported();
         const captured = heads.get(branch);
         const head =
           captured?.target.rootDropId === rootDropId
             ? captured
             : await readHead(rootDropId, branch.branchId);
         const headSeq = head.version.eventSeq;
+        const factPage =
+          factCursor === undefined
+            ? null
+            : await (async () => {
+                const selected = BranchStateQuery.head({
+                  target: head.target,
+                  placement: head.placement,
+                });
+                const factHead =
+                  await selection.runtimeFacts!.readRuntimeFactHead(
+                    structuredClone(selected),
+                  );
+                validateScope(factHead, selected);
+                if (
+                  !Number.isSafeInteger(factHead.headSeq) ||
+                  factHead.headSeq < -1
+                )
+                  throw new BranchStateError("state_corrupt");
+                const factHeadSeq = factHead.headSeq;
+                if (cursor === "__latest__" || factCursor === "__latest__") {
+                  return {
+                    facts: [],
+                    nextCursor: factHeadSeq,
+                    headSeq: factHeadSeq,
+                  };
+                }
+                const parsedFactCursor = Number.parseInt(factCursor, 10);
+                const afterSeq = Number.isFinite(parsedFactCursor)
+                  ? Math.max(-1, parsedFactCursor)
+                  : -1;
+                if (afterSeq >= factHeadSeq)
+                  return { facts: [], nextCursor: null, headSeq: factHeadSeq };
+                const count = Number.isFinite(factLimit)
+                  ? Math.max(1, Math.min(200, Math.floor(factLimit)))
+                  : 200;
+                const page = await selection.runtimeFacts!.readRuntimeFacts({
+                  ...structuredClone(selected),
+                  headSeq: factHeadSeq,
+                  afterSeq,
+                  limit: count,
+                });
+                validateScope(page, selected);
+                const expectedCount = Math.min(
+                  count,
+                  Math.max(0, factHeadSeq - afterSeq),
+                );
+                if (
+                  page.headSeq !== factHeadSeq ||
+                  !Array.isArray(page.facts) ||
+                  page.facts.length !== expectedCount ||
+                  page.facts.some(
+                    (event, i) =>
+                      event?.seq !== afterSeq + i + 1 ||
+                      event.rootDropId !== rootDropId ||
+                      event.branchId !== branch.branchId,
+                  ) ||
+                  page.nextCursor !==
+                    (expectedCount ? afterSeq + expectedCount : null)
+                )
+                  throw new BranchStateError("state_corrupt");
+                for (const event of page.facts)
+                  validateRuntimeFactEvent(event, selected);
+                return page;
+              })();
+        const factsResponse = factPage
+          ? {
+              facts: factPage.facts,
+              factCursor:
+                factPage.nextCursor === null
+                  ? null
+                  : String(factPage.nextCursor),
+            }
+          : {};
         if (cursor === "__latest__") {
           return {
             response: {
               events: [],
               cursor: headSeq >= 0 ? String(headSeq) : null,
+              ...factsResponse,
             },
             totalStored: headSeq + 1,
+            totalFacts: factPage ? factPage.headSeq + 1 : undefined,
           };
         }
         const parsed = cursor === null ? -1 : Number.parseInt(cursor, 10);
@@ -319,8 +463,10 @@ export const createCommitApplicationStatePlane = (
           response: {
             events,
             cursor: scanned === after ? null : String(scanned),
+            ...factsResponse,
           },
           totalStored: headSeq + 1,
+          totalFacts: factPage ? factPage.headSeq + 1 : undefined,
         };
       },
     },

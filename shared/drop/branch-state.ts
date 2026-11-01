@@ -181,6 +181,24 @@ export const requireBranchCommitCapability = (capability: string): void => {
 
 /** Content-free failure semantics for local/RPC callers; existing HTTP error translation remains unchanged. */
 export const BRANCH_STATE_ERRORS = {
+  forbidden: { status: 403, outcome: "not_committed", retry: "never" },
+  branch_not_active: { status: 409, outcome: "not_committed", retry: "never" },
+  source_hash_required: {
+    status: 400,
+    outcome: "not_committed",
+    retry: "never",
+  },
+  stale_source: { status: 409, outcome: "not_committed", retry: "refresh" },
+  idempotency_key_reused: {
+    status: 409,
+    outcome: "not_committed",
+    retry: "never",
+  },
+  runtime_fact_sequence_exhausted: {
+    status: 409,
+    outcome: "not_committed",
+    retry: "never",
+  },
   invalid_command: { status: 400, outcome: "not_committed", retry: "never" },
   branch_not_found: { status: 404, outcome: "not_committed", retry: "never" },
   snapshot_not_found: { status: 404, outcome: "not_committed", retry: "never" },

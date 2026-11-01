@@ -24,6 +24,12 @@ import {
 } from "../../../src/server/state-plane/sqlite-port";
 import type { MemoryBranchStateSeed } from "../../../src/server/state-plane/memory-commits";
 import {
+  captureRuntimeFactAppend,
+  captureRuntimeFactPage,
+  type BranchRuntimeFactAppendCommand,
+  type BranchRuntimeFactPageQuery,
+} from "../../../shared/drop/branch-runtime-facts";
+import {
   branchStateRpcResult,
   branchStateShardName,
   type BranchStateRpcResult,
@@ -74,6 +80,37 @@ export class BranchStateObject extends DurableObject<BranchStateBindings> {
     if (!this.ctx.id.equals(this.env.BRANCH_STATE.idFromName(name))) {
       throw new BranchStateError("routing_placement_mismatch");
     }
+  }
+
+  /** Publishes one immutable UI fact through the branch-local transaction. */
+  async appendRuntimeFact(
+    input: BranchRuntimeFactAppendCommand,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(async () => {
+      const command = captureRuntimeFactAppend(input);
+      await this.#placement(command);
+      return this.#plane.appendRuntimeFact(command);
+    });
+  }
+
+  /** Captures an independently sequenced fact head under shard and generation fencing. */
+  async readRuntimeFactHead(input: BranchHeadQuery) {
+    return branchStateRpcResult(async () => {
+      const query = BranchStateQuery.head(input);
+      await this.#placement(query);
+      return this.#plane.readRuntimeFactHead(query);
+    });
+  }
+
+  /** Reads a bounded page pinned to an exact fact-stream horizon. */
+  async readRuntimeFacts(
+    input: BranchRuntimeFactPageQuery,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(async () => {
+      const query = captureRuntimeFactPage(input);
+      await this.#placement(query);
+      return this.#plane.readRuntimeFacts(query);
+    });
   }
 
   /** Internal discovery exposes pending ownership before any branch head exists. */

@@ -572,9 +572,17 @@ activation. It verifies ownership and excludes existing legacy history before
 selecting local authority. History support adds ascending snapshot discovery and
 exact historical content reads (`?snapshotId=N` on the branch content endpoint).
 Root replacement, deletion, publication, promotion, diff-credential registration,
-runtime facts, memory, and plugin operations remain unsupported on this local path.
+memory, and plugin execution remain unsupported on this local path.
 Snapshotters must be supplied explicitly with a
 derived-data store; durable outbox delivery is separate work.
+
+The optional `runtimeFacts` capability connects `/api/nullplug/state` and
+`/api/nullplug/submit` to immutable UI facts with an independent polling cursor on
+`/api/diff`. Each accepted fact, retry receipt, stream position, and outbox intent
+commits atomically. Exact retries return the original receipt after document edits;
+new facts must match the current source hash. Fact polling requires sensitive branch
+read authorization. Responses report `indexed: false` because projection delivery
+is not implemented, and proposed response diffs remain data.
 
 With Bun and a Node.js version supporting `node:sqlite`, run:
 
