@@ -6,13 +6,17 @@ import { unobserved, type Timing } from "../../core/observability/profiling";
 import { BranchStateError } from "../../../../../shared/drop/branch-state";
 import { branchStateErrorResponse } from "./state-plane-errors";
 import {
+  apiHttpErrorResponse,
+  isApiHttpError,
+} from "../../core/http/responses";
+import {
   createBranchRouteStatePlane,
   resolveBranchTarget,
   type BranchRouteEnv,
   type BranchTargetParams,
 } from "./request-context";
 
-/** Returns materialized branch-head content visible to the caller. */
+/** Returns a captured head or explicitly selected historical snapshot visible to the caller. */
 export const getBranchContent = async (
   env: BranchRouteEnv,
   params: BranchTargetParams,
@@ -22,6 +26,7 @@ export const getBranchContent = async (
   try {
     return await readBranchContent(env, params, request, timing);
   } catch (error) {
+    if (isApiHttpError(error)) return apiHttpErrorResponse(error);
     if (error instanceof BranchStateError)
       return branchStateErrorResponse(error);
     throw error;
@@ -59,11 +64,36 @@ const readBranchContent = async (
     return new Response("Branch not found.", { status: 404 });
   }
 
+  const selectors = new URL(request.url).searchParams.getAll("snapshotId");
+  if (
+    selectors.length > 1 ||
+    (selectors.length === 1 &&
+      (!/^(0|[1-9]\d*)$/.test(selectors[0]) ||
+        !Number.isSafeInteger(Number(selectors[0]))))
+  ) {
+    return new Response("Invalid snapshot ID.", { status: 400 });
+  }
+  const snapshotId = selectors.length
+    ? Number(selectors[0])
+    : branch.headSnapshotId;
+  let eventSeq =
+    typeof branch.headEventSeq === "number" ? branch.headEventSeq : null;
+  if (selectors.length) {
+    if (snapshotId > branch.headSnapshotId)
+      return new Response("Branch snapshot not found.", { status: 404 });
+    const snapshot = await timing.phase("content.snapshot", () =>
+      statePlane.snapshots.readSnapshot(rootDropId, branchId, snapshotId),
+    );
+    if (!snapshot)
+      return new Response("Branch snapshot not found.", { status: 404 });
+    eventSeq = snapshotId === 0 ? -1 : (snapshot.patchEndSeq ?? null);
+  }
+
   const content = await timing.phase("content.materialize", (child) =>
     (env.localBranchApplication
       ? statePlane
       : createBranchRouteStatePlane(env, child)
-    ).snapshots.readContent(rootDropId, branchId, branch.headSnapshotId),
+    ).snapshots.readContent(rootDropId, branchId, snapshotId),
   );
   if (content === null) {
     return new Response("Branch content not found.", { status: 404 });
@@ -74,9 +104,8 @@ const readBranchContent = async (
       JSON.stringify({
         rootDropId,
         branchId,
-        snapshotId: branch.headSnapshotId,
-        headEventSeq:
-          typeof branch.headEventSeq === "number" ? branch.headEventSeq : null,
+        snapshotId,
+        headEventSeq: eventSeq,
         content,
       }),
     ),
@@ -96,6 +125,7 @@ export const listBranchSnapshots = async (
   try {
     return await readBranchSnapshots(env, params, request);
   } catch (error) {
+    if (isApiHttpError(error)) return apiHttpErrorResponse(error);
     if (error instanceof BranchStateError)
       return branchStateErrorResponse(error);
     throw error;

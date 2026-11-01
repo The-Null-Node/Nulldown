@@ -18,7 +18,6 @@ import {
   sameBranchStateVersion,
   type BranchAppendRecord,
   type BranchAppendOutcome,
-  type BranchBatchStatePlane,
   type BranchBatchAppendRecord,
   type BranchBatchAppendResult,
   type BranchCommitReceipt,
@@ -28,6 +27,23 @@ import {
   type BranchStateHead,
   type BranchStateContent,
 } from "../../../shared/drop/branch-state";
+import {
+  BranchLifecycleQuery,
+  prepareBranchInitialization,
+  sameBranchInitializationIdentity,
+  type BranchLifecycleStatePlane,
+  type BranchAuthorityRecord,
+  type BranchPlacementQuery,
+  type BranchReserveRecord,
+  type BranchReserveOutcome,
+  type BranchInitializeRecord,
+  type BranchInitializeOutcome,
+  type BranchSnapshotQuery,
+  type BranchSnapshotState,
+  type BranchSnapshotPageQuery,
+  type BranchSnapshotPage,
+} from "../../../shared/drop/branch-lifecycle";
+import { serializeCanonicalJson } from "../../../shared/drop/types";
 import type { MemoryBranchStateSeed } from "./memory-commits";
 import type { BranchSqlPort } from "./sqlite-port";
 import {
@@ -83,7 +99,7 @@ export interface SqliteBranchCommitOptions {
 }
 
 /** SQL-authoritative branch commits shared by local SQLite and SQLite-backed Durable Objects. */
-export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
+export class SqliteBranchCommitStatePlane implements BranchLifecycleStatePlane {
   private readonly now: () => number;
   private readonly cache: ExactContentCache;
 
@@ -174,6 +190,10 @@ export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
             throw new BranchStateError("invalid_command");
           }
           this.sql.execute(
+            "INSERT INTO branch_fixture_seeds (root_drop_id, branch_id) VALUES (?, ?)",
+            ...scope(head),
+          );
+          this.sql.execute(
             "INSERT INTO branch_heads (root_drop_id, branch_id, routing_version, generation, head_json) VALUES (?, ?, ?, ?, ?)",
             ...scope(head),
             head.placement.routingVersion,
@@ -208,13 +228,257 @@ export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
       throw new BranchStateError("routing_version_unsupported");
   }
 
+  private authority(
+    query: BranchPlacementQuery,
+    includeInitialization = false,
+  ): { authority: BranchAuthorityRecord; row: Row } | null {
+    const row = this.sql.rows(
+      `SELECT authority_json, initialization_intent IS NOT NULL AS has_initialization_intent, initialization_receipt_json IS NOT NULL AS has_initialization_receipt${includeInitialization ? ", initialization_intent, initialization_receipt_json" : ""} FROM branch_authorities WHERE root_drop_id = ? AND branch_id = ?`,
+      encodeBranchSqlText(query.target.rootDropId),
+      encodeBranchSqlText(query.target.branchId),
+    )[0];
+    if (!row) return null;
+    let authority: BranchAuthorityRecord;
+    try {
+      authority = BranchLifecycleQuery.authority(json(row.authority_json));
+    } catch {
+      return corrupt();
+    }
+    if (!sameScope(authority, { ...authority, target: query.target }))
+      return corrupt();
+    if (
+      authority.state === "pending"
+        ? row.has_initialization_intent !== 0 ||
+          row.has_initialization_receipt !== 0
+        : row.has_initialization_intent !== 1 ||
+          row.has_initialization_receipt !== 1
+    )
+      return corrupt();
+    if (
+      includeInitialization &&
+      authority.state === "active" &&
+      (typeof row.initialization_intent !== "string" ||
+        typeof row.initialization_receipt_json !== "string")
+    )
+      return corrupt();
+    return { authority, row };
+  }
+
+  private fencedAuthority(
+    query: BranchHeadQuery,
+    includeInitialization = false,
+  ) {
+    this.routing(query);
+    const stored = this.authority(query, includeInitialization);
+    if (!stored) throw new BranchStateError("branch_not_found");
+    if (stored.authority.placement.generation !== query.placement.generation)
+      throw new BranchStateError("routing_generation_mismatch");
+    return stored;
+  }
+
+  /** Discovers durable pending/active ownership; no branch is created on discovery. */
+  async readPlacement(
+    input: BranchPlacementQuery,
+  ): Promise<BranchAuthorityRecord | null> {
+    return this.available(() => {
+      const query = BranchLifecycleQuery.placement(input);
+      return this.sql.transaction(() => {
+        const stored = this.authority(query);
+        const hasHead =
+          this.sql.rows(
+            "SELECT 1 FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?",
+            encodeBranchSqlText(query.target.rootDropId),
+            encodeBranchSqlText(query.target.branchId),
+          ).length > 0;
+        if (!stored) {
+          if (hasHead) return corrupt();
+          return null;
+        }
+        if ((stored.authority.state === "active") !== hasHead) return corrupt();
+        if (hasHead) this.snapshot(this.head(stored.authority), false);
+        return stored.authority;
+      });
+    });
+  }
+
+  /** Atomically reserves ownership before materialization; a competing resolver receives the original winner. */
+  async reserve(input: BranchReserveRecord): Promise<BranchReserveOutcome> {
+    return this.available(() => {
+      const command = BranchLifecycleQuery.reserve(input);
+      this.routing(command);
+      return this.sql.transaction(() => {
+        const stored = this.authority(command);
+        if (stored) {
+          if (
+            stored.authority.placement.generation !==
+            command.placement.generation
+          )
+            throw new BranchStateError("routing_generation_mismatch");
+          if (
+            !sameBranchInitializationIdentity(
+              stored.authority.reservation.identity,
+              command.identity,
+            )
+          )
+            throw new BranchStateError("branch_initialization_conflict");
+          if (stored.authority.state === "active") this.head(command);
+          return { status: "existing", authority: stored.authority };
+        }
+        if (
+          this.sql.rows(
+            "SELECT 1 FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?",
+            ...scope(command),
+          ).length
+        )
+          throw new BranchStateError("branch_initialization_conflict");
+        const createdAt = this.now();
+        if (!Number.isSafeInteger(createdAt) || createdAt < 0)
+          throw new BranchStateError("invalid_command");
+        const authority: BranchAuthorityRecord = {
+          target: command.target,
+          placement: command.placement,
+          backend: "state-plane",
+          state: "pending",
+          reservation: {
+            reservationId: command.reservationId,
+            identity: command.identity,
+            rootRevision: command.rootRevision,
+            createdAt,
+          },
+        };
+        this.sql.execute(
+          "INSERT INTO branch_authorities (root_drop_id, branch_id, authority_json) VALUES (?, ?, ?)",
+          ...scope(command),
+          JSON.stringify(authority),
+        );
+        return { status: "reserved", authority };
+      });
+    });
+  }
+
+  /** Activates ownership, snapshot zero, head and immutable receipt in one synchronous transaction. */
+  async initialize(
+    input: BranchInitializeRecord,
+  ): Promise<BranchInitializeOutcome> {
+    return this.available(async () => {
+      const command = BranchLifecycleQuery.initialize(input);
+      const initial = this.sql.transaction(
+        () => this.fencedAuthority(command).authority,
+      );
+      const prepared = await prepareBranchInitialization(initial, command);
+      return this.sql.transaction(() => {
+        const { authority, row } = this.fencedAuthority(command, true);
+        if (
+          serializeCanonicalJson(authority.reservation) !==
+          serializeCanonicalJson(initial.reservation)
+        )
+          return corrupt();
+        if (authority.state === "active") {
+          this.head(command);
+          if (row.initialization_intent !== prepared.intent)
+            throw new BranchStateError("branch_initialization_conflict");
+          if (
+            serializeCanonicalJson(json(row.initialization_receipt_json)) !==
+            serializeCanonicalJson(prepared.receipt)
+          )
+            return corrupt();
+          if (this.snapshot(prepared.head, true).content !== command.content)
+            return corrupt();
+          return { status: "duplicate", receipt: prepared.receipt };
+        }
+        if (
+          this.sql.rows(
+            "SELECT 1 FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?",
+            ...scope(command),
+          ).length ||
+          this.sql.rows(
+            "SELECT 1 FROM branch_snapshots WHERE root_drop_id = ? AND branch_id = ? LIMIT 1",
+            ...scope(command),
+          ).length
+        )
+          return corrupt();
+        this.sql.execute(
+          "INSERT INTO branch_heads (root_drop_id, branch_id, routing_version, generation, head_json) VALUES (?, ?, ?, ?, ?)",
+          ...scope(command),
+          command.placement.routingVersion,
+          command.placement.generation,
+          JSON.stringify(prepared.head),
+        );
+        this.sql.execute(
+          "INSERT INTO branch_snapshots (root_drop_id, branch_id, snapshot_id, event_seq, source_content_hash, content, snapshot_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          ...scope(command),
+          0,
+          -1,
+          prepared.head.version.sourceContentHash,
+          encodeBranchSqlText(command.content),
+          JSON.stringify(prepared.snapshot),
+        );
+        this.sql.execute(
+          "UPDATE branch_authorities SET authority_json = ?, initialization_intent = ?, initialization_receipt_json = ? WHERE root_drop_id = ? AND branch_id = ?",
+          JSON.stringify({ ...authority, state: "active" }),
+          prepared.intent,
+          JSON.stringify(prepared.receipt),
+          ...scope(command),
+        );
+        return { status: "created", receipt: prepared.receipt };
+      });
+    });
+  }
+
+  private authorityHead(
+    head: BranchStateHead,
+    authority: BranchAuthorityRecord,
+  ): void {
+    const { branch, version } = head;
+    const { identity, createdAt } = authority.reservation;
+    // Reservation convergence ignores an account's incidental client; persisted identity must not.
+    if (
+      !isDropBranchRecord(branch) ||
+      !sameScope(head, authority) ||
+      !samePlacement(head, authority) ||
+      branch.rootDropId !== authority.target.rootDropId ||
+      branch.branchId !== authority.target.branchId ||
+      branch.baseDropId !== identity.baseDropId ||
+      branch.mode !== identity.mode ||
+      branch.ownerAccountId !== identity.ownerAccountId ||
+      branch.writerAccountId !== identity.writerAccountId ||
+      branch.writerClientId !== identity.writerClientId ||
+      branch.createdAt !== createdAt ||
+      branch.status !== "active" ||
+      branch.snapshotHeapVersion !== 2 ||
+      branch.checkpointInterval !== 24 ||
+      !Number.isSafeInteger(branch.updatedAt) ||
+      branch.updatedAt < 0 ||
+      branch.headSnapshotId !== version.snapshotId ||
+      branch.headEventSeq !== version.eventSeq ||
+      (version.snapshotId === 0
+        ? version.eventSeq !== -1 || branch.updatedAt !== createdAt
+        : version.eventSeq < version.snapshotId - 1)
+    )
+      return corrupt();
+  }
+
   private head(query: BranchHeadQuery): BranchStateHead {
     this.routing(query);
     const row = this.sql.rows(
-      "SELECT routing_version, generation, head_json FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?",
+      "SELECT h.routing_version, h.generation, h.head_json, a.authority_json, a.initialization_receipt_json, a.initialization_intent IS NOT NULL AS has_initialization_intent, f.root_drop_id AS fixture_seed FROM branch_heads h LEFT JOIN branch_authorities a ON a.root_drop_id = h.root_drop_id AND a.branch_id = h.branch_id LEFT JOIN branch_fixture_seeds f ON f.root_drop_id = h.root_drop_id AND f.branch_id = h.branch_id WHERE h.root_drop_id = ? AND h.branch_id = ?",
       ...scope(query),
     )[0];
-    if (!row) throw new BranchStateError("branch_not_found");
+    if (!row) {
+      const stored = this.authority(query);
+      if (
+        stored &&
+        stored.authority.placement.generation !== query.placement.generation
+      )
+        throw new BranchStateError("routing_generation_mismatch");
+      throw new BranchStateError(
+        stored?.authority.state === "pending"
+          ? "branch_initialization_pending"
+          : stored
+            ? "state_corrupt"
+            : "branch_not_found",
+      );
+    }
     // Stored placement is checked before receipt lookup and every cache lookup.
     if (
       row.routing_version !== 1 ||
@@ -222,6 +486,22 @@ export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
       (row.generation as number) < 0
     )
       return corrupt();
+    // Only the explicit seed path can persist a head without lifecycle authority.
+    let authority: BranchAuthorityRecord | undefined;
+    if (row.authority_json !== null) {
+      try {
+        authority = BranchLifecycleQuery.authority(json(row.authority_json));
+      } catch {
+        return corrupt();
+      }
+      if (!sameScope(authority, query) || authority.state !== "active")
+        return corrupt();
+      if (authority.placement.generation !== query.placement.generation)
+        throw new BranchStateError("routing_generation_mismatch");
+      if (authority.placement.generation !== row.generation) return corrupt();
+      if (row.fixture_seed !== null || row.has_initialization_intent !== 1)
+        return corrupt();
+    } else if (row.fixture_seed === null) return corrupt();
     if (row.generation !== query.placement.generation)
       throw new BranchStateError("routing_generation_mismatch");
     const value = record(json(row.head_json));
@@ -240,7 +520,34 @@ export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
       branch.headEventSeq !== identity.version.eventSeq
     )
       return corrupt();
-    return { ...identity, branch };
+    const head = { ...identity, branch };
+    if (authority) {
+      this.authorityHead(head, authority);
+      const receipt = record(json(row.initialization_receipt_json));
+      const receiptIdentity = storedQuery({
+        ...receipt,
+        version: head.version,
+      });
+      const initialValue = record(receipt.initialHead);
+      const initialIdentity = storedQuery(initialValue);
+      if (!isDropBranchRecord(initialValue.branch)) return corrupt();
+      const initialHead = { ...initialIdentity, branch: initialValue.branch };
+      this.authorityHead(initialHead, authority);
+      if (
+        !sameScope(receiptIdentity, authority) ||
+        !samePlacement(receiptIdentity, authority) ||
+        receipt.reservationId !== authority.reservation.reservationId ||
+        receipt.rootRevision !== authority.reservation.rootRevision ||
+        typeof receipt.payloadHash !== "string" ||
+        !/^sha256:[A-Za-z0-9_-]{43}$/.test(receipt.payloadHash) ||
+        initialHead.version.snapshotId !== 0 ||
+        initialHead.version.eventSeq !== -1 ||
+        (head.version.snapshotId === 0 &&
+          !sameBranchStateVersion(head.version, initialHead.version))
+      )
+        return corrupt();
+    }
+    return head;
   }
 
   private snapshot(
@@ -286,6 +593,10 @@ export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
       snapshot.snapshotId !== identity.version.snapshotId ||
       snapshot.seq !== snapshot.snapshotId ||
       snapshot.sourceContentHash !== identity.version.sourceContentHash ||
+      !Number.isSafeInteger(snapshot.textLength) ||
+      snapshot.textLength < 0 ||
+      !Number.isSafeInteger(snapshot.createdAt) ||
+      snapshot.createdAt < 0 ||
       !snapshot.checkpointed
     )
       return corrupt();
@@ -631,6 +942,90 @@ export class SqliteBranchCommitStatePlane implements BranchBatchStatePlane {
       if (content.content.length !== latest.snapshot.textLength)
         return corrupt();
       return content;
+    });
+  }
+
+  private discoveredSnapshot(
+    query: BranchHeadQuery,
+    row: Row,
+  ): BranchSnapshotState {
+    const identity = storedQuery({
+      target: query.target,
+      placement: query.placement,
+      version: {
+        snapshotId: row.snapshot_id,
+        eventSeq: row.event_seq,
+        sourceContentHash: row.source_content_hash,
+      },
+    });
+    return {
+      ...identity,
+      snapshot: this.snapshotRecord(identity, row, false).snapshot,
+    };
+  }
+
+  /** Reads persisted metadata and its complete version in one transaction, including snapshot zero. */
+  async readSnapshot(
+    input: BranchSnapshotQuery,
+  ): Promise<BranchSnapshotState | null> {
+    return this.available(() => {
+      const query = BranchLifecycleQuery.snapshot(input);
+      return this.sql.transaction(() => {
+        const head = this.head(query);
+        const row = this.sql.rows(
+          "SELECT s.snapshot_id, s.event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE s.root_drop_id = ? AND s.branch_id = ? AND s.snapshot_id = ?",
+          ...scope(query),
+          query.snapshotId,
+        )[0];
+        if (!row) {
+          if (query.snapshotId <= head.version.snapshotId) return corrupt();
+          return null;
+        }
+        if (query.snapshotId > head.version.snapshotId) return corrupt();
+        const snapshot = this.discoveredSnapshot(query, row);
+        if (
+          query.snapshotId === head.version.snapshotId &&
+          !sameBranchStateVersion(snapshot.version, head.version)
+        )
+          return corrupt();
+        return snapshot;
+      });
+    });
+  }
+
+  /** Indexed contiguous ascending page pinned to an exact captured snapshot, without hydrating content. */
+  async listSnapshots(
+    input: BranchSnapshotPageQuery,
+  ): Promise<BranchSnapshotPage> {
+    return this.available(() => {
+      const query = BranchLifecycleQuery.page(input);
+      return this.sql.transaction(() => {
+        const head = this.head(query);
+        if (query.version.snapshotId > head.version.snapshotId)
+          throw new BranchStateError("snapshot_not_found");
+        this.snapshot(query, false);
+        const end = Math.min(
+          query.version.snapshotId,
+          query.afterSnapshotId + query.limit,
+        );
+        const rows = this.sql.rows(
+          "SELECT s.snapshot_id, s.event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE s.root_drop_id = ? AND s.branch_id = ? AND s.snapshot_id > ? AND s.snapshot_id <= ? ORDER BY s.snapshot_id ASC LIMIT ?",
+          ...scope(query),
+          query.afterSnapshotId,
+          query.version.snapshotId,
+          query.limit,
+        );
+        if (rows.length !== end - query.afterSnapshotId) return corrupt();
+        const snapshots = rows.map((row, index) => {
+          if (row.snapshot_id !== query.afterSnapshotId + index + 1)
+            return corrupt();
+          return this.discoveredSnapshot(query, row);
+        });
+        return {
+          snapshots,
+          nextAfterSnapshotId: end < query.version.snapshotId ? end : null,
+        };
+      });
     });
   }
 

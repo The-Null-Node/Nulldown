@@ -1,5 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type {
+  BranchPlacementQuery,
+  BranchReserveRecord,
+  BranchInitializeRecord,
+  BranchSnapshotQuery,
+  BranchSnapshotPageQuery,
+} from "../../../shared/drop/branch-lifecycle";
+import type {
   BranchAppendRecord,
   BranchBatchAppendRecord,
   BranchContentQuery,
@@ -23,6 +30,11 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
         this.env.BRANCH_STATE.idFromName(name),
       );
       return {
+        readPlacement: async (query) => await stub.readPlacement(query),
+        reserve: async (command) => await stub.reserve(command),
+        initialize: async (command) => await stub.initialize(command),
+        readSnapshot: async (query) => await stub.readSnapshot(query),
+        listSnapshots: async (query) => await stub.listSnapshots(query),
         append: async (command) => await stub.append(command),
         appendBatch: async (command) => await stub.appendBatch(command),
         readHead: async (query) => await stub.readHead(query),
@@ -30,6 +42,26 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
         readEvents: async (query) => await stub.readEvents(query),
       };
     });
+  }
+  /** Discovers durable local ownership without creating a branch. */
+  async readPlacement(query: BranchPlacementQuery) {
+    return branchStateRpcResult(() => this.#plane().readPlacement(query));
+  }
+  /** Reserves a new branch after upstream authorization and strict legacy exclusion. */
+  async reserve(command: BranchReserveRecord) {
+    return branchStateRpcResult(() => this.#plane().reserve(command));
+  }
+  /** Activates the exact winning reservation after authorized root materialization. */
+  async initialize(command: BranchInitializeRecord) {
+    return branchStateRpcResult(() => this.#plane().initialize(command));
+  }
+  /** Reads exact historical snapshot identity and metadata. */
+  async readSnapshot(query: BranchSnapshotQuery) {
+    return branchStateRpcResult(() => this.#plane().readSnapshot(query));
+  }
+  /** Reads a bounded ascending page pinned to an exact version. */
+  async listSnapshots(query: BranchSnapshotPageQuery) {
+    return branchStateRpcResult(() => this.#plane().listSnapshots(query));
   }
   /** Publishes one event through typed internal RPC. */
   async append(command: BranchAppendRecord) {

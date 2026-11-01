@@ -17,8 +17,12 @@ import type {
   DiffAuthRegisterResponse,
 } from "../../../../shared/drop/diff-auth";
 import { providerCrypto } from "../../_lib/crypto/provider-crypto";
+import type { LocalBranchApplicationSelection } from "../../../../src/server/state-plane/commit-application";
+import { BranchStateError } from "../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../../_lib/branches/http/state-plane-errors";
 
 interface Env extends AccountAuthEnv {
+  localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   DIFF_AUTH_TTL_MS?: string;
@@ -62,6 +66,15 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({
     if (!env.R2_BUCKET) {
       logger.logEnd(500, { reason: "bucket_missing" });
       return new Response("R2 bucket binding is required.", { status: 500 });
+    }
+
+    if (env.localBranchApplication) {
+      if (!(await resolveAuthenticatedAccountId(request, env))) {
+        logger.logEnd(401, { reason: "unauthenticated_account" });
+        return new Response("Authenticated account session is required.", { status: 401 });
+      }
+      logger.logEnd(501, { reason: "capability_unsupported" });
+      return branchStateErrorResponse(new BranchStateError("capability_unsupported"));
     }
 
     const dropIdentityRepository = createDropIdentityRepository({

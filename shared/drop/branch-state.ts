@@ -6,6 +6,7 @@ import { DropDiffOperation } from "./diff-operation";
 import { hashNulldownSourceContent } from "./resolved/hash";
 import type { NulldownSourceHash } from "./resolved/types";
 import { serializeCanonicalJson } from "./types";
+import { MAX_BRANCH_ID_LENGTH } from "./branch-identity";
 
 const token = z
   .string()
@@ -14,7 +15,16 @@ const token = z
   .refine((s) => s.trim() === s);
 const integer = z.number().int().nonnegative();
 const hash = z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/);
-const targetSchema = z.object({ rootDropId: token, branchId: token }).strict();
+const targetSchema = z
+  .object({
+    rootDropId: token,
+    branchId: z
+      .string()
+      .min(1)
+      .max(MAX_BRANCH_ID_LENGTH)
+      .refine((s) => s.trim() === s),
+  })
+  .strict();
 const placementSchema = z
   .object({
     routingVersion: integer.min(1),
@@ -174,6 +184,21 @@ export const BRANCH_STATE_ERRORS = {
   invalid_command: { status: 400, outcome: "not_committed", retry: "never" },
   branch_not_found: { status: 404, outcome: "not_committed", retry: "never" },
   snapshot_not_found: { status: 404, outcome: "not_committed", retry: "never" },
+  branch_initialization_pending: {
+    status: 409,
+    outcome: "not_committed",
+    retry: "refresh",
+  },
+  branch_initialization_conflict: {
+    status: 409,
+    outcome: "not_committed",
+    retry: "never",
+  },
+  routing_placement_mismatch: {
+    status: 409,
+    outcome: "not_committed",
+    retry: "refresh",
+  },
   routing_generation_mismatch: {
     status: 409,
     outcome: "not_committed",

@@ -33,6 +33,7 @@ import {
 import { toLogRef, type RequestLogger } from "../../core/logging/logger";
 import { createSearchDatabase } from "../../search/repository";
 import { createBranchRepository } from "../../branches/storage/repository";
+import type { LocalBranchApplicationSelection } from "../../../../../src/server/state-plane/commit-application";
 import {
   AccountLibraryError,
   projectAccountLibraryEnvelope,
@@ -45,6 +46,8 @@ import {
 
 /** Environment required by the store route service. */
 export interface StoreServiceEnv extends ProviderSigningEnv {
+  /** Trusted local authority selection; root replacement needs a separate durable publication fence. */
+  localBranchApplication?: LocalBranchApplicationSelection;
   blobs: BlobObjectStore;
   sql?: SqlMetadataStore;
   PUBLIC_BASE_URL?: string;
@@ -302,6 +305,18 @@ export const storeDrop = async ({
       upsert = parsedRequest.upsert;
       expectedRevision = parsedRequest.expectedRevision;
       writeExpectedRevision = expectedRevision;
+
+      // A lease cannot fence an already-admitted delayed R2 write against DO
+      // initialization. Selected local roots stay immutable until publication
+      // has its own cross-authority fence; reject before acquiring any lease.
+      if (upsert && env.localBranchApplication) {
+        logger.logEnd(501, { reason: "capability_unsupported" });
+        return jsonErrorResponse(
+          501,
+          "capability_unsupported",
+          "Root replacement is unavailable for the selected branch authority.",
+        );
+      }
 
       if (requestedId && upsert) {
         rootMutationLock = await acquireRootMutationLock(env.blobs, requestedId);

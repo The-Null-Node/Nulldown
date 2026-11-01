@@ -1,5 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  BranchLifecycleQuery,
+  type BranchPlacementQuery,
+  type BranchReserveRecord,
+  type BranchInitializeRecord,
+  type BranchSnapshotQuery,
+  type BranchSnapshotPageQuery,
+} from "../../../shared/drop/branch-lifecycle";
+import {
   BranchStateError,
   BranchStateQuery,
   type BranchAppendRecord,
@@ -59,10 +67,61 @@ export class BranchStateObject extends DurableObject<BranchStateBindings> {
   }
 
   async #placement(query: BranchHeadQuery): Promise<void> {
-    const name = await branchStateShardName(query);
+    const name = await branchStateShardName({
+      target: query.target,
+      placement: query.placement,
+    });
     if (!this.ctx.id.equals(this.env.BRANCH_STATE.idFromName(name))) {
-      throw new BranchStateError("routing_generation_mismatch");
+      throw new BranchStateError("routing_placement_mismatch");
     }
+  }
+
+  /** Internal discovery exposes pending ownership before any branch head exists. */
+  async readPlacement(input: BranchPlacementQuery) {
+    return branchStateRpcResult(async () => {
+      const query = BranchLifecycleQuery.placement(input);
+      await this.#placement({
+        ...query,
+        placement: { routingVersion: 1, generation: 0 },
+      });
+      return this.#plane.readPlacement(query);
+    });
+  }
+
+  /** Upstream-authorized reservation; this is a service-binding operation, never a public endpoint. */
+  async reserve(input: BranchReserveRecord) {
+    return branchStateRpcResult(async () => {
+      const command = BranchLifecycleQuery.reserve(input);
+      await this.#placement(command);
+      return this.#plane.reserve(command);
+    });
+  }
+
+  /** Atomically activates a reserved local branch and its immutable snapshot-zero receipt. */
+  async initialize(input: BranchInitializeRecord) {
+    return branchStateRpcResult(async () => {
+      const command = BranchLifecycleQuery.initialize(input);
+      await this.#placement(command);
+      return this.#plane.initialize(command);
+    });
+  }
+
+  /** Discovers exact snapshot metadata and version without content replay. */
+  async readSnapshot(input: BranchSnapshotQuery) {
+    return branchStateRpcResult(async () => {
+      const query = BranchLifecycleQuery.snapshot(input);
+      await this.#placement(query);
+      return this.#plane.readSnapshot(query);
+    });
+  }
+
+  /** Reads one bounded, captured-version history page. */
+  async listSnapshots(input: BranchSnapshotPageQuery) {
+    return branchStateRpcResult(async () => {
+      const query = BranchLifecycleQuery.page(input);
+      await this.#placement(query);
+      return this.#plane.listSnapshots(query);
+    });
   }
 
   /** Typed append RPC; receiver rejects direct stubs targeting the wrong deterministic shard. */

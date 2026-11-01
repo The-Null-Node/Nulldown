@@ -1,4 +1,6 @@
 import { verifyBearerToken } from "../../auth/bearer";
+import { BranchStateError } from "../../../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../../../branches/http/state-plane-errors";
 import { jsonErrorResponse, jsonResponse } from "../../http/responses";
 import { type RequestLogger, toLogRef } from "../../logging/logger";
 import { backfillAccountLibrary } from "./account-library";
@@ -46,6 +48,13 @@ export const backfillD1Metadata = async (
   }
   if (!verifyBearerToken(request, token)) {
     return jsonErrorResponse(401, "unauthorized", "Unauthorized");
+  }
+
+  if (env.localBranchApplication) {
+    logger?.logEnd(501, { reason: "capability_unsupported" });
+    return branchStateErrorResponse(
+      new BranchStateError("capability_unsupported"),
+    );
   }
 
   const url = new URL(request.url);

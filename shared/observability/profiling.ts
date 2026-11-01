@@ -6,6 +6,7 @@ export const PHASES = [
   "content.authority",
   "content.branch",
   "content.materialize",
+  "content.snapshot",
   "content.serialize",
   "replay.direct",
   "replay.snapshot",

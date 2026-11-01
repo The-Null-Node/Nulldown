@@ -30,6 +30,8 @@ import {
   RootMutationLockError,
 } from "../drops/storage/mutation-lock";
 import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
+import { BranchStateError } from "../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "./http/state-plane-errors";
 import { assertOwnerRootHistory, readRootDropState } from "./lifecycle";
 import type { BranchPromotionEnv, BranchPromotionParams } from "./promotion";
 import {
@@ -103,6 +105,8 @@ export const publishOwnerSnapshot = async (
       sql: env.DB,
     }).resolveRemoteDropId(resolveParam(params.rootId));
     if (!rootDropId) return fail(404, "drop_not_found", "Drop not found.");
+    if (env.localBranchApplication)
+      return branchStateErrorResponse(new BranchStateError("capability_unsupported"));
     const statePlane = createBranchStatePlane({
       blobs: env.R2_BUCKET,
       sql: env.DB,

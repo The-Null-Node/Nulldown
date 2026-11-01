@@ -13,6 +13,11 @@ import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { createMemoryRuntimeDataStore } from "../memory-data-store";
 import type { NulleditSnapshotContext } from "../nulledit/types";
 import { createCommitApplicationStatePlane } from "./commit-application";
+import type { LocalBranchLifecycle } from "./application-lifecycle";
+import type {
+  BranchSnapshotState,
+  BranchSnapshotStatePlane,
+} from "../../../shared/drop/branch-lifecycle";
 
 const branch: DropBranchRecord = {
   version: 1,
@@ -76,7 +81,253 @@ const fixture = async (events: DropDiffEvent[] = []) => {
   };
 };
 
+const historyFixture = async (count: number) => {
+  const states: BranchSnapshotState[] = await Promise.all(
+    Array.from({ length: count }, async (_, id) => {
+      const hash = await hashNulldownSourceContent(`snapshot-${id}`);
+      return {
+        target: { rootDropId: "root", branchId: "owner" },
+        placement,
+        version: { snapshotId: id, eventSeq: id - 1, sourceContentHash: hash },
+        snapshot: {
+          version: 1 as const,
+          rootDropId: "root",
+          branchId: "owner",
+          snapshotId: id,
+          parentSnapshotId: id ? id - 1 : null,
+          seq: id ? id - 1 : 0,
+          eventIds: id ? [`event-${id - 1}`] : [],
+          checkpointed: true,
+          patchStartSeq: id ? id - 1 : null,
+          patchEndSeq: id ? id - 1 : null,
+          textLength: `snapshot-${id}`.length,
+          sourceContentHash: hash,
+          createdAt: id + 1,
+        },
+      };
+    }),
+  );
+  const history = {
+    readSnapshot: jest
+      .fn<BranchSnapshotStatePlane["readSnapshot"]>()
+      .mockImplementation(async ({ snapshotId }) =>
+        structuredClone(states[snapshotId] ?? null),
+      ),
+    listSnapshots: jest
+      .fn<BranchSnapshotStatePlane["listSnapshots"]>()
+      .mockImplementation(async ({ version, afterSnapshotId, limit }) => {
+        const end = Math.min(
+          afterSnapshotId + limit + 1,
+          version.snapshotId + 1,
+        );
+        return {
+          snapshots: structuredClone(states.slice(afterSnapshotId + 1, end)),
+          nextAfterSnapshotId: end <= version.snapshotId ? end - 1 : null,
+        };
+      }),
+  };
+  return { states, history };
+};
+
 describe("local commit application adapter", () => {
+  it("pins historical discovery to the placement captured with the authorized head", async () => {
+    const { selection, commits } = await fixture();
+    const { history } = await historyFixture(1);
+    const lifecycle = {
+      resolveForActor: jest.fn<LocalBranchLifecycle["resolveForActor"]>(),
+      readPlacement: jest.fn<LocalBranchLifecycle["readPlacement"]>(),
+      requireActivePlacement: jest
+        .fn<LocalBranchLifecycle["requireActivePlacement"]>()
+        .mockResolvedValueOnce(placement)
+        .mockResolvedValue({ routingVersion: 1, generation: 8 }),
+    };
+    const plane = createCommitApplicationStatePlane({
+      ...selection,
+      lifecycle,
+      history,
+    });
+    await plane.branches.readBranch("root", "owner");
+    await plane.snapshots.readSnapshot("root", "owner", 0);
+    await plane.snapshots.readContent("root", "owner", 0);
+    expect(lifecycle.requireActivePlacement).toHaveBeenCalledTimes(1);
+    expect(history.readSnapshot).toHaveBeenCalledWith({
+      target: { rootDropId: "root", branchId: "owner" },
+      placement,
+      snapshotId: 0,
+    });
+    expect(commits.readContent.mock.calls[0][0].placement).toEqual(placement);
+  });
+
+  it("rejects conflicting terminal identities and snapshot cursors before replacing captured content", async () => {
+    const { selection, head, commits } = await fixture();
+    const { history, states } = await historyFixture(2);
+    head.version = states[1].version;
+    head.branch.headSnapshotId = 1;
+    head.branch.headEventSeq = 0;
+    const plane = createCommitApplicationStatePlane({ ...selection, history });
+    await plane.branches.readBranch("root", "owner");
+    history.readSnapshot.mockResolvedValueOnce({
+      ...states[1],
+      version: { ...states[1].version, eventSeq: 99 },
+      snapshot: { ...states[1].snapshot, patchEndSeq: 99 },
+    });
+    await expect(
+      plane.snapshots.readSnapshot("root", "owner", 1),
+    ).rejects.toThrow("state_corrupt");
+    history.listSnapshots.mockResolvedValueOnce({
+      snapshots: [
+        states[0],
+        {
+          ...states[1],
+          snapshot: { ...states[1].snapshot, patchEndSeq: 98 },
+        },
+      ],
+      nextAfterSnapshotId: null,
+    });
+    await expect(
+      plane.snapshots.listSnapshotsForBranch("root", "owner"),
+    ).rejects.toThrow("state_corrupt");
+    await plane.snapshots.readContent("root", "owner", 1);
+    expect(commits.readContent.mock.calls[0][0].version).toEqual(
+      states[1].version,
+    );
+  });
+
+  it("does not let a history dependency mutate its captured pagination bound", async () => {
+    const { selection } = await fixture();
+    const { history, states } = await historyFixture(1);
+    history.listSnapshots.mockImplementationOnce(async (query) => {
+      query.version.snapshotId = 0;
+      return { snapshots: states, nextAfterSnapshotId: null };
+    });
+    const plane = createCommitApplicationStatePlane({ ...selection, history });
+    await expect(
+      plane.snapshots.listSnapshotsForBranch("root", "owner"),
+    ).rejects.toThrow("state_corrupt");
+  });
+
+  it("collects bounded history pages at one captured head and pins exact content versions", async () => {
+    const { selection, commits, head } = await fixture();
+    const { states, history } = await historyFixture(402);
+    head.version = states[400].version;
+    head.branch.headSnapshotId = 400;
+    head.branch.headEventSeq = 399;
+    const plane = createCommitApplicationStatePlane({ ...selection, history });
+    await plane.branches.readBranch("root", "owner");
+    head.version = states[401].version;
+    head.branch.headSnapshotId = 401;
+    const snapshots = await plane.snapshots.listSnapshotsForBranch(
+      "root",
+      "owner",
+    );
+    expect(snapshots.map((snapshot) => snapshot.snapshotId)).toEqual(
+      Array.from({ length: 401 }, (_, i) => i),
+    );
+    expect(
+      history.listSnapshots.mock.calls.map(([query]) => [
+        query.afterSnapshotId,
+        query.limit,
+        query.version.snapshotId,
+      ]),
+    ).toEqual([
+      [-1, 200, 400],
+      [199, 200, 400],
+      [399, 200, 400],
+    ]);
+    await plane.snapshots.readContent("root", "owner", 0);
+    expect(history.readSnapshot).not.toHaveBeenCalled();
+    expect(commits.readContent).toHaveBeenCalledWith({
+      target: states[0].target,
+      placement,
+      version: states[0].version,
+    });
+    expect(commits.readHead).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovers uncaptured history, preserves missing snapshots, and rejects cross-scope metadata", async () => {
+    const { selection, commits } = await fixture();
+    const { history, states } = await historyFixture(2);
+    const plane = createCommitApplicationStatePlane({ ...selection, history });
+    expect(await plane.snapshots.readSnapshot("root", "owner", 1)).toEqual(
+      states[1].snapshot,
+    );
+    await plane.snapshots.readContent("root", "owner", 1);
+    expect(commits.readContent).toHaveBeenCalledWith({
+      target: states[1].target,
+      placement,
+      version: states[1].version,
+    });
+    expect(await plane.snapshots.readContent("root", "owner", 9)).toBeNull();
+    history.readSnapshot.mockResolvedValueOnce({
+      ...states[0],
+      target: { rootDropId: "other", branchId: "owner" },
+    });
+    await expect(
+      plane.snapshots.readSnapshot("root", "owner", 0),
+    ).rejects.toThrow("state_corrupt");
+  });
+
+  it("rejects truncated history and nonadvancing pagination rather than returning partial success", async () => {
+    const { selection } = await fixture();
+    const { history, states } = await historyFixture(1);
+    const plane = createCommitApplicationStatePlane({ ...selection, history });
+    history.listSnapshots.mockResolvedValueOnce({
+      snapshots: states,
+      nextAfterSnapshotId: null,
+    });
+    await expect(
+      plane.snapshots.listSnapshotsForBranch("root", "owner"),
+    ).rejects.toThrow("state_corrupt");
+    history.listSnapshots.mockResolvedValueOnce({
+      snapshots: [],
+      nextAfterSnapshotId: -1,
+    });
+    await expect(
+      plane.snapshots.listSnapshotsForBranch("root", "owner"),
+    ).rejects.toThrow("state_corrupt");
+  });
+
+  it("discovers durable placement for commands and rejects unavailable authority without touching commits", async () => {
+    const { selection, commits } = await fixture();
+    const lifecycle = {
+      resolveForActor: jest.fn<LocalBranchLifecycle["resolveForActor"]>(),
+      readPlacement: jest.fn<LocalBranchLifecycle["readPlacement"]>(),
+      requireActivePlacement: jest
+        .fn<LocalBranchLifecycle["requireActivePlacement"]>()
+        .mockResolvedValue({ routingVersion: 1, generation: 42 }),
+    };
+    const plane = createCommitApplicationStatePlane({
+      ...selection,
+      lifecycle,
+    });
+    await plane.branches.readBranch("root", "owner");
+    expect(commits.readHead).toHaveBeenCalledWith({
+      target: { rootDropId: "root", branchId: "owner" },
+      placement: { routingVersion: 1, generation: 42 },
+    });
+    lifecycle.resolveForActor.mockResolvedValueOnce({ branch, created: false });
+    expect(
+      await plane.branches.resolveForActor("root", "account", "client"),
+    ).toEqual({ branch, created: false });
+    expect(lifecycle.resolveForActor).toHaveBeenCalledWith(
+      "root",
+      "account",
+      "client",
+    );
+    commits.readHead.mockClear();
+    lifecycle.requireActivePlacement.mockRejectedValue(
+      new BranchStateError("state_unavailable"),
+    );
+    await expect(plane.branches.readBranch("root", "owner")).rejects.toThrow(
+      "state_unavailable",
+    );
+    await expect(
+      plane.appendDiffEvents({ branch, events: [makeEvent(0)] }),
+    ).rejects.toThrow("state_unavailable");
+    expect(commits.readHead).not.toHaveBeenCalled();
+    expect(commits.appendBatch).not.toHaveBeenCalled();
+  });
+
   it("scans exclusions across bounded chunks, counting only returned events and pinning one head", async () => {
     const events = Array.from({ length: 455 }, (_, seq) =>
       makeEvent(seq, seq === 401 || seq === 450 ? "other" : "writer"),

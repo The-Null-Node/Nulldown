@@ -563,11 +563,17 @@ seeding requires an explicit test binding. Migration and outbox consumers are no
 implemented.
 
 For local application testing, `src/server/state-plane/commit-application.ts`
-connects explicitly seeded branches to the existing authenticated diff and content
+connects local branches to the existing authenticated diff and content
 routes. Public batches share one snapshot and retain per-event retry acknowledgements.
 Selection is an in-process dependency, not a request header or deployment variable.
-Lifecycle, snapshot listing, runtime facts, memory, and plugin operations remain
-unsupported on this local path. Snapshotters must be supplied explicitly with a
+The optional lifecycle adapter in `src/server/state-plane/application-lifecycle.ts`
+bootstraps signed, account-owned roots through durable reservation and snapshot-zero
+activation. It verifies ownership and excludes existing legacy history before
+selecting local authority. History support adds ascending snapshot discovery and
+exact historical content reads (`?snapshotId=N` on the branch content endpoint).
+Root replacement, deletion, publication, promotion, diff-credential registration,
+runtime facts, memory, and plugin operations remain unsupported on this local path.
+Snapshotters must be supplied explicitly with a
 derived-data store; durable outbox delivery is separate work.
 
 With Bun and a Node.js version supporting `node:sqlite`, run:

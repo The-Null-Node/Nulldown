@@ -9,8 +9,10 @@ import { acquireRootMutationLock } from "../_lib/drops/storage/mutation-lock";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
 import { readAccountLibraryEntry, tombstoneAccountLibraryEntry } from "../_lib/accounts/library/repository";
 import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/authentication";
+import type { LocalBranchApplicationSelection } from "../../../src/server/state-plane/commit-application";
 
 interface Env {
+  localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   ACCOUNT_AUTH_SECRET?: string;
@@ -88,6 +90,15 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
         401,
         "account_auth_required",
         "An authenticated account session is required.",
+      );
+    }
+
+    if (env.localBranchApplication) {
+      logger.logEnd(501, { reason: "capability_unsupported" });
+      return jsonErrorResponse(
+        501,
+        "capability_unsupported",
+        "Root deletion is unavailable for the selected branch authority.",
       );
     }
 
