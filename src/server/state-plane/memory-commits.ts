@@ -4,6 +4,26 @@ import {
   type DropSnapshotRecord,
 } from "../../../shared/drop/branch";
 import type { DropDiffEvent } from "../../../shared/drop/diff";
+import { nullplugUiRuntimeFactId } from "../../../shared/nullplug/ui";
+import {
+  authorizeRuntimeFact,
+  captureRuntimeFactAppend,
+  captureRuntimeFactPage,
+  hashRuntimeFactIntent,
+  prepareRuntimeFactReceipt,
+  runtimeFactIdentity,
+  runtimeFactIntent,
+  runtimeFactKey,
+  runtimeFactOutbox,
+  type BranchRuntimeFactAppendCommand,
+  type BranchRuntimeFactAppendResult,
+  type BranchRuntimeFactHead,
+  type BranchRuntimeFactPage,
+  type BranchRuntimeFactPageQuery,
+  type BranchRuntimeFactReceipt,
+  type BranchRuntimeFactOutbox,
+  type BranchRuntimeFactStatePlane,
+} from "../../../shared/drop/branch-runtime-facts";
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { prepareBranchCommit } from "../../../shared/drop/branch-commit";
 import {
@@ -57,6 +77,11 @@ export interface MemoryBranchStateSeed {
 }
 
 type State = {
+  runtimeFacts: Map<
+    string,
+    { intent: string; receipt: BranchRuntimeFactReceipt }
+  >;
+  runtimeOutbox: Map<string, BranchRuntimeFactOutbox>;
   head: BranchStateHead;
   snapshots: Map<number, BranchStateContent>;
   snapshotMetadata: Map<number, DropSnapshotRecord>;
@@ -72,7 +97,9 @@ const key = (target: BranchHeadQuery["target"]): string =>
  * Deterministic in-memory reference for local contract tests, not durable authority or a production cache.
  * Each instance owns seeded branches; returned values never share mutable state with storage.
  */
-export class MemoryBranchCommitStatePlane implements BranchLifecycleStatePlane {
+export class MemoryBranchCommitStatePlane
+  implements BranchLifecycleStatePlane, BranchRuntimeFactStatePlane
+{
   private readonly states = new Map<string, State>();
   private readonly authorities = new Map<string, BranchAuthorityRecord>();
   private readonly initializations = new Map<
@@ -118,6 +145,8 @@ export class MemoryBranchCommitStatePlane implements BranchLifecycleStatePlane {
         sourceContentHash: await hashNulldownSourceContent(content),
       };
       plane.states.set(key(query.target), {
+        runtimeFacts: new Map(),
+        runtimeOutbox: new Map(),
         head: { ...query, branch, version },
         snapshots: new Map([[0, { ...query, version, content }]]),
         snapshotMetadata: new Map([
@@ -234,6 +263,8 @@ export class MemoryBranchCommitStatePlane implements BranchLifecycleStatePlane {
     if (this.states.has(id) || this.initializations.has(id))
       throw new BranchStateError("state_corrupt");
     this.states.set(id, {
+      runtimeFacts: new Map(),
+      runtimeOutbox: new Map(),
       head: prepared.head,
       snapshots: new Map([
         [
@@ -292,6 +323,8 @@ export class MemoryBranchCommitStatePlane implements BranchLifecycleStatePlane {
       throw new BranchStateError("diff_predecessor_mismatch");
     const query = { target: command.target, placement: command.placement };
     const next: State = {
+      runtimeFacts: latest.runtimeFacts,
+      runtimeOutbox: latest.runtimeOutbox,
       head: {
         ...query,
         branch: prepared.branch,
@@ -338,6 +371,8 @@ export class MemoryBranchCommitStatePlane implements BranchLifecycleStatePlane {
       if (latest !== state) continue;
       if (!prepared.result.snapshot) return structuredClone(prepared.result);
       const next: State = {
+        runtimeFacts: state.runtimeFacts,
+        runtimeOutbox: state.runtimeOutbox,
         head: {
           target: command.target,
           placement: command.placement,
@@ -369,6 +404,92 @@ export class MemoryBranchCommitStatePlane implements BranchLifecycleStatePlane {
       return structuredClone(prepared.result);
     }
     throw new BranchStateError("state_unavailable");
+  }
+
+  /** Publishes immutable fact, receipt, sequence and outbox with one synchronous state replacement. */
+  async appendRuntimeFact(
+    input: BranchRuntimeFactAppendCommand,
+  ): Promise<BranchRuntimeFactAppendResult> {
+    const command = captureRuntimeFactAppend(input);
+    const intent = runtimeFactIntent(command.fact);
+    const payloadHash = await hashRuntimeFactIntent(intent);
+    const state = this.state(command);
+    authorizeRuntimeFact(command, state.head);
+    const query = { target: command.target, placement: command.placement };
+    const identity = runtimeFactIdentity(command.fact);
+    const existing = state.runtimeFacts.get(identity);
+    if (existing) {
+      if (existing.intent !== intent)
+        throw new BranchStateError("idempotency_key_reused");
+      return structuredClone({
+        ...query,
+        appended: false,
+        receipt: existing.receipt,
+      });
+    }
+    for (const { receipt } of state.runtimeFacts.values()) {
+      if (
+        receipt.event.factId === nullplugUiRuntimeFactId(command.fact) ||
+        receipt.key === runtimeFactKey(command.fact)
+      )
+        throw new BranchStateError("idempotency_key_reused");
+    }
+    this.content({ ...query, version: state.head.version });
+    const receipt = prepareRuntimeFactReceipt(
+      command,
+      state.head,
+      state.runtimeFacts.size - 1,
+      payloadHash,
+      this.now(),
+    );
+    const outbox = runtimeFactOutbox(query, receipt);
+    const next = {
+      ...state,
+      runtimeFacts: new Map(state.runtimeFacts),
+      runtimeOutbox: new Map(state.runtimeOutbox),
+    };
+    next.runtimeFacts.set(identity, { intent, receipt });
+    next.runtimeOutbox.set(outbox.id, outbox);
+    this.states.set(key(command.target), next);
+    return structuredClone({ ...query, appended: true, receipt });
+  }
+
+  /** Captures the independent runtime timeline without creating branch or fact state. */
+  async readRuntimeFactHead(
+    input: BranchHeadQuery,
+  ): Promise<BranchRuntimeFactHead> {
+    const query = BranchStateQuery.head(input);
+    return { ...query, headSeq: this.state(query).runtimeFacts.size - 1 };
+  }
+
+  /** Reads one contiguous bounded page, excluding facts beyond the captured horizon. */
+  async readRuntimeFacts(
+    input: BranchRuntimeFactPageQuery,
+  ): Promise<BranchRuntimeFactPage> {
+    const query = captureRuntimeFactPage(input);
+    const state = this.state(query);
+    if (query.headSeq > state.runtimeFacts.size - 1)
+      throw new BranchStateError("invalid_command");
+    const facts = [...state.runtimeFacts.values()]
+      .map(({ receipt }) => receipt.event)
+      .filter(
+        (event) => event.seq > query.afterSeq && event.seq <= query.headSeq,
+      )
+      .slice(0, query.limit);
+    return structuredClone({
+      target: query.target,
+      placement: query.placement,
+      headSeq: query.headSeq,
+      facts,
+      nextCursor: facts.length ? facts[facts.length - 1].seq : null,
+    });
+  }
+
+  /** Test-only inspection of authoritative runtime outbox intents; does not deliver or acknowledge. */
+  inspectRuntimeFactOutbox(input: BranchHeadQuery): BranchRuntimeFactOutbox[] {
+    return structuredClone([
+      ...this.state(BranchStateQuery.head(input)).runtimeOutbox.values(),
+    ]);
   }
 
   /** Returns the exact current head without resolving or creating missing branches. */

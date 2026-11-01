@@ -52,6 +52,27 @@ import {
   initializeBranchSqlSchema,
 } from "./sqlite-schema";
 import { ExactContentCache } from "./exact-content-cache";
+import { nullplugUiRuntimeFactId } from "../../../shared/nullplug/ui";
+import {
+  authorizeRuntimeFact,
+  canonicalRuntimeFactJson,
+  captureRuntimeFactAppend,
+  captureRuntimeFactPage,
+  hashRuntimeFactIntent,
+  prepareRuntimeFactReceipt,
+  runtimeFactIdentity,
+  runtimeFactIntent,
+  runtimeFactKey,
+  runtimeFactOutbox,
+  validateRuntimeFactReceipt,
+  type BranchRuntimeFactAppendCommand,
+  type BranchRuntimeFactAppendResult,
+  type BranchRuntimeFactHead,
+  type BranchRuntimeFactPage,
+  type BranchRuntimeFactPageQuery,
+  type BranchRuntimeFactReceipt,
+  type BranchRuntimeFactStatePlane,
+} from "../../../shared/drop/branch-runtime-facts";
 
 type Row = Record<string, unknown>;
 const scope = (query: BranchHeadQuery): [string, string] => [
@@ -99,7 +120,9 @@ export interface SqliteBranchCommitOptions {
 }
 
 /** SQL-authoritative branch commits shared by local SQLite and SQLite-backed Durable Objects. */
-export class SqliteBranchCommitStatePlane implements BranchLifecycleStatePlane {
+export class SqliteBranchCommitStatePlane
+  implements BranchLifecycleStatePlane, BranchRuntimeFactStatePlane
+{
   private readonly now: () => number;
   private readonly cache: ExactContentCache;
 
@@ -890,6 +913,231 @@ export class SqliteBranchCommitStatePlane implements BranchLifecycleStatePlane {
         if (committed) return prepared.result;
       }
       throw new BranchStateError("state_unavailable");
+    });
+  }
+
+  private runtimeHead(query: BranchHeadQuery): number {
+    const row = this.sql.rows(
+      "SELECT head_seq FROM branch_runtime_fact_heads WHERE root_drop_id = ? AND branch_id = ?",
+      ...scope(query),
+    )[0];
+    const maximum = this.sql.rows(
+      "SELECT MAX(seq) AS maximum FROM branch_runtime_facts WHERE root_drop_id = ? AND branch_id = ?",
+      ...scope(query),
+    )[0];
+    const headSeq = row ? row.head_seq : -1;
+    if (
+      !Number.isSafeInteger(headSeq) ||
+      Number(headSeq) < -1 ||
+      maximum?.maximum !== (headSeq === -1 ? null : headSeq)
+    )
+      return corrupt();
+    return headSeq as number;
+  }
+
+  private runtimeReceipt(
+    query: BranchHeadQuery,
+    identity: string,
+  ): { intent: string; receipt: BranchRuntimeFactReceipt } | null {
+    const rows = this.sql.rows(
+      "SELECT f.identity, f.fact_id, f.fact_key, f.seq, f.event_json, r.intent, r.receipt_json, o.outbox_id, o.outbox_json FROM branch_runtime_facts f LEFT JOIN branch_runtime_fact_receipts r ON r.root_drop_id = f.root_drop_id AND r.branch_id = f.branch_id AND r.identity = f.identity LEFT JOIN branch_runtime_fact_outbox o ON o.root_drop_id = f.root_drop_id AND o.branch_id = f.branch_id AND o.identity = f.identity WHERE f.root_drop_id = ? AND f.branch_id = ? AND f.identity = ?",
+      ...scope(query),
+      identity,
+    );
+    if (!rows.length) return null;
+    const row = rows[0];
+    const receipt = json(row.receipt_json) as BranchRuntimeFactReceipt;
+    validateRuntimeFactReceipt(receipt, query);
+    if (
+      receipt.identity !== identity ||
+      row.identity !== identity ||
+      row.fact_id !== encodeBranchSqlText(receipt.event.factId) ||
+      row.fact_key !== encodeBranchSqlText(receipt.key) ||
+      row.seq !== receipt.event.seq ||
+      canonicalRuntimeFactJson(json(row.event_json)) !==
+        canonicalRuntimeFactJson(receipt.event) ||
+      row.intent !== runtimeFactIntent(receipt.event.fact) ||
+      row.outbox_id !== runtimeFactOutbox(query, receipt).id ||
+      canonicalRuntimeFactJson(json(row.outbox_json)) !==
+        canonicalRuntimeFactJson(runtimeFactOutbox(query, receipt))
+    )
+      return corrupt();
+    const snapshot = this.sql.rows(
+      "SELECT event_seq, source_content_hash FROM branch_snapshots WHERE root_drop_id = ? AND branch_id = ? AND snapshot_id = ?",
+      ...scope(query),
+      receipt.event.fact.source.snapshotId!,
+    )[0];
+    if (
+      !snapshot ||
+      snapshot.source_content_hash !==
+        receipt.event.fact.source.sourceContentHash
+    )
+      return corrupt();
+    try {
+      this.snapshot(
+        {
+          target: query.target,
+          placement: query.placement,
+          version: {
+            snapshotId: receipt.event.fact.source.snapshotId!,
+            eventSeq: snapshot.event_seq as number,
+            sourceContentHash: receipt.event.fact.source
+              .sourceContentHash as `sha256:${string}`,
+          },
+        },
+        false,
+      );
+    } catch (error) {
+      if (
+        error instanceof BranchStateError &&
+        (error.code === "snapshot_not_found" ||
+          error.code === "snapshot_version_mismatch")
+      )
+        return corrupt();
+      throw error;
+    }
+    return { intent: row.intent as string, receipt };
+  }
+
+  /** Checks generation and current actor before replay, then publishes fact, receipt, head and outbox atomically. */
+  async appendRuntimeFact(
+    input: BranchRuntimeFactAppendCommand,
+  ): Promise<BranchRuntimeFactAppendResult> {
+    return this.available(async () => {
+      const command = captureRuntimeFactAppend(input);
+      const intent = runtimeFactIntent(command.fact);
+      const payloadHash = await hashRuntimeFactIntent(intent);
+      return this.sql.transaction(() => {
+        const head = this.head(command);
+        authorizeRuntimeFact(command, head);
+        const query = { target: command.target, placement: command.placement };
+        const headSeq = this.runtimeHead(query);
+        const identity = runtimeFactIdentity(command.fact);
+        const existing = this.runtimeReceipt(query, identity);
+        if (existing) {
+          if (existing.intent !== intent)
+            throw new BranchStateError("idempotency_key_reused");
+          if (
+            existing.receipt.payloadHash !== payloadHash ||
+            existing.receipt.event.seq > headSeq
+          )
+            return corrupt();
+          return { ...query, appended: false, receipt: existing.receipt };
+        }
+        const alias = this.sql.rows(
+          "SELECT identity FROM branch_runtime_facts WHERE root_drop_id = ? AND branch_id = ? AND (fact_id = ? OR fact_key = ?)",
+          ...scope(query),
+          encodeBranchSqlText(nullplugUiRuntimeFactId(command.fact)),
+          encodeBranchSqlText(runtimeFactKey(command.fact)),
+        );
+        if (alias.length) throw new BranchStateError("idempotency_key_reused");
+        this.snapshot(head, false);
+        const receipt = prepareRuntimeFactReceipt(
+          command,
+          head,
+          headSeq,
+          payloadHash,
+          this.now(),
+        );
+        const outbox = runtimeFactOutbox(query, receipt);
+        this.sql.execute(
+          "INSERT INTO branch_runtime_facts (root_drop_id, branch_id, identity, fact_id, fact_key, seq, event_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          ...scope(query),
+          identity,
+          encodeBranchSqlText(receipt.event.factId),
+          encodeBranchSqlText(receipt.key),
+          receipt.event.seq,
+          JSON.stringify(receipt.event),
+        );
+        this.sql.execute(
+          "INSERT INTO branch_runtime_fact_receipts (root_drop_id, branch_id, identity, intent, receipt_json) VALUES (?, ?, ?, ?, ?)",
+          ...scope(query),
+          identity,
+          intent,
+          JSON.stringify(receipt),
+        );
+        this.sql.execute(
+          "INSERT INTO branch_runtime_fact_heads (root_drop_id, branch_id, head_seq) VALUES (?, ?, ?) ON CONFLICT(root_drop_id, branch_id) DO UPDATE SET head_seq = excluded.head_seq",
+          ...scope(query),
+          receipt.event.seq,
+        );
+        this.sql.execute(
+          "INSERT INTO branch_runtime_fact_outbox (root_drop_id, branch_id, identity, outbox_id, outbox_json) VALUES (?, ?, ?, ?, ?)",
+          ...scope(query),
+          identity,
+          outbox.id,
+          JSON.stringify(outbox),
+        );
+        return { ...query, appended: true, receipt };
+      });
+    });
+  }
+
+  /** Captures the runtime horizon under durable placement fencing, without initializing missing state. */
+  async readRuntimeFactHead(
+    input: BranchHeadQuery,
+  ): Promise<BranchRuntimeFactHead> {
+    return this.available(() => {
+      const query = BranchStateQuery.head(input);
+      return this.sql.transaction(() => {
+        this.head(query);
+        return { ...query, headSeq: this.runtimeHead(query) };
+      });
+    });
+  }
+
+  /** Reads a complete contiguous page bounded by the caller's captured runtime horizon. */
+  async readRuntimeFacts(
+    input: BranchRuntimeFactPageQuery,
+  ): Promise<BranchRuntimeFactPage> {
+    return this.available(async () => {
+      const query = captureRuntimeFactPage(input);
+      const page = this.sql.transaction(() => {
+        this.head(query);
+        if (query.headSeq > this.runtimeHead(query))
+          throw new BranchStateError("invalid_command");
+        const rows = this.sql.rows(
+          "SELECT identity, seq FROM branch_runtime_facts WHERE root_drop_id = ? AND branch_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?",
+          ...scope(query),
+          query.afterSeq,
+          query.headSeq,
+          query.limit,
+        );
+        const count = Math.max(
+          0,
+          Math.min(query.limit, query.headSeq - query.afterSeq),
+        );
+        if (rows.length !== count) return corrupt();
+        const receipts = rows.map((row, index) => {
+          if (
+            row.seq !== query.afterSeq + index + 1 ||
+            typeof row.identity !== "string"
+          )
+            return corrupt();
+          const stored = this.runtimeReceipt(query, row.identity);
+          if (!stored) return corrupt();
+          return stored;
+        });
+        return receipts;
+      });
+      for (const stored of page)
+        if (
+          (await hashRuntimeFactIntent(stored.intent)) !==
+          stored.receipt.payloadHash
+        )
+          return corrupt();
+      // Hash verification yields; durable generation is rechecked before returning the captured page.
+      this.sql.transaction(() => {
+        this.head(query);
+      });
+      const facts = page.map(({ receipt }) => receipt.event);
+      return {
+        target: query.target,
+        placement: query.placement,
+        headSeq: query.headSeq,
+        facts,
+        nextCursor: facts.length ? facts[facts.length - 1].seq : null,
+      };
     });
   }
 

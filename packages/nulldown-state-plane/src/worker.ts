@@ -15,6 +15,12 @@ import type {
 } from "../../../shared/drop/branch-state";
 import type { BranchStateBindings } from "./branch-state-object";
 import {
+  captureRuntimeFactAppend,
+  captureRuntimeFactPage,
+  type BranchRuntimeFactAppendCommand,
+  type BranchRuntimeFactPageQuery,
+} from "../../../shared/drop/branch-runtime-facts";
+import {
   RpcBranchCommitStatePlane,
   branchStateRpcResult,
   type BranchStateRpcResult,
@@ -30,6 +36,11 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
         this.env.BRANCH_STATE.idFromName(name),
       );
       return {
+        appendRuntimeFact: async (command) =>
+          await stub.appendRuntimeFact(command),
+        readRuntimeFactHead: async (query) =>
+          await stub.readRuntimeFactHead(query),
+        readRuntimeFacts: async (query) => await stub.readRuntimeFacts(query),
         readPlacement: async (query) => await stub.readPlacement(query),
         reserve: async (command) => await stub.reserve(command),
         initialize: async (command) => await stub.initialize(command),
@@ -42,6 +53,26 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
         readEvents: async (query) => await stub.readEvents(query),
       };
     });
+  }
+  /** Publishes an authorized UI fact through typed service-binding RPC. */
+  async appendRuntimeFact(
+    input: BranchRuntimeFactAppendCommand,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(() =>
+      this.#plane().appendRuntimeFact(captureRuntimeFactAppend(input)),
+    );
+  }
+  /** Captures the durable runtime-fact stream horizon. */
+  async readRuntimeFactHead(query: BranchHeadQuery) {
+    return branchStateRpcResult(() => this.#plane().readRuntimeFactHead(query));
+  }
+  /** Reads a bounded captured runtime-fact page. */
+  async readRuntimeFacts(
+    input: BranchRuntimeFactPageQuery,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(() =>
+      this.#plane().readRuntimeFacts(captureRuntimeFactPage(input)),
+    );
   }
   /** Discovers durable local ownership without creating a branch. */
   async readPlacement(query: BranchPlacementQuery) {

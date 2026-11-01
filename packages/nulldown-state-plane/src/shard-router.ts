@@ -36,6 +36,23 @@ import {
 } from "../../../shared/drop/branch-lifecycle";
 import { serializeCanonicalJson } from "../../../shared/drop/types";
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
+import {
+  canonicalRuntimeFactJson,
+  captureRuntimeFactAppend,
+  captureRuntimeFactPage,
+  hashRuntimeFactIntent,
+  runtimeFactIdentity,
+  runtimeFactIntent,
+  runtimeFactKey,
+  validateRuntimeFactReceipt,
+  validateRuntimeFactEvent,
+  type BranchRuntimeFactAppendCommand,
+  type BranchRuntimeFactAppendResult,
+  type BranchRuntimeFactHead,
+  type BranchRuntimeFactPage,
+  type BranchRuntimeFactPageQuery,
+  type BranchRuntimeFactStatePlane,
+} from "../../../shared/drop/branch-runtime-facts";
 
 /** Frozen routing-v1 pool size. Changing this requires a new routing version and explicit migration. */
 export const BRANCH_STATE_SHARD_COUNT = 16;
@@ -104,6 +121,15 @@ export function decodeBranchStateRpcResult<T>(
 
 /** The selected typed RPC methods on a shard stub; no HTTP or lifecycle capabilities. */
 export interface BranchStateRpcStub {
+  appendRuntimeFact?(
+    command: BranchRuntimeFactAppendCommand,
+  ): Promise<BranchStateRpcResult<unknown>>;
+  readRuntimeFactHead?(
+    query: BranchHeadQuery,
+  ): Promise<BranchStateRpcResult<BranchRuntimeFactHead>>;
+  readRuntimeFacts?(
+    query: BranchRuntimeFactPageQuery,
+  ): Promise<BranchStateRpcResult<unknown>>;
   readPlacement?(
     query: BranchPlacementQuery,
   ): Promise<BranchStateRpcResult<BranchAuthorityRecord | null>>;
@@ -138,7 +164,9 @@ export interface BranchStateRpcStub {
 }
 
 /** Per-caller RPC adapter. The supplied resolver is an internal binding boundary, not a public URL. */
-export class RpcBranchCommitStatePlane implements BranchLifecycleStatePlane {
+export class RpcBranchCommitStatePlane
+  implements BranchLifecycleStatePlane, BranchRuntimeFactStatePlane
+{
   constructor(
     private readonly resolve: (shardName: string) => BranchStateRpcStub,
   ) {}
@@ -156,6 +184,135 @@ export class RpcBranchCommitStatePlane implements BranchLifecycleStatePlane {
     } catch (error) {
       if (error instanceof BranchStateError) throw error;
       throw new BranchStateError("state_unavailable");
+    }
+  }
+
+  private runtimeHead(
+    value: BranchRuntimeFactHead,
+    query: BranchHeadQuery,
+  ): BranchRuntimeFactHead {
+    try {
+      if (
+        !value ||
+        canonicalRuntimeFactJson(value.target) !==
+          canonicalRuntimeFactJson(query.target) ||
+        canonicalRuntimeFactJson(value.placement) !==
+          canonicalRuntimeFactJson(query.placement) ||
+        !Number.isSafeInteger(value.headSeq) ||
+        value.headSeq < -1
+      )
+        throw Error();
+      return {
+        target: structuredClone(query.target),
+        placement: structuredClone(query.placement),
+        headSeq: value.headSeq,
+      };
+    } catch {
+      throw new BranchStateError("state_corrupt");
+    }
+  }
+
+  /** Captures complete JSON intent before routing and verifies the immutable receipt returned by the authority. */
+  async appendRuntimeFact(
+    input: BranchRuntimeFactAppendCommand,
+  ): Promise<BranchRuntimeFactAppendResult> {
+    const command = captureRuntimeFactAppend(input);
+    const intent = runtimeFactIntent(command.fact);
+    const payloadHash = await hashRuntimeFactIntent(intent);
+    const value = await this.call(command, (stub) => {
+      if (!stub.appendRuntimeFact)
+        throw new BranchStateError("capability_unsupported");
+      return stub.appendRuntimeFact(command);
+    });
+    try {
+      const result = value as BranchRuntimeFactAppendResult;
+      if (
+        !result ||
+        typeof result.appended !== "boolean" ||
+        canonicalRuntimeFactJson(result.target) !==
+          canonicalRuntimeFactJson(command.target) ||
+        canonicalRuntimeFactJson(result.placement) !==
+          canonicalRuntimeFactJson(command.placement)
+      )
+        throw Error();
+      validateRuntimeFactReceipt(result.receipt, command);
+      if (
+        result.receipt.identity !== runtimeFactIdentity(command.fact) ||
+        result.receipt.payloadHash !== payloadHash ||
+        runtimeFactIntent(result.receipt.event.fact) !== intent ||
+        (await hashRuntimeFactIntent(
+          runtimeFactIntent(result.receipt.event.fact),
+        )) !== result.receipt.payloadHash
+      )
+        throw Error();
+      return structuredClone(result);
+    } catch {
+      throw new BranchStateError("state_corrupt");
+    }
+  }
+
+  /** Reads and validates a fenced runtime-fact horizon. */
+  async readRuntimeFactHead(
+    input: BranchHeadQuery,
+  ): Promise<BranchRuntimeFactHead> {
+    const query = BranchStateQuery.head(input);
+    const value = await this.call(query, (stub) => {
+      if (!stub.readRuntimeFactHead)
+        throw new BranchStateError("capability_unsupported");
+      return stub.readRuntimeFactHead(query);
+    });
+    return this.runtimeHead(value, query);
+  }
+
+  /** Rejects truncated, mis-scoped, malformed or unpinned RPC pages rather than presenting partial history. */
+  async readRuntimeFacts(
+    input: BranchRuntimeFactPageQuery,
+  ): Promise<BranchRuntimeFactPage> {
+    const query = captureRuntimeFactPage(input);
+    const value = await this.call(query, (stub) => {
+      if (!stub.readRuntimeFacts)
+        throw new BranchStateError("capability_unsupported");
+      return stub.readRuntimeFacts(query);
+    });
+    try {
+      const page = value as BranchRuntimeFactPage;
+      const head = this.runtimeHead(page, query);
+      const count = Math.max(
+        0,
+        Math.min(query.limit, query.headSeq - query.afterSeq),
+      );
+      if (
+        head.headSeq !== query.headSeq ||
+        !Array.isArray(page.facts) ||
+        page.facts.length !== count ||
+        page.nextCursor !== (count ? query.afterSeq + count : null)
+      )
+        throw Error();
+      const identities = new Set<string>();
+      const publicIds = new Set<string>();
+      const publicKeys = new Set<string>();
+      for (const [index, event] of page.facts.entries()) {
+        const identity = runtimeFactIdentity(event.fact);
+        const key = runtimeFactKey(event.fact);
+        validateRuntimeFactEvent(event, query);
+        if (
+          event.seq !== query.afterSeq + index + 1 ||
+          identities.has(identity) ||
+          publicIds.has(event.factId) ||
+          publicKeys.has(key)
+        )
+          throw Error();
+        identities.add(identity);
+        publicIds.add(event.factId);
+        publicKeys.add(key);
+      }
+      return structuredClone({
+        ...head,
+        facts: page.facts,
+        nextCursor: page.nextCursor,
+      });
+    } catch {
+      throw new BranchStateError("state_corrupt");
     }
   }
 

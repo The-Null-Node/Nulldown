@@ -26,6 +26,12 @@ import type {
   BranchCommitStatePlane,
   BranchHeadQuery,
 } from "../../shared/drop/branch-state";
+import type {
+  BranchRuntimeFactAppendCommand,
+  BranchRuntimeFactAppendResult,
+  BranchRuntimeFactOutbox,
+  BranchRuntimeFactStatePlane,
+} from "../../shared/drop/branch-runtime-facts";
 import {
   assertRecords,
   commitContractScenarios,
@@ -37,6 +43,7 @@ import {
   losslessFixtures,
   verifyLosslessHistory,
   referenceVersion,
+  referenceSourceHash,
 } from "../../src/server/state-plane/testing/commit-contract";
 import { runShardRouterContract } from "../../packages/nulldown-state-plane/test/shard-router.test";
 import { runNativeLifecycleContract } from "../../packages/nulldown-state-plane/test/lifecycle-native.test";
@@ -118,6 +125,12 @@ interface Inspection {
   outbox: BranchCommitOutboxRecord[];
   counts: Record<string, number>;
   trace: { operation: string; phase: string; sql?: string }[];
+}
+interface RuntimeFactInspection {
+  bootId: string;
+  counts: Record<string, number>;
+  outbox: BranchRuntimeFactOutbox[];
+  trace: Inspection["trace"];
 }
 interface Wire {
   ok?: boolean;
@@ -471,6 +484,52 @@ async function main() {
         }),
       ),
   });
+  const runtime = (query: BranchHeadQuery): BranchRuntimeFactStatePlane => ({
+    appendRuntimeFact: async (value) =>
+      unwrap(
+        await client.call({ action: "runtime-fact-append", query, value }),
+      ),
+    readRuntimeFactHead: async (value) =>
+      unwrap(await client.call({ action: "runtime-fact-head", query, value })),
+    readRuntimeFacts: async (value) =>
+      unwrap(await client.call({ action: "runtime-facts", query, value })),
+  });
+  const runtimeCommand = (
+    query: BranchHeadQuery,
+    id = "native-fact",
+    sourceContentHash = referenceSourceHash(""),
+  ): BranchRuntimeFactAppendCommand => ({
+    ...query,
+    actorAccountId: "fixture-owner",
+    fact: {
+      version: 1,
+      kind: "ui.state.patch",
+      id,
+      callId: "native-call",
+      createdAt: 1,
+      source: { ...query.target, sourceContentHash },
+      patch: [{ op: "set", path: ["value"], value: "\ud800" }],
+      metadata: { actorAccountId: "untrusted-client" },
+    },
+  });
+  const runtimeTables = [
+    "branch_runtime_facts",
+    "branch_runtime_fact_receipts",
+    "branch_runtime_fact_heads",
+    "branch_runtime_fact_outbox",
+  ];
+  const runtimeCounts = (facts: number) =>
+    Object.fromEntries(
+      runtimeTables.map((table) => [
+        table,
+        table === "branch_runtime_fact_heads" ? Number(facts > 0) : facts,
+      ]),
+    );
+  const inspectRuntime = async (query: BranchHeadQuery) =>
+    (await client.call({
+      action: "runtime-fact-inspect",
+      query,
+    })) as RuntimeFactInspection;
   const inspectLossless = async (fixture: (typeof lossless)[number]) => {
     const { query, history } = fixture;
     const contents = [
@@ -747,6 +806,213 @@ async function main() {
       },
     );
     await run(
+      "native runtime facts: all three kinds, concurrent retry and duplicate after document edit",
+      async () => {
+        const { query } = await seed();
+        const facts = runtime(query);
+        const originalHead = await plane(query).readHead(query);
+        const patch = runtimeCommand(query);
+        const attempts = await Promise.all(
+          Array.from({ length: 3 }, () => facts.appendRuntimeFact(patch)),
+        );
+        assert.equal(attempts.filter((result) => result.appended).length, 1);
+        for (const result of attempts)
+          assertRecords(result.receipt, attempts[0].receipt);
+        const source = patch.fact.source;
+        const snapshot = await facts.appendRuntimeFact({
+          ...patch,
+          fact: {
+            version: 1,
+            kind: "ui.state.snapshot",
+            id: "native-snapshot",
+            callId: "native-call",
+            createdAt: 1,
+            source,
+            state: { value: "\ud800" },
+          },
+        });
+        const response = await facts.appendRuntimeFact({
+          ...patch,
+          fact: {
+            version: 1,
+            kind: "ui.response",
+            id: "native-response",
+            primitiveId: "native-form",
+            createdAt: 1,
+            source,
+            data: { approved: true },
+          },
+        });
+        const expectedEvents = [attempts[0], snapshot, response].map(
+          (result) => result.receipt.event,
+        );
+        assertRecords(
+          expectedEvents.map((event) => [event.seq, event.fact.kind]),
+          [
+            [0, "ui.state.patch"],
+            [1, "ui.state.snapshot"],
+            [2, "ui.response"],
+          ],
+        );
+        for (const event of expectedEvents) {
+          assert.equal(event.fact.createdAt, event.createdAt);
+          assert.equal(event.fact.source.snapshotId, 0);
+          assert.equal(event.fact.metadata?.actorAccountId, "fixture-owner");
+        }
+        const head = await facts.readRuntimeFactHead(query);
+        assertRecords(head, { ...query, headSeq: 2 });
+        const page = await facts.readRuntimeFacts({
+          ...head,
+          afterSeq: -1,
+          limit: 200,
+        });
+        assertRecords(page, { ...head, facts: expectedEvents, nextCursor: 2 });
+        assertRecords(await plane(query).readHead(query), originalHead);
+        const entry = contractHistory(1)[0];
+        await plane(query).append(remap(query, entry.command));
+        const retried = await facts.appendRuntimeFact({
+          ...patch,
+          fact: {
+            ...patch.fact,
+            createdAt: 999,
+            source: { ...patch.fact.source, snapshotId: 999 },
+          },
+        });
+        assertRecords(retried, { ...attempts[0], appended: false });
+        await rejectsCode(
+          () => facts.appendRuntimeFact(runtimeCommand(query, "stale-new")),
+          "stale_source",
+        );
+        await rejectsCode(
+          () =>
+            facts.appendRuntimeFact({ ...patch, actorAccountId: "not-writer" }),
+          "forbidden",
+        );
+        await rejectsCode(
+          () =>
+            facts.appendRuntimeFact({
+              ...patch,
+              placement: {
+                ...query.placement,
+                generation: query.placement.generation + 1,
+              },
+            }),
+          "routing_generation_mismatch",
+        );
+        assertRecords((await inspectRuntime(query)).counts, runtimeCounts(3));
+        assertRecords(
+          await facts.readRuntimeFacts({ ...head, afterSeq: 2, limit: 200 }),
+          { ...head, facts: [], nextCursor: null },
+        );
+        const stored = await inspectRuntime(query);
+        assertRecords(
+          stored.outbox
+            .map((intent) => intent.receipt)
+            .sort((a, b) => a.event.seq - b.event.seq),
+          [attempts[0].receipt, snapshot.receipt, response.receipt],
+        );
+        assert.equal(
+          ((await client.call({ action: "inspect", query })) as Inspection)
+            .r2Calls,
+          0,
+        );
+        writeFileSync(
+          resolve(evidence, "native-runtime-facts.json"),
+          JSON.stringify(
+            { query, attempts, snapshot, response, page, stored },
+            null,
+            2,
+          ),
+        );
+      },
+    );
+    await run(
+      "native runtime fact transactionSync rollback at all four publication statements",
+      async () => {
+        const sample = await seed();
+        const observed = (await client.call({
+          action: "runtime-fact-cut",
+          query: sample.query,
+          value: runtimeCommand(sample.query),
+        })) as { result: Wire; trace: Inspection["trace"]; fired: boolean };
+        const accepted = unwrap<BranchRuntimeFactAppendResult>(observed.result);
+        assert.equal(accepted.appended, true);
+        const operations = observed.trace.filter(
+          (event) => event.operation !== "transaction",
+        );
+        const cuts = operations.flatMap((event, index) =>
+          event.operation === "execute" &&
+          runtimeTables.some((table) =>
+            event.sql?.startsWith(`INSERT INTO ${table} `),
+          )
+            ? [{ index, ...event }]
+            : [],
+        );
+        assert.equal(cuts.length, 8);
+        for (const table of runtimeTables)
+          assertRecords(
+            cuts
+              .filter((event) => event.sql?.startsWith(`INSERT INTO ${table} `))
+              .map((event) => event.phase),
+            ["before", "after"],
+          );
+        const proof = [];
+        for (const cut of cuts) {
+          const { query } = await seed();
+          const command = runtimeCommand(query);
+          const failed = (await client.call({
+            action: "runtime-fact-cut",
+            query,
+            value: command,
+            cut: cut.index,
+          })) as { result: Wire; fired: boolean };
+          assert.equal(failed.fired, true);
+          assertRecords(failed.result, {
+            ok: false,
+            error: {
+              code: "state_unavailable",
+              status: 503,
+              outcome: "unknown",
+              retry: "same-command",
+            },
+          });
+          const beforeRetry = await inspectRuntime(query);
+          assertRecords(beforeRetry.counts, runtimeCounts(0));
+          assertRecords(beforeRetry.outbox, []);
+          const branch = (await client.call({
+            action: "inspect",
+            query,
+          })) as Inspection;
+          assertRecords(branch.counts, {
+            branch_heads: 1,
+            branch_snapshots: 1,
+            branch_events: 0,
+            branch_receipts: 0,
+            branch_outbox: 0,
+          });
+          assert.equal(branch.r2Calls, 0);
+          assertRecords(await runtime(query).readRuntimeFactHead(query), {
+            ...query,
+            headSeq: -1,
+          });
+          const retry = await runtime(query).appendRuntimeFact(command);
+          assert.equal(retry.appended, true);
+          assert.equal(retry.receipt.event.seq, 0);
+          const recovered = await inspectRuntime(query);
+          assertRecords(recovered.counts, runtimeCounts(1));
+          assertRecords(
+            recovered.outbox.map((intent) => intent.receipt),
+            [retry.receipt],
+          );
+          proof.push({ cut, failed, beforeRetry, retry, recovered });
+        }
+        writeFileSync(
+          resolve(evidence, "native-runtime-fact-cutpoints.json"),
+          JSON.stringify({ operations, proof }, null, 2),
+        );
+      },
+    );
+    await run(
       "native constant SQL budgets, zero R2 and indexed bounded range query",
       async () => {
         const { query } = await seed(),
@@ -980,6 +1246,52 @@ async function main() {
               value: remap(query, entry.command),
             }),
           );
+        const factCommand = runtimeCommand(
+          query,
+          "restart-lost-ack",
+          history[24].receipt.version.sourceContentHash,
+        );
+        const factLost = (await client.call({
+          action: "runtime-fact-cut",
+          query,
+          value: factCommand,
+          loseResponse: true,
+        })) as { result: Wire };
+        assertRecords(factLost.result, {
+          ok: false,
+          error: {
+            code: "state_unavailable",
+            status: 503,
+            outcome: "unknown",
+            retry: "same-command",
+          },
+        });
+        const factsBefore = await inspectRuntime(query);
+        assertRecords(factsBefore.counts, runtimeCounts(1));
+        assert.equal(factsBefore.outbox.length, 1);
+        const factReceipt = factsBefore.outbox[0].receipt;
+        assert.equal(factReceipt.event.fact.source.snapshotId, 25);
+        assert.equal(factReceipt.event.seq, 0);
+        const factHead = await runtime(query).readRuntimeFactHead(query);
+        assertRecords(factHead, { ...query, headSeq: 0 });
+        const factPage = {
+          ...factHead,
+          facts: [factReceipt.event],
+          nextCursor: 0,
+        };
+        assertRecords(await runtime(query).appendRuntimeFact(factCommand), {
+          ...query,
+          appended: false,
+          receipt: factReceipt,
+        });
+        assertRecords(
+          await runtime(query).readRuntimeFacts({
+            ...factHead,
+            afterSeq: -1,
+            limit: 200,
+          }),
+          factPage,
+        );
         const before = (await client.call({
           action: "inspect",
           query,
@@ -992,6 +1304,23 @@ async function main() {
         })) as Inspection;
         assert.notEqual(afterReset.bootId, before.bootId);
         assertRecords(afterReset.outbox, before.outbox);
+        const factsAfterReset = await inspectRuntime(query);
+        assert.notEqual(factsAfterReset.bootId, factsBefore.bootId);
+        assertRecords(factsAfterReset.counts, factsBefore.counts);
+        assertRecords(factsAfterReset.outbox, factsBefore.outbox);
+        assertRecords(await runtime(query).appendRuntimeFact(factCommand), {
+          ...query,
+          appended: false,
+          receipt: factReceipt,
+        });
+        assertRecords(
+          await runtime(query).readRuntimeFacts({
+            ...factHead,
+            afterSeq: -1,
+            limit: 200,
+          }),
+          factPage,
+        );
         const firstPid = await client.ready;
         await client.close();
         client = new NativeProcess();
@@ -1004,6 +1333,40 @@ async function main() {
         assert.notEqual(recovered.bootId, afterReset.bootId);
         assertRecords(recovered.outbox, before.outbox);
         assertRecords(recovered.counts, before.counts);
+        const factsRecovered = await inspectRuntime(query);
+        assert.notEqual(factsRecovered.bootId, factsAfterReset.bootId);
+        assertRecords(factsRecovered.counts, factsBefore.counts);
+        assertRecords(factsRecovered.outbox, factsBefore.outbox);
+        assertRecords(await runtime(query).appendRuntimeFact(factCommand), {
+          ...query,
+          appended: false,
+          receipt: factReceipt,
+        });
+        assertRecords(
+          await runtime(query).readRuntimeFacts({
+            ...factHead,
+            afterSeq: -1,
+            limit: 200,
+          }),
+          factPage,
+        );
+        writeFileSync(
+          resolve(evidence, "native-runtime-fact-restart-proof.json"),
+          JSON.stringify(
+            {
+              firstPid,
+              nextPid,
+              factLost,
+              factReceipt,
+              factPage,
+              before: factsBefore,
+              afterReset: factsAfterReset,
+              recovered: factsRecovered,
+            },
+            null,
+            2,
+          ),
+        );
         assert.equal(
           unwrap<{ content: string }>(
             await client.call({
