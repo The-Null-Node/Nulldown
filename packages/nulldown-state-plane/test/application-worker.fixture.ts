@@ -17,6 +17,11 @@ import type { LocalBranchApplicationSelection } from "../../../src/server/state-
 import { createLocalBranchLifecycle } from "../../../src/server/state-plane/application-lifecycle";
 import type { BranchLifecycleStatePlane } from "../../../shared/drop/branch-lifecycle";
 import type { BranchRuntimeFactStatePlane } from "../../../shared/drop/branch-runtime-facts";
+import type { BranchNullMemStatePlane } from "../../../shared/drop/branch-nullmem";
+import { onRequest as memoryQueryRoute } from "../../../functions/api/branches/[rootId]/[branchId]/memory/query";
+import { onRequest as memoryFactRoute } from "../../../functions/api/branches/[rootId]/[branchId]/memory/facts";
+import { onRequest as memoryProcedureRoute } from "../../../functions/api/branches/[rootId]/[branchId]/memory/procedures";
+import { onRequest as memoryDeleteRoute } from "../../../functions/api/branches/[rootId]/[branchId]/memory/[recordId]";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
@@ -31,12 +36,16 @@ import {
   applicationFixture,
   applicationLifecycleFixture,
   applicationRuntimeRoots,
+  applicationNullMemFixture,
+  applicationNullMemRoots,
   applicationUnseededRoots,
   type ApplicationRequestEvidence,
 } from "./application-scenarios.fixture";
 
 type Commits = LocalBranchApplicationSelection["commits"];
-type Backend = BranchLifecycleStatePlane & BranchRuntimeFactStatePlane;
+type Backend = BranchLifecycleStatePlane &
+  BranchRuntimeFactStatePlane &
+  BranchNullMemStatePlane;
 type RpcBinding = {
   [K in keyof Backend]: Backend[K] extends (...args: infer A) => infer R
     ? (...args: A) => Promise<BranchStateRpcResult<Awaited<R>>>
@@ -72,7 +81,9 @@ function measured<T extends object>(
         row.count++;
         if (
           label === "r2" &&
-          ["baseline", "steady-state", "runtime-facts"].includes(evidence.phase)
+          ["baseline", "steady-state", "runtime-facts", "nullmem"].includes(
+            evidence.phase,
+          )
         ) {
           row.errors++;
           throw Error("FIXTURE_R2_FORBIDDEN");
@@ -150,7 +161,10 @@ export default {
       /^\/api\/branches\/([^/]+)\/([^/]+)\/(content|snapshots|publish|promote|resolved\/query)$/.exec(
         path,
       );
-    let rootId = decodeURIComponent((diff ?? branch)?.[1] ?? "");
+    const memory = /^\/api\/branches\/([^/]+)\/([^/]+)\/memory\/([^/]+)$/.exec(
+      path,
+    );
+    let rootId = decodeURIComponent((diff ?? branch ?? memory)?.[1] ?? "");
     if (
       request.method === "POST" &&
       ["/api/nullplug/state", "/api/nullplug/submit"].includes(path)
@@ -192,7 +206,9 @@ export default {
                   ? "baseline"
                   : applicationRuntimeRoots.includes(rootId)
                     ? "runtime-facts"
-                    : "steady-state",
+                    : applicationNullMemRoots.includes(rootId)
+                      ? "nullmem"
+                      : "steady-state",
       status: 500,
       calls: {},
       rpcFailures: [],
@@ -297,6 +313,27 @@ export default {
       readEvents: (query) =>
         call("readEvents", () => service.readEvents(query)),
     };
+    const memoryCommit = async (
+      target: { rootDropId: string; branchId: string },
+      revision: number,
+      operation: "put" | "delete",
+    ) => {
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(
+          JSON.stringify([target.rootDropId, target.branchId]),
+        ),
+      );
+      evidence.memoryCommits = [
+        {
+          scopeHash: Array.from(new Uint8Array(digest), (byte) =>
+            byte.toString(16).padStart(2, "0"),
+          ).join(""),
+          revision,
+          operation,
+        },
+      ];
+    };
     const backend: Backend = {
       ...commits,
       readPlacement: (query) =>
@@ -372,6 +409,71 @@ export default {
         }),
       readRuntimeFacts: (query) =>
         call("readRuntimeFacts", () => service.readRuntimeFacts(query)),
+      queryNullMem: (query) =>
+        call("queryNullMem", async () => {
+          const stale = await fault("queryNullMem", "before", query.target);
+          const result = await service.queryNullMem(
+            stale
+              ? {
+                  ...query,
+                  placement: {
+                    ...query.placement,
+                    generation: query.placement.generation + 1,
+                  },
+                }
+              : query,
+          );
+          if (result.ok) await fault("queryNullMem", "after", query.target);
+          return result;
+        }),
+      putNullMem: (command) =>
+        call("putNullMem", async () => {
+          const stale = await fault("putNullMem", "before", command.target);
+          const result = await service.putNullMem(
+            stale
+              ? {
+                  ...command,
+                  placement: {
+                    ...command.placement,
+                    generation: command.placement.generation + 1,
+                  },
+                }
+              : command,
+          );
+          if (result.ok) {
+            await memoryCommit(
+              command.target,
+              result.value.memoryRevision,
+              "put",
+            );
+            await fault("putNullMem", "after", command.target);
+          }
+          return result;
+        }),
+      deleteNullMem: (command) =>
+        call("deleteNullMem", async () => {
+          const stale = await fault("deleteNullMem", "before", command.target);
+          const result = await service.deleteNullMem(
+            stale
+              ? {
+                  ...command,
+                  placement: {
+                    ...command.placement,
+                    generation: command.placement.generation + 1,
+                  },
+                }
+              : command,
+          );
+          if (result.ok) {
+            await memoryCommit(
+              command.target,
+              result.value.memoryRevision,
+              "delete",
+            );
+            await fault("deleteNullMem", "after", command.target);
+          }
+          return result;
+        }),
     };
     const observer = (
       id: string,
@@ -408,6 +510,41 @@ export default {
       placement: { ...applicationFixture.placement },
       ...(applicationRuntimeRoots.includes(rootId)
         ? { runtimeFacts: backend }
+        : {}),
+      ...(applicationNullMemRoots.includes(rootId)
+        ? {
+            nullmem: {
+              backend,
+              catalog: {
+                async readRecords({ kind, canReadSensitive }) {
+                  const row = (evidence.calls["catalog.readRecords"] ??= {
+                    count: 0,
+                    errors: 0,
+                  });
+                  row.count++;
+                  if (!canReadSensitive) {
+                    row.errors++;
+                    throw Error("FIXTURE_SENSITIVE_CATALOG_FORBIDDEN");
+                  }
+                  return kind && kind !== "capability"
+                    ? []
+                    : [
+                        {
+                          version: 1 as const,
+                          kind: "capability" as const,
+                          recordId: applicationNullMemFixture.remoteId,
+                          capabilityKind: "nullplug" as const,
+                          capabilityId: "acceptance-remote",
+                          description:
+                            "Synthetic remote catalog metadata; no plugin execution",
+                          labels: ["remote-nullplug"],
+                          createdAt: 0,
+                        },
+                      ];
+                },
+              },
+            },
+          }
         : {}),
       ...(!baseline
         ? {
@@ -490,6 +627,23 @@ export default {
       response = await diffRoute({
         ...pagesContext,
         params: { id: decodeURIComponent(diff[1]) },
+      });
+    } else if (memory) {
+      const handler =
+        memory[3] === "query"
+          ? memoryQueryRoute
+          : memory[3] === "facts"
+            ? memoryFactRoute
+            : memory[3] === "procedures"
+              ? memoryProcedureRoute
+              : memoryDeleteRoute;
+      response = await handler({
+        ...pagesContext,
+        params: {
+          rootId: decodeURIComponent(memory[1]),
+          branchId: decodeURIComponent(memory[2]),
+          recordId: memory[3],
+        },
       });
     } else if (branch) {
       const handler =

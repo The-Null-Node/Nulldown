@@ -12,6 +12,10 @@ import {
 } from "./authorization";
 import { createNullMemService } from "./service";
 import { createMemoryStatePlane } from "../../../../src/server/state-plane/gateway";
+import { createLocalNullMemService } from "../../../../src/server/state-plane/nullmem-application";
+import { resolveAuthenticatedAccountId } from "../accounts/session/authentication";
+import { BranchStateError } from "../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../branches/http/state-plane-errors";
 import {
   type NullMemFactRecord,
   type NullMemProcedureRecord,
@@ -214,6 +218,18 @@ const createNullMemHttpServices = (
   );
 };
 
+const memoryForWrite = async (
+  env: NullMemEnv,
+  request: Request,
+  legacy: BranchMemoryService,
+): Promise<BranchMemoryService> =>
+  env.localBranchApplication
+    ? createLocalNullMemService(env.localBranchApplication, {
+        actorAccountId: await resolveAuthenticatedAccountId(request, env),
+        canReadSensitive: true,
+      })
+    : legacy;
+
 /** Queries branch-scoped NullMem records and built-in capability memory. */
 export const queryNullMem = async (
   env: NullMemEnv,
@@ -276,8 +292,12 @@ export const queryNullMem = async (
       typeof stepLimit === "number",
     );
 
-    const memory =
-      target.canReadSensitive || services?.memory
+    const memory = env.localBranchApplication
+      ? createLocalNullMemService(env.localBranchApplication, {
+          actorAccountId: null,
+          canReadSensitive: target.canReadSensitive,
+        })
+      : target.canReadSensitive || services?.memory
         ? memoryServices.memory
         : createMemoryStatePlane(
             createNullMemService({
@@ -313,6 +333,8 @@ export const queryNullMem = async (
       },
     });
   } catch (error) {
+    if (error instanceof BranchStateError)
+      return branchStateErrorResponse(error);
     const message = error instanceof Error ? error.message : String(error);
     return jsonErrorResponse(
       500,
@@ -352,13 +374,16 @@ export const createNullMemFact = async (
       );
     }
 
-    const result = await memoryServices.memory.createFact({
+    const memory = await memoryForWrite(env, request, memoryServices.memory);
+    const result = await memory.createFact({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
       fact: parsed as BranchMemoryFactInput,
     });
     return jsonResponse(result, 201);
   } catch (error) {
+    if (error instanceof BranchStateError)
+      return branchStateErrorResponse(error);
     const message = error instanceof Error ? error.message : String(error);
     if (message === "Memory fact payload is invalid.") {
       return jsonErrorResponse(400, "validation_failed", message);
@@ -401,13 +426,16 @@ export const createNullMemProcedure = async (
       );
     }
 
-    const result = await memoryServices.memory.createProcedure({
+    const memory = await memoryForWrite(env, request, memoryServices.memory);
+    const result = await memory.createProcedure({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
       procedure: parsed as BranchMemoryProcedureInput,
     });
     return jsonResponse(result, 201);
   } catch (error) {
+    if (error instanceof BranchStateError)
+      return branchStateErrorResponse(error);
     const message = error instanceof Error ? error.message : String(error);
     if (message === "Memory procedure payload is invalid.") {
       return jsonErrorResponse(400, "validation_failed", message);
@@ -451,13 +479,16 @@ export const deleteNullMemRecord = async (
       );
     }
 
-    const result = await memoryServices.memory.delete({
+    const memory = await memoryForWrite(env, request, memoryServices.memory);
+    const result = await memory.delete({
       rootDropId: target.rootDropId,
       branchId: target.branchId,
       recordId,
     });
     return jsonResponse(result);
   } catch (error) {
+    if (error instanceof BranchStateError)
+      return branchStateErrorResponse(error);
     const message = error instanceof Error ? error.message : String(error);
     return jsonErrorResponse(
       500,

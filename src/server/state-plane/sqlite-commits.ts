@@ -3,6 +3,26 @@ import {
   isDropSnapshotRecord,
   type DropSnapshotRecord,
 } from "../../../shared/drop/branch";
+import {
+  authorizeNullMem,
+  captureNullMemQuery,
+  captureNullMemPut,
+  captureNullMemDelete,
+  nullMemRecordIdentity,
+  prepareNullMemPut,
+  prepareNullMemDelete,
+  queryNullMemRecords,
+  validateNullMemState,
+  type BranchNullMemStatePlane,
+  type BranchNullMemQuery,
+  type BranchNullMemQueryResult,
+  type BranchNullMemPutCommand,
+  type BranchNullMemPutResult,
+  type BranchNullMemDeleteCommand,
+  type BranchNullMemDeleteResult,
+  type BranchNullMemRecord,
+  type BranchNullMemOutbox,
+} from "../../../shared/drop/branch-nullmem";
 import { isDropDiffEvent, type DropDiffEvent } from "../../../shared/drop/diff";
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { prepareBranchCommit } from "../../../shared/drop/branch-commit";
@@ -121,7 +141,10 @@ export interface SqliteBranchCommitOptions {
 
 /** SQL-authoritative branch commits shared by local SQLite and SQLite-backed Durable Objects. */
 export class SqliteBranchCommitStatePlane
-  implements BranchLifecycleStatePlane, BranchRuntimeFactStatePlane
+  implements
+    BranchLifecycleStatePlane,
+    BranchRuntimeFactStatePlane,
+    BranchNullMemStatePlane
 {
   private readonly now: () => number;
   private readonly cache: ExactContentCache;
@@ -997,6 +1020,162 @@ export class SqliteBranchCommitStatePlane
       throw error;
     }
     return { intent: row.intent as string, receipt };
+  }
+
+  private nullMemState(query: BranchHeadQuery) {
+    const head = this.head(query);
+    const snapshots = new Map<number, BranchStateHead["version"]>();
+    const verifySnapshot = (captured: BranchStateHead) => {
+      const known = snapshots.get(captured.version.snapshotId);
+      if (known) {
+        if (!sameBranchStateVersion(known, captured.version)) return corrupt();
+        return;
+      }
+      try {
+        this.snapshot(captured, false);
+      } catch (error) {
+        if (
+          error instanceof BranchStateError &&
+          (error.code === "snapshot_not_found" ||
+            error.code === "snapshot_version_mismatch")
+        )
+          return corrupt();
+        throw error;
+      }
+      snapshots.set(captured.version.snapshotId, captured.version);
+    };
+    verifySnapshot(head);
+    const heads = this.sql.rows(
+      "SELECT memory_revision FROM branch_nullmem_heads WHERE root_drop_id = ? AND branch_id = ?",
+      ...scope(query),
+    );
+    const revision = heads.length ? heads[0].memory_revision : 0;
+    if (typeof revision !== "number" || (heads.length && revision < 1))
+      return corrupt();
+    const records = this.sql
+      .rows(
+        "SELECT identity, record_json FROM branch_nullmem_records WHERE root_drop_id = ? AND branch_id = ? ORDER BY rowid",
+        ...scope(query),
+      )
+      .map((row) => {
+        const value = json(row.record_json) as BranchNullMemRecord;
+        if (!value || row.identity !== nullMemRecordIdentity(value))
+          return corrupt();
+        return value;
+      });
+    const outbox = this.sql
+      .rows(
+        "SELECT memory_revision, outbox_id, outbox_json FROM branch_nullmem_outbox WHERE root_drop_id = ? AND branch_id = ? ORDER BY memory_revision",
+        ...scope(query),
+      )
+      .map((row) => {
+        const value = json(row.outbox_json) as BranchNullMemOutbox;
+        if (
+          !value?.result ||
+          row.memory_revision !== value.result.memoryRevision ||
+          row.outbox_id !== value.id
+        )
+          return corrupt();
+        return value;
+      });
+    validateNullMemState(head, revision, records, outbox);
+    for (const entry of outbox) verifySnapshot(entry.result.head);
+    return { head, revision, records, outbox };
+  }
+
+  private publishNullMem(entry: BranchNullMemOutbox): void {
+    const query = entry.result;
+    this.sql.execute(
+      "INSERT INTO branch_nullmem_heads (root_drop_id, branch_id, memory_revision) VALUES (?, ?, ?) ON CONFLICT(root_drop_id, branch_id) DO UPDATE SET memory_revision = excluded.memory_revision",
+      ...scope(query),
+      query.memoryRevision,
+    );
+    this.sql.execute(
+      "INSERT INTO branch_nullmem_outbox (root_drop_id, branch_id, memory_revision, outbox_id, outbox_json) VALUES (?, ?, ?, ?, ?)",
+      ...scope(query),
+      query.memoryRevision,
+      entry.id,
+      JSON.stringify(entry),
+    );
+  }
+
+  /** Reads exact head and filtered top-N in one transaction; validation and selection may scan all branch memory. */
+  async queryNullMem(
+    input: BranchNullMemQuery,
+  ): Promise<BranchNullMemQueryResult> {
+    const query = captureNullMemQuery(input);
+    return this.available(() =>
+      this.sql.transaction(() => {
+        const state = this.nullMemState(query);
+        return {
+          target: query.target,
+          placement: query.placement,
+          head: state.head,
+          memoryRevision: state.revision,
+          records: queryNullMemRecords(state.records, query),
+        };
+      }),
+    );
+  }
+
+  /** Assigns a new timestamp and atomically replaces the record, advances revision and publishes an outbox intent. */
+  async putNullMem(
+    input: BranchNullMemPutCommand,
+  ): Promise<BranchNullMemPutResult> {
+    const command = captureNullMemPut(input);
+    return this.available(() =>
+      this.sql.transaction(() => {
+        const state = this.nullMemState(command);
+        authorizeNullMem(command, state.head);
+        const entry = prepareNullMemPut(
+          command,
+          state.head,
+          state.revision,
+          this.now(),
+        );
+        this.sql.execute(
+          "INSERT INTO branch_nullmem_records (root_drop_id, branch_id, identity, record_json) VALUES (?, ?, ?, ?) ON CONFLICT(root_drop_id, branch_id, identity) DO UPDATE SET record_json = excluded.record_json",
+          ...scope(command),
+          nullMemRecordIdentity(entry.result.record),
+          JSON.stringify(entry.result.record),
+        );
+        this.publishNullMem(entry);
+        return entry.result;
+      }),
+    );
+  }
+
+  /** Deletes all kinds with the exact ID and commits revision/outbox even when no record exists. */
+  async deleteNullMem(
+    input: BranchNullMemDeleteCommand,
+  ): Promise<BranchNullMemDeleteResult> {
+    const command = captureNullMemDelete(input);
+    return this.available(() =>
+      this.sql.transaction(() => {
+        const state = this.nullMemState(command);
+        authorizeNullMem(command, state.head);
+        const entry = prepareNullMemDelete(
+          command,
+          state.head,
+          state.revision,
+          this.now(),
+        );
+        for (const kind of ["fact", "procedure"])
+          this.sql.execute(
+            "DELETE FROM branch_nullmem_records WHERE root_drop_id = ? AND branch_id = ? AND identity = ?",
+            ...scope(command),
+            JSON.stringify([kind, command.recordId]),
+          );
+        this.publishNullMem(entry);
+        return entry.result;
+      }),
+    );
+  }
+
+  /** Test-only authoritative outbox inspection; no derived-work delivery is performed. */
+  inspectNullMemOutbox(input: BranchHeadQuery): BranchNullMemOutbox[] {
+    const query = BranchStateQuery.head(input);
+    return this.sql.transaction(() => this.nullMemState(query).outbox);
   }
 
   /** Checks generation and current actor before replay, then publishes fact, receipt, head and outbox atomically. */

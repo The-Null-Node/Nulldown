@@ -35,6 +35,22 @@ export function decodeBranchSqlText(value: unknown): string {
  * use encodeBranchSqlText, intent is canonical JSON, and *_json stores records.
  */
 export const BRANCH_SQL_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS branch_nullmem_heads (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    memory_revision INTEGER NOT NULL CHECK (memory_revision > 0),
+    PRIMARY KEY (root_drop_id, branch_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_nullmem_records (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    identity TEXT NOT NULL, record_json TEXT NOT NULL,
+    PRIMARY KEY (root_drop_id, branch_id, identity)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_nullmem_outbox (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    memory_revision INTEGER NOT NULL CHECK (memory_revision > 0),
+    outbox_id TEXT NOT NULL, outbox_json TEXT NOT NULL,
+    PRIMARY KEY (root_drop_id, branch_id, memory_revision), UNIQUE (outbox_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS branch_runtime_fact_heads (
     root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
     head_seq INTEGER NOT NULL CHECK (head_seq >= 0),

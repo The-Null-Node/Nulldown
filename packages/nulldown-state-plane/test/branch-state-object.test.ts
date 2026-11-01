@@ -25,6 +25,10 @@ import {
 } from "../../../shared/drop/branch-state";
 import type { BranchInitializeRecord } from "../../../shared/drop/branch-lifecycle";
 import type { BranchRuntimeFactAppendCommand } from "../../../shared/drop/branch-runtime-facts";
+import type {
+  BranchNullMemPutCommand,
+  BranchNullMemDeleteCommand,
+} from "../../../shared/drop/branch-nullmem";
 import { observeBranchSql } from "../../../src/server/state-plane/sqlite-port";
 
 interface Trace {
@@ -56,6 +60,82 @@ export class TestBranchStateObject extends BranchStateObject {
   private fixture(): void {
     if (this.env.STATE_PLANE_LOCAL_TEST !== "1")
       throw new BranchStateError("capability_unsupported");
+  }
+
+  /** Native mutable-memory cutpoints and lost-response simulation; production paths expose neither control. */
+  async nullMemCutFixture(
+    mutation:
+      | { operation: "put"; command: BranchNullMemPutCommand }
+      | { operation: "delete"; command: BranchNullMemDeleteCommand },
+    cut: number | null = null,
+    loseResponse = false,
+  ) {
+    this.fixture();
+    let armed = false,
+      index = 0,
+      fired = false;
+    const trace: Trace[] = [];
+    const port = observeBranchSql(
+      new DurableObjectBranchSqlite(this.ctx.storage),
+      (row) => {
+        if (!armed) return;
+        trace.push(row);
+        if (row.operation !== "transaction" && index++ === cut) {
+          fired = true;
+          throw Error("FIXTURE_NULLMEM_CUT");
+        }
+      },
+    );
+    const plane = new SqliteBranchCommitStatePlane(port);
+    armed = true;
+    const result = await branchStateRpcResult(async () => {
+      const accepted =
+        mutation.operation === "put"
+          ? await plane.putNullMem(mutation.command)
+          : await plane.deleteNullMem(mutation.command);
+      await this.ctx.storage.sync();
+      if (loseResponse) throw Error("FIXTURE_NULLMEM_RESPONSE_LOST");
+      return accepted;
+    });
+    this.lastTrace = trace;
+    return { result, trace, fired };
+  }
+
+  /** Reads durable memory rows and revision-keyed intents for native reset and rollback verification. */
+  async inspectNullMemFixture(query: BranchHeadQuery) {
+    this.fixture();
+    const scope = [
+      JSON.stringify(query.target.rootDropId),
+      JSON.stringify(query.target.branchId),
+    ];
+    return {
+      bootId: this.bootId,
+      r2Calls: this.counters.r2,
+      counts: Object.fromEntries(
+        [
+          "branch_nullmem_records",
+          "branch_nullmem_heads",
+          "branch_nullmem_outbox",
+        ].map((table) => [
+          table,
+          this.ctx.storage.sql
+            .exec<{ n: number }>(
+              `SELECT COUNT(*) AS n FROM ${table} WHERE root_drop_id=? AND branch_id=?`,
+              ...scope,
+            )
+            .one().n,
+        ]),
+      ),
+      outbox: new SqliteBranchCommitStatePlane(
+        new DurableObjectBranchSqlite(this.ctx.storage),
+      ).inspectNullMemOutbox(query),
+      identities: this.ctx.storage.sql
+        .exec<{ identity: string }>(
+          "SELECT identity FROM branch_nullmem_records WHERE root_drop_id=? AND branch_id=? ORDER BY identity",
+          ...scope,
+        )
+        .toArray(),
+    };
   }
 
   /** Native fact publication cutpoints; all four runtime tables share the production SQLite transaction. */
@@ -466,6 +546,15 @@ export default {
       const stub = env.BRANCH_STATE.get(
         env.BRANCH_STATE.idFromName(name),
       ) as unknown as {
+        queryNullMem(value: unknown): Promise<unknown>;
+        putNullMem(value: unknown): Promise<unknown>;
+        deleteNullMem(value: unknown): Promise<unknown>;
+        nullMemCutFixture(
+          value: unknown,
+          cut: number | null,
+          loseResponse: boolean,
+        ): Promise<unknown>;
+        inspectNullMemFixture(query: BranchHeadQuery): Promise<unknown>;
         readPlacement(value: unknown): Promise<unknown>;
         reserve(value: unknown): Promise<unknown>;
         initialize(value: unknown): Promise<unknown>;
@@ -507,6 +596,25 @@ export default {
       };
       let result: unknown;
       switch (q.action) {
+        case "nullmem-query":
+          result = await stub.queryNullMem(q.value);
+          break;
+        case "nullmem-put":
+          result = await stub.putNullMem(q.value);
+          break;
+        case "nullmem-delete":
+          result = await stub.deleteNullMem(q.value);
+          break;
+        case "nullmem-cut":
+          result = await stub.nullMemCutFixture(
+            q.value,
+            q.cut ?? null,
+            q.loseResponse ?? false,
+          );
+          break;
+        case "nullmem-inspect":
+          result = await stub.inspectNullMemFixture(q.query);
+          break;
         case "runtime-fact-append":
           result = await stub.appendRuntimeFact(q.value);
           break;

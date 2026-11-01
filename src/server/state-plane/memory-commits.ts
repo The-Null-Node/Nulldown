@@ -3,6 +3,26 @@ import {
   type DropBranchRecord,
   type DropSnapshotRecord,
 } from "../../../shared/drop/branch";
+import {
+  authorizeNullMem,
+  captureNullMemQuery,
+  captureNullMemPut,
+  captureNullMemDelete,
+  nullMemRecordIdentity,
+  prepareNullMemPut,
+  prepareNullMemDelete,
+  queryNullMemRecords,
+  validateNullMemState,
+  type BranchNullMemStatePlane,
+  type BranchNullMemQuery,
+  type BranchNullMemQueryResult,
+  type BranchNullMemPutCommand,
+  type BranchNullMemPutResult,
+  type BranchNullMemDeleteCommand,
+  type BranchNullMemDeleteResult,
+  type BranchNullMemRecord,
+  type BranchNullMemOutbox,
+} from "../../../shared/drop/branch-nullmem";
 import type { DropDiffEvent } from "../../../shared/drop/diff";
 import { nullplugUiRuntimeFactId } from "../../../shared/nullplug/ui";
 import {
@@ -77,6 +97,11 @@ export interface MemoryBranchStateSeed {
 }
 
 type State = {
+  nullmem: {
+    revision: number;
+    records: Map<string, BranchNullMemRecord>;
+    outbox: BranchNullMemOutbox[];
+  };
   runtimeFacts: Map<
     string,
     { intent: string; receipt: BranchRuntimeFactReceipt }
@@ -98,7 +123,10 @@ const key = (target: BranchHeadQuery["target"]): string =>
  * Each instance owns seeded branches; returned values never share mutable state with storage.
  */
 export class MemoryBranchCommitStatePlane
-  implements BranchLifecycleStatePlane, BranchRuntimeFactStatePlane
+  implements
+    BranchLifecycleStatePlane,
+    BranchRuntimeFactStatePlane,
+    BranchNullMemStatePlane
 {
   private readonly states = new Map<string, State>();
   private readonly authorities = new Map<string, BranchAuthorityRecord>();
@@ -145,6 +173,7 @@ export class MemoryBranchCommitStatePlane
         sourceContentHash: await hashNulldownSourceContent(content),
       };
       plane.states.set(key(query.target), {
+        nullmem: { revision: 0, records: new Map(), outbox: [] },
         runtimeFacts: new Map(),
         runtimeOutbox: new Map(),
         head: { ...query, branch, version },
@@ -263,6 +292,7 @@ export class MemoryBranchCommitStatePlane
     if (this.states.has(id) || this.initializations.has(id))
       throw new BranchStateError("state_corrupt");
     this.states.set(id, {
+      nullmem: { revision: 0, records: new Map(), outbox: [] },
       runtimeFacts: new Map(),
       runtimeOutbox: new Map(),
       head: prepared.head,
@@ -323,6 +353,7 @@ export class MemoryBranchCommitStatePlane
       throw new BranchStateError("diff_predecessor_mismatch");
     const query = { target: command.target, placement: command.placement };
     const next: State = {
+      nullmem: latest.nullmem,
       runtimeFacts: latest.runtimeFacts,
       runtimeOutbox: latest.runtimeOutbox,
       head: {
@@ -371,6 +402,7 @@ export class MemoryBranchCommitStatePlane
       if (latest !== state) continue;
       if (!prepared.result.snapshot) return structuredClone(prepared.result);
       const next: State = {
+        nullmem: state.nullmem,
         runtimeFacts: state.runtimeFacts,
         runtimeOutbox: state.runtimeOutbox,
         head: {
@@ -404,6 +436,110 @@ export class MemoryBranchCommitStatePlane
       return structuredClone(prepared.result);
     }
     throw new BranchStateError("state_unavailable");
+  }
+
+  private nullMemState(query: BranchHeadQuery): State {
+    const state = this.state(query);
+    this.content({
+      target: query.target,
+      placement: query.placement,
+      version: state.head.version,
+    });
+    validateNullMemState(
+      state.head,
+      state.nullmem.revision,
+      [...state.nullmem.records.values()],
+      state.nullmem.outbox,
+    );
+    for (const entry of state.nullmem.outbox) {
+      const stored = state.snapshots.get(entry.result.head.version.snapshotId);
+      if (
+        !stored ||
+        !sameBranchStateVersion(stored.version, entry.result.head.version)
+      )
+        throw new BranchStateError("state_corrupt");
+    }
+    return state;
+  }
+
+  /** Captures current head and filtered top-N memory synchronously; scans all records without legacy reads. */
+  async queryNullMem(
+    input: BranchNullMemQuery,
+  ): Promise<BranchNullMemQueryResult> {
+    const query = captureNullMemQuery(input);
+    const state = this.nullMemState(query);
+    return structuredClone({
+      target: query.target,
+      placement: query.placement,
+      head: state.head,
+      memoryRevision: state.nullmem.revision,
+      records: queryNullMemRecords(state.nullmem.records.values(), query),
+    });
+  }
+
+  /** Publishes one mutable upsert and revision-keyed intent with one synchronous state replacement. */
+  async putNullMem(
+    input: BranchNullMemPutCommand,
+  ): Promise<BranchNullMemPutResult> {
+    const command = captureNullMemPut(input);
+    const state = this.nullMemState(command);
+    authorizeNullMem(command, state.head);
+    const entry = prepareNullMemPut(
+      command,
+      state.head,
+      state.nullmem.revision,
+      this.now(),
+    );
+    const records = new Map(state.nullmem.records);
+    records.set(
+      nullMemRecordIdentity(entry.result.record),
+      entry.result.record,
+    );
+    this.states.set(key(command.target), {
+      ...state,
+      nullmem: {
+        revision: entry.result.memoryRevision,
+        records,
+        outbox: [...state.nullmem.outbox, entry],
+      },
+    });
+    return structuredClone(entry.result);
+  }
+
+  /** Publishes deletion across kinds, including absent IDs; retries are fresh accepted mutations. */
+  async deleteNullMem(
+    input: BranchNullMemDeleteCommand,
+  ): Promise<BranchNullMemDeleteResult> {
+    const command = captureNullMemDelete(input);
+    const state = this.nullMemState(command);
+    authorizeNullMem(command, state.head);
+    const entry = prepareNullMemDelete(
+      command,
+      state.head,
+      state.nullmem.revision,
+      this.now(),
+    );
+    const records = new Map(
+      [...state.nullmem.records].filter(
+        ([, record]) => record.recordId !== command.recordId,
+      ),
+    );
+    this.states.set(key(command.target), {
+      ...state,
+      nullmem: {
+        revision: entry.result.memoryRevision,
+        records,
+        outbox: [...state.nullmem.outbox, entry],
+      },
+    });
+    return structuredClone(entry.result);
+  }
+
+  /** Test-only authoritative memory intent inspection; does not deliver or acknowledge work. */
+  inspectNullMemOutbox(input: BranchHeadQuery): BranchNullMemOutbox[] {
+    return structuredClone(
+      this.nullMemState(BranchStateQuery.head(input)).nullmem.outbox,
+    );
   }
 
   /** Publishes immutable fact, receipt, sequence and outbox with one synchronous state replacement. */

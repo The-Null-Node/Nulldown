@@ -21,10 +21,22 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type * as MiniflareModule from "miniflare";
 import type { BuildOptions, BuildResult } from "esbuild";
+import { createApplicationMcpClient } from "./application-mcp-client";
+import type { BranchMemoryQueryResult } from "../../src/server/runtime";
+import type {
+  NullMemFactRecord,
+  NullMemProcedureRecord,
+  NullMemRecord,
+} from "../../shared/nullmem/records";
+import type { BranchNullMemOutbox } from "../../shared/drop/branch-nullmem";
 import {
   createNulldownClient,
   type NulldownClient,
   type NulldownCreateDropRequest,
+  type NulldownMemoryQueryRequest,
+  type NulldownMemoryFactRequest,
+  type NulldownMemoryProcedureRequest,
+  type NulldownMemoryDeleteRequest,
 } from "../../src/client/nulldown-client";
 import { sealDropForAuthoring } from "../../shared/drop/authoring-crypto";
 import { decodeDropEnvelope } from "../../shared/drop/codecs/envelope-v1";
@@ -77,6 +89,8 @@ import {
   applicationLifecycleRoots,
   applicationRuntimeFixture as runtimeFacts,
   applicationRuntimeRoots,
+  applicationNullMemFixture as nullmem,
+  applicationNullMemRoots,
   applicationUnseededRoots,
   inspectApplicationRootStorage,
   type ApplicationRequestEvidence,
@@ -216,6 +230,12 @@ interface Command {
   create?: NulldownCreateDropRequest;
   visibility?: DropVisibility;
   authoring?: AuthoringKeys;
+  memoryQuery?: NulldownMemoryQueryRequest;
+  memoryFact?: NulldownMemoryFactRequest;
+  memoryProcedure?: NulldownMemoryProcedureRequest;
+  memoryDelete?: NulldownMemoryDeleteRequest;
+  mcpTool?: string;
+  mcpArgs?: Record<string, unknown>;
   providerPrivateJwk?: JsonWebKey;
   account?: {
     accountId: string;
@@ -229,7 +249,10 @@ interface Command {
       | "readPlacement"
       | "readHead"
       | "appendRuntimeFact"
-      | "readRuntimeFactHead";
+      | "readRuntimeFactHead"
+      | "queryNullMem"
+      | "putNullMem"
+      | "deleteNullMem";
     stage: "before" | "after";
     mode: "fail" | "hold" | "pause" | "stale-generation";
   };
@@ -285,6 +308,13 @@ interface RuntimeFactInspection {
   facts: DropBranchRuntimeFact[];
   receipts: BranchRuntimeFactReceipt[];
   outbox: BranchRuntimeFactOutbox[];
+}
+
+interface NullMemInspection {
+  counts: Record<string, number>;
+  memoryRevision: number;
+  records: NullMemRecord[];
+  outbox: BranchNullMemOutbox[];
 }
 
 function value<T>(result: Result<T>): T {
@@ -1667,6 +1697,85 @@ async function runtimeMode() {
           .sort((a, b) => a.receipt.event.seq - b.receipt.event.seq),
       } satisfies RuntimeFactInspection;
     }
+    if (
+      command.action === "inspect-nullmem" ||
+      command.action === "arm-nullmem-sql-fault" ||
+      command.action === "clear-nullmem-sql-fault"
+    ) {
+      assert.ok(applicationNullMemRoots.includes(query.target.rootDropId));
+      const storage = await mf.unsafeGetDurableObjectStorage(
+        "state",
+        "BranchStateObject",
+        { name },
+      );
+      const scope = [
+        JSON.stringify(query.target.rootDropId),
+        JSON.stringify(query.target.branchId),
+      ];
+      if (command.action === "arm-nullmem-sql-fault") {
+        // The backend writes the record and revision before this final outbox insertion.
+        // Both mutation kinds must roll back all three effects when this late cutpoint aborts.
+        await storage.exec(`CREATE TRIGGER acceptance_nullmem_abort AFTER INSERT ON branch_nullmem_outbox
+          WHEN NEW.root_drop_id = '${scope[0].replaceAll("'", "''")}' AND NEW.branch_id = '${scope[1].replaceAll("'", "''")}'
+            AND COALESCE(json_extract(NEW.outbox_json, '$.result.record.recordId'), json_extract(NEW.outbox_json, '$.result.recordId')) = 'native-memory-rollback'
+          BEGIN SELECT RAISE(ABORT, 'SYNTHETIC_NULLMEM_ABORT'); END`);
+        return { armed: true };
+      }
+      if (command.action === "clear-nullmem-sql-fault") {
+        await storage.exec("DROP TRIGGER acceptance_nullmem_abort");
+        return { armed: false };
+      }
+      const counts: Record<string, number> = {};
+      for (const table of [
+        "branch_nullmem_heads",
+        "branch_nullmem_records",
+        "branch_nullmem_outbox",
+      ])
+        counts[table] = (
+          await storage.exec<{ n: number }>(
+            `SELECT COUNT(*) AS n FROM ${table} WHERE root_drop_id=? AND branch_id=?`,
+            ...scope,
+          )
+        )[0].n;
+      const heads = await storage.exec<{ memory_revision: number }>(
+        "SELECT memory_revision FROM branch_nullmem_heads WHERE root_drop_id=? AND branch_id=?",
+        ...scope,
+      );
+      const records = (
+        await storage.exec<{ identity: string; record_json: string }>(
+          "SELECT identity,record_json FROM branch_nullmem_records WHERE root_drop_id=? AND branch_id=? ORDER BY identity",
+          ...scope,
+        )
+      ).map((row) => {
+        const record = JSON.parse(row.record_json) as NullMemRecord;
+        assert.equal(
+          row.identity,
+          JSON.stringify([record.kind, record.recordId]),
+        );
+        return record;
+      });
+      const outbox = (
+        await storage.exec<{
+          memory_revision: number;
+          outbox_id: string;
+          outbox_json: string;
+        }>(
+          "SELECT memory_revision,outbox_id,outbox_json FROM branch_nullmem_outbox WHERE root_drop_id=? AND branch_id=? ORDER BY memory_revision",
+          ...scope,
+        )
+      ).map((row) => {
+        const entry = JSON.parse(row.outbox_json) as BranchNullMemOutbox;
+        assert.equal(row.memory_revision, entry.result.memoryRevision);
+        assert.equal(row.outbox_id, entry.id);
+        return entry;
+      });
+      return {
+        counts,
+        memoryRevision: heads[0]?.memory_revision ?? 0,
+        records,
+        outbox,
+      } satisfies NullMemInspection;
+    }
     if (command.action === "inspect") {
       console.error(
         JSON.stringify({
@@ -1748,6 +1857,10 @@ async function runtimeMode() {
 
 async function clientMode() {
   let client: NulldownClient | undefined;
+  let mcp: Awaited<ReturnType<typeof createApplicationMcpClient>> | undefined;
+  let mcpConfiguration:
+    { baseUrl: string; token?: string; fetchImpl: typeof fetch } | undefined;
+  const nativeFetch = globalThis.fetch;
   let visibility: DropVisibility = "unlisted";
   let cursor = "-1",
     factCursor: string | undefined,
@@ -1756,6 +1869,8 @@ async function clientMode() {
     loseNextAck = false;
   await serveCommands(async (command) => {
     if (command.action === "configure") {
+      await mcp?.close();
+      mcp = undefined;
       clientId = command.clientId!;
       cursor = command.cursor ?? "-1";
       factCursor = command.factCursor ?? undefined;
@@ -1800,7 +1915,7 @@ async function clientMode() {
             headers.set("x-acceptance-lose-ack", "1");
             loseNextAck = false;
           }
-          return fetch(input, { ...init, headers });
+          return nativeFetch(input, { ...init, headers });
         },
         {
           preconnect: () => {
@@ -1808,6 +1923,11 @@ async function clientMode() {
           },
         },
       );
+      mcpConfiguration = {
+        baseUrl: command.baseUrl!,
+        token: command.token,
+        fetchImpl,
+      };
       client = createNulldownClient({
         baseUrl: command.baseUrl!,
         token: command.token ?? null,
@@ -1847,8 +1967,34 @@ async function clientMode() {
       });
       return { pid: process.pid };
     }
-    if (command.action === "close") return { closed: true, cursor, factCursor };
+    if (command.action === "close") {
+      await mcp?.close();
+      return { closed: true, cursor, factCursor };
+    }
     assert.ok(client, "client configured");
+    if (command.action === "mcp-list" || command.action === "mcp-call") {
+      assert.ok(mcpConfiguration);
+      mcp ??= await createApplicationMcpClient(
+        mcpConfiguration.baseUrl,
+        mcpConfiguration.token,
+        mcpConfiguration.fetchImpl,
+      );
+      loseNextAck = command.loseAck ?? false;
+      return command.action === "mcp-list"
+        ? mcp.list()
+        : mcp.call(command.mcpTool!, command.mcpArgs ?? {});
+    }
+    if (command.action.startsWith("memory-")) {
+      loseNextAck = command.loseAck ?? false;
+      if (command.action === "memory-query")
+        return client.queryMemory(command.memoryQuery!);
+      if (command.action === "memory-fact")
+        return client.createMemoryFact(command.memoryFact!);
+      if (command.action === "memory-procedure")
+        return client.createMemoryProcedure(command.memoryProcedure!);
+      if (command.action === "memory-delete")
+        return client.deleteMemoryRecord(command.memoryDelete!);
+    }
     if (command.action === "store-state") {
       assert.ok(command.stateFact);
       loseNextAck = command.loseAck ?? false;
@@ -2038,9 +2184,13 @@ async function relay(upstream: () => string, records: RequestRecord[]) {
         JSON.stringify(record) + "\n",
       );
       if (loseAck) {
-        assert.equal(
-          response.status,
-          200,
+        assert.ok(
+          response.status === 200 ||
+            (response.status === 201 &&
+              incoming.method === "POST" &&
+              /^\/api\/branches\/[^/]+\/[^/]+\/memory\/(facts|procedures)$/.test(
+                new URL(incoming.url!, "http://fixture.invalid").pathname,
+              )),
           "only discard a confirmed postcommit response",
         );
         lostResponse = JSON.parse(new TextDecoder().decode(bytes));
@@ -2286,13 +2436,19 @@ async function main() {
   const records: RequestRecord[] = [];
   const checks: {
     name: string;
-    workload: "baseline" | "lifecycle" | "runtime-facts";
+    workload: "baseline" | "lifecycle" | "runtime-facts" | "nullmem";
     passed: boolean;
     ms: number;
     error?: string;
   }[] = [];
-  let workload: "baseline" | "lifecycle" | "runtime-facts" = "baseline";
-  const expectedGroups = { baseline: 13, lifecycle: 8, "runtime-facts": 8 };
+  let workload: "baseline" | "lifecycle" | "runtime-facts" | "nullmem" =
+    "baseline";
+  const expectedGroups = {
+    baseline: 13,
+    lifecycle: 8,
+    "runtime-facts": 8,
+    nullmem: 8,
+  };
   const completeGroups = () =>
     Object.entries(expectedGroups).every(
       ([name, count]) =>
@@ -5095,6 +5251,1031 @@ async function main() {
               production: false,
               dependencyPhases: [...new Set(rows.map((row) => row.phase))],
               runtimeResetAndProcessRestart: true,
+            },
+            null,
+            2,
+          ),
+        );
+      },
+    );
+    workload = "nullmem";
+    const memoryRequestOffset = records.length;
+    const memoryMarker = `sensitive-nullmem-${randomBytes(24).toString("hex")}`;
+    sensitiveValues.add(memoryMarker);
+    const memoryScope = { rootId: nullmem.root as string, branchId: "owner" };
+    const memoryTargets = applicationNullMemRoots.map((rootId) => ({
+      rootId,
+      branch: "owner",
+    }));
+    const memoryQuery = async (
+      peer: Peer = a,
+      options: Partial<NulldownMemoryQueryRequest> = {},
+    ) =>
+      value(
+        await peer.call<BranchMemoryQueryResult>({
+          action: "memory-query",
+          memoryQuery: { ...memoryScope, ...options },
+        }),
+      );
+    const memoryFact = async (
+      recordId: string,
+      options: Partial<NulldownMemoryFactRequest> = {},
+      peer: Peer = a,
+    ) =>
+      value(
+        await peer.call<{ record: NullMemFactRecord }>({
+          action: "memory-fact",
+          memoryFact: {
+            ...memoryScope,
+            recordId,
+            text: memoryMarker,
+            ...options,
+          },
+        }),
+      ).record;
+    const procedureInput = (
+      recordId: string,
+    ): NulldownMemoryProcedureRequest => ({
+      ...memoryScope,
+      recordId,
+      goal: "acceptance procedure",
+      summary: memoryMarker,
+      steps: [9, 2, 5].map((index) => ({
+        index,
+        kind: "note",
+        name: `Step ${index}`,
+        status: "success",
+        description: `Run ${index}`,
+      })),
+    });
+    const memoryProcedure = async (
+      recordId: string,
+      options: Partial<NulldownMemoryProcedureRequest> = {},
+      peer: Peer = a,
+    ) =>
+      value(
+        await peer.call<{ record: NullMemProcedureRecord }>({
+          action: "memory-procedure",
+          memoryProcedure: { ...procedureInput(recordId), ...options },
+        }),
+      ).record;
+    const memoryDelete = async (
+      recordId: string,
+      options: Partial<NulldownMemoryDeleteRequest> = {},
+      peer: Peer = a,
+    ) =>
+      value(
+        await peer.call({
+          action: "memory-delete",
+          memoryDelete: { ...memoryScope, recordId, ...options },
+        }),
+      );
+    const mcpCall = async <T>(
+      tool: string,
+      args: Record<string, unknown>,
+      peer: Peer = b,
+    ) =>
+      value(
+        await peer.call<T>({
+          action: "mcp-call",
+          mcpTool: tool,
+          mcpArgs: { ...memoryScope, format: "full", maxTokens: 8000, ...args },
+        }),
+      );
+    const inspectMemory = async (
+      rootId: string = nullmem.root,
+      branch = "owner",
+    ) =>
+      value(
+        await runtime.call<NullMemInspection>({
+          action: "inspect-nullmem",
+          rootId,
+          branch,
+        }),
+      );
+    const memoryIds = (result: BranchMemoryQueryResult) =>
+      result.records.map((record) => record.recordId);
+    const memoryRevision = () => records.at(-1)!.memoryCommits![0].revision;
+    const appendMemoryEdit = async (id: string) => {
+      const before = await lifecycleContent(b, nullmem.root);
+      const state = await inspect("owner", nullmem.root);
+      value(
+        await b.call({
+          action: "apply",
+          branch: "owner",
+          event: applicationEvent(
+            id,
+            [
+              {
+                type: "insert",
+                start: before.content.length,
+                end: before.content.length,
+                text: `${id}\n`,
+              },
+            ],
+            state.events.at(-1)?.event_seq ?? -1,
+            "nullmem-B",
+            nullmem.root,
+          ),
+        }),
+      );
+    };
+
+    await run(
+      "NullMem signed bootstrap and actual MCP protocol round-trip",
+      async () => {
+        await configure(a, tokens[3], "nullmem-A", undefined, authoring);
+        await configure(b, tokens[3], "nullmem-MCP");
+        for (const rootId of applicationNullMemRoots) {
+          assert.equal((await inspectRoot(rootId)).exists, false);
+          const visibility =
+            rootId === nullmem.privateRoot
+              ? "private"
+              : rootId === nullmem.root
+                ? "public"
+                : "unlisted";
+          value(
+            await a.call({
+              action: "create-root",
+              visibility,
+              create: {
+                id: rootId,
+                content: nullmem.initial,
+                metadata: { themeId: "system" },
+              },
+            }),
+          );
+          const stored = value(
+            await runtime.call<RootInspection>({
+              action: "inspect-root",
+              rootId,
+              content: nullmem.initial,
+            }),
+          );
+          assert.equal(stored.sealed, true);
+          assert.equal(stored.containsPlaintext, false);
+          assert.deepEqual(stored.unexpectedFields, []);
+          assert.equal(stored.projection?.visibility, visibility);
+          assert.equal((await resolveBranch(a, rootId)).created, true);
+          assert.equal((await resolveBranch(b, rootId)).created, false);
+          assert.equal(
+            (await lifecycleContent(a, rootId)).content,
+            nullmem.initial,
+          );
+        }
+        const tools = value(
+          await b.call<{ tools: { name: string }[] }>({ action: "mcp-list" }),
+        );
+        for (const name of [
+          "memory_fact",
+          "memory_procedure",
+          "memory_query",
+          "memory_stale_check",
+        ])
+          assert.ok(tools.tools.some((tool) => tool.name === name));
+        const before = await inspect("owner", nullmem.root);
+        const refs: NulldownMemoryFactRequest["sourceRefs"] = [
+          {
+            kind: "snapshot",
+            rootDropId: nullmem.root,
+            branchId: "owner",
+            snapshotId: 0,
+          },
+        ];
+        const fact = await memoryFact("sdk-roundtrip", {
+          sourceRefs: refs,
+          labels: ["roundtrip"],
+          metadata: { marker: memoryMarker },
+          confidence: 0.75,
+        });
+        assert.deepEqual(fact.sourceRefs, refs);
+        assert.equal(fact.text, memoryMarker);
+        assert.equal(fact.rootDropId, nullmem.root);
+        assert.equal(fact.branchId, "owner");
+        assert.equal(fact.kind, "fact");
+        assert.equal(fact.version, 1);
+        assert.ok(fact.createdAt > 0);
+        assert.equal(fact.confidence, 0.75);
+        assert.deepEqual(
+          (
+            await mcpCall<BranchMemoryQueryResult>("memory_query", {
+              labels: ["roundtrip"],
+            })
+          ).records,
+          [fact],
+        );
+        const procedure = await mcpCall<{ record: NullMemProcedureRecord }>(
+          "memory_procedure",
+          {
+            ...procedureInput("mcp-roundtrip"),
+            labels: ["roundtrip-procedure"],
+          },
+        );
+        assert.deepEqual(
+          (
+            await memoryQuery(a, {
+              kind: "procedure",
+              labels: ["roundtrip-procedure"],
+            })
+          ).records,
+          [procedure.record],
+        );
+        const fromMcp = await mcpCall<{ record: NullMemFactRecord }>(
+          "memory_fact",
+          { recordId: "mcp-fact", text: memoryMarker, labels: ["mcp-fact"] },
+        );
+        assert.deepEqual(
+          (await memoryQuery(a, { labels: ["mcp-fact"] })).records,
+          [fromMcp.record],
+        );
+        assert.deepEqual(await inspect("owner", nullmem.root), before);
+        const poll = value(
+          await a.call<DropDiffPollResponse>({
+            action: "poll",
+            rootId: nullmem.root,
+            branch: "owner",
+            cursor: "-1",
+            factCursor: null,
+          }),
+        );
+        assert.deepEqual(poll.events, []);
+        assert.equal(poll.facts, undefined);
+        await rejected(
+          a,
+          {
+            action: "memory-query",
+            memoryQuery: { rootId: lifecycle.root, branchId: "owner" },
+          },
+          501,
+          "capability_unsupported",
+        );
+      },
+    );
+
+    await run(
+      "NullMem authorization filters every public projection and suppresses sensitive catalogs",
+      async () => {
+        await memoryFact("public-fact", {
+          labels: ["public-memory", "access"],
+        });
+        await memoryFact("secret-fact", { labels: ["access"] });
+        await memoryProcedure("public-procedure", {
+          labels: ["public-memory", "access"],
+        });
+        await memoryProcedure("secret-procedure", { labels: ["access"] });
+        await memoryFact("private-root-fact", { rootId: nullmem.privateRoot });
+        const catalog = await memoryQuery(a, {
+          kind: "capability",
+          limit: 100,
+        });
+        assert.ok(memoryIds(catalog).includes(nullmem.remoteId));
+        assert.ok(
+          catalog.records.some(
+            (record) =>
+              record.kind === "capability" && record.capabilityKind === "theme",
+          ),
+        );
+        assert.ok(
+          catalog.records.some(
+            (record) =>
+              record.kind === "capability" &&
+              record.capabilityKind !== "theme" &&
+              record.recordId !== nullmem.remoteId,
+          ),
+        );
+        assert.equal(records.at(-1)!.calls["catalog.readRecords"].count, 1);
+        for (const token of [undefined, "forged-session", tokens[2]]) {
+          await configure(b, token, "nullmem-public");
+          const offset = records.length;
+          const visible = await memoryQuery(b, {
+            labels: ["access"],
+            includeFreshness: true,
+          });
+          assert.deepEqual(memoryIds(visible).sort(), [
+            "public-fact",
+            "public-procedure",
+          ]);
+          assert.deepEqual(visible.capsules.map((row) => row.recordId).sort(), [
+            "public-fact",
+            "public-procedure",
+          ]);
+          assert.deepEqual(
+            visible.freshness!.map((row) => row.recordId).sort(),
+            ["public-fact", "public-procedure"],
+          );
+          const hidden = await memoryQuery(b, {
+            procedureId: "secret-procedure",
+            includeFreshness: true,
+            includeRecords: true,
+          });
+          for (const list of [
+            hidden.records,
+            hidden.capsules,
+            hidden.procedureSteps,
+            hidden.freshness,
+          ])
+            assert.deepEqual(list, []);
+          const publicSteps = await mcpCall<BranchMemoryQueryResult>(
+            "memory_query",
+            { procedureId: "public-procedure", includeFreshness: true },
+            b,
+          );
+          assert.equal(publicSteps.procedureSteps!.length, 1);
+          const publicCatalog = await memoryQuery(b, {
+            kind: "capability",
+            limit: 100,
+          });
+          assert.equal(
+            memoryIds(publicCatalog).includes(nullmem.remoteId),
+            false,
+          );
+          for (const row of records.slice(offset))
+            assert.equal(row.calls["catalog.readRecords"], undefined);
+          await rejected(
+            b,
+            {
+              action: "memory-query",
+              memoryQuery: { rootId: nullmem.privateRoot, branchId: "owner" },
+            },
+            404,
+            "branch_not_found",
+          );
+          assert.equal(records.at(-1)!.calls["rpc.queryNullMem"], undefined);
+          const status = token === tokens[2] ? 403 : 401;
+          const code = status === 403 ? "forbidden" : "account_required";
+          await rejected(
+            b,
+            {
+              action: "memory-fact",
+              memoryFact: {
+                ...memoryScope,
+                recordId: "denied",
+                text: "denied",
+              },
+            },
+            status,
+            code,
+          );
+          assert.equal(records.at(-1)!.calls["rpc.putNullMem"], undefined);
+          await rejected(
+            b,
+            {
+              action: "memory-delete",
+              memoryDelete: { ...memoryScope, recordId: "public-fact" },
+            },
+            status,
+            code,
+          );
+          assert.equal(records.at(-1)!.calls["rpc.deleteNullMem"], undefined);
+        }
+        await configure(b, tokens[4], "nullmem-writer");
+        const clone = await resolveBranch(b, nullmem.root);
+        memoryTargets.push({ rootId: nullmem.root, branch: clone.branchId });
+        const own = await memoryFact(
+          "writer-record",
+          { branchId: clone.branchId, labels: ["writer-only"] },
+          b,
+        );
+        assert.deepEqual(
+          (
+            await memoryQuery(b, {
+              branchId: clone.branchId,
+              labels: ["writer-only"],
+            })
+          ).records,
+          [own],
+        );
+        assert.deepEqual(
+          (await memoryQuery(a, { labels: ["writer-only"] })).records,
+          [],
+        );
+        await configure(b, tokens[3], "nullmem-MCP");
+      },
+    );
+
+    await run(
+      "NullMem mutable identity and lost acknowledgements create new revisions on every retry",
+      async () => {
+        const request = {
+          ...memoryScope,
+          recordId: "mutable-retry",
+          text: "original retry",
+          labels: ["retry"],
+        };
+        const first = await memoryFact(request.recordId, request);
+        const firstRevision = memoryRevision();
+        const second = await memoryFact(request.recordId, request);
+        assert.equal(memoryRevision(), firstRevision + 1);
+        assert.ok(second.createdAt >= first.createdAt);
+        assert.deepEqual({ ...second, createdAt: first.createdAt }, first);
+        for (const protocol of ["sdk", "mcp"] as const) {
+          const offset = records.length;
+          const lost = await (protocol === "sdk" ? a : b).call(
+            protocol === "sdk"
+              ? { action: "memory-fact", memoryFact: request, loseAck: true }
+              : {
+                  action: "mcp-call",
+                  mcpTool: "memory_fact",
+                  mcpArgs: { ...request },
+                  loseAck: true,
+                },
+          );
+          assert.equal(lost.ok, false);
+          assert.equal(records[offset].status, 201);
+          assert.equal(records[offset].lostAck, true);
+          const committed = (
+            proxy.lostResponse() as { record: NullMemFactRecord }
+          ).record;
+          const lostRevision = records[offset].memoryCommits![0].revision;
+          await memoryFact(request.recordId, {
+            ...request,
+            text: "intervening overwrite",
+          });
+          assert.equal(memoryRevision(), lostRevision + 1);
+          const retried =
+            protocol === "sdk"
+              ? await memoryFact(request.recordId, request)
+              : (
+                  await mcpCall<{ record: NullMemFactRecord }>("memory_fact", {
+                    ...request,
+                  })
+                ).record;
+          assert.equal(memoryRevision(), lostRevision + 2);
+          assert.ok(retried.createdAt >= committed.createdAt);
+          assert.equal(retried.text, request.text);
+          assert.equal(records.at(-1)!.bodyHash, records[offset].bodyHash);
+          assert.deepEqual(
+            (await memoryQuery(a, { labels: ["retry"] })).records,
+            [retried],
+          );
+        }
+      },
+    );
+
+    await run(
+      "NullMem 101 real HTTP writes filter before limit and rank mutable JSON timestamps",
+      async () => {
+        const expected: NullMemFactRecord[] = [];
+        for (let index = 0; index < nullmem.pageRecordCount; index++)
+          expected.push(
+            await memoryFact(
+              `rank-${index}`,
+              {
+                rootId: nullmem.pageRoot,
+                text:
+                  index === 0
+                    ? "needle amber cobalt"
+                    : index % 2
+                      ? "amber cobalt"
+                      : "amber only",
+                labels: index % 3 ? ["rank"] : ["rank", "both"],
+                priority: index % 5,
+              },
+              index % 2 ? b : a,
+            ),
+          );
+        const sorted = [...expected].sort(
+          (left, right) =>
+            (right.priority ?? 0) - (left.priority ?? 0) ||
+            right.createdAt - left.createdAt ||
+            left.recordId.localeCompare(right.recordId),
+        );
+        assert.deepEqual(
+          (
+            await memoryQuery(a, {
+              rootId: nullmem.pageRoot,
+              kind: "fact",
+              limit: 100,
+            })
+          ).records,
+          sorted.slice(0, 100),
+        );
+        for (const [limit, count] of [
+          [999, 100],
+          [0, 1],
+        ] as const) {
+          const normalized = await memoryQuery(a, {
+            rootId: nullmem.pageRoot,
+            kind: "fact",
+            limit,
+          });
+          assert.equal(normalized.query.limit, count);
+          assert.deepEqual(normalized.records, sorted.slice(0, count));
+        }
+        assert.deepEqual(
+          memoryIds(
+            await memoryQuery(a, {
+              rootId: nullmem.pageRoot,
+              query: "needle COBALT",
+              limit: 1,
+            }),
+          ),
+          ["rank-0"],
+        );
+        const filtered = sorted.filter(
+          (record) =>
+            record.text.includes("cobalt") && record.labels!.includes("both"),
+        );
+        assert.deepEqual(
+          (
+            await memoryQuery(a, {
+              rootId: nullmem.pageRoot,
+              query: "AMBER cobalt",
+              labels: ["rank", "both"],
+              limit: 100,
+            })
+          ).records,
+          filtered,
+        );
+        assert.deepEqual(
+          (
+            await memoryQuery(a, {
+              rootId: nullmem.pageRoot,
+              kind: "procedure",
+            })
+          ).records,
+          [],
+        );
+        assert.deepEqual(
+          (await memoryQuery(a, { labels: ["rank"] })).records,
+          [],
+        );
+        const overwritten = await memoryFact("rank-0", {
+          rootId: nullmem.pageRoot,
+          text: "amber cobalt",
+          labels: ["rank"],
+          priority: 4,
+        });
+        const refreshed = [...expected.slice(1), overwritten].sort(
+          (left, right) =>
+            (right.priority ?? 0) - (left.priority ?? 0) ||
+            right.createdAt - left.createdAt ||
+            left.recordId.localeCompare(right.recordId),
+        );
+        assert.deepEqual(
+          (
+            await memoryQuery(a, {
+              rootId: nullmem.pageRoot,
+              kind: "fact",
+              limit: 1,
+            })
+          ).records,
+          refreshed.slice(0, 1),
+        );
+        const capped = await mcpCall<{ truncated: boolean; maxTokens: number }>(
+          "memory_query",
+          {
+            rootId: nullmem.pageRoot,
+            kind: "fact",
+            limit: 100,
+            maxTokens: 100,
+          },
+        );
+        assert.equal(capped.truncated, true);
+        assert.equal(capped.maxTokens, 100);
+      },
+    );
+
+    await run(
+      "NullMem procedure cursors and transaction-captured freshness agree across SDK and MCP",
+      async () => {
+        await memoryProcedure("projection", { labels: ["projection"] });
+        const projected = await memoryQuery(a, {
+          procedureId: "projection",
+          afterStep: 2,
+          stepLimit: 1,
+        });
+        assert.deepEqual(projected.records, []);
+        assert.deepEqual(
+          projected.procedureSteps!.map((item) => [
+            item.step.index,
+            item.nextCursor,
+            item.remainingSteps,
+          ]),
+          [[5, 5, 1]],
+        );
+        assert.deepEqual(
+          await mcpCall<BranchMemoryQueryResult>("memory_query", {
+            procedureId: "projection",
+            afterStep: 2,
+            stepLimit: 1,
+          }),
+          projected,
+        );
+        const tail = await memoryQuery(a, {
+          procedureId: "projection",
+          afterStep: 5,
+          stepLimit: 20,
+          includeRecords: true,
+        });
+        assert.equal(tail.records.length, 1);
+        assert.equal(tail.capsules.length, 1);
+        assert.equal(tail.procedureSteps![0].step.index, 9);
+        assert.equal(tail.procedureSteps![0].nextCursor, undefined);
+        assert.deepEqual(
+          (await memoryQuery(a, { procedureId: "projection", afterStep: 9 }))
+            .procedureSteps,
+          [],
+        );
+        const refs: NulldownMemoryFactRequest["sourceRefs"] = [
+          {
+            kind: "snapshot",
+            rootDropId: nullmem.root,
+            branchId: "owner",
+            snapshotId: 0,
+          },
+        ];
+        for (const [id, labels, sourceRefs] of [
+          ["fresh", [], refs],
+          ["stale", ["stale-memory"], refs],
+          ["missing", [], []],
+          ["review", ["needs-review"], refs],
+          ["superseded", ["supersedes:newer"], refs],
+        ] as const)
+          await memoryFact(`freshness-${id}`, {
+            labels: ["acceptance-freshness", ...labels],
+            sourceRefs: [...sourceRefs],
+          });
+        const before = await memoryQuery(a, {
+          labels: ["acceptance-freshness"],
+          includeFreshness: true,
+        });
+        assert.deepEqual(
+          Object.fromEntries(
+            before.freshness!.map((row) => [row.recordId, row.status]),
+          ),
+          {
+            "freshness-fresh": "fresh",
+            "freshness-stale": "explicit-stale",
+            "freshness-missing": "source-missing",
+            "freshness-review": "needs-review",
+            "freshness-superseded": "superseded",
+          },
+        );
+        await armFault(nullmem.root, "queryNullMem", "pause", "after");
+        const pending = memoryQuery(a, {
+          labels: ["acceptance-freshness"],
+          includeFreshness: true,
+        });
+        value(await runtime.call({ action: "wait-rpc-fault" }));
+        try {
+          await appendMemoryEdit("memory-freshness-edit");
+        } finally {
+          value(await runtime.call({ action: "release-rpc-fault" }));
+        }
+        assert.deepEqual(await pending, before);
+        const after = await memoryQuery(a, {
+          labels: ["acceptance-freshness"],
+          includeFreshness: true,
+        });
+        assert.equal(
+          after.freshness!.find((row) => row.recordId === "freshness-fresh")!
+            .status,
+          "snapshot-outdated",
+        );
+        assert.ok(after.freshness!.every((row) => row.currentSnapshotId === 1));
+        assert.deepEqual(
+          await mcpCall<BranchMemoryQueryResult>("memory_stale_check", {
+            labels: ["acceptance-freshness"],
+          }),
+          after,
+        );
+      },
+    );
+
+    await run(
+      "NullMem delete spans kinds, missing deletes mutate, and recreation stays branch-local",
+      async () => {
+        const branch = memoryTargets.find(
+          (target) => target.branch !== "owner",
+        )!.branch;
+        await memoryFact("shared-id", { labels: ["delete-scope"] });
+        await memoryProcedure("shared-id", { labels: ["delete-scope"] });
+        await memoryFact("shared-id", {
+          branchId: branch,
+          labels: ["delete-scope"],
+        });
+        const sibling = await memoryQuery(a, {
+          branchId: branch,
+          labels: ["delete-scope"],
+        });
+        assert.equal(
+          (await memoryQuery(a, { labels: ["delete-scope"] })).records.length,
+          2,
+        );
+        const before = await inspectMemory();
+        await memoryDelete("shared-id");
+        assert.equal(memoryRevision(), before.memoryRevision + 1);
+        assert.deepEqual(
+          (await memoryQuery(a, { labels: ["delete-scope"] })).records,
+          [],
+        );
+        await memoryDelete("shared-id");
+        assert.equal(memoryRevision(), before.memoryRevision + 2);
+        assert.deepEqual(
+          await memoryQuery(a, { branchId: branch, labels: ["delete-scope"] }),
+          sibling,
+        );
+        const recreated = await memoryFact("shared-id", {
+          labels: ["delete-scope"],
+          text: "recreated",
+        });
+        assert.equal(memoryRevision(), before.memoryRevision + 3);
+        assert.deepEqual(
+          (await memoryQuery(a, { labels: ["delete-scope"] })).records,
+          [recreated],
+        );
+      },
+    );
+
+    await run(
+      "NullMem real races, selected RPC failures and native late abort preserve atomic state",
+      async () => {
+        const distinct = await Promise.all([
+          memoryFact("race-a", { labels: ["race-distinct"] }, a),
+          memoryFact("race-b", { labels: ["race-distinct"] }, b),
+        ]);
+        assert.deepEqual(
+          memoryIds(await memoryQuery(a, { labels: ["race-distinct"] })).sort(),
+          distinct.map((row) => row.recordId).sort(),
+        );
+        const raced = await Promise.all([
+          memoryFact(
+            "race-same",
+            {
+              text: "complete alpha",
+              metadata: { winner: "alpha" },
+              labels: ["race-same"],
+            },
+            a,
+          ),
+          memoryFact(
+            "race-same",
+            {
+              text: "complete beta",
+              metadata: { winner: "beta" },
+              labels: ["race-same"],
+            },
+            b,
+          ),
+        ]);
+        const winner = (await memoryQuery(a, { labels: ["race-same"] }))
+          .records;
+        assert.equal(winner.length, 1);
+        assert.ok(
+          raced.some(
+            (row) => JSON.stringify(row) === JSON.stringify(winner[0]),
+          ),
+        );
+        for (const stage of ["before", "after"] as const) {
+          await armFault(nullmem.root, "putNullMem", "pause", stage);
+          const pending = memoryFact("write-delete-race", {
+            labels: ["write-delete"],
+          });
+          value(await runtime.call({ action: "wait-rpc-fault" }));
+          try {
+            await memoryDelete("write-delete-race", {}, b);
+          } finally {
+            value(await runtime.call({ action: "release-rpc-fault" }));
+          }
+          const written = await pending;
+          assert.deepEqual(
+            (await memoryQuery(a, { labels: ["write-delete"] })).records,
+            stage === "before" ? [written] : [],
+          );
+        }
+        const before = await inspectMemory();
+        for (const method of [
+          "queryNullMem",
+          "putNullMem",
+          "deleteNullMem",
+        ] as const) {
+          const command: Command =
+            method === "queryNullMem"
+              ? { action: "memory-query", memoryQuery: memoryScope }
+              : method === "putNullMem"
+                ? {
+                    action: "memory-fact",
+                    memoryFact: {
+                      ...memoryScope,
+                      recordId: "failure",
+                      text: "must not persist",
+                    },
+                  }
+                : {
+                    action: "memory-delete",
+                    memoryDelete: { ...memoryScope, recordId: "sdk-roundtrip" },
+                  };
+          for (const mode of ["fail", "stale-generation"] as const) {
+            await armFault(nullmem.root, method, mode, "before");
+            await rejected(
+              a,
+              command,
+              mode === "fail" ? 503 : 409,
+              mode === "fail"
+                ? "state_unavailable"
+                : "routing_generation_mismatch",
+            );
+            assert.equal(records.at(-1)!.calls[`rpc.${method}`].errors, 1);
+            assert.deepEqual(await inspectMemory(), before);
+          }
+        }
+        value(
+          await runtime.call({
+            action: "arm-nullmem-sql-fault",
+            rootId: nullmem.root,
+            branch: "owner",
+          }),
+        );
+        try {
+          await rejected(
+            a,
+            {
+              action: "memory-fact",
+              memoryFact: {
+                ...memoryScope,
+                recordId: "native-memory-rollback",
+                text: "rollback",
+              },
+            },
+            503,
+            "state_unavailable",
+          );
+          assert.deepEqual(await inspectMemory(), before);
+        } finally {
+          value(
+            await runtime.call({
+              action: "clear-nullmem-sql-fault",
+              rootId: nullmem.root,
+              branch: "owner",
+            }),
+          );
+        }
+        await memoryFact("native-memory-rollback", { text: "recovered" });
+        assert.equal(memoryRevision(), before.memoryRevision + 1);
+        const beforeDelete = await inspectMemory();
+        value(
+          await runtime.call({
+            action: "arm-nullmem-sql-fault",
+            rootId: nullmem.root,
+            branch: "owner",
+          }),
+        );
+        try {
+          await rejected(
+            a,
+            {
+              action: "memory-delete",
+              memoryDelete: {
+                ...memoryScope,
+                recordId: "native-memory-rollback",
+              },
+            },
+            503,
+            "state_unavailable",
+          );
+          assert.deepEqual(await inspectMemory(), beforeDelete);
+        } finally {
+          value(
+            await runtime.call({
+              action: "clear-nullmem-sql-fault",
+              rootId: nullmem.root,
+              branch: "owner",
+            }),
+          );
+        }
+        await memoryDelete("native-memory-rollback");
+        assert.equal(memoryRevision(), beforeDelete.memoryRevision + 1);
+      },
+    );
+
+    await run(
+      "NullMem survives runtime/process/MCP restart with revision correlation and dependency budgets",
+      async () => {
+        const states = [];
+        for (const target of memoryTargets)
+          states.push(await inspectMemory(target.rootId, target.branch));
+        const before = await memoryQuery(a, {
+          kind: "fact",
+          limit: 100,
+          includeFreshness: true,
+        });
+        upstream = value(
+          await runtime.call<{ baseUrl: string }>({ action: "reset-runtime" }),
+        ).baseUrl;
+        assert.deepEqual(
+          await memoryQuery(a, {
+            kind: "fact",
+            limit: 100,
+            includeFreshness: true,
+          }),
+          before,
+        );
+        const oldPid = await runtime.ready;
+        await runtime.close();
+        runtime = new Peer("runtime");
+        await startRuntime();
+        assert.notEqual(await runtime.ready, oldPid);
+        await b.close();
+        b = new Peer("client");
+        await configure(b, tokens[3], "nullmem-MCP-reconnected");
+        assert.deepEqual(
+          await mcpCall<BranchMemoryQueryResult>("memory_query", {
+            kind: "fact",
+            limit: 100,
+            includeFreshness: true,
+          }),
+          before,
+        );
+        for (const [index, target] of memoryTargets.entries())
+          assert.deepEqual(
+            await inspectMemory(target.rootId, target.branch),
+            states[index],
+          );
+        await mcpCall("memory_fact", {
+          recordId: "after-memory-restart",
+          text: "restart write",
+        });
+        await memoryDelete("after-memory-restart");
+        const rows = records.slice(memoryRequestOffset);
+        const steady = rows.filter((row) => row.phase === "nullmem");
+        assert.ok(steady.length > nullmem.pageRecordCount);
+        for (const row of steady) {
+          assert.equal(row.sqlWrites, 0, row.requestId);
+          assert.equal(
+            Object.keys(row.calls).some((name) => name.startsWith("r2.")),
+            false,
+            row.requestId,
+          );
+          assert.equal(row.background.failed, 0);
+          assert.equal(row.background.scheduled, row.background.completed);
+        }
+        assert.ok(steady.some((row) => row.sqlReads > 0));
+        assert.ok(steady.some((row) => row.lostAck && row.status === 201));
+        for (const code of ["state_unavailable", "routing_generation_mismatch"])
+          assert.ok(
+            steady.some((row) =>
+              row.rpcFailures.some((failure) => failure.code === code),
+            ),
+          );
+        const commits = steady.flatMap((row) =>
+          (row.memoryCommits ?? []).map((commit) => ({
+            requestId: row.requestId,
+            ...commit,
+          })),
+        );
+        const durableSummaries = [];
+        for (const target of memoryTargets) {
+          const durable = await inspectMemory(target.rootId, target.branch);
+          const scopeHash = sha256(
+            JSON.stringify([target.rootId, target.branch]),
+          );
+          const correlated = commits
+            .filter((row) => row.scopeHash === scopeHash)
+            .sort((a, b) => a.revision - b.revision);
+          assert.equal(durable.outbox.length, durable.memoryRevision);
+          assert.deepEqual(
+            correlated.map((row) => row.revision),
+            Array.from(
+              { length: durable.memoryRevision },
+              (_, index) => index + 1,
+            ),
+          );
+          assert.equal(
+            new Set(durable.outbox.map((row) => row.id)).size,
+            durable.memoryRevision,
+          );
+          for (const [index, row] of durable.outbox.entries()) {
+            assert.equal(row.kind, "branch.nullmem.v1");
+            assert.equal(row.result.memoryRevision, index + 1);
+            assert.equal(row.operation, correlated[index].operation);
+          }
+          durableSummaries.push({
+            scopeHash,
+            memoryRevision: durable.memoryRevision,
+            counts: durable.counts,
+          });
+        }
+        writeFileSync(
+          resolve(evidence, "application-nullmem.json"),
+          JSON.stringify(
+            {
+              scope:
+                "local signed SDK / MCP protocol / Pages / Worker RPC / native SQLite",
+              groups: 8,
+              pageRecordWrites: nullmem.pageRecordCount,
+              eventCorrelation: commits,
+              atomicOutboxRecords: durableSummaries,
+              remoteCatalog:
+                "synthetic injected metadata; sensitive callers only",
+              globalPersistedDefaults:
+                "deferred; no legacy D1 default parity claim",
+              runtimeResetAndProcessRestart: true,
+              mcpReconnect: true,
+              syntheticPayloadMarkerRegistered:
+                sensitiveValues.has(memoryMarker),
+              outboxDelivery: false,
+              production: false,
             },
             null,
             2,

@@ -23,6 +23,7 @@ import type { NulleditSnapshotter } from "../nulledit/types";
 import type { RuntimeDataStore } from "../ports";
 import type { BranchDiffCommands, BranchStatePlane } from "./contracts";
 import type { LocalBranchLifecycle } from "./application-lifecycle";
+import type { LocalBranchNullMemSelection } from "./nullmem-application";
 import type {
   BranchSnapshotState,
   BranchSnapshotStatePlane,
@@ -39,6 +40,8 @@ export interface LocalBranchApplicationSelection {
   history?: BranchSnapshotStatePlane;
   /** Atomic immutable UI facts and their independently sequenced branch stream. */
   runtimeFacts?: BranchRuntimeFactStatePlane;
+  /** Explicit branch-local memory authority and optional sensitive catalog dependency. */
+  nullmem?: LocalBranchNullMemSelection;
   data?: RuntimeDataStore;
   snapshotters?: NulleditSnapshotter[];
 }

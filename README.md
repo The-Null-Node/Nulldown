@@ -572,7 +572,7 @@ activation. It verifies ownership and excludes existing legacy history before
 selecting local authority. History support adds ascending snapshot discovery and
 exact historical content reads (`?snapshotId=N` on the branch content endpoint).
 Root replacement, deletion, publication, promotion, diff-credential registration,
-memory, and plugin execution remain unsupported on this local path.
+and plugin execution remain unsupported on this local path.
 Snapshotters must be supplied explicitly with a
 derived-data store; durable outbox delivery is separate work.
 
@@ -583,6 +583,18 @@ commits atomically. Exact retries return the original receipt after document edi
 new facts must match the current source hash. Fact polling requires sensitive branch
 read authorization. Responses report `indexed: false` because projection delivery
 is not implemented, and proposed response diffs remain data.
+
+The optional `nullmem` capability connects the existing branch memory routes to
+local durable facts and procedures. Record IDs remain mutable: repeated writes
+replace that kind's record, and deletion removes every kind with the requested ID.
+Each write or deletion commits with a memory revision and outbox intent. Queries
+filter before applying the result limit, preserve capsule and procedure-step
+responses, and use a transaction-consistent branch head for freshness.
+Built-in and theme catalogs are available locally; an explicit additional catalog
+is consulted only for sensitive readers. Legacy global persisted defaults and
+cross-branch freshness improvements are outside this local capability. Query
+responses are bounded, but the initial implementation scans branch records and
+validates retained memory mutation history.
 
 With Bun and a Node.js version supporting `node:sqlite`, run:
 

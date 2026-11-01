@@ -20,7 +20,7 @@ import type {
 
 /** Storage and authentication dependencies used for NullMem authorization. */
 export interface NullMemAuthorizationEnv extends AccountAuthEnv {
-  /** Request-owned local authority; memory capabilities reject before legacy access. */
+  /** Request-owned local authority; an omitted memory capability rejects before legacy access. */
   localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
@@ -68,11 +68,12 @@ export const resolveNullMemTarget = async (
         ),
       };
     }
-    return {
-      error: branchStateErrorResponse(
-        new BranchStateError("capability_unsupported"),
-      ),
-    };
+    if (!env.localBranchApplication.nullmem)
+      return {
+        error: branchStateErrorResponse(
+          new BranchStateError("capability_unsupported"),
+        ),
+      };
   }
   const requestedRootId = resolveParam(params.rootId);
   const requestedBranchId = resolveParam(params.branchId);
@@ -90,8 +91,11 @@ export const resolveNullMemTarget = async (
     blobs: env.R2_BUCKET,
     sql: env.DB,
   });
-  const rootDropId =
-    await dropIdentityRepository.resolveRemoteDropId(requestedRootId);
+  const rootDropId = env.localBranchApplication
+    ? await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
+        requestedRootId,
+      )
+    : await dropIdentityRepository.resolveRemoteDropId(requestedRootId);
   if (!rootDropId) {
     return {
       error: jsonErrorResponse(
@@ -102,15 +106,21 @@ export const resolveNullMemTarget = async (
     };
   }
 
+  const rootDecision = env.localBranchApplication
+    ? await resolveRootReadAuthorization(request, env, rootDropId)
+    : null;
+  if (rootDecision?.kind === "denied")
+    return { error: branchNotFoundResponse() };
   const statePlane = createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
+    localBranchApplication: env.localBranchApplication,
   });
   const branch = await statePlane.branches.readBranch(
     rootDropId,
     requestedBranchId,
   );
-  if (!branch) {
+  if (!branch || (rootDecision && !canReadBranch(rootDecision, branch))) {
     return {
       error: jsonErrorResponse(404, "branch_not_found", "Branch not found."),
     };
@@ -125,7 +135,7 @@ export const resolveNullMemQueryTarget = async (
   env: NullMemAuthorizationEnv,
   params: NullMemTargetParams,
 ): Promise<ResolvedNullMemQueryTarget | { error: Response }> => {
-  if (env.localBranchApplication) {
+  if (env.localBranchApplication && !env.localBranchApplication.nullmem) {
     return {
       error: branchStateErrorResponse(
         new BranchStateError("capability_unsupported"),
@@ -174,6 +184,7 @@ export const resolveNullMemQueryTarget = async (
   const statePlane = createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
+    localBranchApplication: env.localBranchApplication,
   });
   const branch = await statePlane.branches.readBranch(
     rootDropId,

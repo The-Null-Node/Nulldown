@@ -1,5 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  captureNullMemQuery,
+  captureNullMemPut,
+  captureNullMemDelete,
+  type BranchNullMemQuery,
+  type BranchNullMemPutCommand,
+  type BranchNullMemDeleteCommand,
+} from "../../../shared/drop/branch-nullmem";
+import {
   BranchLifecycleQuery,
   type BranchPlacementQuery,
   type BranchReserveRecord,
@@ -80,6 +88,39 @@ export class BranchStateObject extends DurableObject<BranchStateBindings> {
     if (!this.ctx.id.equals(this.env.BRANCH_STATE.idFromName(name))) {
       throw new BranchStateError("routing_placement_mismatch");
     }
+  }
+
+  /** Captures query filters before shard routing and reads branch-local memory plus current head atomically. */
+  async queryNullMem(
+    input: BranchNullMemQuery,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(async () => {
+      const query = captureNullMemQuery(input);
+      await this.#placement(query);
+      return this.#plane.queryNullMem(query);
+    });
+  }
+
+  /** Publishes one fresh mutable upsert using the authenticated actor supplied by the internal application. */
+  async putNullMem(
+    input: BranchNullMemPutCommand,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(async () => {
+      const command = captureNullMemPut(input);
+      await this.#placement(command);
+      return this.#plane.putNullMem(command);
+    });
+  }
+
+  /** Publishes an all-kinds deletion and revision-keyed intent in the same SQLite transaction. */
+  async deleteNullMem(
+    input: BranchNullMemDeleteCommand,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(async () => {
+      const command = captureNullMemDelete(input);
+      await this.#placement(command);
+      return this.#plane.deleteNullMem(command);
+    });
   }
 
   /** Publishes one immutable UI fact through the branch-local transaction. */
