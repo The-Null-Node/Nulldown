@@ -20,7 +20,7 @@ import {
   BranchMutationLockError,
   withBranchMutationLock,
 } from "./storage/mutation-lock";
-import { sanitizeDiffAuthToken } from "../diffs/credentials/repository";
+import { sanitizeBranchId } from "../../../../shared/drop/branch-identity";
 import { createDropIdentityRepository } from "../drops/identity/id";
 import {
   apiHttpErrorResponse,
@@ -31,6 +31,9 @@ import {
 } from "../core/http/responses";
 import { createPromotedEnvelope } from "../crypto/envelopes/promotion";
 import { encodeDropEnvelope } from "../../../../shared/drop/codecs/envelope-v1";
+import type { LocalBranchApplicationSelection } from "../../../../src/server/state-plane/commit-application";
+import { BranchStateError } from "../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "./http/state-plane-errors";
 import {
   createReservedRemoteJsonDrop,
   releaseReservedRemoteJsonDropId,
@@ -65,6 +68,8 @@ const hasMatchingPromotionIdentity = (
 
 /** Environment required to promote a branch snapshot into a new drop. */
 export interface BranchPromotionEnv extends AccountAuthEnv {
+  /** Trusted local authority selection; publication and promotion require their own fencing capability. */
+  localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
   PUBLIC_BASE_URL: string;
@@ -105,7 +110,7 @@ export const promoteBranchSnapshot = async (
     const rootDropId = await dropIdentityRepository.resolveRemoteDropId(
       resolveParam(params.rootId),
     );
-    const branchId = sanitizeDiffAuthToken(resolveParam(params.branchId));
+    const branchId = sanitizeBranchId(resolveParam(params.branchId));
     const accountId = await resolveAuthenticatedAccountId(request, env);
     if (!rootDropId || !branchId) {
       return jsonErrorResponse(
@@ -117,6 +122,9 @@ export const promoteBranchSnapshot = async (
     if (!accountId) {
       return jsonErrorResponse(401, "account_required", "Account ID is required.");
     }
+
+    if (env.localBranchApplication)
+      return branchStateErrorResponse(new BranchStateError("capability_unsupported"));
 
     const statePlane = createBranchStatePlane({
       blobs: env.R2_BUCKET,

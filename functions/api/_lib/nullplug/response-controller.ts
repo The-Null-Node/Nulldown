@@ -14,6 +14,8 @@ import {
 import { createDropIdentityRepository } from "../drops/identity/id";
 import { resolveAuthenticatedAccountId } from "../accounts/session/authentication";
 import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
+import { BranchStateError } from "../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../branches/http/state-plane-errors";
 import { readBranchContent } from "../branches/content/replay";
 import { createBranchRuntimeFactLogRepository } from "../branches/storage/runtime-fact-log";
 import {
@@ -87,6 +89,13 @@ const handlePost = async (
         401,
         "account_required",
         "Authenticated account session is required.",
+      );
+    }
+
+    if (serviceEnv.localBranchApplication) {
+      logger.logEnd(501, { reason: "capability_unsupported" });
+      return branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
       );
     }
 

@@ -1,12 +1,18 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
-import { handleNullplugResolveRequest } from "../_lib/nullplug/resolve-controller";
+import {
+  handleNullplugResolveRequest,
+  type NullplugResolveControllerEnv,
+} from "../_lib/nullplug/resolve-controller";
 import { createCloudflareBackendRuntime } from "../_lib/core/platform/cloudflare/runtime/composition";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
 } from "../_lib/core/platform/cloudflare/storage";
 
-interface Env {
+interface Env extends Pick<
+  NullplugResolveControllerEnv,
+  "localBranchApplication"
+> {
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   PROVIDER_ENCRYPTION_PRIVATE_JWK?: string;
@@ -22,6 +28,7 @@ export const onRequest: PagesFunction<Env> = async ({ env, request }) =>
   (await handleNullplugResolveRequest({
     request: request as unknown as Request,
     env: {
+      localBranchApplication: env.localBranchApplication,
       R2_BUCKET: createCloudflareBlobStore(env.R2_BUCKET),
       DB: createCloudflareSqlStore(env.DB),
       ACCOUNT_AUTH_SECRET: env.ACCOUNT_AUTH_SECRET,

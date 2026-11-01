@@ -8,7 +8,7 @@ export const branchStateErrorResponse = (error: BranchStateError): Response => {
     status,
     code,
     retry === "same-command"
-      ? "Branch commit outcome could not be confirmed. Retry the exact same events."
+      ? "Branch operation outcome could not be confirmed. Retry with the original inputs."
       : retry === "refresh"
         ? "Branch state changed. Refresh before retrying."
         : "The selected branch authority could not complete this operation.",

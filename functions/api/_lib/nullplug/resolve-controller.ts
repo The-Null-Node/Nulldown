@@ -9,6 +9,9 @@ import {
 } from "../../../../shared/nullplug/runtime";
 import { resolveAuthenticatedAccountId } from "../accounts/session/authentication";
 import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
+import type { LocalBranchApplicationSelection } from "../../../../src/server/state-plane/commit-application";
+import { BranchStateError } from "../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../branches/http/state-plane-errors";
 import { sanitizeDiffAuthToken } from "../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../drops/identity/id";
 import { createRequestLogger, toLogRef } from "../core/logging/logger";
@@ -27,6 +30,8 @@ import {
 
 /** Portable storage and auth ports used by the Nullplug resolve controller. */
 export interface NullplugResolveControllerEnv extends RootReadAuthorizationPorts {
+  /** Request-owned local authority; invocation rejects before legacy authorization reads. */
+  localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: BlobObjectStore;
 }
 
@@ -84,6 +89,22 @@ const authorizeCallerBranch = async (
   request: Request,
   invokeRequest: NullplugInvokeRequest,
 ): Promise<CallerAuthorizationResult> => {
+  if (env.localBranchApplication) {
+    if (!(await resolveAuthenticatedAccountId(request, env))) {
+      return {
+        error: jsonErrorResponse(
+          401,
+          "account_required",
+          "Authenticated account session is required.",
+        ),
+      };
+    }
+    return {
+      error: branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
+      ),
+    };
+  }
   const requestedRootDropId =
     invokeRequest.call.caller.dropId ?? invokeRequest.context.callerDropId;
   const branchId = sanitizeDiffAuthToken(
@@ -206,7 +227,10 @@ const handlePost = async (
     const authorization = await authorizeCallerBranch(env, request, parsed);
     if ("error" in authorization) {
       logger.logEnd(authorization.error.status, {
-        reason: "caller_unauthorized",
+        reason:
+          authorization.error.status === 501
+            ? "capability_unsupported"
+            : "caller_unauthorized",
       });
       return authorization.error;
     }

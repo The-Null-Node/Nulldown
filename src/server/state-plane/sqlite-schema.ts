@@ -33,6 +33,17 @@ export function decodeBranchSqlText(value: unknown): string {
  * local fixtures, migration or projection consumer is supplied by this schema.
  */
 export const BRANCH_SQL_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS branch_fixture_seeds (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    PRIMARY KEY (root_drop_id, branch_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_authorities (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    authority_json TEXT NOT NULL,
+    initialization_intent TEXT,
+    initialization_receipt_json TEXT,
+    PRIMARY KEY (root_drop_id, branch_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS branch_heads (
     root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
     routing_version INTEGER NOT NULL CHECK (routing_version = 1),

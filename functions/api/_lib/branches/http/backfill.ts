@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { BranchStateError } from "../../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "./state-plane-errors";
 import { verifyBearerToken } from "../../core/auth/bearer";
 import {
   apiHttpErrorResponse,
@@ -89,6 +91,10 @@ export const backfillBranchesForDrop = async (
       return jsonErrorResponse(401, "unauthorized", "Unauthorized");
     }
 
+    if (env.localBranchApplication) {
+      throw new BranchStateError("capability_unsupported");
+    }
+
     const dropIdentityRepository = createDropIdentityRepository({
       blobs: env.R2_BUCKET,
       sql: env.DB,
@@ -163,6 +169,10 @@ export const backfillBranchesForDrop = async (
       cursor: page.cursor,
     });
   } catch (error: unknown) {
+    if (error instanceof BranchStateError) {
+      logger.logEnd(error.toRecord().status, { reason: error.code });
+      return branchStateErrorResponse(error);
+    }
     if (isApiHttpError(error)) {
       logger.logEnd(error.status, {
         reason: error.code,

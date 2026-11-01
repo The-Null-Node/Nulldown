@@ -1,11 +1,12 @@
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { handleNullplugStateRequest } from "../_lib/nullplug/state-controller";
+import type { ResolvedHeapEnv } from "../_lib/resolved/heap/types";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
 } from "../_lib/core/platform/cloudflare/storage";
 
-interface Env {
+interface Env extends Pick<ResolvedHeapEnv, "localBranchApplication"> {
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   ACCOUNT_AUTH_SECRET?: string;
@@ -18,6 +19,7 @@ export const onRequest: PagesFunction<Env> = async ({ env, request }) =>
   (await handleNullplugStateRequest({
     request: request as unknown as Request,
     env: {
+      localBranchApplication: env.localBranchApplication,
       R2_BUCKET: createCloudflareBlobStore(env.R2_BUCKET),
       DB: createCloudflareSqlStore(env.DB),
       ACCOUNT_AUTH_SECRET: env.ACCOUNT_AUTH_SECRET,

@@ -80,7 +80,8 @@ export async function runShardRouterContract(): Promise<string[]> {
     for (const target of [
       { rootDropId: "", branchId: "owner" },
       { rootDropId: "root", branchId: " owner" },
-      { rootDropId: "root", branchId: "x".repeat(121) },
+      { rootDropId: "x".repeat(121), branchId: "owner" },
+      { rootDropId: "root", branchId: "x".repeat(135) },
     ])
       await rejectsCode(
         () => branchStateShardName({ ...initialQuery(), target }),

@@ -39,6 +39,7 @@ import {
   referenceVersion,
 } from "../../src/server/state-plane/testing/commit-contract";
 import { runShardRouterContract } from "../../packages/nulldown-state-plane/test/shard-router.test";
+import { runNativeLifecycleContract } from "../../packages/nulldown-state-plane/test/lifecycle-native.test";
 
 const argument = (name: string) =>
   process.argv
@@ -556,6 +557,12 @@ async function main() {
     await run("independent frozen shard vectors and RPC errors", async () => {
       await runShardRouterContract();
     });
+    await run(
+      "native lifecycle RPC fields, activation cutpoints and pending/receipt recovery",
+      async () => {
+        await runNativeLifecycleContract((command) => client.call(command));
+      },
+    );
     // Each generic scenario has isolated branch state. Adapt target only at transport, restore it in returned wire values.
     for (const scenario of commitContractScenarios)
       await run("native " + scenario.name, async () => {
@@ -633,7 +640,7 @@ async function main() {
                 shard: "branch-state-v1-11",
               }),
             ),
-          "routing_generation_mismatch",
+          "routing_placement_mismatch",
         );
         await rejectsCode(
           async () =>

@@ -12,6 +12,7 @@ import {
   DropDiffAppendEnvelopeSchema,
 } from "../../../../../shared/drop/codecs/diff-v1";
 import { sanitizeDiffAuthToken } from "../credentials/repository";
+import { sanitizeBranchId } from "../../../../../shared/drop/branch-identity";
 import {
   verifyDiffRequestAuth,
   type DiffRequestAuthSuccess,
@@ -120,7 +121,7 @@ const resolveRequestedBranchId = (request: Request): string | null => {
   if (
     branchId !== null &&
     (!branchId ||
-      branchId !== sanitizeDiffAuthToken(branchId) ||
+      branchId !== sanitizeBranchId(branchId) ||
       url.searchParams.getAll("branchId").length !== 1)
   ) {
     throw new ApiHttpError({
@@ -129,7 +130,7 @@ const resolveRequestedBranchId = (request: Request): string | null => {
       message: "Supply one exact, nonempty branchId.",
     });
   }
-  return sanitizeDiffAuthToken(branchId);
+  return sanitizeBranchId(branchId);
 };
 
 const parseDiffPollQuery = (request: Request): DiffPollQuery => {

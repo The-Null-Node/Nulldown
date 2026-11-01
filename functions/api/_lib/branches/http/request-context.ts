@@ -3,7 +3,7 @@ import type {
   SqlMetadataStore,
 } from "../../../../../src/server/ports";
 import type { AccountAuthEnv } from "../../accounts/session/authentication";
-import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
+import { sanitizeBranchId } from "../../../../../shared/drop/branch-identity";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { resolveParam } from "../../core/http/responses";
 import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
@@ -58,7 +58,7 @@ export const resolveBranchTarget = async (
     await dropIdentityRepository.resolveRemoteDropIdForReadRequest(
       resolveParam(params.rootId),
     );
-  const branchId = sanitizeDiffAuthToken(resolveParam(params.branchId));
+  const branchId = sanitizeBranchId(resolveParam(params.branchId));
   if (!rootDropId || !branchId) {
     return {
       error: new Response("Root drop ID and branch ID are required.", {

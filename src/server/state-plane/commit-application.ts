@@ -3,6 +3,7 @@ import type { DropDiffEvent } from "../../../shared/drop/diff";
 import {
   BranchStateError,
   BranchStateQuery,
+  sameBranchStateVersion,
   type BranchBatchStatePlane,
   type BranchContentQuery,
   type BranchStateHead,
@@ -12,12 +13,21 @@ import { dispatchNulleditSnapshottersForCommit } from "../nulledit/dispatch";
 import type { NulleditSnapshotter } from "../nulledit/types";
 import type { RuntimeDataStore } from "../ports";
 import type { BranchDiffCommands, BranchStatePlane } from "./contracts";
+import type { LocalBranchLifecycle } from "./application-lifecycle";
+import type {
+  BranchSnapshotState,
+  BranchSnapshotStatePlane,
+} from "../../../shared/drop/branch-lifecycle";
 
 /** Explicit in-process local-test authority and derived-work dependencies for an application instance. */
 export interface LocalBranchApplicationSelection {
   mode: "local-test";
   commits: BranchBatchStatePlane;
   placement: BranchStatePlacement;
+  /** Authorized bootstrap and durable authority discovery for unseeded local branches. */
+  lifecycle?: LocalBranchLifecycle;
+  /** Exact immutable snapshot metadata and bounded history discovery. */
+  history?: BranchSnapshotStatePlane;
   data?: RuntimeDataStore;
   snapshotters?: NulleditSnapshotter[];
 }
@@ -33,7 +43,7 @@ const snapshotKey = (
 ): string => JSON.stringify([rootDropId, branchId, snapshotId]);
 
 /**
- * Adapts explicitly seeded local commits to request-scoped application reads and appends.
+ * Adapts explicitly selected local commits to request-scoped application reads and appends.
  * Captured heads live only for this adapter; unsupported domains never fall back to legacy storage.
  */
 export const createCommitApplicationStatePlane = (
@@ -45,14 +55,21 @@ export const createCommitApplicationStatePlane = (
   const { commits } = selection;
   const placement = { ...selection.placement };
   const heads = new WeakMap<DropBranchRecord, BranchStateHead>();
+  const capturedHeads = new Map<string, BranchStateHead>();
   const versions = new Map<string, BranchContentQuery>();
-  const query = (rootDropId: string, branchId: string) =>
-    BranchStateQuery.head({ target: { rootDropId, branchId }, placement });
+  const query = async (rootDropId: string, branchId: string) => {
+    const target = { rootDropId, branchId };
+    const selected = selection.lifecycle
+      ? await selection.lifecycle.requireActivePlacement(target)
+      : placement;
+    return BranchStateQuery.head({ target, placement: selected });
+  };
 
   const readHead = async (rootDropId: string, branchId: string) => {
-    const head = await commits.readHead(query(rootDropId, branchId));
+    const head = await commits.readHead(await query(rootDropId, branchId));
     const captured = structuredClone(head);
     heads.set(head.branch, captured);
+    capturedHeads.set(JSON.stringify([rootDropId, branchId]), captured);
     versions.set(
       snapshotKey(rootDropId, branchId, captured.version.snapshotId),
       BranchStateQuery.content({
@@ -62,6 +79,71 @@ export const createCommitApplicationStatePlane = (
       }),
     );
     return head;
+  };
+
+  const captureSnapshot = (
+    state: BranchSnapshotState,
+    rootDropId: string,
+    branchId: string,
+  ) => {
+    const { snapshot, version } = state;
+    const key = snapshotKey(rootDropId, branchId, version.snapshotId);
+    const existing = versions.get(key);
+    if (
+      state.target.rootDropId !== rootDropId ||
+      state.target.branchId !== branchId ||
+      snapshot.rootDropId !== rootDropId ||
+      snapshot.branchId !== branchId ||
+      snapshot.snapshotId !== version.snapshotId ||
+      snapshot.sourceContentHash !== version.sourceContentHash ||
+      (version.snapshotId === 0
+        ? version.eventSeq !== -1 || snapshot.patchEndSeq != null
+        : snapshot.patchEndSeq !== version.eventSeq) ||
+      (existing &&
+        (existing.placement.routingVersion !== state.placement.routingVersion ||
+          existing.placement.generation !== state.placement.generation ||
+          !sameBranchStateVersion(existing.version, version)))
+    )
+      throw new BranchStateError("state_corrupt");
+    versions.set(
+      key,
+      BranchStateQuery.content({
+        target: state.target,
+        placement: state.placement,
+        version,
+      }),
+    );
+    return structuredClone(snapshot);
+  };
+
+  const readSnapshot = async (
+    rootDropId: string,
+    branchId: string,
+    snapshotId: number,
+  ) => {
+    if (!selection.history) return unsupported();
+    if (!Number.isSafeInteger(snapshotId) || snapshotId < 0)
+      throw new BranchStateError("invalid_command");
+    const head = capturedHeads.get(JSON.stringify([rootDropId, branchId]));
+    if (head && snapshotId > head.version.snapshotId) return null;
+    const selected = head
+      ? BranchStateQuery.head({
+          target: head.target,
+          placement: head.placement,
+        })
+      : await query(rootDropId, branchId);
+    const state = await selection.history.readSnapshot({
+      ...structuredClone(selected),
+      snapshotId,
+    });
+    if (!state) return null;
+    if (
+      state.version.snapshotId !== snapshotId ||
+      state.placement.routingVersion !== selected.placement.routingVersion ||
+      state.placement.generation !== selected.placement.generation
+    )
+      throw new BranchStateError("state_corrupt");
+    return captureSnapshot(state, rootDropId, branchId);
   };
 
   const readRange = async (
@@ -101,15 +183,19 @@ export const createCommitApplicationStatePlane = (
           throw error;
         }
       },
-      resolveForActor: unsupported,
+      resolveForActor: selection.lifecycle
+        ? (...args) => selection.lifecycle!.resolveForActor(...args)
+        : unsupported,
       listBranchesForRoot: unsupported,
     },
     snapshots: {
       async readContent(rootDropId, branchId, snapshotId) {
-        const captured = versions.get(
-          snapshotKey(rootDropId, branchId, snapshotId),
-        );
-        if (!captured) return unsupported();
+        const key = snapshotKey(rootDropId, branchId, snapshotId);
+        if (!versions.has(key)) {
+          if (!(await readSnapshot(rootDropId, branchId, snapshotId)))
+            return null;
+        }
+        const captured = versions.get(key)!;
         return (await commits.readContent(structuredClone(captured))).content;
       },
       async readEventsBySeqRange(rootDropId, branchId, startSeq, endSeq) {
@@ -133,8 +219,51 @@ export const createCommitApplicationStatePlane = (
         }
         return events;
       },
-      readSnapshot: unsupported,
-      listSnapshotsForBranch: unsupported,
+      readSnapshot,
+      async listSnapshotsForBranch(rootDropId, branchId) {
+        if (!selection.history) return unsupported();
+        const head =
+          capturedHeads.get(JSON.stringify([rootDropId, branchId])) ??
+          (await readHead(rootDropId, branchId));
+        const snapshots = [];
+        let afterSnapshotId = -1;
+        for (;;) {
+          const page = await selection.history.listSnapshots(
+            structuredClone({
+              target: head.target,
+              placement: head.placement,
+              version: head.version,
+              afterSnapshotId,
+              limit: 200,
+            }),
+          );
+          if (page.snapshots.length > 200)
+            throw new BranchStateError("state_corrupt");
+          for (const state of page.snapshots) {
+            if (
+              state.version.snapshotId !== afterSnapshotId + 1 ||
+              state.version.snapshotId > head.version.snapshotId ||
+              state.placement.routingVersion !==
+                head.placement.routingVersion ||
+              state.placement.generation !== head.placement.generation
+            )
+              throw new BranchStateError("state_corrupt");
+            snapshots.push(captureSnapshot(state, rootDropId, branchId));
+            afterSnapshotId = state.version.snapshotId;
+          }
+          if (page.nextAfterSnapshotId === null) {
+            if (afterSnapshotId !== head.version.snapshotId)
+              throw new BranchStateError("state_corrupt");
+            return snapshots;
+          }
+          if (
+            !page.snapshots.length ||
+            page.nextAfterSnapshotId !== afterSnapshotId ||
+            afterSnapshotId >= head.version.snapshotId
+          )
+            throw new BranchStateError("state_corrupt");
+        }
+      },
     },
     maintenance: {
       listBranchesForRootPage: unsupported,
@@ -203,7 +332,7 @@ export const createCommitApplicationStatePlane = (
       const data = selection.data;
       if (snapshotters.length && !data) return unsupported();
       const result = await commits.appendBatch({
-        ...query(request.branch.rootDropId, request.branch.branchId),
+        ...(await query(request.branch.rootDropId, request.branch.branchId)),
         events: request.events,
       });
       if (result.acceptedEvents.length && result.snapshot && data) {

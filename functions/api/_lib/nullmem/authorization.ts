@@ -3,6 +3,9 @@ import {
   type AccountAuthEnv,
 } from "../accounts/session/authentication";
 import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
+import type { LocalBranchApplicationSelection } from "../../../../src/server/state-plane/commit-application";
+import { BranchStateError } from "../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../branches/http/state-plane-errors";
 import { jsonErrorResponse, resolveParam } from "../core/http/responses";
 import { createDropIdentityRepository } from "../drops/identity/id";
 import {
@@ -17,6 +20,8 @@ import type {
 
 /** Storage and authentication dependencies used for NullMem authorization. */
 export interface NullMemAuthorizationEnv extends AccountAuthEnv {
+  /** Request-owned local authority; memory capabilities reject before legacy access. */
+  localBranchApplication?: LocalBranchApplicationSelection;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
 }
@@ -51,7 +56,24 @@ const branchNotFoundResponse = (): Response =>
 export const resolveNullMemTarget = async (
   env: NullMemAuthorizationEnv,
   params: NullMemTargetParams,
+  request: Request,
 ): Promise<ResolvedNullMemTarget | { error: Response }> => {
+  if (env.localBranchApplication) {
+    if (!(await resolveAuthenticatedAccountId(request, env))) {
+      return {
+        error: jsonErrorResponse(
+          401,
+          "account_required",
+          "Authenticated account session is required.",
+        ),
+      };
+    }
+    return {
+      error: branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
+      ),
+    };
+  }
   const requestedRootId = resolveParam(params.rootId);
   const requestedBranchId = resolveParam(params.branchId);
   if (!requestedRootId || !requestedBranchId) {
@@ -103,6 +125,13 @@ export const resolveNullMemQueryTarget = async (
   env: NullMemAuthorizationEnv,
   params: NullMemTargetParams,
 ): Promise<ResolvedNullMemQueryTarget | { error: Response }> => {
+  if (env.localBranchApplication) {
+    return {
+      error: branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
+      ),
+    };
+  }
   const requestedRootId = resolveParam(params.rootId);
   const requestedBranchId = resolveParam(params.branchId);
   if (!requestedRootId || !requestedBranchId) {

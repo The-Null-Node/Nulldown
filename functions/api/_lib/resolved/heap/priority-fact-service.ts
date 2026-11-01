@@ -39,7 +39,7 @@ const createResolvedPriorityFactUnsafe = async (
   params: ResolvedHeapParams,
   request: Request,
 ): Promise<Response> => {
-  if (!env.DB) {
+  if (!env.DB && !env.localBranchApplication) {
     return jsonErrorResponse(
       500,
       "sql_store_required",
@@ -167,7 +167,7 @@ const deleteResolvedPriorityFactUnsafe = async (
   params: ResolvedPriorityFactDeleteParams,
   request: Request,
 ): Promise<Response> => {
-  if (!env.DB) {
+  if (!env.DB && !env.localBranchApplication) {
     return jsonErrorResponse(
       500,
       "sql_store_required",

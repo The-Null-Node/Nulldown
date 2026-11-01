@@ -23,6 +23,8 @@ import {
   type BranchContentQuery,
   type BranchStateVersion,
 } from "../../../shared/drop/branch-state";
+import type { BranchInitializeRecord } from "../../../shared/drop/branch-lifecycle";
+import { observeBranchSql } from "../../../src/server/state-plane/sqlite-port";
 
 interface Trace {
   operation: string;
@@ -53,6 +55,40 @@ export class TestBranchStateObject extends BranchStateObject {
   private fixture(): void {
     if (this.env.STATE_PLANE_LOCAL_TEST !== "1")
       throw new BranchStateError("capability_unsupported");
+  }
+
+  /** Native transaction cutpoints for activation; an interrupted attempt retains its durable pending reservation. */
+  async initializeCutFixture(
+    command: BranchInitializeRecord,
+    cut: number | null = null,
+    loseResponse = false,
+  ) {
+    this.fixture();
+    let armed = false,
+      index = 0,
+      fired = false;
+    const trace: Trace[] = [];
+    const port = observeBranchSql(
+      new DurableObjectBranchSqlite(this.ctx.storage),
+      (row) => {
+        if (!armed) return;
+        trace.push(row);
+        if (row.operation !== "transaction" && index++ === cut) {
+          fired = true;
+          throw Error("FIXTURE_INITIALIZATION_CUT");
+        }
+      },
+    );
+    const plane = new SqliteBranchCommitStatePlane(port);
+    armed = true;
+    const result = await branchStateRpcResult(async () => {
+      const initialized = await plane.initialize(command);
+      await this.ctx.storage.sync();
+      if (loseResponse) throw Error("FIXTURE_INITIALIZATION_RESPONSE_LOST");
+      return initialized;
+    });
+    this.lastTrace = trace;
+    return { result, trace, fired };
   }
 
   /** Reads durable rows directly; boot identity distinguishes real instance reset. */
@@ -359,6 +395,16 @@ export default {
       const stub = env.BRANCH_STATE.get(
         env.BRANCH_STATE.idFromName(name),
       ) as unknown as {
+        readPlacement(value: unknown): Promise<unknown>;
+        reserve(value: unknown): Promise<unknown>;
+        initialize(value: unknown): Promise<unknown>;
+        readSnapshot(value: unknown): Promise<unknown>;
+        listSnapshots(value: unknown): Promise<unknown>;
+        initializeCutFixture(
+          command: unknown,
+          cut: number | null,
+          loseResponse: boolean,
+        ): Promise<unknown>;
         seedLocalFixtures(value: unknown): Promise<unknown>;
         append(value: unknown): Promise<unknown>;
         readHead(value: unknown): Promise<unknown>;
@@ -381,6 +427,30 @@ export default {
       };
       let result: unknown;
       switch (q.action) {
+        case "placement":
+          result = await stub.readPlacement(
+            q.value ?? { target: q.query.target },
+          );
+          break;
+        case "reserve":
+          result = await stub.reserve(q.value);
+          break;
+        case "initialize":
+          result = await stub.initialize(q.value);
+          break;
+        case "snapshot":
+          result = await stub.readSnapshot(q.value);
+          break;
+        case "snapshots":
+          result = await stub.listSnapshots(q.value);
+          break;
+        case "initialize-cut":
+          result = await stub.initializeCutFixture(
+            q.value,
+            q.cut ?? null,
+            q.loseResponse ?? false,
+          );
+          break;
         case "seed":
           result = await stub.seedLocalFixtures(q.value);
           break;

@@ -1,4 +1,6 @@
 import { resolveAuthenticatedAccountId } from "../../accounts/session/authentication";
+import { BranchStateError } from "../../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../../branches/http/state-plane-errors";
 import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
@@ -96,6 +98,13 @@ export const resolveResolvedBranchTarget = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
 ): Promise<ResolvedBranchTargetResult> => {
+  if (env.localBranchApplication) {
+    return {
+      error: branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
+      ),
+    };
+  }
   const identity = await resolveResolvedBranchIdentity(env, params);
   if ("error" in identity) return identity;
   const { rootDropId, branchId } = identity;
@@ -120,6 +129,25 @@ export const resolveReadableResolvedBranchTarget = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
 ): Promise<ResolvedBranchTargetResult> => {
+  if (env.localBranchApplication) {
+    if (
+      request.method !== "GET" &&
+      !(await resolveAuthenticatedAccountId(request, env))
+    ) {
+      return {
+        error: jsonErrorResponse(
+          401,
+          "account_required",
+          "Authenticated account session is required.",
+        ),
+      };
+    }
+    return {
+      error: branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
+      ),
+    };
+  }
   const identity = await resolveReadableResolvedBranchIdentity(env, params);
   if ("error" in identity) return identity;
   const { rootDropId, branchId } = identity;

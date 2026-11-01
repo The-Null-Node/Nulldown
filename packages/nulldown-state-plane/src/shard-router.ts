@@ -5,7 +5,6 @@ import {
   BranchStateQuery,
   type BranchAppendRecord,
   type BranchAppendOutcome,
-  type BranchBatchStatePlane,
   type BranchBatchAppendRecord,
   type BranchBatchAppendResult,
   type BranchContentQuery,
@@ -20,6 +19,23 @@ import {
   isDropSnapshotRecord,
 } from "../../../shared/drop/branch";
 import { captureBranchBatchAppend } from "../../../shared/drop/branch-batch";
+import {
+  BranchLifecycleQuery,
+  sameBranchInitializationIdentity,
+  type BranchLifecycleStatePlane,
+  type BranchAuthorityRecord,
+  type BranchPlacementQuery,
+  type BranchReserveRecord,
+  type BranchReserveOutcome,
+  type BranchInitializeRecord,
+  type BranchInitializeOutcome,
+  type BranchSnapshotQuery,
+  type BranchSnapshotState,
+  type BranchSnapshotPageQuery,
+  type BranchSnapshotPage,
+} from "../../../shared/drop/branch-lifecycle";
+import { serializeCanonicalJson } from "../../../shared/drop/types";
+import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 
 /** Frozen routing-v1 pool size. Changing this requires a new routing version and explicit migration. */
 export const BRANCH_STATE_SHARD_COUNT = 16;
@@ -88,6 +104,21 @@ export function decodeBranchStateRpcResult<T>(
 
 /** The selected typed RPC methods on a shard stub; no HTTP or lifecycle capabilities. */
 export interface BranchStateRpcStub {
+  readPlacement?(
+    query: BranchPlacementQuery,
+  ): Promise<BranchStateRpcResult<BranchAuthorityRecord | null>>;
+  reserve?(
+    command: BranchReserveRecord,
+  ): Promise<BranchStateRpcResult<BranchReserveOutcome>>;
+  initialize?(
+    command: BranchInitializeRecord,
+  ): Promise<BranchStateRpcResult<BranchInitializeOutcome>>;
+  readSnapshot?(
+    query: BranchSnapshotQuery,
+  ): Promise<BranchStateRpcResult<BranchSnapshotState | null>>;
+  listSnapshots?(
+    query: BranchSnapshotPageQuery,
+  ): Promise<BranchStateRpcResult<BranchSnapshotPage>>;
   /** Optional only for original four-capability callers; batch requests reject an unextended stub explicitly. */
   appendBatch?(
     command: BranchBatchAppendRecord,
@@ -107,7 +138,7 @@ export interface BranchStateRpcStub {
 }
 
 /** Per-caller RPC adapter. The supplied resolver is an internal binding boundary, not a public URL. */
-export class RpcBranchCommitStatePlane implements BranchBatchStatePlane {
+export class RpcBranchCommitStatePlane implements BranchLifecycleStatePlane {
   constructor(
     private readonly resolve: (shardName: string) => BranchStateRpcStub,
   ) {}
@@ -126,6 +157,223 @@ export class RpcBranchCommitStatePlane implements BranchBatchStatePlane {
       if (error instanceof BranchStateError) throw error;
       throw new BranchStateError("state_unavailable");
     }
+  }
+
+  private authority(
+    value: unknown,
+    query: BranchPlacementQuery,
+  ): BranchAuthorityRecord {
+    try {
+      const authority = BranchLifecycleQuery.authority(value);
+      if (
+        serializeCanonicalJson(authority.target) !==
+        serializeCanonicalJson(query.target)
+      )
+        throw Error();
+      return authority;
+    } catch {
+      throw new BranchStateError("state_corrupt");
+    }
+  }
+
+  /** Discovers ownership through routing v1 without inventing an expected generation. */
+  async readPlacement(
+    input: BranchPlacementQuery,
+  ): Promise<BranchAuthorityRecord | null> {
+    const query = BranchLifecycleQuery.placement(input);
+    const value = await this.call(
+      { ...query, placement: { routingVersion: 1, generation: 0 } },
+      (stub) => {
+        if (!stub.readPlacement)
+          throw new BranchStateError("capability_unsupported");
+        return stub.readPlacement(query);
+      },
+    );
+    return value === null ? null : this.authority(value, query);
+  }
+
+  /** Reserves before root materialization; validates the winning identity returned by the shard. */
+  async reserve(input: BranchReserveRecord): Promise<BranchReserveOutcome> {
+    const command = BranchLifecycleQuery.reserve(input);
+    const result = await this.call(command, (stub) => {
+      if (!stub.reserve) throw new BranchStateError("capability_unsupported");
+      return stub.reserve(command);
+    });
+    const authority = this.authority(result?.authority, command);
+    if (
+      (result?.status !== "reserved" && result?.status !== "existing") ||
+      serializeCanonicalJson(authority.placement) !==
+        serializeCanonicalJson(command.placement) ||
+      !sameBranchInitializationIdentity(
+        authority.reservation.identity,
+        command.identity,
+      ) ||
+      (result.status === "reserved" &&
+        (authority.state !== "pending" ||
+          authority.reservation.reservationId !== command.reservationId ||
+          authority.reservation.rootRevision !== command.rootRevision))
+    )
+      throw new BranchStateError("state_corrupt");
+    return { status: result.status, authority };
+  }
+
+  /** Exact replay returns snapshot zero, independently of the current head. */
+  async initialize(
+    input: BranchInitializeRecord,
+  ): Promise<BranchInitializeOutcome> {
+    const command = BranchLifecycleQuery.initialize(input);
+    const [payloadHash, sourceContentHash] = await Promise.all([
+      hashNulldownSourceContent(
+        `nulldown.branch-initialization.v1\n${serializeCanonicalJson(command)}`,
+      ),
+      hashNulldownSourceContent(command.content),
+    ]);
+    const result = await this.call(command, (stub) => {
+      if (!stub.initialize)
+        throw new BranchStateError("capability_unsupported");
+      return stub.initialize(command);
+    });
+    try {
+      if (
+        !result ||
+        (result.status !== "created" && result.status !== "duplicate")
+      )
+        throw Error();
+      const receipt = result.receipt;
+      const query = BranchStateQuery.content({
+        target: receipt?.target,
+        placement: receipt?.placement,
+        version: receipt?.initialHead?.version,
+      });
+      const head = receipt.initialHead;
+      if (
+        serializeCanonicalJson(query.target) !==
+          serializeCanonicalJson(command.target) ||
+        serializeCanonicalJson(query.placement) !==
+          serializeCanonicalJson(command.placement) ||
+        serializeCanonicalJson(head.target) !==
+          serializeCanonicalJson(command.target) ||
+        serializeCanonicalJson(head.placement) !==
+          serializeCanonicalJson(command.placement) ||
+        receipt.reservationId !== command.reservationId ||
+        receipt.rootRevision !== command.rootRevision ||
+        receipt.payloadHash !== payloadHash ||
+        query.version.sourceContentHash !== sourceContentHash ||
+        !isDropBranchRecord(head.branch) ||
+        head.branch.rootDropId !== command.target.rootDropId ||
+        head.branch.branchId !== command.target.branchId ||
+        head.branch.headSnapshotId !== 0 ||
+        head.branch.headEventSeq !== -1 ||
+        query.version.snapshotId !== 0 ||
+        query.version.eventSeq !== -1
+      )
+        throw Error();
+      return structuredClone(result);
+    } catch {
+      throw new BranchStateError("state_corrupt");
+    }
+  }
+
+  private snapshot(
+    value: BranchSnapshotState,
+    query: BranchSnapshotQuery,
+  ): BranchSnapshotState {
+    try {
+      const identity = BranchStateQuery.content({
+        target: value?.target,
+        placement: value?.placement,
+        version: value?.version,
+      });
+      const snapshot = value.snapshot;
+      if (
+        serializeCanonicalJson(identity.target) !==
+          serializeCanonicalJson(query.target) ||
+        serializeCanonicalJson(identity.placement) !==
+          serializeCanonicalJson(query.placement) ||
+        identity.version.snapshotId !== query.snapshotId ||
+        !isDropSnapshotRecord(snapshot) ||
+        snapshot.rootDropId !== query.target.rootDropId ||
+        snapshot.branchId !== query.target.branchId ||
+        snapshot.snapshotId !== query.snapshotId ||
+        snapshot.seq !== query.snapshotId ||
+        !snapshot.checkpointed ||
+        snapshot.sourceContentHash !== identity.version.sourceContentHash ||
+        !Number.isSafeInteger(snapshot.textLength) ||
+        snapshot.textLength < 0 ||
+        (query.snapshotId === 0
+          ? snapshot.parentSnapshotId !== null ||
+            snapshot.patchStartSeq !== null ||
+            snapshot.patchEndSeq !== null ||
+            snapshot.eventIds.length !== 0 ||
+            identity.version.eventSeq !== -1
+          : snapshot.parentSnapshotId !== query.snapshotId - 1 ||
+            !Number.isSafeInteger(snapshot.patchStartSeq) ||
+            snapshot.patchStartSeq! < 0 ||
+            snapshot.patchEndSeq !== identity.version.eventSeq ||
+            snapshot.patchEndSeq! < snapshot.patchStartSeq! ||
+            snapshot.eventIds.length !==
+              snapshot.patchEndSeq! - snapshot.patchStartSeq! + 1 ||
+            new Set(snapshot.eventIds).size !== snapshot.eventIds.length)
+      )
+        throw Error();
+      return structuredClone({ ...identity, snapshot });
+    } catch {
+      throw new BranchStateError("state_corrupt");
+    }
+  }
+
+  /** Discovers exact historical metadata through the selected authority only. */
+  async readSnapshot(
+    input: BranchSnapshotQuery,
+  ): Promise<BranchSnapshotState | null> {
+    const query = BranchLifecycleQuery.snapshot(input);
+    const result = await this.call(query, (stub) => {
+      if (!stub.readSnapshot)
+        throw new BranchStateError("capability_unsupported");
+      return stub.readSnapshot(query);
+    });
+    return result === null ? null : this.snapshot(result, query);
+  }
+
+  /** Validates contiguous ascending pages and their pinned continuation cursor. */
+  async listSnapshots(
+    input: BranchSnapshotPageQuery,
+  ): Promise<BranchSnapshotPage> {
+    const query = BranchLifecycleQuery.page(input);
+    const result = await this.call(query, (stub) => {
+      if (!stub.listSnapshots)
+        throw new BranchStateError("capability_unsupported");
+      return stub.listSnapshots(query);
+    });
+    const end = Math.min(
+      query.version.snapshotId,
+      query.afterSnapshotId + query.limit,
+    );
+    const cursor = end < query.version.snapshotId ? end : null;
+    if (
+      !result ||
+      !Array.isArray(result.snapshots) ||
+      result.snapshots.length !== end - query.afterSnapshotId ||
+      result.nextAfterSnapshotId !== cursor
+    )
+      throw new BranchStateError("state_corrupt");
+    const snapshots = result.snapshots.map((value, index) =>
+      this.snapshot(value, {
+        target: query.target,
+        placement: query.placement,
+        snapshotId: query.afterSnapshotId + index + 1,
+      }),
+    );
+    if (
+      snapshots.some(
+        (value) =>
+          value.version.snapshotId === query.version.snapshotId &&
+          serializeCanonicalJson(value.version) !==
+            serializeCanonicalJson(query.version),
+      )
+    )
+      throw new BranchStateError("state_corrupt");
+    return { snapshots, nextAfterSnapshotId: cursor };
   }
 
   /** The durable receiver revalidates payload hashes and all fences. */

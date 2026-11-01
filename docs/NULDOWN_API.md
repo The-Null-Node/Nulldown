@@ -820,6 +820,12 @@ Implementation: `functions/api/branches/resolve/[id].ts`.
 
 Read materialized branch content at the branch head.
 
+In current source, add `?snapshotId=0` (or another nonnegative snapshot ID) to
+read an exact historical snapshot. Omitting the selector reads a captured head.
+Malformed or repeated selectors return `400`; a missing snapshot returns `404`.
+The response's `snapshotId` and optional `headEventSeq` describe the returned
+content, including `headEventSeq: -1` for snapshot zero.
+
 Public and unlisted roots are readable by identifier. A projected private root is
 readable only by its canonical projected owner or the target branch's explicit
 `writerAccountId`; denied reads return a generic `404`. Branch owner fields and

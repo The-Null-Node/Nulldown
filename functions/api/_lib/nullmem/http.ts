@@ -194,7 +194,7 @@ const createNullMemHttpServices = (
   env: NullMemEnv,
   services?: Partial<NullMemHttpServices>,
 ): NullMemHttpServices | { error: Response } => {
-  if (!env.DB) {
+  if (!env.DB && !env.localBranchApplication) {
     return {
       error: jsonErrorResponse(
         500,
@@ -333,7 +333,7 @@ export const createNullMemFact = async (
   if ("error" in memoryServices) return memoryServices.error;
 
   try {
-    const target = await resolveNullMemTarget(env, params);
+    const target = await resolveNullMemTarget(env, params, request);
     if ("error" in target) return target.error;
     const access = await authorizeNullMemAccess(
       request,
@@ -382,7 +382,7 @@ export const createNullMemProcedure = async (
   if ("error" in memoryServices) return memoryServices.error;
 
   try {
-    const target = await resolveNullMemTarget(env, params);
+    const target = await resolveNullMemTarget(env, params, request);
     if ("error" in target) return target.error;
     const access = await authorizeNullMemAccess(
       request,
@@ -431,7 +431,7 @@ export const deleteNullMemRecord = async (
   if ("error" in memoryServices) return memoryServices.error;
 
   try {
-    const target = await resolveNullMemTarget(env, params);
+    const target = await resolveNullMemTarget(env, params, request);
     if ("error" in target) return target.error;
     const access = await authorizeNullMemAccess(
       request,
