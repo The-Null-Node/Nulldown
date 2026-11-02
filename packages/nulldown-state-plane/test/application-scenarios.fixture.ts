@@ -68,10 +68,28 @@ export const applicationRuntimeRoots: readonly string[] = [
   applicationRuntimeFixture.pageRoot,
 ];
 
+/** Signed SDK-created NullMem roots with distinct short-link prefixes. */
+export const applicationNullMemFixture = {
+  root: "MemoryMainRoot01",
+  privateRoot: "MemPrivateRoot01",
+  pageRoot: "MemPagingRoot01",
+  initial: "# NullMem\nSDK-created memory branch\n",
+  pageRecordCount: 101,
+  remoteId: "capability:nullplug:acceptance-remote:1",
+} as const;
+
+/** Only new disposable memory roots select the optional NullMem capability. */
+export const applicationNullMemRoots: readonly string[] = [
+  applicationNullMemFixture.root,
+  applicationNullMemFixture.privateRoot,
+  applicationNullMemFixture.pageRoot,
+];
+
 /** Local bootstrap allowlist; the original lifecycle scenario's root set stays independent. */
 export const applicationUnseededRoots: readonly string[] = [
   ...applicationLifecycleRoots,
   ...applicationRuntimeRoots,
+  ...applicationNullMemRoots,
 ];
 
 /** Inspects one synthetic stored root without trusting permissive envelope decoding to exclude plaintext. */
@@ -131,6 +149,7 @@ export type ApplicationRequestPhase =
   | "bootstrap"
   | "steady-state"
   | "runtime-facts"
+  | "nullmem"
   | "legacy";
 
 /** Fixture setup data; production initialization and lifecycle remain outside this test. */
@@ -230,6 +249,11 @@ export interface ApplicationRequestEvidence {
   calls: Record<string, { count: number; errors: number }>;
   rpcFailures: { method: string; code: string }[];
   factCommits?: { identityHash: string; seq: number; appended: boolean }[];
+  memoryCommits?: {
+    scopeHash: string;
+    revision: number;
+    operation: "put" | "delete";
+  }[];
   sqlReads: number;
   sqlWrites: number;
   background: { scheduled: number; completed: number; failed: number };

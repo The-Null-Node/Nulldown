@@ -13,6 +13,21 @@ import {
   type BranchStateContent,
   type BranchStateHead,
 } from "../../../shared/drop/branch-state";
+import {
+  captureNullMemQuery,
+  captureNullMemPut,
+  captureNullMemDelete,
+  validateNullMemQueryResult,
+  validateNullMemPutResult,
+  validateNullMemDeleteResult,
+  type BranchNullMemStatePlane,
+  type BranchNullMemQuery,
+  type BranchNullMemQueryResult,
+  type BranchNullMemPutCommand,
+  type BranchNullMemPutResult,
+  type BranchNullMemDeleteCommand,
+  type BranchNullMemDeleteResult,
+} from "../../../shared/drop/branch-nullmem";
 import { isDropDiffEvent, type DropDiffEvent } from "../../../shared/drop/diff";
 import {
   isDropBranchRecord,
@@ -121,6 +136,15 @@ export function decodeBranchStateRpcResult<T>(
 
 /** The selected typed RPC methods on a shard stub; no HTTP or lifecycle capabilities. */
 export interface BranchStateRpcStub {
+  queryNullMem?(
+    query: BranchNullMemQuery,
+  ): Promise<BranchStateRpcResult<unknown>>;
+  putNullMem?(
+    command: BranchNullMemPutCommand,
+  ): Promise<BranchStateRpcResult<unknown>>;
+  deleteNullMem?(
+    command: BranchNullMemDeleteCommand,
+  ): Promise<BranchStateRpcResult<unknown>>;
   appendRuntimeFact?(
     command: BranchRuntimeFactAppendCommand,
   ): Promise<BranchStateRpcResult<unknown>>;
@@ -165,7 +189,10 @@ export interface BranchStateRpcStub {
 
 /** Per-caller RPC adapter. The supplied resolver is an internal binding boundary, not a public URL. */
 export class RpcBranchCommitStatePlane
-  implements BranchLifecycleStatePlane, BranchRuntimeFactStatePlane
+  implements
+    BranchLifecycleStatePlane,
+    BranchRuntimeFactStatePlane,
+    BranchNullMemStatePlane
 {
   constructor(
     private readonly resolve: (shardName: string) => BranchStateRpcStub,
@@ -185,6 +212,48 @@ export class RpcBranchCommitStatePlane
       if (error instanceof BranchStateError) throw error;
       throw new BranchStateError("state_unavailable");
     }
+  }
+
+  /** Queries branch-local memory and validates exact bounded results; missing capability never falls back. */
+  async queryNullMem(
+    input: BranchNullMemQuery,
+  ): Promise<BranchNullMemQueryResult> {
+    const query = captureNullMemQuery(input);
+    const result = (await this.call(query, (stub) => {
+      if (!stub.queryNullMem)
+        throw new BranchStateError("capability_unsupported");
+      return stub.queryNullMem(structuredClone(query));
+    })) as BranchNullMemQueryResult;
+    validateNullMemQueryResult(result, query);
+    return structuredClone(result);
+  }
+
+  /** Captures mutable write intent before routing and verifies metadata/extension fidelity on the returned record. */
+  async putNullMem(
+    input: BranchNullMemPutCommand,
+  ): Promise<BranchNullMemPutResult> {
+    const command = captureNullMemPut(input);
+    const result = (await this.call(command, (stub) => {
+      if (!stub.putNullMem)
+        throw new BranchStateError("capability_unsupported");
+      return stub.putNullMem(structuredClone(command));
+    })) as BranchNullMemPutResult;
+    validateNullMemPutResult(result, command);
+    return structuredClone(result);
+  }
+
+  /** Deletes an exact ID across kinds; transport retry is a new mutation, never a duplicate acknowledgement. */
+  async deleteNullMem(
+    input: BranchNullMemDeleteCommand,
+  ): Promise<BranchNullMemDeleteResult> {
+    const command = captureNullMemDelete(input);
+    const result = (await this.call(command, (stub) => {
+      if (!stub.deleteNullMem)
+        throw new BranchStateError("capability_unsupported");
+      return stub.deleteNullMem(structuredClone(command));
+    })) as BranchNullMemDeleteResult;
+    validateNullMemDeleteResult(result, command);
+    return structuredClone(result);
   }
 
   private runtimeHead(

@@ -47,6 +47,11 @@ import {
 } from "../../src/server/state-plane/testing/commit-contract";
 import { runShardRouterContract } from "../../packages/nulldown-state-plane/test/shard-router.test";
 import { runNativeLifecycleContract } from "../../packages/nulldown-state-plane/test/lifecycle-native.test";
+import { runNativeNullMemContract } from "../../packages/nulldown-state-plane/test/nullmem-native.test";
+import type {
+  BranchNullMemPutCommand,
+  BranchNullMemQueryResult,
+} from "../../shared/drop/branch-nullmem";
 
 const argument = (name: string) =>
   process.argv
@@ -623,6 +628,19 @@ async function main() {
       },
     );
     // Each generic scenario has isolated branch state. Adapt target only at transport, restore it in returned wire values.
+    await run(
+      "native mutable NullMem RPC, UTF-16, concurrent writes, reset, lost acknowledgement and atomic rollback",
+      async () => {
+        const proof = await runNativeNullMemContract(
+          (command) => client.call(command),
+          seed,
+        );
+        writeFileSync(
+          resolve(evidence, "native-nullmem.json"),
+          JSON.stringify(proof, null, 2),
+        );
+      },
+    );
     for (const scenario of commitContractScenarios)
       await run("native " + scenario.name, async () => {
         const { query } = await seed();
@@ -1267,6 +1285,33 @@ async function main() {
           },
         });
         const factsBefore = await inspectRuntime(query);
+        const memoryCommand: BranchNullMemPutCommand = {
+          ...query,
+          actorAccountId: "fixture-owner",
+          record: {
+            version: 1,
+            kind: "fact",
+            ...query.target,
+            recordId: "memory-restart-\ud800",
+            text: "retained",
+            createdAt: 1,
+            metadata: { actorAccountId: "preserved" },
+          },
+        };
+        unwrap(
+          await client.call({
+            action: "nullmem-put",
+            query,
+            value: memoryCommand,
+          }),
+        );
+        const memoryBefore = unwrap<BranchNullMemQueryResult>(
+          await client.call({
+            action: "nullmem-query",
+            query,
+            value: { ...query, limit: 100 },
+          }),
+        );
         assertRecords(factsBefore.counts, runtimeCounts(1));
         assert.equal(factsBefore.outbox.length, 1);
         const factReceipt = factsBefore.outbox[0].receipt;
@@ -1308,6 +1353,16 @@ async function main() {
         assert.notEqual(factsAfterReset.bootId, factsBefore.bootId);
         assertRecords(factsAfterReset.counts, factsBefore.counts);
         assertRecords(factsAfterReset.outbox, factsBefore.outbox);
+        assertRecords(
+          unwrap(
+            await client.call({
+              action: "nullmem-query",
+              query,
+              value: { ...query, limit: 100 },
+            }),
+          ),
+          memoryBefore,
+        );
         assertRecords(await runtime(query).appendRuntimeFact(factCommand), {
           ...query,
           appended: false,
@@ -1337,6 +1392,32 @@ async function main() {
         assert.notEqual(factsRecovered.bootId, factsAfterReset.bootId);
         assertRecords(factsRecovered.counts, factsBefore.counts);
         assertRecords(factsRecovered.outbox, factsBefore.outbox);
+        assertRecords(
+          unwrap(
+            await client.call({
+              action: "nullmem-query",
+              query,
+              value: { ...query, limit: 100 },
+            }),
+          ),
+          memoryBefore,
+        );
+        const memoryRetried = unwrap<{ memoryRevision: number }>(
+          await client.call({
+            action: "nullmem-put",
+            query,
+            value: memoryCommand,
+          }),
+        );
+        assert.equal(memoryRetried.memoryRevision, 2);
+        writeFileSync(
+          resolve(evidence, "native-nullmem-restart-proof.json"),
+          JSON.stringify(
+            { firstPid, nextPid, memoryBefore, memoryRetried },
+            null,
+            2,
+          ),
+        );
         assertRecords(await runtime(query).appendRuntimeFact(factCommand), {
           ...query,
           appended: false,

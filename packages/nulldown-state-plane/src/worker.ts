@@ -1,4 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  captureNullMemQuery,
+  captureNullMemPut,
+  captureNullMemDelete,
+  type BranchNullMemQuery,
+  type BranchNullMemPutCommand,
+  type BranchNullMemDeleteCommand,
+} from "../../../shared/drop/branch-nullmem";
 import type {
   BranchPlacementQuery,
   BranchReserveRecord,
@@ -36,6 +44,9 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
         this.env.BRANCH_STATE.idFromName(name),
       );
       return {
+        queryNullMem: async (query) => await stub.queryNullMem(query),
+        putNullMem: async (command) => await stub.putNullMem(command),
+        deleteNullMem: async (command) => await stub.deleteNullMem(command),
         appendRuntimeFact: async (command) =>
           await stub.appendRuntimeFact(command),
         readRuntimeFactHead: async (query) =>
@@ -54,6 +65,31 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
       };
     });
   }
+  /** Reads bounded branch-local memory through the existing private service binding. */
+  async queryNullMem(
+    input: BranchNullMemQuery,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(() =>
+      this.#plane().queryNullMem(captureNullMemQuery(input)),
+    );
+  }
+  /** Publishes a mutable upsert; repeated calls intentionally create new revisions. */
+  async putNullMem(
+    input: BranchNullMemPutCommand,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(() =>
+      this.#plane().putNullMem(captureNullMemPut(input)),
+    );
+  }
+  /** Deletes every branch-local kind for the requested exact ID. */
+  async deleteNullMem(
+    input: BranchNullMemDeleteCommand,
+  ): Promise<BranchStateRpcResult<unknown>> {
+    return branchStateRpcResult(() =>
+      this.#plane().deleteNullMem(captureNullMemDelete(input)),
+    );
+  }
+
   /** Publishes an authorized UI fact through typed service-binding RPC. */
   async appendRuntimeFact(
     input: BranchRuntimeFactAppendCommand,

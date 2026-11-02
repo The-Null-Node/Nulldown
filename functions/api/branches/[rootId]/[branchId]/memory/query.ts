@@ -19,7 +19,9 @@ export const onRequestGet: PagesFunction<Env, "rootId" | "branchId"> = ({
   request,
 }) =>
   queryNullMem(createCloudflareStorageServiceEnv(env), params, request, {
-    data: createCloudflareRuntimeDataStore(env),
+    data: env.localBranchApplication
+      ? undefined
+      : createCloudflareRuntimeDataStore(env),
   });
 
 export const onRequest: PagesFunction<Env, "rootId" | "branchId"> = async (
