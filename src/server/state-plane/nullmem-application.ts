@@ -54,7 +54,10 @@ export function createLocalNullMemService(
   access: LocalNullMemAccess,
 ): BranchMemoryService {
   const selected = selection.nullmem;
-  if (selection.mode !== "local-test" || !selected)
+  if (
+    (selection.mode !== "local-test" && selection.mode !== "hosted-staging") ||
+    !selected
+  )
     throw new BranchStateError("capability_unsupported");
   const { backend, catalog } = selected;
   const queryFor = async (rootDropId: string, branchId: string) => {

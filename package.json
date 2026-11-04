@@ -110,7 +110,7 @@
     "test:profiling": "bun run scripts/profiling/check.ts",
     "typecheck:profiling": "tsc --project tsconfig.check.profiling.json",
     "typecheck:telemetry": "tsc --project packages/nulldown-telemetry/tsconfig.json",
-    "typecheck:state-plane": "tsc --project packages/nulldown-state-plane/tsconfig.json && tsc --project packages/nulldown-state-plane/tsconfig.tests.json && tsc --project packages/nulldown-state-plane/tsconfig.application-tests.json",
+    "typecheck:state-plane": "tsc --project packages/nulldown-state-plane/tsconfig.json && tsc --project packages/nulldown-state-plane/tsconfig.tests.json && tsc --project packages/nulldown-state-plane/tsconfig.application-tests.json && tsc --project packages/nulldown-state-plane/tsconfig.staging-api.json",
     "test:state-plane": "bun --no-env-file run test -- src/server/state-plane/ --runInBand",
     "test:state-plane:native": "bun --no-env-file run scripts/state-plane/run-native-contracts.ts",
     "test:state-plane:application": "bun --no-env-file run scripts/state-plane/run-application-acceptance.ts",

@@ -29,12 +29,12 @@ import type {
   BranchSnapshotStatePlane,
 } from "../../../shared/drop/branch-lifecycle";
 
-/** Explicit in-process local-test authority and derived-work dependencies for an application instance. */
+/** Explicit in-process authority and derived-work dependencies for an application instance. */
 export interface LocalBranchApplicationSelection {
-  mode: "local-test";
+  mode: "local-test" | "hosted-staging";
   commits: BranchBatchStatePlane;
   placement: BranchStatePlacement;
-  /** Authorized bootstrap and durable authority discovery for unseeded local branches. */
+  /** Authorized bootstrap and durable authority discovery for unseeded selected branches. */
   lifecycle?: LocalBranchLifecycle;
   /** Exact immutable snapshot metadata and bounded history discovery. */
   history?: BranchSnapshotStatePlane;
@@ -67,13 +67,13 @@ const validateScope = (actual: BranchHeadQuery, expected: BranchHeadQuery) => {
 };
 
 /**
- * Adapts explicitly selected local commits to request-scoped application reads and appends.
+ * Adapts explicitly selected commits to request-scoped application reads and appends.
  * Captured heads live only for this adapter; unsupported domains never fall back to legacy storage.
  */
 export const createCommitApplicationStatePlane = (
   selection: LocalBranchApplicationSelection,
 ): BranchStatePlane & BranchDiffCommands => {
-  if (selection.mode !== "local-test") {
+  if (selection.mode !== "local-test" && selection.mode !== "hosted-staging") {
     throw new BranchStateError("capability_unsupported");
   }
   const { commits } = selection;

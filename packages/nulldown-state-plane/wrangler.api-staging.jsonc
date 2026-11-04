@@ -1,0 +1,39 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "nulldown-state-plane-api-staging",
+  "main": "src/staging-api.ts",
+  "compatibility_date": "2026-10-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "upload_source_maps": true,
+  "r2_buckets": [
+    { "binding": "R2_BUCKET", "bucket_name": "nulldown-state-plane-staging" },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nulldown-state-plane-staging",
+      "database_id": "498fb9ab-ca3b-49a4-8718-f208c5901635",
+      "migrations_dir": "../../migrations",
+    },
+  ],
+  "services": [
+    {
+      "binding": "STATE_PLANE",
+      "service": "nulldown-state-plane-staging",
+      "entrypoint": "BranchStateService",
+    },
+  ],
+  "vars": {
+    "ENVIRONMENT": "staging",
+    "ALLOW_INSECURE_ACCOUNT_HEADER": "0",
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "invocation_logs": false },
+    // Application summaries and RPC timings emit bounded, content-free fields.
+    "traces": { "enabled": false },
+  },
+}

@@ -490,6 +490,11 @@ Run Cloudflare Pages development with Functions:
 bun run pages:dev
 ```
 
+For the experimental SQLite-backed branch service, see
+[State Plane staging](docs/STATE_PLANE_STAGING.md) for isolated Worker deployment
+and storage configuration. Existing production branches still use the legacy
+backend.
+
 Run focused verification:
 
 ```bash

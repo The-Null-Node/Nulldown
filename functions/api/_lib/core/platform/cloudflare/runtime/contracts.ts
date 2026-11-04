@@ -10,7 +10,7 @@ import type { LocalBranchApplicationSelection } from "../../../../../../../src/s
 
 /** Cloudflare bindings required to compose the server runtime. */
 export interface CloudflareBackendRuntimeBindings {
-  /** In-process local composition only; no deployment binding enables this authority. */
+  /** Request-owned explicit composition; absence retains the legacy authority. */
   localBranchApplication?: LocalBranchApplicationSelection;
   /** R2 bucket for canonical branch and drop records. */
   R2_BUCKET: R2Bucket;

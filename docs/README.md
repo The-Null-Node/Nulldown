@@ -19,4 +19,7 @@ The public conceptual documentation for Nulldown is published as a queryable Nul
 
 The source-coupled [CLI and HTTP API reference](NULDOWN_API.md) covers terminal automation and custom integrations. Agents should start with the MCP connection guide.
 
+[State Plane staging](STATE_PLANE_STAGING.md) describes isolated deployment of the
+experimental SQLite-backed branch service.
+
 Files in this directory are source-coupled operational references, historical migration material, or documents awaiting intentional migration. They are not the public product source of truth. Do not create new local architecture plans; publish focused documentation and plans as Nulldown drops, update them with atomic branch diffs, and verify them through resolved queries.
