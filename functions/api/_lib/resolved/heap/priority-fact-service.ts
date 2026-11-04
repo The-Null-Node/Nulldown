@@ -47,7 +47,11 @@ const createResolvedPriorityFactUnsafe = async (
     );
   }
 
-  const target = await resolveReadableResolvedBranchTarget(request, env, params);
+  const target = await resolveReadableResolvedBranchTarget(
+    request,
+    env,
+    params,
+  );
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
 
@@ -59,6 +63,13 @@ const createResolvedPriorityFactUnsafe = async (
     "create",
   );
   if (authError) return authError;
+  if (env.localBranchApplication) {
+    return jsonErrorResponse(
+      501,
+      "capability_unsupported",
+      "Resolved priority facts are not supported by selected branch authority.",
+    );
+  }
 
   const rawBody = await readRequestTextWithLimit(
     request,
@@ -78,7 +89,12 @@ const createResolvedPriorityFactUnsafe = async (
     (parsed.targetKind === "node" ? RESOLVED_DOCUMENT_RESOLVER_ID : undefined);
   const targetId =
     parsed.targetId ??
-    defaultPriorityTargetId(rootDropId, branchId, resolverId, parsed.targetKind);
+    defaultPriorityTargetId(
+      rootDropId,
+      branchId,
+      resolverId,
+      parsed.targetKind,
+    );
   if (!targetId) {
     return jsonErrorResponse(
       400,
@@ -121,7 +137,11 @@ const listResolvedPriorityFactsUnsafe = async (
   params: ResolvedHeapParams,
   request: Request,
 ): Promise<Response> => {
-  const target = await resolveReadableResolvedBranchTarget(request, env, params);
+  const target = await resolveReadableResolvedBranchTarget(
+    request,
+    env,
+    params,
+  );
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
 
@@ -132,6 +152,13 @@ const listResolvedPriorityFactsUnsafe = async (
     branch,
   );
   if (authError) return authError;
+  if (env.localBranchApplication) {
+    return jsonErrorResponse(
+      501,
+      "capability_unsupported",
+      "Resolved priority facts are not supported by selected branch authority.",
+    );
+  }
 
   const url = new URL(request.url);
   const targetKindParam =
@@ -154,7 +181,9 @@ const listResolvedPriorityFactsUnsafe = async (
           url.searchParams.get("target") ??
           undefined,
         factId:
-          url.searchParams.get("factId") ?? url.searchParams.get("fact") ?? undefined,
+          url.searchParams.get("factId") ??
+          url.searchParams.get("fact") ??
+          undefined,
         limit: parsePositiveInteger(url.searchParams.get("limit"), 100),
       })
     : [];
@@ -175,7 +204,11 @@ const deleteResolvedPriorityFactUnsafe = async (
     );
   }
 
-  const target = await resolveReadableResolvedBranchTarget(request, env, params);
+  const target = await resolveReadableResolvedBranchTarget(
+    request,
+    env,
+    params,
+  );
   if ("error" in target) return target.error;
   const { rootDropId, branchId, branch } = target;
   const authError = await authorizeResolvedPriorityFactWrite(
@@ -186,6 +219,13 @@ const deleteResolvedPriorityFactUnsafe = async (
     "delete",
   );
   if (authError) return authError;
+  if (env.localBranchApplication) {
+    return jsonErrorResponse(
+      501,
+      "capability_unsupported",
+      "Resolved priority facts are not supported by selected branch authority.",
+    );
+  }
 
   const factId = decodeRouteParam(resolveParam(params.factId));
   if (!factId) {

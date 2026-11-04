@@ -973,4 +973,146 @@ describe("local commit application adapter", () => {
       }),
     ).rejects.toThrow("state_corrupt");
   });
+
+  it("queries selected historical snapshot content without projection storage", async () => {
+    const base = await fixture();
+    const { states, history } = await historyFixture(8);
+    const historical = states[7];
+    if (!historical) throw new Error("missing history fixture");
+    base.head.version.sourceContentHash = historical.version.sourceContentHash;
+    base.head.version.eventSeq = historical.version.eventSeq;
+    base.head.branch.headEventSeq = historical.version.eventSeq;
+    base.commits.readContent.mockImplementation(async (query) => ({
+      ...query,
+      content: "snapshot-7",
+    }));
+    const plane = createCommitApplicationStatePlane({
+      ...base.selection,
+      history,
+      resolvedQuery: true,
+    });
+    const result = await plane.resolvedQuery?.queryDocument({
+      rootDropId: "root",
+      branchId: "owner",
+      snapshotId: 7,
+      q: "snapshot-7",
+    });
+    expect(result?.snapshotId).toBe(7);
+    expect(result?.sourceContentHash).toBe(
+      historical.version.sourceContentHash,
+    );
+    expect(result?.nodes.length).toBeGreaterThan(0);
+  });
+
+  it("keeps a captured snapshot when the head advances during content read", async () => {
+    const base = await fixture();
+    const { states, history } = await historyFixture(1);
+    const captured = states[0];
+    if (!captured) throw new Error("missing captured history fixture");
+    base.head.version.sourceContentHash = captured.version.sourceContentHash;
+    base.commits.readContent.mockImplementation(async (query) => {
+      base.head.branch.headSnapshotId = 8;
+      return { ...query, content: "snapshot-0" };
+    });
+    const plane = createCommitApplicationStatePlane({
+      ...base.selection,
+      history,
+      resolvedQuery: true,
+    });
+    const result = await plane.resolvedQuery?.queryDocument({
+      rootDropId: "root",
+      branchId: "owner",
+      snapshotId: 0,
+    });
+    expect(result?.snapshotId).toBe(0);
+    expect(base.commits.readHead).toHaveBeenCalledTimes(1);
+    expect(base.commits.readContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: expect.objectContaining({ snapshotId: 0 }),
+      }),
+    );
+  });
+
+  it("rejects content whose hash does not match selected snapshot identity", async () => {
+    const base = await fixture();
+    const { history } = await historyFixture(1);
+    base.commits.readContent.mockImplementation(async (query) => ({
+      ...query,
+      content: "tampered source",
+    }));
+    const plane = createCommitApplicationStatePlane({
+      ...base.selection,
+      history,
+      resolvedQuery: true,
+    });
+    await expect(
+      plane.resolvedQuery?.queryDocument({
+        rootDropId: "root",
+        branchId: "owner",
+        snapshotId: 0,
+      }),
+    ).rejects.toThrow("state_corrupt");
+  });
+
+  it.each(["target", "placement", "version"] as const)(
+    "rejects content with mismatched %s identity",
+    async (mismatch) => {
+      const base = await fixture();
+      const { history } = await historyFixture(1);
+      base.commits.readContent.mockImplementation(async (query) => ({
+        ...query,
+        ...(mismatch === "target"
+          ? { target: { rootDropId: "different-root", branchId: "owner" } }
+          : {}),
+        ...(mismatch === "placement"
+          ? { placement: { ...query.placement, generation: 8 } }
+          : {}),
+        ...(mismatch === "version"
+          ? { version: { ...query.version, snapshotId: 1 } }
+          : {}),
+        content: "snapshot-0",
+      }));
+      const plane = createCommitApplicationStatePlane({
+        ...base.selection,
+        history,
+        resolvedQuery: true,
+      });
+      await expect(
+        plane.resolvedQuery?.queryDocument({
+          rootDropId: "root",
+          branchId: "owner",
+          snapshotId: 0,
+        }),
+      ).rejects.toThrow("state_corrupt");
+    },
+  );
+
+  it("bounds historical event provenance to the requested snapshot sequence", async () => {
+    const base = await fixture();
+    const { states, history } = await historyFixture(8);
+    const historical = states[7];
+    if (!historical) throw new Error("missing history fixture");
+    base.head.version.sourceContentHash = historical.version.sourceContentHash;
+    base.head.version.eventSeq = historical.version.eventSeq;
+    base.head.branch.headEventSeq = historical.version.eventSeq;
+    base.commits.readContent.mockImplementation(async (query) => ({
+      ...query,
+      content: "snapshot-7",
+    }));
+    const plane = createCommitApplicationStatePlane({
+      ...base.selection,
+      history,
+      resolvedQuery: true,
+    });
+    await expect(
+      plane.resolvedQuery?.queryDocument({
+        rootDropId: "root",
+        branchId: "owner",
+        snapshotId: 7,
+        fromSeq: 7,
+        toSeq: 7,
+      }),
+    ).rejects.toThrow("invalid_command");
+    expect(base.commits.readEvents).not.toHaveBeenCalled();
+  });
 });

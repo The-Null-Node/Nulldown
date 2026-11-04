@@ -2626,11 +2626,6 @@ async function main() {
     const unsupported: Command[] = [
       {
         action: "request",
-        path: `/api/branches/${rootId}/owner/resolved/query`,
-        method: "GET",
-      },
-      {
-        action: "request",
         path: "/api/nullplug/state",
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3802,6 +3797,30 @@ async function main() {
           (await lifecycleContent(a, rootId, "owner", 0)).content,
           lifecycle.initial,
         );
+        for (const snapshotId of [0, lifecycle.historyLastSnapshot]) {
+          const resolved = value(
+            await a.call<{
+              rootDropId: string;
+              branchId: string;
+              snapshotId: number;
+              sourceContentHash: string;
+              stale: boolean;
+              nodes: unknown[];
+            }>({
+              action: "request",
+              path: `/api/branches/${rootId}/owner/resolved/query?snapshotId=${snapshotId}&q=Lifecycle`,
+            }),
+          );
+          assert.equal(resolved.rootDropId, rootId);
+          assert.equal(resolved.branchId, "owner");
+          assert.equal(resolved.snapshotId, snapshotId);
+          assert.equal(
+            resolved.sourceContentHash,
+            complete.snapshots[snapshotId].sourceContentHash,
+          );
+          assert.equal(resolved.stale, false);
+          assert.ok(resolved.nodes.length > 0);
+        }
         await assertRootWritesRejected(rootId);
       },
     );

@@ -80,6 +80,7 @@ type Checkpoint = {
   memory: unknown;
   retry: NulldownDiffApplyRequest;
   cloneBranch: string;
+  resolvedQuery: unknown;
 };
 type MemoryResult = {
   records: { recordId: string; text?: string }[];
@@ -598,6 +599,7 @@ async function main() {
     };
     let retry = checkpoint?.retry;
     let cloneBranch = checkpoint?.cloneBranch ?? "";
+    let resolvedQuery = checkpoint?.resolvedQuery;
     if (!checkpoint) {
       await run("signed_sdk_root_creation_and_owner_convergence", async () => {
         for (const [id, visibility] of [
@@ -721,17 +723,47 @@ async function main() {
       );
       await response.arrayBuffer();
     });
-    await run("explicit_unsupported_resolved_query", async () => {
-      const response = await fetchImpl(
-        `${base}/api/branches/${rootId}/owner/resolved/query?query=synthetic`,
-        { headers: { Authorization: `Bearer ${ownerToken}` } },
-      );
-      assert.equal(response.status, 501);
-      assert.equal(
-        response.headers.get("x-diagnostic-reason"),
-        "capability_unsupported",
-      );
-      await response.arrayBuffer();
+    await run("resolved_query_sdk_identity_and_snapshot", async () => {
+      const request = {
+        rootId,
+        branchId: "owner",
+        query: "Synthetic",
+        top: 10,
+      };
+      const first = (await a.queryBranch(request)) as {
+        rootDropId: string;
+        branchId: string;
+        snapshotId: number;
+        resolverId: string;
+        resolverVersion: string;
+        sourceContentHash: string;
+        stale: boolean;
+        heapGenerated: boolean;
+        nodes: unknown[];
+      };
+      assert.equal(first.rootDropId, rootId);
+      assert.equal(first.branchId, "owner");
+      assert.equal(first.snapshotId, 0);
+      assert.ok(first.resolverId && first.resolverVersion);
+      assert.ok(first.sourceContentHash.startsWith("sha256:"));
+      assert.equal(first.stale, false);
+      assert.equal(first.heapGenerated, true);
+      assert.ok(first.nodes.length > 0);
+      const repeated = await a.queryBranch(request);
+      assert.deepEqual(repeated, first);
+      const historical = await a.queryBranch({ ...request, snapshotId: 0 });
+      assert.deepEqual(historical, first);
+      resolvedQuery = first;
+      for (const client of [anonymous, outsider]) {
+        await assert.rejects(
+          client.queryBranch(request),
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "status" in error &&
+            error.status === 404,
+        );
+      }
     });
     if (!checkpoint) {
       await run("diff_lost_ack_exact_retry", async () => {
@@ -933,6 +965,13 @@ async function main() {
         // Persisted records are authoritative. Exclude query metadata and any
         // derived freshness values from redeploy equality.
         assert.deepEqual(await authoritativeMemoryRecords(), checkpoint.memory);
+        const resolved = await a.queryBranch({
+          rootId,
+          branchId: "owner",
+          query: "Synthetic",
+          top: 10,
+        });
+        assert.deepEqual(resolved, checkpoint.resolvedQuery);
         const receipt = await a.applyDiff(checkpoint.retry);
         assert.equal(receipt.deduplicated, 1);
         assert.equal(receipt.accepted, 0);
@@ -975,6 +1014,18 @@ async function main() {
           maxTokens: 8000,
         })) as DropBranchContentResponse;
         assert.equal(branch.content, (await content()).content);
+        const resolved = (await mcp.call("branch_query", {
+          ...scope,
+          query: "Synthetic",
+          top: 10,
+          format: "full",
+          maxTokens: 8000,
+        })) as Record<string, unknown>;
+        assert.equal(resolved.rootDropId, rootId);
+        assert.equal(resolved.branchId, "owner");
+        assert.equal(resolved.snapshotId, (await content()).snapshotId);
+        assert.equal(resolved.stale, false);
+        assert.ok(Array.isArray(resolved.nodes) && resolved.nodes.length > 0);
       } finally {
         await mcp.close();
       }
@@ -1036,14 +1087,14 @@ async function main() {
           },
         );
       try {
-        const resolved = await runCli(["branch", "resolve", rootId]);
-        assert.equal(resolved.code, 0);
+        const resolveRun = await runCli(["branch", "resolve", rootId]);
+        assert.equal(resolveRun.code, 0);
         assert.ok(
-          !resolved.stdout.includes(ownerToken) &&
-            !resolved.stderr.includes(ownerToken),
+          !resolveRun.stdout.includes(ownerToken) &&
+            !resolveRun.stderr.includes(ownerToken),
         );
         assert.equal(
-          (JSON.parse(resolved.stdout) as DropBranchResolveResponse).branchId,
+          (JSON.parse(resolveRun.stdout) as DropBranchResolveResponse).branchId,
           "owner",
         );
 
@@ -1077,6 +1128,32 @@ async function main() {
         ) as DropBranchContentResponse;
         assert.equal(result.content, expected.content);
         assert.equal(result.branchId, "owner");
+
+        const resolvedRun = await runCli([
+          "branch",
+          "query",
+          rootId,
+          "owner",
+          "--query=Synthetic",
+          "--top=10",
+        ]);
+        assert.equal(resolvedRun.code, 0);
+        assert.ok(
+          !resolvedRun.stdout.includes(ownerToken) &&
+            !resolvedRun.stderr.includes(ownerToken),
+        );
+        const resolved = JSON.parse(resolvedRun.stdout) as {
+          rootDropId: string;
+          branchId: string;
+          snapshotId: number;
+          sourceContentHash: string;
+          nodes: unknown[];
+        };
+        assert.equal(resolved.rootDropId, rootId);
+        assert.equal(resolved.branchId, "owner");
+        assert.equal(resolved.snapshotId, expected.snapshotId);
+        assert.ok(resolved.sourceContentHash.startsWith("sha256:"));
+        assert.ok(resolved.nodes.length > 0);
       } finally {
         writeExclusive(join(evidence, "cli-window.json"), {
           startedAt,
@@ -1090,7 +1167,7 @@ async function main() {
       }
     });
     if (checks.every((check) => check.passed)) {
-      assert.ok(retry && cloneBranch);
+      assert.ok(retry && cloneBranch && resolvedQuery);
       const durable = {
         deployment,
         content: await content(),
@@ -1099,6 +1176,7 @@ async function main() {
         memory: await authoritativeMemoryRecords(),
         retry,
         cloneBranch,
+        resolvedQuery,
       } satisfies Checkpoint;
       writeExclusive(join(evidence, "durable-summary.json"), {
         snapshotId: durable.content.snapshotId,

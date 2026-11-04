@@ -564,8 +564,9 @@ exact-version cache reuses content while durable reads check placement and ident
 `packages/nulldown-state-plane` adapts this port to SQLite-backed Durable Objects
 and internal RPC, using a fixed 16-shard routing layout. HTTP, MCP, and CLI use the
 legacy backend by default. The local Worker has no public state endpoints; fixture
-seeding requires an explicit test binding. Migration and outbox consumers are not
-implemented.
+seeding requires an explicit test binding. Isolated staging adds Queue delivery,
+encrypted R2 archives, and a separate D1 metadata projection. Migration tooling
+remains pending; see [State Plane staging](docs/STATE_PLANE_STAGING.md).
 
 For local application testing, `src/server/state-plane/commit-application.ts`
 connects local branches to the existing authenticated diff and content
@@ -578,16 +579,18 @@ selecting local authority. History support adds ascending snapshot discovery and
 exact historical content reads (`?snapshotId=N` on the branch content endpoint).
 Root replacement, deletion, publication, promotion, diff-credential registration,
 and plugin execution remain unsupported on this local path.
-Snapshotters must be supplied explicitly with a
-derived-data store; durable outbox delivery is separate work.
+Snapshotters must be supplied explicitly with a derived-data store. The optional
+`resolvedQuery` capability answers document queries from exact authoritative
+snapshots without depending on resolved-heap projections.
 
 The optional `runtimeFacts` capability connects `/api/nullplug/state` and
 `/api/nullplug/submit` to immutable UI facts with an independent polling cursor on
 `/api/diff`. Each accepted fact, retry receipt, stream position, and outbox intent
 commits atomically. Exact retries return the original receipt after document edits;
 new facts must match the current source hash. Fact polling requires sensitive branch
-read authorization. Responses report `indexed: false` because projection delivery
-is not implemented, and proposed response diffs remain data.
+read authorization. Responses report `indexed: false`; asynchronous outbox metadata
+delivery does not populate the legacy runtime-reference query index. Proposed
+response diffs remain data.
 
 The optional `nullmem` capability connects the existing branch memory routes to
 local durable facts and procedures. Record IDs remain mutable: repeated writes

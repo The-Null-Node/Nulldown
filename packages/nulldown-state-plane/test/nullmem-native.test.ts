@@ -186,7 +186,8 @@ export async function runNativeNullMemContract(
     const cuts = checkpoints.flatMap((row, index) =>
       row.operation === "execute" ? [index] : [],
     );
-    assert.equal(cuts.length, operation === "put" ? 6 : 8);
+    // Include both sides of the delivery-row publication in the same transaction.
+    assert.equal(cuts.length, operation === "put" ? 8 : 10);
     for (const cut of cuts) {
       const fixture = await prepare();
       const prior = await read(fixture.query);

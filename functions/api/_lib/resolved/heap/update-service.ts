@@ -36,7 +36,11 @@ export const updateResolvedHeap = async (
       );
     }
 
-    const target = await resolveReadableResolvedBranchTarget(request, env, params);
+    const target = await resolveReadableResolvedBranchTarget(
+      request,
+      env,
+      params,
+    );
     if ("error" in target) return target.error;
     const { rootDropId, branchId, branch } = target;
 
@@ -45,6 +49,14 @@ export const updateResolvedHeap = async (
         403,
         "forbidden",
         "Authenticated branch capability is required.",
+      );
+    }
+
+    if (env.localBranchApplication) {
+      return jsonErrorResponse(
+        501,
+        "capability_unsupported",
+        "Resolved heap rebuilds are not supported by selected branch authority.",
       );
     }
 
@@ -62,18 +74,25 @@ export const updateResolvedHeap = async (
     }
 
     const resolverId = parsed.resolverId ?? "all";
-    if (parsed.uiResponseFacts?.length || parsed.uiStatePatchFacts?.length || parsed.uiStateSnapshots?.length) {
-      return jsonErrorResponse(400, "runtime_facts_must_be_stored", "Store runtime facts through the state or submit API before rebuilding projections.");
+    if (
+      parsed.uiResponseFacts?.length ||
+      parsed.uiStatePatchFacts?.length ||
+      parsed.uiStateSnapshots?.length
+    ) {
+      return jsonErrorResponse(
+        400,
+        "runtime_facts_must_be_stored",
+        "Store runtime facts through the state or submit API before rebuilding projections.",
+      );
     }
     const snapshotId =
       parsed.snapshotId === undefined || parsed.snapshotId === "latest"
         ? branch.headSnapshotId
         : parsed.snapshotId;
-    const content = await createBranchStatePlane({ blobs: env.R2_BUCKET, sql: env.DB }).snapshots.readContent(
-      rootDropId,
-      branchId,
-      snapshotId,
-    );
+    const content = await createBranchStatePlane({
+      blobs: env.R2_BUCKET,
+      sql: env.DB,
+    }).snapshots.readContent(rootDropId, branchId, snapshotId);
     if (content === null) {
       return jsonErrorResponse(
         404,

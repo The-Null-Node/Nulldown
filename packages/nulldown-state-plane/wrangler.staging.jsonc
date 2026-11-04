@@ -11,7 +11,46 @@
     "bindings": [{ "name": "BRANCH_STATE", "class_name": "BranchStateObject" }],
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BranchStateObject"] }],
-  "vars": { "STATE_PLANE_LOCAL_TEST": "0", "ENVIRONMENT": "staging" },
+  "vars": {
+    "STATE_PLANE_LOCAL_TEST": "0",
+    "ENVIRONMENT": "staging",
+    "STATE_PLANE_OUTBOX_ENABLED": "1",
+    "OUTBOX_ARCHIVE_KEY_ID": "staging-20261104-v1",
+  },
+  "r2_buckets": [
+    {
+      "binding": "OUTBOX_ARCHIVE",
+      "bucket_name": "nulldown-state-plane-archives-staging",
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "OUTBOX_DB",
+      "database_name": "nulldown-state-plane-projections-staging",
+      "database_id": "84e7fd6a-3051-42a4-a186-9ea1380c44a1",
+      "migrations_dir": "./migrations",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "OUTBOX_QUEUE",
+        "queue": "nulldown-state-plane-outbox-staging",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "nulldown-state-plane-outbox-staging",
+        "max_batch_size": 5,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "retry_delay": 30,
+        "max_concurrency": 2,
+      },
+    ],
+  },
+  // Revisit the fixed shard pool to recover pending work after missed wakeups.
+  "triggers": { "crons": ["* * * * *"] },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,

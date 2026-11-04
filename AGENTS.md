@@ -23,6 +23,8 @@ Before starting any architecture, refactor, planning, checklist, strategy, skill
 
 This is a hard gate. Do not skip it. Do not start making changes based on local intuition.
 
+For isolated-worktree environment recovery, follow the [Worktree Environment Recovery Strategy](https://nulldown.app/d/zatkNM) (authorized branch `clone_account:2d89645f-f4b5-40be-a890-9e279ff4c46b`; query the “Worktree Environment Recovery Strategy” section) and structured NullMem procedure `memproc:3b72c5f7-6da7-423d-bae1-8f6b234160b2`. Inspect known worktree evidence before concluding files are absent; keep secret values out of hosted records.
+
 ## Hosted Writeback
 
 Hosted writes are opt-in and require explicit authorization for the target
@@ -45,6 +47,7 @@ When canonical writeback is needed but not authorized, report it as pending and
 do not claim that hosted state changed.
 
 Trigger examples (use categories, not specific symbols):
+
 - Changing rules or behavior for how agents retrieve or present information from hosted plans/memory.
 - Modifying architecture, contracts, or observable behavior that other work should follow.
 - Adding or changing agent procedures, best practices, or instructions that should be discoverable later.

@@ -22,6 +22,8 @@ import { dispatchNulleditSnapshottersForCommit } from "../nulledit/dispatch";
 import type { NulleditSnapshotter } from "../nulledit/types";
 import type { RuntimeDataStore } from "../ports";
 import type { BranchDiffCommands, BranchStatePlane } from "./contracts";
+import { queryResolvedDocumentSource } from "./resolved-query";
+import { hashBranchSnapshotSource } from "../../../shared/drop/resolved/hash";
 import type { LocalBranchLifecycle } from "./application-lifecycle";
 import type { LocalBranchNullMemSelection } from "./nullmem-application";
 import type {
@@ -44,6 +46,8 @@ export interface LocalBranchApplicationSelection {
   nullmem?: LocalBranchNullMemSelection;
   data?: RuntimeDataStore;
   snapshotters?: NulleditSnapshotter[];
+  /** Enables resolved document reads from selected immutable snapshot authority. */
+  resolvedQuery?: boolean;
 }
 
 const unsupported = async (): Promise<never> => {
@@ -202,6 +206,104 @@ export const createCommitApplicationStatePlane = (
   };
 
   return {
+    resolvedQuery: selection.resolvedQuery
+      ? {
+          async queryDocument(request) {
+            if (!selection.history)
+              throw new BranchStateError("capability_unsupported");
+            const head = await readHead(request.rootDropId, request.branchId);
+            if (request.snapshotId > head.version.snapshotId)
+              throw new BranchStateError("invalid_command");
+            const snapshotState = await selection.history?.readSnapshot({
+              target: head.target,
+              placement: head.placement,
+              snapshotId: request.snapshotId,
+            });
+            if (!snapshotState) throw new BranchStateError("branch_not_found");
+            const snapshot = captureSnapshot(
+              snapshotState,
+              request.rootDropId,
+              request.branchId,
+            );
+            const version = versions.get(
+              snapshotKey(
+                request.rootDropId,
+                request.branchId,
+                request.snapshotId,
+              ),
+            );
+            if (!version) throw new BranchStateError("state_corrupt");
+            const content = await commits.readContent(structuredClone(version));
+            if (
+              content.target.rootDropId !== request.rootDropId ||
+              content.target.branchId !== request.branchId ||
+              content.placement.routingVersion !==
+                head.placement.routingVersion ||
+              content.placement.generation !== head.placement.generation ||
+              !sameBranchStateVersion(content.version, version.version)
+            ) {
+              throw new BranchStateError("state_corrupt");
+            }
+            const sourceHash = await hashBranchSnapshotSource({
+              rootDropId: request.rootDropId,
+              branchId: request.branchId,
+              snapshotId: request.snapshotId,
+              content: content.content,
+            });
+            if (sourceHash !== snapshot.sourceContentHash)
+              throw new BranchStateError("state_corrupt");
+            const events: DropDiffEvent[] = [];
+            if (request.fromSeq !== undefined || request.toSeq !== undefined) {
+              const start = request.fromSeq ?? request.toSeq ?? 0;
+              const end = request.toSeq ?? request.fromSeq ?? 0;
+              if (
+                !Number.isSafeInteger(start) ||
+                !Number.isSafeInteger(end) ||
+                start < 0 ||
+                end < start ||
+                end > snapshotState.version.eventSeq
+              )
+                throw new BranchStateError("invalid_command");
+              for (let cursor = start; cursor <= end; cursor += 200) {
+                const chunkEnd = Math.min(cursor + 199, end);
+                const range = BranchStateQuery.range({
+                  target: head.target,
+                  placement: head.placement,
+                  version: snapshotState.version,
+                  startSeq: cursor,
+                  endSeq: chunkEnd,
+                });
+                const chunk = await commits.readEvents(structuredClone(range));
+                if (
+                  chunk.length !== chunkEnd - cursor + 1 ||
+                  chunk.some(
+                    (event, index) =>
+                      event.seq !== cursor + index ||
+                      event.dropId !== request.rootDropId,
+                  )
+                ) {
+                  throw new BranchStateError("state_corrupt");
+                }
+                events.push(...chunk);
+              }
+            }
+            const result = await queryResolvedDocumentSource(
+              {
+                rootDropId: request.rootDropId,
+                branchId: request.branchId,
+                snapshotId: request.snapshotId,
+                headEventSeq: snapshot.patchEndSeq ?? -1,
+                content: content.content,
+                events,
+              },
+              request,
+            );
+            if (result.sourceContentHash !== snapshot.sourceContentHash)
+              throw new BranchStateError("state_corrupt");
+            return result;
+          },
+        }
+      : undefined,
     runtimeFacts: selection.runtimeFacts
       ? {
           async storeUiFact(request) {

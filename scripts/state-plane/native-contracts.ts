@@ -274,6 +274,11 @@ class NativeProcess {
           WRANGLER_SEND_METRICS: "false",
           WRANGLER_WRITE_LOGS: "false",
           STATE_PLANE_LOCAL_TEST: "0",
+          // Keep native commit-contract workers explicitly outbox-disabled;
+          // Wrangler-generated ProcessEnv requires every configured variable.
+          ENVIRONMENT: "test",
+          STATE_PLANE_OUTBOX_ENABLED: "0",
+          OUTBOX_ARCHIVE_KEY_ID: "disabled",
         },
         stdio: "pipe",
       },
@@ -945,7 +950,7 @@ async function main() {
       },
     );
     await run(
-      "native runtime fact transactionSync rollback at all four publication statements",
+      "native runtime fact transactionSync rollback at all five publication statements",
       async () => {
         const sample = await seed();
         const observed = (await client.call({
@@ -958,16 +963,17 @@ async function main() {
         const operations = observed.trace.filter(
           (event) => event.operation !== "transaction",
         );
+        const publicationTables = [...runtimeTables, "branch_outbox_delivery"];
         const cuts = operations.flatMap((event, index) =>
           event.operation === "execute" &&
-          runtimeTables.some((table) =>
+          publicationTables.some((table) =>
             event.sql?.startsWith(`INSERT INTO ${table} `),
           )
             ? [{ index, ...event }]
             : [],
         );
-        assert.equal(cuts.length, 8);
-        for (const table of runtimeTables)
+        assert.equal(cuts.length, 10);
+        for (const table of publicationTables)
           assertRecords(
             cuts
               .filter((event) => event.sql?.startsWith(`INSERT INTO ${table} `))

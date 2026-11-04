@@ -6,6 +6,8 @@ import type { DropDiffEvent } from "../../../shared/drop/diff";
 import type { DropDiffPollResponse } from "../../../shared/drop/diff";
 import type { DropBranchRuntimeFact } from "../../../shared/drop/diff";
 import type { NullplugUiRuntimeFact } from "../../../shared/nullplug/ui";
+import type { ResolvedDocumentNodeKind } from "../../../shared/drop/resolved/types";
+import type { ResolvedDocumentQueryResult } from "./resolved-query";
 import type {
   BranchMemoryService,
   ServerNulleditAppendRequest,
@@ -135,6 +137,22 @@ export interface BranchMaintenanceCapability {
 
 /** Request-scoped application routing boundary for branch timelines and snapshots. */
 export interface BranchStatePlane {
+  /** Optional query over selected immutable branch snapshots; absent means unsupported, never legacy fallback. */
+  resolvedQuery?: {
+    queryDocument(request: {
+      rootDropId: string;
+      branchId: string;
+      snapshotId: number;
+      q?: string;
+      kinds?: ResolvedDocumentNodeKind[];
+      limit?: number;
+      fromSeq?: number;
+      toSeq?: number;
+      includeEventMetadata?: boolean;
+      changedOnly?: boolean;
+      includeAncestors?: boolean;
+    }): Promise<ResolvedDocumentQueryResult>;
+  };
   /** Optional atomic UI-fact commands; unavailable capabilities must reject without fallback. */
   runtimeFacts?: BranchRuntimeFactCommands;
   /** Event and optional sensitive runtime-fact polling. */

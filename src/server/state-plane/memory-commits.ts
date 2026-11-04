@@ -88,6 +88,21 @@ import {
   type BranchSnapshotPageQuery,
   type BranchSnapshotPage,
 } from "../../../shared/drop/branch-lifecycle";
+import type {
+  BranchCanonicalOutbox,
+  BranchClaimedOutbox,
+  BranchOutboxClaimCommand,
+  BranchOutboxClaimResultCommand,
+  BranchOutboxDeliveryStatePlane,
+  BranchOutboxDeliveryItem,
+} from "../../../shared/drop/branch-outbox-delivery";
+import {
+  validateOutboxClaim,
+  validateOutboxClaimResult,
+  outboxRetryAt,
+  canonicalOutboxPlacement,
+  outboxLeaseToken,
+} from "./outbox-delivery";
 
 /** Explicit local fixture initialization; not an import, migration, or branch-lifecycle API. */
 export interface MemoryBranchStateSeed {
@@ -115,6 +130,20 @@ type State = {
   outbox: Map<string, BranchCommitOutboxRecord | BranchBatchCommitOutboxRecord>;
 };
 
+type OutboxDeliveryState = {
+  kind: string;
+  target: { rootDropId: string; branchId: string };
+  generation: number;
+  status: "pending" | "claimed" | "completed" | "fenced";
+  attempt: number;
+  nextAttemptAt: number;
+  lastErrorCode?: string;
+  leaseId?: string;
+  leaseToken?: string;
+  leaseUntil?: number;
+  completedAt?: number;
+};
+
 const key = (target: BranchHeadQuery["target"]): string =>
   JSON.stringify([target.rootDropId, target.branchId]);
 
@@ -126,7 +155,8 @@ export class MemoryBranchCommitStatePlane
   implements
     BranchLifecycleStatePlane,
     BranchRuntimeFactStatePlane,
-    BranchNullMemStatePlane
+    BranchNullMemStatePlane,
+    BranchOutboxDeliveryStatePlane
 {
   private readonly states = new Map<string, State>();
   private readonly authorities = new Map<string, BranchAuthorityRecord>();
@@ -134,6 +164,32 @@ export class MemoryBranchCommitStatePlane
     string,
     { intent: string; receipt: BranchInitializationReceipt }
   >();
+  private delivery = new Map<string, OutboxDeliveryState>();
+
+  private registerOutbox(
+    outbox: BranchCanonicalOutbox,
+  ): Map<string, OutboxDeliveryState> {
+    const captured = canonicalOutboxPlacement(outbox);
+    const current = this.delivery.get(outbox.id);
+    if (
+      current &&
+      (current.kind !== outbox.kind ||
+        key(current.target) !== key(captured.target) ||
+        current.generation !== captured.placement.generation)
+    )
+      throw new BranchStateError("state_corrupt");
+    const next = new Map(this.delivery);
+    if (!current)
+      next.set(outbox.id, {
+        kind: outbox.kind,
+        target: captured.target,
+        generation: captured.placement.generation,
+        status: "pending",
+        attempt: 0,
+        nextAttemptAt: 0,
+      });
+    return next;
+  }
 
   private constructor(private readonly now: () => number) {}
 
@@ -376,7 +432,9 @@ export class MemoryBranchCommitStatePlane
     next.snapshotMetadata.set(prepared.snapshot.snapshotId, prepared.snapshot);
     next.receipts.set(prepared.event.eventId, prepared.receipt);
     next.outbox.set(prepared.outbox.id, prepared.outbox);
+    const delivery = this.registerOutbox(prepared.outbox);
     this.states.set(key(command.target), next);
+    this.delivery = delivery;
     return { status: "accepted", receipt: structuredClone(prepared.receipt) };
   }
 
@@ -432,7 +490,9 @@ export class MemoryBranchCommitStatePlane
       for (const receipt of prepared.receipts)
         next.receipts.set(receipt.eventId, receipt);
       next.outbox.set(prepared.outbox!.id, prepared.outbox!);
+      const delivery = this.registerOutbox(prepared.outbox!);
       this.states.set(key(command.target), next);
+      this.delivery = delivery;
       return structuredClone(prepared.result);
     }
     throw new BranchStateError("state_unavailable");
@@ -495,14 +555,17 @@ export class MemoryBranchCommitStatePlane
       nullMemRecordIdentity(entry.result.record),
       entry.result.record,
     );
-    this.states.set(key(command.target), {
+    const next = {
       ...state,
       nullmem: {
         revision: entry.result.memoryRevision,
         records,
         outbox: [...state.nullmem.outbox, entry],
       },
-    });
+    };
+    const delivery = this.registerOutbox(entry);
+    this.states.set(key(command.target), next);
+    this.delivery = delivery;
     return structuredClone(entry.result);
   }
 
@@ -524,14 +587,17 @@ export class MemoryBranchCommitStatePlane
         ([, record]) => record.recordId !== command.recordId,
       ),
     );
-    this.states.set(key(command.target), {
+    const next = {
       ...state,
       nullmem: {
         revision: entry.result.memoryRevision,
         records,
         outbox: [...state.nullmem.outbox, entry],
       },
-    });
+    };
+    const delivery = this.registerOutbox(entry);
+    this.states.set(key(command.target), next);
+    this.delivery = delivery;
     return structuredClone(entry.result);
   }
 
@@ -586,7 +652,9 @@ export class MemoryBranchCommitStatePlane
     };
     next.runtimeFacts.set(identity, { intent, receipt });
     next.runtimeOutbox.set(outbox.id, outbox);
+    const delivery = this.registerOutbox(outbox);
     this.states.set(key(command.target), next);
+    this.delivery = delivery;
     return structuredClone({ ...query, appended: true, receipt });
   }
 
@@ -738,5 +806,280 @@ export class MemoryBranchCommitStatePlane
           intent.kind === "branch.batch-commit.v1",
       ),
     );
+  }
+
+  private canonicalOutboxById(
+    target: BranchHeadQuery["target"],
+    id: string,
+  ): BranchCanonicalOutbox | null {
+    const state = this.states.get(key(target));
+    if (!state) return null;
+    return (
+      state.outbox.get(id) ??
+      state.runtimeOutbox.get(id) ??
+      state.nullmem.outbox.find((entry) => entry.id === id) ??
+      null
+    );
+  }
+
+  /** Claims due intents shard-wide with a durable-in-instance expiry fence. */
+  async claimOutbox(command: BranchOutboxClaimCommand) {
+    validateOutboxClaim(command);
+    const leaseUntil = command.now + command.leaseMs;
+    const items: BranchOutboxDeliveryItem[] = [];
+    const selected: Array<{
+      id: string;
+      target: OutboxDeliveryState["target"];
+      generation: number;
+      attempt: number;
+      token: string;
+    }> = [];
+    const fenced: string[] = [];
+    for (const [id, row] of [...this.delivery].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      if (items.length >= command.limit) break;
+      if (row.status === "completed" || row.status === "fenced") continue;
+      if (row.status === "claimed" && row.nextAttemptAt !== row.leaseUntil)
+        throw new BranchStateError("state_corrupt");
+      if (row.nextAttemptAt > command.now) continue;
+      const live = this.states.get(key(row.target));
+      const outbox = this.canonicalOutboxById(row.target, id);
+      if (!outbox || outbox.kind !== row.kind)
+        throw new BranchStateError("state_corrupt");
+      const witness = canonicalOutboxPlacement(outbox);
+      if (
+        witness.target.rootDropId !== row.target.rootDropId ||
+        witness.target.branchId !== row.target.branchId ||
+        witness.placement.generation !== row.generation
+      )
+        throw new BranchStateError("state_corrupt");
+      if (!live || live.head.placement.generation !== row.generation) {
+        fenced.push(id);
+        continue;
+      }
+      const attempt = row.attempt + 1;
+      const leaseToken = outboxLeaseToken(command.leaseId, id, attempt);
+      selected.push({
+        id,
+        target: row.target,
+        generation: row.generation,
+        attempt,
+        token: leaseToken,
+      });
+      items.push({
+        target: row.target,
+        placement: { routingVersion: 1, generation: row.generation },
+        outboxId: id,
+        leaseToken,
+      });
+    }
+    const next = new Map(this.delivery);
+    for (const item of selected) {
+      const row = next.get(item.id)!;
+      next.set(item.id, {
+        ...row,
+        status: "claimed",
+        attempt: item.attempt,
+        nextAttemptAt: leaseUntil,
+        leaseId: command.leaseId,
+        leaseToken: item.token,
+        leaseUntil,
+      });
+    }
+    for (const id of fenced) {
+      const row = next.get(id)!;
+      next.set(id, {
+        ...row,
+        status: "fenced",
+        leaseId: undefined,
+        leaseToken: undefined,
+        leaseUntil: undefined,
+      });
+    }
+    this.delivery = next;
+    return structuredClone({ leaseId: command.leaseId, leaseUntil, items });
+  }
+
+  /** Reads exact canonical records only through the live per-item lease and placement fence. */
+  async readClaimedOutbox(
+    command: BranchOutboxClaimResultCommand,
+  ): Promise<BranchClaimedOutbox[]> {
+    validateOutboxClaimResult(command);
+    return structuredClone(
+      command.items.flatMap((item) => {
+        const delivery = this.delivery.get(item.outboxId);
+        const state = this.states.get(key(item.target));
+        if (
+          !delivery ||
+          key(delivery.target) !== key(item.target) ||
+          delivery.status !== "claimed" ||
+          delivery.leaseId !== command.leaseId ||
+          delivery.leaseToken !== item.leaseToken ||
+          (delivery.leaseUntil ?? 0) <= command.now ||
+          delivery.nextAttemptAt !== delivery.leaseUntil ||
+          !state ||
+          state.head.placement.generation !== item.placement.generation
+        )
+          return [];
+        const outbox = this.canonicalOutboxById(item.target, item.outboxId);
+        if (!outbox) return [];
+        const witness = canonicalOutboxPlacement(outbox);
+        if (
+          witness.target.rootDropId !== item.target.rootDropId ||
+          witness.target.branchId !== item.target.branchId ||
+          witness.placement.generation !== item.placement.generation
+        )
+          throw new BranchStateError("state_corrupt");
+        return [
+          {
+            target: item.target,
+            placement: item.placement,
+            outbox,
+            status: "claimed" as const,
+            attempt: delivery.attempt,
+            leaseUntil: delivery.leaseUntil!,
+          },
+        ];
+      }),
+    );
+  }
+
+  /** Completes exact leased work; repeated completion is represented by its compact tombstone. */
+  async acknowledgeOutbox(command: BranchOutboxClaimResultCommand) {
+    validateOutboxClaimResult(command);
+    let acknowledged = 0,
+      duplicate = 0,
+      stale = 0;
+    const completed: string[] = [];
+    for (const item of command.items) {
+      const delivery = this.delivery.get(item.outboxId);
+      const state = this.states.get(key(item.target));
+      if (
+        !delivery ||
+        key(delivery.target) !== key(item.target) ||
+        delivery.generation !== item.placement.generation ||
+        !state ||
+        state.head.placement.generation !== item.placement.generation
+      ) {
+        stale++;
+        continue;
+      }
+      if (delivery.status === "completed") {
+        duplicate++;
+        continue;
+      }
+      if (
+        delivery.status !== "claimed" ||
+        delivery.leaseId !== command.leaseId ||
+        delivery.leaseToken !== item.leaseToken ||
+        (delivery.leaseUntil ?? 0) <= command.now ||
+        delivery.nextAttemptAt !== delivery.leaseUntil
+      ) {
+        stale++;
+        continue;
+      }
+      completed.push(item.outboxId);
+      acknowledged++;
+    }
+    const next = new Map(this.delivery);
+    for (const id of completed) {
+      const row = next.get(id)!;
+      next.set(id, {
+        ...row,
+        status: "completed",
+        completedAt: command.now,
+        leaseId: undefined,
+        leaseToken: undefined,
+        leaseUntil: undefined,
+      });
+    }
+    this.delivery = next;
+    return { acknowledged, duplicate, stale };
+  }
+
+  /** Persists retry/backoff for exact currently leased work. */
+  async retryOutbox(
+    command: BranchOutboxClaimResultCommand & { errorCode: string },
+  ) {
+    validateOutboxClaimResult(command);
+    if (
+      typeof command.errorCode !== "string" ||
+      !/^[a-z0-9_.-]{1,80}$/.test(command.errorCode)
+    )
+      throw new BranchStateError("invalid_command");
+    let retried = 0,
+      stale = 0;
+    const retryAt = new Map<string, number>();
+    for (const item of command.items) {
+      const delivery = this.delivery.get(item.outboxId);
+      const state = this.states.get(key(item.target));
+      if (
+        !delivery ||
+        key(delivery.target) !== key(item.target) ||
+        delivery.generation !== item.placement.generation ||
+        delivery.status !== "claimed" ||
+        delivery.leaseId !== command.leaseId ||
+        delivery.leaseToken !== item.leaseToken ||
+        (delivery.leaseUntil ?? 0) <= command.now ||
+        delivery.nextAttemptAt !== delivery.leaseUntil ||
+        !state ||
+        state.head.placement.generation !== item.placement.generation
+      ) {
+        stale++;
+        continue;
+      }
+      retryAt.set(item.outboxId, outboxRetryAt(command.now, delivery.attempt));
+      retried++;
+    }
+    const next = new Map(this.delivery);
+    for (const [id, nextAttemptAt] of retryAt) {
+      const row = next.get(id)!;
+      next.set(id, {
+        ...row,
+        status: "pending",
+        nextAttemptAt,
+        lastErrorCode: command.errorCode,
+        leaseId: undefined,
+        leaseToken: undefined,
+        leaseUntil: undefined,
+      });
+    }
+    this.delivery = next;
+    return { retried, stale };
+  }
+
+  /** Retains compact completed markers; canonical proof rows are never pruned. */
+  async pruneCompletedOutbox(command: { before: number; limit: number }) {
+    if (
+      !command ||
+      !Number.isSafeInteger(command.before) ||
+      command.before < 0 ||
+      !Number.isSafeInteger(command.limit) ||
+      command.limit < 1 ||
+      command.limit > 256
+    )
+      throw new BranchStateError("invalid_command");
+    let pruned = 0;
+    const next = new Map(this.delivery);
+    for (const [id, original] of next) {
+      const row = { ...original };
+      if (pruned >= command.limit) break;
+      if (
+        row.status === "completed" &&
+        row.completedAt !== undefined &&
+        row.completedAt <= command.before
+      ) {
+        // The status row itself is the compact completion watermark.
+        delete row.completedAt;
+        row.attempt = 0;
+        row.nextAttemptAt = 0;
+        delete row.lastErrorCode;
+        next.set(id, row);
+        pruned++;
+      }
+    }
+    this.delivery = next;
+    return { pruned };
   }
 }
