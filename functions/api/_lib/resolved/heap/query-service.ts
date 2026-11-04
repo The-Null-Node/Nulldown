@@ -1,4 +1,7 @@
 import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
+import { createCommitApplicationStatePlane } from "../../../../../src/server/state-plane/commit-application";
+import { BranchStateError } from "../../../../../shared/drop/branch-state";
+import { branchStateErrorResponse } from "../../branches/http/state-plane-errors";
 import {
   apiHttpErrorResponse,
   isApiHttpError,
@@ -156,6 +159,23 @@ const queryResolvedHeapUnsafe = async (
     );
   }
 
+  if (env.localBranchApplication) {
+    if (resolverId !== RESOLVED_DOCUMENT_RESOLVER_ID) {
+      return jsonErrorResponse(
+        501,
+        "capability_unsupported",
+        "Selected branch authority supports document resolver queries only.",
+      );
+    }
+    if (snapshotterId && snapshotterId !== RESOLVED_DOCUMENT_SNAPSHOTTER_ID) {
+      return jsonErrorResponse(
+        501,
+        "capability_unsupported",
+        "Selected branch authority does not support this snapshotter.",
+      );
+    }
+  }
+
   if (snapshotterId && isNonDocumentSnapshotter) {
     const result = await timeHeapPhase(timing, "query.snapshotter", async () =>
       options?.querySnapshotter?.(
@@ -172,6 +192,56 @@ const queryResolvedHeapUnsafe = async (
       : Number.parseInt(snapshotParam, 10);
   if (!Number.isFinite(snapshotId) || snapshotId < 0) {
     return jsonErrorResponse(400, "validation_failed", "Invalid snapshotId.");
+  }
+
+  if (env.localBranchApplication) {
+    // Selected heaps use intrinsic document/event scoring only. Priority fact
+    // records remain unsupported until they have a selected authoritative store.
+    const selected = createCommitApplicationStatePlane(
+      env.localBranchApplication,
+    );
+    const query = selected.resolvedQuery;
+    if (!query)
+      return jsonErrorResponse(
+        501,
+        "capability_unsupported",
+        "Selected branch authority does not support resolved document queries.",
+      );
+    const fromSeq = parseOptionalSeq(url.searchParams.get("fromSeq"));
+    const toSeq = parseOptionalSeq(url.searchParams.get("toSeq"));
+    const result = await query.queryDocument({
+      rootDropId,
+      branchId,
+      snapshotId,
+      q:
+        url.searchParams.get("q") || url.searchParams.get("query") || undefined,
+      kinds: parseDocumentKinds(url.searchParams.get("kind")),
+      limit: parsePositiveInteger(
+        url.searchParams.get("k") || url.searchParams.get("top"),
+        10,
+      ),
+      fromSeq: fromSeq ?? undefined,
+      toSeq: toSeq ?? undefined,
+      includeEventMetadata:
+        url.searchParams.get("includeEventMetadata") !== "false",
+      changedOnly: parseBoolean(url.searchParams.get("changedOnly")),
+      includeAncestors: parseBoolean(url.searchParams.get("includeAncestors")),
+    });
+    const body = {
+      ...result,
+      nodes: result.nodes,
+    };
+    if (snapshotterId === RESOLVED_DOCUMENT_SNAPSHOTTER_ID) {
+      const compact = compactResolvedDocumentItems(result.nodes, url);
+      return jsonResponse({
+        ...body,
+        snapshotterId,
+        items: compact.items,
+        truncated: compact.truncated || undefined,
+        nodes: undefined,
+      });
+    }
+    return jsonResponse(body);
   }
 
   if (snapshotParam === "latest" && options?.repairBufferedCommits) {
@@ -420,6 +490,13 @@ export const queryResolvedHeap = async (
   } catch (error) {
     if (isApiHttpError(error)) {
       return apiHttpErrorResponse(error);
+    }
+    if (env.localBranchApplication) {
+      return branchStateErrorResponse(
+        error instanceof BranchStateError
+          ? error
+          : new BranchStateError("state_unavailable"),
+      );
     }
 
     const message = error instanceof Error ? error.message : String(error);

@@ -2,6 +2,7 @@ import { resolveAuthenticatedAccountId } from "../../accounts/session/authentica
 import { BranchStateError } from "../../../../../shared/drop/branch-state";
 import { branchStateErrorResponse } from "../../branches/http/state-plane-errors";
 import { createBranchStatePlane } from "../../../../../src/server/state-plane/gateway";
+import { createCommitApplicationStatePlane } from "../../../../../src/server/state-plane/commit-application";
 import { sanitizeDiffAuthToken } from "../../diffs/credentials/repository";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import { jsonErrorResponse, resolveParam } from "../../core/http/responses";
@@ -18,8 +19,7 @@ import type {
 
 /** Result returned when resolving route params to a concrete branch target. */
 export type ResolvedBranchTargetResult =
-  | ResolvedBranchTarget
-  | { error: Response };
+  ResolvedBranchTarget | { error: Response };
 
 const branchNotFoundResponse = (): Response =>
   jsonErrorResponse(404, "branch_not_found", "Branch not found.");
@@ -27,10 +27,7 @@ const branchNotFoundResponse = (): Response =>
 const resolveResolvedBranchIdentity = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
-): Promise<
-  | { rootDropId: string; branchId: string }
-  | { error: Response }
-> => {
+): Promise<{ rootDropId: string; branchId: string } | { error: Response }> => {
   if (!env.R2_BUCKET) {
     return {
       error: new Response("R2 bucket binding is required.", { status: 500 }),
@@ -61,10 +58,7 @@ const resolveResolvedBranchIdentity = async (
 const resolveReadableResolvedBranchIdentity = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
-): Promise<
-  | { rootDropId: string; branchId: string }
-  | { error: Response }
-> => {
+): Promise<{ rootDropId: string; branchId: string } | { error: Response }> => {
   if (!env.R2_BUCKET) {
     return {
       error: new Response("R2 bucket binding is required.", { status: 500 }),
@@ -109,11 +103,10 @@ export const resolveResolvedBranchTarget = async (
   if ("error" in identity) return identity;
   const { rootDropId, branchId } = identity;
 
-  const statePlane = createBranchStatePlane({
+  const branch = await createBranchStatePlane({
     blobs: env.R2_BUCKET,
     sql: env.DB,
-  });
-  const branch = await statePlane.branches.readBranch(rootDropId, branchId);
+  }).branches.readBranch(rootDropId, branchId);
   if (!branch) {
     return {
       error: jsonErrorResponse(404, "branch_not_found", "Branch not found."),
@@ -129,19 +122,20 @@ export const resolveReadableResolvedBranchTarget = async (
   env: ResolvedHeapEnv,
   params: ResolvedHeapParams,
 ): Promise<ResolvedBranchTargetResult> => {
-  if (env.localBranchApplication) {
-    if (
-      request.method !== "GET" &&
-      !(await resolveAuthenticatedAccountId(request, env))
-    ) {
-      return {
-        error: jsonErrorResponse(
-          401,
-          "account_required",
-          "Authenticated account session is required.",
-        ),
-      };
-    }
+  if (
+    env.localBranchApplication &&
+    request.method !== "GET" &&
+    !(await resolveAuthenticatedAccountId(request, env))
+  ) {
+    return {
+      error: jsonErrorResponse(
+        401,
+        "account_required",
+        "Authenticated account session is required.",
+      ),
+    };
+  }
+  if (env.localBranchApplication && !env.localBranchApplication.resolvedQuery) {
     return {
       error: branchStateErrorResponse(
         new BranchStateError("capability_unsupported"),
@@ -161,10 +155,14 @@ export const resolveReadableResolvedBranchTarget = async (
     return { error: branchNotFoundResponse() };
   }
 
-  const branch = await createBranchStatePlane({
-    blobs: env.R2_BUCKET,
-    sql: env.DB,
-  }).branches.readBranch(rootDropId, branchId);
+  const branch = env.localBranchApplication
+    ? await createCommitApplicationStatePlane(
+        env.localBranchApplication,
+      ).branches.readBranch(rootDropId, branchId)
+    : await createBranchStatePlane({
+        blobs: env.R2_BUCKET,
+        sql: env.DB,
+      }).branches.readBranch(rootDropId, branchId);
   if (!branch || !canReadBranch(authorization, branch)) {
     return { error: branchNotFoundResponse() };
   }

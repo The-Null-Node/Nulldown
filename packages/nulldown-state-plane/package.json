@@ -5,6 +5,6 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --project tsconfig.json",
-    "types": "wrangler types --config wrangler.jsonc --strict-vars=false"
+    "types": "wrangler types --config wrangler.staging.jsonc --strict-vars=false"
   }
 }

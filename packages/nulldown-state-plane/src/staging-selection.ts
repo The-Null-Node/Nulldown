@@ -60,5 +60,6 @@ export function createStagingBranchApplication(
     history: backend,
     runtimeFacts: backend,
     nullmem: { backend },
+    resolvedQuery: true,
   };
 }

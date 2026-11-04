@@ -66,6 +66,21 @@ import {
 import { serializeCanonicalJson } from "../../../shared/drop/types";
 import type { MemoryBranchStateSeed } from "./memory-commits";
 import type { BranchSqlPort } from "./sqlite-port";
+import type {
+  BranchCanonicalOutbox,
+  BranchClaimedOutbox,
+  BranchOutboxClaimCommand,
+  BranchOutboxClaimResultCommand,
+  BranchOutboxDeliveryStatePlane,
+  BranchOutboxDeliveryItem,
+} from "../../../shared/drop/branch-outbox-delivery";
+import {
+  validateOutboxClaim,
+  validateOutboxClaimResult,
+  outboxRetryAt,
+  canonicalOutboxPlacement,
+  outboxLeaseToken,
+} from "./outbox-delivery";
 import {
   decodeBranchSqlText,
   encodeBranchSqlText,
@@ -144,7 +159,8 @@ export class SqliteBranchCommitStatePlane
   implements
     BranchLifecycleStatePlane,
     BranchRuntimeFactStatePlane,
-    BranchNullMemStatePlane
+    BranchNullMemStatePlane,
+    BranchOutboxDeliveryStatePlane
 {
   private readonly now: () => number;
   private readonly cache: ExactContentCache;
@@ -272,6 +288,43 @@ export class SqliteBranchCommitStatePlane
   private routing(query: BranchHeadQuery): void {
     if (query.placement.routingVersion !== 1)
       throw new BranchStateError("routing_version_unsupported");
+  }
+
+  /** Registers newly committed canonical work in the same SQL transaction as its witness. */
+  private registerOutbox(
+    outbox: BranchCanonicalOutbox,
+    target: BranchHeadQuery["target"],
+    placement: BranchHeadQuery["placement"],
+  ): void {
+    const captured = canonicalOutboxPlacement(outbox);
+    if (
+      captured.target.rootDropId !== target.rootDropId ||
+      captured.target.branchId !== target.branchId ||
+      captured.placement.generation !== placement.generation
+    )
+      return corrupt();
+    const existing = this.sql.rows(
+      `SELECT kind,root_drop_id,branch_id,generation FROM branch_outbox_delivery WHERE outbox_id=?`,
+      outbox.id,
+    )[0];
+    if (existing) {
+      if (
+        existing.kind !== outbox.kind ||
+        existing.root_drop_id !== encodeBranchSqlText(target.rootDropId) ||
+        existing.branch_id !== encodeBranchSqlText(target.branchId) ||
+        existing.generation !== placement.generation
+      )
+        return corrupt();
+      return;
+    }
+    this.sql.execute(
+      `INSERT INTO branch_outbox_delivery (outbox_id,kind,root_drop_id,branch_id,generation,status,attempts,next_attempt_at) VALUES (?,?,?,?,?,'pending',0,0)`,
+      outbox.id,
+      outbox.kind,
+      encodeBranchSqlText(target.rootDropId),
+      encodeBranchSqlText(target.branchId),
+      placement.generation,
+    );
   }
 
   private authority(
@@ -841,6 +894,7 @@ export class SqliteBranchCommitStatePlane
           prepared.outbox.id,
           JSON.stringify(prepared.outbox),
         );
+        this.registerOutbox(prepared.outbox, command.target, command.placement);
         return { status: "accepted", receipt: prepared.receipt };
       });
     });
@@ -931,6 +985,7 @@ export class SqliteBranchCommitStatePlane
             outbox!.id,
             JSON.stringify(outbox),
           );
+          this.registerOutbox(outbox!, command.target, command.placement);
           return true;
         });
         if (committed) return prepared.result;
@@ -1097,6 +1152,7 @@ export class SqliteBranchCommitStatePlane
       entry.id,
       JSON.stringify(entry),
     );
+    this.registerOutbox(entry, query.target, query.placement);
   }
 
   /** Reads exact head and filtered top-N in one transaction; validation and selection may scan all branch memory. */
@@ -1247,6 +1303,7 @@ export class SqliteBranchCommitStatePlane
           outbox.id,
           JSON.stringify(outbox),
         );
+        this.registerOutbox(outbox, query.target, query.placement);
         return { ...query, appended: true, receipt };
       });
     });
@@ -1508,5 +1565,398 @@ export class SqliteBranchCommitStatePlane
         });
       });
     });
+  }
+
+  /** Looks up one canonical witness by unique indexed ID without scanning unrelated histories. */
+  private canonicalOutboxById(
+    id: string,
+    root: string,
+    branch: string,
+  ): BranchCanonicalOutbox | null {
+    const candidates = [
+      this.sql.rows(
+        `SELECT outbox_json FROM branch_outbox WHERE outbox_id=? AND root_drop_id=? AND branch_id=?`,
+        id,
+        root,
+        branch,
+      ),
+      this.sql.rows(
+        `SELECT outbox_json FROM branch_runtime_fact_outbox WHERE outbox_id=? AND root_drop_id=? AND branch_id=?`,
+        id,
+        root,
+        branch,
+      ),
+      this.sql.rows(
+        `SELECT outbox_json FROM branch_nullmem_outbox WHERE outbox_id=? AND root_drop_id=? AND branch_id=?`,
+        id,
+        root,
+        branch,
+      ),
+    ].flat();
+    if (candidates.length > 1) return corrupt();
+    return candidates.length
+      ? (json(candidates[0].outbox_json) as BranchCanonicalOutbox)
+      : null;
+  }
+
+  /** Incrementally registers canonical rows that predate delivery bookkeeping. Cursor state is durable and keyed per source. */
+  private bootstrapOutbox(pageSize: number): void {
+    const sources = [
+      { id: "diff", table: "branch_outbox" },
+      { id: "runtime", table: "branch_runtime_fact_outbox" },
+      { id: "nullmem", table: "branch_nullmem_outbox" },
+    ] as const;
+    for (const source of sources) {
+      this.sql.execute(
+        `INSERT OR IGNORE INTO branch_outbox_delivery_bootstrap (source,rowid_cursor,complete) VALUES (?,0,0)`,
+        source.id,
+      );
+      const progress = this.sql.rows(
+        `SELECT rowid_cursor,complete FROM branch_outbox_delivery_bootstrap WHERE source=?`,
+        source.id,
+      )[0];
+      if (!progress || progress.complete === 1) continue;
+      const rows = this.sql.rows(
+        `SELECT rowid AS source_rowid,root_drop_id,branch_id,outbox_id,outbox_json FROM ${source.table} WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+        progress.rowid_cursor as number,
+        pageSize,
+      );
+      for (const row of rows) {
+        const target = {
+          rootDropId: decodeBranchSqlText(row.root_drop_id),
+          branchId: decodeBranchSqlText(row.branch_id),
+        };
+        const outbox = json(row.outbox_json) as BranchCanonicalOutbox;
+        if (!outbox || outbox.id !== row.outbox_id) return corrupt();
+        const captured = canonicalOutboxPlacement(outbox);
+        if (
+          captured.target.rootDropId !== target.rootDropId ||
+          captured.target.branchId !== target.branchId
+        )
+          return corrupt();
+        const existing = this.sql.rows(
+          `SELECT kind,root_drop_id,branch_id,generation FROM branch_outbox_delivery WHERE outbox_id=?`,
+          outbox.id,
+        )[0];
+        if (existing) {
+          if (
+            existing.kind !== outbox.kind ||
+            existing.root_drop_id !== row.root_drop_id ||
+            existing.branch_id !== row.branch_id ||
+            existing.generation !== captured.placement.generation
+          )
+            return corrupt();
+        } else
+          this.sql.execute(
+            `INSERT INTO branch_outbox_delivery (outbox_id,kind,root_drop_id,branch_id,generation,status,attempts,next_attempt_at) VALUES (?,?,?,?,?,'pending',0,0)`,
+            outbox.id,
+            outbox.kind,
+            row.root_drop_id as string,
+            row.branch_id as string,
+            captured.placement.generation,
+          );
+      }
+      const cursor = rows.length
+        ? (rows[rows.length - 1].source_rowid as number)
+        : (progress.rowid_cursor as number);
+      this.sql.execute(
+        `UPDATE branch_outbox_delivery_bootstrap SET rowid_cursor=?,complete=? WHERE source=?`,
+        cursor,
+        rows.length < pageSize ? 1 : 0,
+        source.id,
+      );
+    }
+  }
+
+  /** Claims due canonical work across all branch rows owned by this SQL shard. */
+  async claimOutbox(command: BranchOutboxClaimCommand) {
+    validateOutboxClaim(command);
+    return this.available(() =>
+      this.sql.transaction(() => {
+        this.bootstrapOutbox(Math.max(16, command.limit));
+        const candidates = this.sql.rows(
+          `SELECT d.outbox_id,d.kind,d.root_drop_id,d.branch_id,d.generation,d.attempts,d.status,d.next_attempt_at,d.lease_until
+         FROM branch_outbox_delivery d INDEXED BY branch_outbox_delivery_active_due
+           WHERE d.status IN ('pending','claimed') AND d.next_attempt_at<=?
+         ORDER BY d.next_attempt_at,d.outbox_id LIMIT ?`,
+          command.now,
+          command.limit,
+        );
+        const leaseUntil = command.now + command.leaseMs;
+        const items: BranchOutboxDeliveryItem[] = [];
+        for (const row of candidates) {
+          if (
+            typeof row.outbox_id !== "string" ||
+            ![
+              "branch.commit.v1",
+              "branch.batch-commit.v1",
+              "branch.runtime-fact.v1",
+              "branch.nullmem.v1",
+            ].includes(row.kind as string) ||
+            typeof row.root_drop_id !== "string" ||
+            typeof row.branch_id !== "string" ||
+            !Number.isSafeInteger(row.generation)
+          )
+            return corrupt();
+          const target = {
+            rootDropId: decodeBranchSqlText(row.root_drop_id),
+            branchId: decodeBranchSqlText(row.branch_id),
+          };
+          const generation = row.generation as number;
+          if (
+            row.status === "claimed" &&
+            (typeof row.lease_until !== "number" ||
+              row.next_attempt_at !== row.lease_until)
+          )
+            return corrupt();
+          const head = this.sql.rows(
+            `SELECT generation FROM branch_heads WHERE root_drop_id=? AND branch_id=?`,
+            row.root_drop_id as string,
+            row.branch_id as string,
+          )[0];
+          if (!head || head.generation !== generation) {
+            this.sql.execute(
+              `UPDATE branch_outbox_delivery SET status='fenced',lease_id=NULL,lease_token=NULL,lease_until=NULL WHERE outbox_id=? AND status IN ('pending','claimed')`,
+              row.outbox_id,
+            );
+            continue;
+          }
+          const attempt =
+            (typeof row.attempts === "number" ? row.attempts : 0) + 1;
+          const leaseToken = outboxLeaseToken(
+            command.leaseId,
+            row.outbox_id as string,
+            attempt,
+          );
+          this.sql.execute(
+            `INSERT INTO branch_outbox_delivery (outbox_id,kind,root_drop_id,branch_id,generation,status,attempts,next_attempt_at,lease_id,lease_token,lease_until)
+           VALUES (?,?,?,?,?,'claimed',?,?,?,?,?) ON CONFLICT(outbox_id) DO UPDATE SET kind=excluded.kind,generation=excluded.generation,status='claimed',attempts=excluded.attempts,next_attempt_at=excluded.next_attempt_at,lease_id=excluded.lease_id,lease_token=excluded.lease_token,lease_until=excluded.lease_until,completed_at=NULL`,
+            row.outbox_id,
+            row.kind as string,
+            row.root_drop_id,
+            row.branch_id,
+            generation,
+            attempt,
+            leaseUntil,
+            command.leaseId,
+            leaseToken,
+            leaseUntil,
+          );
+          items.push({
+            target,
+            placement: { routingVersion: 1, generation },
+            outboxId: row.outbox_id,
+            leaseToken,
+          });
+        }
+        return { leaseId: command.leaseId, leaseUntil, items };
+      }),
+    );
+  }
+
+  /** Returns exact canonical records only while their individual claim and current generation are valid. */
+  async readClaimedOutbox(
+    command: BranchOutboxClaimResultCommand,
+  ): Promise<BranchClaimedOutbox[]> {
+    validateOutboxClaimResult(command);
+    return this.available(() =>
+      this.sql.transaction(() =>
+        command.items.flatMap((item) => {
+          const status = this.sql.rows(
+            `SELECT kind,status,attempts,next_attempt_at,lease_id,lease_token,lease_until,root_drop_id,branch_id,generation FROM branch_outbox_delivery WHERE outbox_id = ?`,
+            item.outboxId,
+          )[0];
+          if (
+            !status ||
+            status.status !== "claimed" ||
+            status.lease_id !== command.leaseId ||
+            status.lease_token !== item.leaseToken ||
+            typeof status.lease_until !== "number" ||
+            status.lease_until <= command.now ||
+            status.next_attempt_at !== status.lease_until ||
+            status.generation !== item.placement.generation ||
+            status.root_drop_id !==
+              encodeBranchSqlText(item.target.rootDropId) ||
+            status.branch_id !== encodeBranchSqlText(item.target.branchId)
+          )
+            return [];
+          const head = this.sql.rows(
+            `SELECT generation FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?`,
+            status.root_drop_id as string,
+            status.branch_id as string,
+          )[0];
+          if (!head || head.generation !== item.placement.generation) return [];
+          const outbox = this.canonicalOutboxById(
+            item.outboxId,
+            status.root_drop_id as string,
+            status.branch_id as string,
+          );
+          if (
+            !outbox ||
+            outbox.id !== item.outboxId ||
+            outbox.kind !== status.kind
+          )
+            return corrupt();
+          const witness = canonicalOutboxPlacement(outbox);
+          if (
+            witness.placement.generation !== item.placement.generation ||
+            witness.target.rootDropId !== item.target.rootDropId ||
+            witness.target.branchId !== item.target.branchId
+          )
+            return corrupt();
+          return [
+            {
+              target: item.target,
+              placement: item.placement,
+              outbox,
+              status: "claimed" as const,
+              attempt: status.attempts as number,
+              leaseUntil: status.lease_until,
+            },
+          ];
+        }),
+      ),
+    );
+  }
+
+  /** Acknowledges exact live claims; completed markers make acknowledgement idempotent. */
+  async acknowledgeOutbox(command: BranchOutboxClaimResultCommand) {
+    validateOutboxClaimResult(command);
+    return this.available(() =>
+      this.sql.transaction(() => {
+        let acknowledged = 0,
+          duplicate = 0,
+          stale = 0;
+        for (const item of command.items) {
+          const row = this.sql.rows(
+            `SELECT status,next_attempt_at,lease_id,lease_token,lease_until,root_drop_id,branch_id,generation FROM branch_outbox_delivery WHERE outbox_id = ?`,
+            item.outboxId,
+          )[0];
+          const head = row
+            ? this.sql.rows(
+                `SELECT generation FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?`,
+                row.root_drop_id as string,
+                row.branch_id as string,
+              )[0]
+            : undefined;
+          if (
+            !row ||
+            row.generation !== item.placement.generation ||
+            row.root_drop_id !== encodeBranchSqlText(item.target.rootDropId) ||
+            row.branch_id !== encodeBranchSqlText(item.target.branchId) ||
+            !head ||
+            head.generation !== item.placement.generation
+          ) {
+            stale++;
+            continue;
+          }
+          if (row.status === "completed") {
+            duplicate++;
+            continue;
+          }
+          if (
+            row.status !== "claimed" ||
+            row.lease_id !== command.leaseId ||
+            row.lease_token !== item.leaseToken ||
+            typeof row.lease_until !== "number" ||
+            row.lease_until <= command.now
+          ) {
+            stale++;
+            continue;
+          }
+          this.sql.execute(
+            `UPDATE branch_outbox_delivery SET status='completed',completed_at=?,lease_id=NULL,lease_token=NULL,lease_until=NULL WHERE outbox_id=?`,
+            command.now,
+            item.outboxId,
+          );
+          acknowledged++;
+        }
+        return { acknowledged, duplicate, stale };
+      }),
+    );
+  }
+
+  /** Stores exponential retry timing without affecting canonical accepted state. */
+  async retryOutbox(
+    command: BranchOutboxClaimResultCommand & { errorCode: string },
+  ) {
+    validateOutboxClaimResult(command);
+    if (
+      typeof command.errorCode !== "string" ||
+      !/^[a-z0-9_.-]{1,80}$/.test(command.errorCode)
+    )
+      throw new BranchStateError("invalid_command");
+    return this.available(() =>
+      this.sql.transaction(() => {
+        let retried = 0,
+          stale = 0;
+        for (const item of command.items) {
+          const row = this.sql.rows(
+            `SELECT status,attempts,next_attempt_at,lease_id,lease_token,lease_until,root_drop_id,branch_id,generation FROM branch_outbox_delivery WHERE outbox_id = ?`,
+            item.outboxId,
+          )[0];
+          const head = row
+            ? this.sql.rows(
+                `SELECT generation FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?`,
+                row.root_drop_id as string,
+                row.branch_id as string,
+              )[0]
+            : undefined;
+          if (
+            !row ||
+            row.status !== "claimed" ||
+            row.lease_id !== command.leaseId ||
+            row.lease_token !== item.leaseToken ||
+            typeof row.lease_until !== "number" ||
+            row.lease_until <= command.now ||
+            row.next_attempt_at !== row.lease_until ||
+            row.generation !== item.placement.generation ||
+            row.root_drop_id !== encodeBranchSqlText(item.target.rootDropId) ||
+            row.branch_id !== encodeBranchSqlText(item.target.branchId) ||
+            !head ||
+            head.generation !== item.placement.generation
+          ) {
+            stale++;
+            continue;
+          }
+          this.sql.execute(
+            `UPDATE branch_outbox_delivery SET status='pending',next_attempt_at=?,last_error_code=?,lease_id=NULL,lease_token=NULL,lease_until=NULL WHERE outbox_id=?`,
+            outboxRetryAt(command.now, row.attempts as number),
+            command.errorCode,
+            item.outboxId,
+          );
+          retried++;
+        }
+        return { retried, stale };
+      }),
+    );
+  }
+
+  /** Compacts old completion timestamps while retaining outbox-ID tombstones against replay. */
+  async pruneCompletedOutbox(command: { before: number; limit: number }) {
+    if (
+      !command ||
+      !Number.isSafeInteger(command.before) ||
+      command.before < 0 ||
+      !Number.isSafeInteger(command.limit) ||
+      command.limit < 1 ||
+      command.limit > 256
+    )
+      throw new BranchStateError("invalid_command");
+    return this.available(() =>
+      this.sql.transaction(() => {
+        const rows = this.sql.rows(
+          `SELECT outbox_id FROM branch_outbox_delivery WHERE status='completed' AND completed_at IS NOT NULL AND completed_at <= ? ORDER BY completed_at,outbox_id LIMIT ?`,
+          command.before,
+          command.limit,
+        );
+        for (const row of rows)
+          this.sql.execute(
+            `UPDATE branch_outbox_delivery SET completed_at=NULL,attempts=0,next_attempt_at=0,last_error_code=NULL WHERE outbox_id=? AND status='completed'`,
+            row.outbox_id as string,
+          );
+        return { pruned: rows.length };
+      }),
+    );
   }
 }

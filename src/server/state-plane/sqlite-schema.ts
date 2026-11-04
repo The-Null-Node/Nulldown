@@ -120,6 +120,20 @@ export const BRANCH_SQL_SCHEMA = [
     PRIMARY KEY (root_drop_id, branch_id, event_id),
     UNIQUE (outbox_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS branch_outbox_delivery (
+    outbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation >= 0), status TEXT NOT NULL CHECK (status IN ('pending','claimed','completed','fenced')),
+    attempts INTEGER NOT NULL CHECK (attempts >= 0), next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_id TEXT, lease_token TEXT, lease_until INTEGER, completed_at INTEGER, last_error_code TEXT,
+    CHECK ((status = 'claimed' AND lease_id IS NOT NULL AND lease_token IS NOT NULL AND lease_until IS NOT NULL AND next_attempt_at = lease_until) OR status != 'claimed')
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_outbox_delivery_bootstrap (
+    source TEXT PRIMARY KEY CHECK (source IN ('diff','runtime','nullmem')),
+    rowid_cursor INTEGER NOT NULL DEFAULT 0 CHECK (rowid_cursor >= 0),
+    complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0,1))
+  )`,
+  `CREATE INDEX IF NOT EXISTS branch_outbox_delivery_active_due ON branch_outbox_delivery(next_attempt_at, outbox_id) WHERE status IN ('pending','claimed')`,
+  `CREATE INDEX IF NOT EXISTS branch_outbox_delivery_completed ON branch_outbox_delivery(status, completed_at, outbox_id)`,
 ] as const;
 
 /** Initializes only tables on a connection; never creates branch state on reads. */

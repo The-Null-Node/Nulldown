@@ -508,6 +508,11 @@ export default {
       mode: "local-test",
       commits,
       placement: { ...applicationFixture.placement },
+      // Acceptance-created roots opt into the real resolved-query composition;
+      // the legacy baseline scenario retains its historical capability set.
+      ...(applicationUnseededRoots.includes(rootId)
+        ? { resolvedQuery: true }
+        : {}),
       ...(applicationRuntimeRoots.includes(rootId)
         ? { runtimeFacts: backend }
         : {}),

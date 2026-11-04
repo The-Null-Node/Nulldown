@@ -11,7 +11,8 @@ The configurations live in `packages/nulldown-state-plane/`:
 
 - `wrangler.staging.jsonc` deploys the private State Plane Worker and creates its
   SQLite-backed Durable Object class. Both workers.dev and preview URLs are
-  disabled.
+  disabled. `OUTBOX_QUEUE`, `OUTBOX_ARCHIVE`, and `OUTBOX_DB` select a dedicated
+  delivery queue, encrypted archive bucket, and metadata projection database.
 - `wrangler.api-staging.jsonc` deploys the HTTP API. Its `STATE_PLANE` service
   binding selects the private Worker's `BranchStateService` entrypoint. `DB` and
   `R2_BUCKET` select staging storage.
@@ -29,6 +30,19 @@ From the repository root, apply the application schema to the staging database:
 bunx wrangler d1 migrations apply nulldown-state-plane-staging --remote \
   --config packages/nulldown-state-plane/wrangler.api-staging.jsonc
 ```
+
+Apply the separate projection schema and configure the archive key:
+
+```bash
+bunx wrangler d1 migrations apply nulldown-state-plane-projections-staging --remote \
+  --config packages/nulldown-state-plane/wrangler.staging.jsonc
+bunx wrangler secret put OUTBOX_ARCHIVE_KEY \
+  --config packages/nulldown-state-plane/wrangler.staging.jsonc
+```
+
+`OUTBOX_ARCHIVE_KEY` is a base64-encoded random 32-byte AES-256-GCM key.
+`OUTBOX_ARCHIVE_KEY_ID` identifies that key in archive envelopes. Preserve the
+key securely so archived records remain decryptable.
 
 Deploy the private service first:
 
@@ -90,7 +104,29 @@ earlier runs. A failed `run` also consumes its identity set; prepare a fresh set
 for another run. Start log collection before the hosted requests, and correlate
 the evidence's request identifiers with retained API events.
 
+For query and delivery testing on a fresh account clone of the configured synthetic
+public root, run `bun --no-env-file run scripts/state-plane/hosted-query-outbox-acceptance.ts --help`.
+This runner leaves the root and owner branch untouched and supports a separate
+post-redeploy readback. It tests SDK, MCP, and compiled CLI queries; archive and
+projection verification is performed separately. It does not test root creation.
+
 ## Storage and migration
+
+Selected document queries build an ephemeral resolved heap from an exact
+authoritative snapshot. They do not require the asynchronous D1 projection or
+an R2 resolved heap. Queries use intrinsic document and event scoring; explicit
+priority-fact operations and persistent heap updates are unsupported on selected
+authority. Other resolver domains require their own selected capability.
+
+Outbox delivery uses expiring durable claims and reference-only Queue messages.
+Consumers seal immutable artifacts before writing them to R2 and persist derived
+metadata in the separate D1 database before acknowledging delivery. A minute
+cron revisits the fixed shard pool to recover missed wakeups. Delivery is enabled
+by `STATE_PLANE_OUTBOX_ENABLED="1"` in the staging configuration.
+
+Retention compacts completed delivery bookkeeping. Canonical outbox records,
+receipts, and authoritative history remain available as integrity witnesses;
+this is not an archive or document-history deletion policy.
 
 D1 migrations create the account and metadata schema. The Worker's `v1`
 migration creates the Durable Object class. Neither operation imports existing

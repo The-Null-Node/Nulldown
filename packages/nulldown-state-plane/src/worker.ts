@@ -22,6 +22,16 @@ import type {
   BranchHeadQuery,
 } from "../../../shared/drop/branch-state";
 import type { BranchStateBindings } from "./branch-state-object";
+import type { OutboxReferenceMessage } from "./outbox-platform";
+import type {
+  BranchStatePlacement,
+  BranchStateTarget,
+} from "../../../shared/drop/branch-state";
+import {
+  dispatchOutboxTarget,
+  handleOutboxQueue,
+  recoverOutbox,
+} from "./outbox-runtime";
 import {
   captureRuntimeFactAppend,
   captureRuntimeFactPage,
@@ -38,6 +48,41 @@ export { BranchStateObject } from "./branch-state-object";
 
 /** Internal service-binding entrypoint only; local composition must explicitly select this authority. */
 export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
+  #outboxEnabled(): boolean {
+    return (
+      this.env.STATE_PLANE_OUTBOX_ENABLED === "1" &&
+      this.env.ENVIRONMENT === "staging"
+    );
+  }
+
+  #scheduleDispatch(
+    target: BranchStateTarget,
+    placement: BranchStatePlacement,
+  ): void {
+    if (!this.#outboxEnabled()) return;
+    const failure = () => {
+      try {
+        console.log(
+          JSON.stringify({
+            event: "state_plane.outbox.enqueue",
+            version: 1,
+            outcome: "retry",
+            reason: "dispatch_unavailable",
+          }),
+        );
+      } catch {
+        /* best effort */
+      }
+    };
+    try {
+      this.ctx.waitUntil(
+        dispatchOutboxTarget(this.env, target, placement).catch(failure),
+      );
+    } catch {
+      failure();
+    }
+  }
+
   #plane(): RpcBranchCommitStatePlane {
     return new RpcBranchCommitStatePlane((name) => {
       const stub = this.env.BRANCH_STATE.get(
@@ -77,26 +122,35 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
   async putNullMem(
     input: BranchNullMemPutCommand,
   ): Promise<BranchStateRpcResult<unknown>> {
-    return branchStateRpcResult(() =>
-      this.#plane().putNullMem(captureNullMemPut(input)),
-    );
+    return branchStateRpcResult(async () => {
+      const command = captureNullMemPut(input);
+      const result = await this.#plane().putNullMem(command);
+      this.#scheduleDispatch(command.target, command.placement);
+      return result;
+    });
   }
   /** Deletes every branch-local kind for the requested exact ID. */
   async deleteNullMem(
     input: BranchNullMemDeleteCommand,
   ): Promise<BranchStateRpcResult<unknown>> {
-    return branchStateRpcResult(() =>
-      this.#plane().deleteNullMem(captureNullMemDelete(input)),
-    );
+    return branchStateRpcResult(async () => {
+      const command = captureNullMemDelete(input);
+      const result = await this.#plane().deleteNullMem(command);
+      this.#scheduleDispatch(command.target, command.placement);
+      return result;
+    });
   }
 
   /** Publishes an authorized UI fact through typed service-binding RPC. */
   async appendRuntimeFact(
     input: BranchRuntimeFactAppendCommand,
   ): Promise<BranchStateRpcResult<unknown>> {
-    return branchStateRpcResult(() =>
-      this.#plane().appendRuntimeFact(captureRuntimeFactAppend(input)),
-    );
+    return branchStateRpcResult(async () => {
+      const command = captureRuntimeFactAppend(input);
+      const result = await this.#plane().appendRuntimeFact(command);
+      this.#scheduleDispatch(command.target, command.placement);
+      return result;
+    });
   }
   /** Captures the durable runtime-fact stream horizon. */
   async readRuntimeFactHead(query: BranchHeadQuery) {
@@ -120,7 +174,12 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
   }
   /** Activates the exact winning reservation after authorized root materialization. */
   async initialize(command: BranchInitializeRecord) {
-    return branchStateRpcResult(() => this.#plane().initialize(command));
+    return branchStateRpcResult(async () => {
+      const captured = structuredClone(command);
+      const result = await this.#plane().initialize(captured);
+      this.#scheduleDispatch(captured.target, captured.placement);
+      return result;
+    });
   }
   /** Reads exact historical snapshot identity and metadata. */
   async readSnapshot(query: BranchSnapshotQuery) {
@@ -132,14 +191,23 @@ export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
   }
   /** Publishes one event through typed internal RPC. */
   async append(command: BranchAppendRecord) {
-    return branchStateRpcResult(() => this.#plane().append(command));
+    return branchStateRpcResult(async () => {
+      const captured = structuredClone(command);
+      const result = await this.#plane().append(captured);
+      this.#scheduleDispatch(captured.target, captured.placement);
+      return result;
+    });
   }
   /** Publishes one whole public envelope through internal batch RPC. */
   async appendBatch(
     command: BranchBatchAppendRecord,
   ): Promise<BranchStateRpcResult<unknown>> {
-    const captured = structuredClone(command);
-    return branchStateRpcResult(() => this.#plane().appendBatch(captured));
+    return branchStateRpcResult(async () => {
+      const captured = structuredClone(command);
+      const result = await this.#plane().appendBatch(captured);
+      this.#scheduleDispatch(captured.target, captured.placement);
+      return result;
+    });
   }
   /** Reads a branch head through typed internal RPC. */
   async readHead(query: BranchHeadQuery) {
@@ -165,5 +233,19 @@ export default {
   /** Default public entrypoint is deliberately disabled. */
   fetch(): Response {
     return new Response(null, { status: 404 });
+  },
+  /** Queue consumer; messages contain references only and are verified against the live shard lease. */
+  async queue(
+    batch: MessageBatch<OutboxReferenceMessage>,
+    env: BranchStateBindings,
+  ): Promise<void> {
+    await handleOutboxQueue(batch, env);
+  },
+  /** Bounded recovery scheduler for all fixed routing-v1 shards. */
+  async scheduled(
+    _controller: ScheduledController,
+    env: BranchStateBindings,
+  ): Promise<void> {
+    await recoverOutbox(env);
   },
 };
