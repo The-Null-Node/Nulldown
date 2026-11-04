@@ -33,13 +33,13 @@ import {
 } from "../../../functions/api/_lib/core/http/responses";
 import type { BlobObjectStore, SqlMetadataStore } from "../ports";
 
-/** Durable capabilities consumed by local bootstrap; no runtime-data or legacy authority fallback. */
+/** Durable capabilities consumed by selected bootstrap; no runtime-data or legacy authority fallback. */
 export type LocalBranchLifecycleBackend = Pick<
   BranchLifecycleStatePlane,
   "readPlacement" | "reserve" | "initialize" | "readHead"
 >;
 
-/** Internal lifecycle bound to one explicit local composition; callers supply authenticated account identity. */
+/** Internal lifecycle bound to one explicit composition; callers supply authenticated account identity. */
 export interface LocalBranchLifecycle {
   resolveForActor(
     rootDropId: string,
@@ -56,9 +56,9 @@ export interface LocalBranchLifecycle {
   ): Promise<BranchStatePlacement>;
 }
 
-/** Explicit local composition dependencies, with verified root projections and immutable-source admission. */
+/** Explicit composition dependencies, with verified root projections and immutable-source admission. */
 export interface LocalBranchLifecycleOptions {
-  mode: "local-test";
+  mode: "local-test" | "hosted-staging";
   blobs: BlobObjectStore;
   sql: SqlMetadataStore;
   providerPrivateKey?: string;
@@ -80,7 +80,7 @@ const branchIdFor = (owner: string, writer: string): string =>
     : createCloneBranchId(createWriterKey(writer, null));
 
 /**
- * Creates local-only bootstrap for immutable signed roots. Fixed eligible composition
+ * Creates explicitly selected bootstrap for immutable signed roots. Fixed eligible composition
  * must exclude concurrent legacy writers and reject root replacement, deletion,
  * publication and promotion. Durable reservation/activation coordinates concurrent
  * callers and crash recovery; this adapter never acquires an R2 lease.
@@ -88,7 +88,7 @@ const branchIdFor = (owner: string, writer: string): string =>
 export function createLocalBranchLifecycle(
   input: LocalBranchLifecycleOptions,
 ): LocalBranchLifecycle {
-  if (input.mode !== "local-test")
+  if (input.mode !== "local-test" && input.mode !== "hosted-staging")
     throw new BranchStateError("capability_unsupported");
   const options = { ...input, initialPlacement: { ...input.initialPlacement } };
   const { backend, blobs, sql } = options;

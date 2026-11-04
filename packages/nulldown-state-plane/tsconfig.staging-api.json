@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.check.functions.json",
+  "include": [
+    "staging-api-configuration.d.ts",
+    "src/staging-api.ts",
+    "src/staging-selection.ts"
+  ]
+}
