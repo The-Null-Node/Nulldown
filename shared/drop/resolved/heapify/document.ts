@@ -122,17 +122,14 @@ interface HeadingSpan {
 
 const collectMarkdownLines = (content: string): MarkdownLineSpan[] => {
   const lines: MarkdownLineSpan[] = [];
+  const lineBreak = /[\r\n]/g;
   let lineStart = 0;
 
   while (lineStart <= content.length) {
-    let lineEnd = lineStart;
-    while (
-      lineEnd < content.length &&
-      content[lineEnd] !== "\n" &&
-      content[lineEnd] !== "\r"
-    ) {
-      lineEnd += 1;
-    }
+    // Let the engine scan long lines instead of indexing every UTF-16 code unit
+    // in JavaScript. Keep offsets and CR/LF/CRLF handling identical.
+    lineBreak.lastIndex = lineStart;
+    const lineEnd = lineBreak.exec(content)?.index ?? content.length;
 
     const nextStart =
       lineEnd < content.length
