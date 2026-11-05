@@ -9,6 +9,7 @@ import { createBranchRepository } from "../../functions/api/_lib/branches/storag
 import { createBranchDiffRepository } from "../../functions/api/_lib/branches/storage/diff-log";
 import { applicationSeed } from "../../packages/nulldown-state-plane/test/application-scenarios.fixture";
 import { branchStateShardName } from "../../packages/nulldown-state-plane/src/shard-router";
+import { profileWorker } from "./profile-worker";
 import {
   BranchAppendCommand,
   type BranchStateVersion,
@@ -25,6 +26,7 @@ const arg = (name: string) =>
 const root = resolve(arg("root")!);
 const evidence = resolve(arg("evidence")!);
 const requestedSize = Number(arg("size") ?? "65536");
+const profile = process.argv.includes("--profile");
 if (![8192, 65536, 262144].includes(requestedSize))
   throw Error("size must be one of 8192, 65536, or 262144 bytes");
 const require = createRequire(resolve(root, "package.json"));
@@ -53,6 +55,7 @@ const options = {
   resourcePersistencePath: resolve(evidence, "native-state"),
   host: "127.0.0.1",
   port: 0,
+  ...(profile ? { inspectorPort: 0 } : {}),
   cf: false,
   telemetry: { enabled: false },
   log: new Log(LogLevel.NONE),
@@ -404,262 +407,336 @@ try {
       `${operation}: legacy/State Plane semantic output equivalence`,
     );
   }
-  for (let round = 0; round < 5; round++) {
-    for (const operation of ["content", "history", "resolved-query"] as const) {
-      const order =
-        round % 2 === 0
-          ? (["legacy", "state-plane"] as const)
-          : (["state-plane", "legacy"] as const);
-      for (const arm of order) {
-        await mf.dispose();
-        mf = createRuntime();
-        await mf.ready;
-        const rows = await collectBenchmarkSamples({
-          operation: `cold/${operation}`,
-          arm,
-          iterations: 1,
-          warmups: 0,
-          timeoutMs: 10_000,
-          hash,
-          run: async (_, signal) => {
-            const output = await requestAdapter(arm, operation, signal);
-            assert.equal(
-              hash(output),
-              hash(baselines[operation][arm]),
-              `cold ${arm}/${operation} semantic output`,
-            );
-            return output;
-          },
-        });
-        const row = { ...rows[0], iteration: round };
-        coldSamples.push(row);
-        journal("cold", [row]);
-      }
+  if (profile) {
+    // Inspector overhead and diagnostic requests are excluded from accepted timings.
+    for (const arm of ["legacy", "state-plane"] as const) {
+      await profileWorker(
+        await mf.getInspectorURL(),
+        "benchmark",
+        resolve(evidence, `${arm}.cpuprofile`),
+        async () => {
+          for (let iteration = 0; iteration < 128; iteration++) {
+            try {
+              const output = await requestAdapter(
+                arm,
+                "resolved-query",
+                AbortSignal.timeout(10_000),
+              );
+              const semanticHash = hash(output);
+              assert.equal(
+                semanticHash,
+                hash(baselines["resolved-query"][arm]),
+              );
+              appendFileSync(
+                resolve(evidence, "profile-attempts.jsonl"),
+                JSON.stringify({
+                  arm,
+                  iteration,
+                  outcome: "complete",
+                  reason: "semantic_match",
+                  semanticHash,
+                }) + "\n",
+              );
+            } catch (error) {
+              appendFileSync(
+                resolve(evidence, "profile-attempts.jsonl"),
+                JSON.stringify({
+                  arm,
+                  iteration,
+                  outcome: "error",
+                  reason: "request_or_semantic_failure",
+                }) + "\n",
+              );
+              throw error;
+            }
+          }
+        },
+      );
     }
-  }
-  const operationRunners = {
-    content: {
-      legacy: (signal: AbortSignal) =>
-        requestAdapter("legacy", "content", signal),
-      "state-plane": (signal: AbortSignal) =>
-        requestAdapter("state-plane", "content", signal),
-    },
-    history: {
-      legacy: (signal: AbortSignal) =>
-        requestAdapter("legacy", "history", signal),
-      "state-plane": (signal: AbortSignal) =>
-        requestAdapter("state-plane", "history", signal),
-    },
-    "resolved-query": {
-      legacy: (signal: AbortSignal) =>
-        requestAdapter("legacy", "resolved-query", signal),
-      "state-plane": (signal: AbortSignal) =>
-        requestAdapter("state-plane", "resolved-query", signal),
-    },
-  };
-  const runArm = async (
-    arm: "legacy" | "state-plane",
-    concurrency: number,
-    operation: keyof typeof operationRunners,
-    iterations: number,
-  ) => {
-    const run = operationRunners[operation][arm];
-    const started = performance.now();
-    const result = await Promise.all(
-      Array.from({ length: concurrency }, async () =>
-        collectBenchmarkSamples({
-          operation,
-          arm,
-          iterations,
-          warmups: 0,
-          timeoutMs: 2000,
-          run: async (_iteration, signal) => {
-            const output = await run(signal);
-            assert.equal(
-              hash(output),
-              hash(baselines[operation][arm]),
-              `${arm}/${operation} sample semantic output`,
-            );
-            return output;
-          },
-          hash,
-        }),
+    writeFileSync(
+      resolve(evidence, "profile-summary.json"),
+      JSON.stringify(
+        {
+          environment,
+          requestsPerArm: 128,
+          semanticEquivalence: true,
+          diagnosticOnly: true,
+        },
+        null,
+        2,
       ),
     );
-    const wallMs = performance.now() - started;
-    return {
-      rows: result.flat().map((row, index) => ({
-        ...row,
-        operation: `${operation}/concurrency-${concurrency}`,
-        iteration: row.iteration * concurrency + Math.floor(index / iterations),
-      })),
-      wallMs,
-    };
-  };
-  for (const concurrency of [1, 4, 16]) {
-    const order =
-      concurrency === 4
-        ? (["state-plane", "legacy"] as const)
-        : (["legacy", "state-plane"] as const);
-    for (const operation of ["content", "history", "resolved-query"] as const) {
-      for (const arm of order) {
-        const diagnostics = await collectWarmupSamples({
-          operation: `${operation}/concurrency-${concurrency}`,
-          arm,
-          count: 10,
-          timeoutMs: 2000,
-          run: async (_iteration, signal) => {
-            const output = await operationRunners[operation][arm](signal);
-            assert.equal(
-              hash(output),
-              hash(baselines[operation][arm]),
-              `warmup ${arm}/${operation} semantic output`,
-            );
-            return output;
-          },
-          hash,
-        });
-        warmupSamples.push(...diagnostics);
-        journal("warmup", diagnostics);
-        if (diagnostics.some((sample) => !sample.ok)) {
-          writeFileSync(
-            resolve(evidence, "benchmark-warmup-samples.jsonl"),
-            warmupSamples.map((sample) => JSON.stringify(sample)).join("\n") +
-              "\n",
-          );
-          throw Error(
-            `Warmup failure ${arm}/${operation}; timed samples not run`,
-          );
+    console.log(
+      JSON.stringify({ evidence, diagnosticOnly: true, requestsPerArm: 128 }),
+    );
+  } else {
+    for (let round = 0; round < 5; round++) {
+      for (const operation of [
+        "content",
+        "history",
+        "resolved-query",
+      ] as const) {
+        const order =
+          round % 2 === 0
+            ? (["legacy", "state-plane"] as const)
+            : (["state-plane", "legacy"] as const);
+        for (const arm of order) {
+          await mf.dispose();
+          mf = createRuntime();
+          await mf.ready;
+          const rows = await collectBenchmarkSamples({
+            operation: `cold/${operation}`,
+            arm,
+            iterations: 1,
+            warmups: 0,
+            timeoutMs: 10_000,
+            hash,
+            run: async (_, signal) => {
+              const output = await requestAdapter(arm, operation, signal);
+              assert.equal(
+                hash(output),
+                hash(baselines[operation][arm]),
+                `cold ${arm}/${operation} semantic output`,
+              );
+              return output;
+            },
+          });
+          const row = { ...rows[0], iteration: round };
+          coldSamples.push(row);
+          journal("cold", [row]);
         }
-      }
-      const grouped = Object.fromEntries(
-        order.map((arm) => [arm, [] as BenchmarkSample[]]),
-      ) as Record<(typeof order)[number], BenchmarkSample[]>;
-      const activeWallMs = { legacy: 0, "state-plane": 0 };
-      const perLane = Math.max(1, 16 / concurrency);
-      for (let batch = 0; batch < 8; batch++) {
-        for (const arm of batch % 2 ? [...order].reverse() : order) {
-          const measured = await runArm(arm, concurrency, operation, perLane);
-          activeWallMs[arm] += measured.wallMs;
-          grouped[arm].push(
-            ...measured.rows.map((row) => ({
-              ...row,
-              iteration: batch * 16 + row.iteration,
-            })),
-          );
-          journal(
-            "warm",
-            measured.rows.map((row) => ({
-              ...row,
-              iteration: batch * 16 + row.iteration,
-            })),
-          );
-        }
-      }
-      for (const arm of order) {
-        samples.push(...grouped[arm]);
-        groupWallMs[`${arm}/${operation}/concurrency-${concurrency}`] =
-          activeWallMs[arm];
       }
     }
-  }
-  const report = {
-    schemaVersion: 1,
-    title: "Controlled legacy adapter vs State Plane SQLite adapter benchmark",
-    workload: { sizeBytes: requestedSize, operationHistoryEvents: 1 },
-    environment,
-    equivalence: {
-      verifiedBeforeTiming: true,
-      responseHashes: Object.fromEntries(
-        (["content", "history", "resolved-query"] as const).map((operation) => [
-          operation,
-          hash(baselines[operation].legacy),
-        ]),
-      ),
-      provenance:
-        "content snapshotId=1,eventSeq=0; history has one accepted event at seq=0",
-      caveat:
-        "both paths execute in workerd through the same loopback HTTP boundary; State Plane uses service-binding RPC to SQLite DO; legacy uses R2+D1 production adapters. Throughput uses active batch wall time, excluding the alternating arm's batches.",
-    },
-    coldSummaries: Object.fromEntries(
-      (["content", "history", "resolved-query"] as const).map((operation) => [
-        operation,
-        Object.fromEntries(
-          (["legacy", "state-plane"] as const).map((arm) => [
+    const operationRunners = {
+      content: {
+        legacy: (signal: AbortSignal) =>
+          requestAdapter("legacy", "content", signal),
+        "state-plane": (signal: AbortSignal) =>
+          requestAdapter("state-plane", "content", signal),
+      },
+      history: {
+        legacy: (signal: AbortSignal) =>
+          requestAdapter("legacy", "history", signal),
+        "state-plane": (signal: AbortSignal) =>
+          requestAdapter("state-plane", "history", signal),
+      },
+      "resolved-query": {
+        legacy: (signal: AbortSignal) =>
+          requestAdapter("legacy", "resolved-query", signal),
+        "state-plane": (signal: AbortSignal) =>
+          requestAdapter("state-plane", "resolved-query", signal),
+      },
+    };
+    const runArm = async (
+      arm: "legacy" | "state-plane",
+      concurrency: number,
+      operation: keyof typeof operationRunners,
+      iterations: number,
+    ) => {
+      const run = operationRunners[operation][arm];
+      const started = performance.now();
+      const result = await Promise.all(
+        Array.from({ length: concurrency }, async () =>
+          collectBenchmarkSamples({
+            operation,
             arm,
-            {
-              ...summarizeBenchmarkSamples(
-                coldSamples.filter(
-                  (sample) =>
-                    sample.operation === `cold/${operation}` &&
-                    sample.arm === arm,
-                ),
-              ),
-              label:
-                "exploratory first request after Miniflare dispose/reopen; n=5; not a deployment cold start",
+            iterations,
+            warmups: 0,
+            timeoutMs: 2000,
+            run: async (_iteration, signal) => {
+              const output = await run(signal);
+              assert.equal(
+                hash(output),
+                hash(baselines[operation][arm]),
+                `${arm}/${operation} sample semantic output`,
+              );
+              return output;
             },
-          ]),
-        ),
-      ]),
-    ),
-    sourcePins: "source-pins.json",
-    summaries: Object.fromEntries(
-      [...new Set(samples.map((s) => s.operation))].map((operation) => [
-        operation,
-        Object.fromEntries(
-          (["legacy", "state-plane"] as const).map((arm) => {
-            const selected = samples.filter(
-              (s) => s.operation === operation && s.arm === arm,
-            );
-            const measuredWallMs = groupWallMs[`${arm}/${operation}`];
-            const quantilesAndFailures = summarizeBenchmarkSamples(selected);
-            return [
-              arm,
-              {
-                ...quantilesAndFailures,
-                groupWallMs: measuredWallMs,
-                throughputPerSecond: selected.length / (measuredWallMs / 1000),
-                successfulThroughputPerSecond:
-                  selected.filter((sample) => sample.ok).length /
-                  (measuredWallMs / 1000),
-              },
-            ];
+            hash,
           }),
         ),
-      ]),
-    ),
-    samples,
-    coldSamples,
-    warmupSamples,
-  };
-  writeFileSync(
-    resolve(evidence, "benchmark-report.json"),
-    JSON.stringify(report, null, 2),
-  );
-  writeFileSync(
-    resolve(evidence, "benchmark-samples.jsonl"),
-    samples.map((sample) => JSON.stringify(sample)).join("\n") + "\n",
-  );
-  writeFileSync(
-    resolve(evidence, "benchmark-cold-samples.jsonl"),
-    coldSamples.map((sample) => JSON.stringify(sample)).join("\n") + "\n",
-  );
-  writeFileSync(
-    resolve(evidence, "benchmark-warmup-samples.jsonl"),
-    warmupSamples.map((sample) => JSON.stringify(sample)).join("\n") + "\n",
-  );
-  console.log(
-    JSON.stringify(
-      { evidence, environment, summaries: report.summaries },
-      null,
-      2,
-    ),
-  );
-  if (
-    samples.some((sample) => !sample.ok) ||
-    coldSamples.some((sample) => !sample.ok)
-  )
-    process.exitCode = 1;
+      );
+      const wallMs = performance.now() - started;
+      return {
+        rows: result.flat().map((row, index) => ({
+          ...row,
+          operation: `${operation}/concurrency-${concurrency}`,
+          iteration:
+            row.iteration * concurrency + Math.floor(index / iterations),
+        })),
+        wallMs,
+      };
+    };
+    for (const concurrency of [1, 4, 16]) {
+      const order =
+        concurrency === 4
+          ? (["state-plane", "legacy"] as const)
+          : (["legacy", "state-plane"] as const);
+      for (const operation of [
+        "content",
+        "history",
+        "resolved-query",
+      ] as const) {
+        for (const arm of order) {
+          const diagnostics = await collectWarmupSamples({
+            operation: `${operation}/concurrency-${concurrency}`,
+            arm,
+            count: 10,
+            timeoutMs: 2000,
+            run: async (_iteration, signal) => {
+              const output = await operationRunners[operation][arm](signal);
+              assert.equal(
+                hash(output),
+                hash(baselines[operation][arm]),
+                `warmup ${arm}/${operation} semantic output`,
+              );
+              return output;
+            },
+            hash,
+          });
+          warmupSamples.push(...diagnostics);
+          journal("warmup", diagnostics);
+          if (diagnostics.some((sample) => !sample.ok)) {
+            writeFileSync(
+              resolve(evidence, "benchmark-warmup-samples.jsonl"),
+              warmupSamples.map((sample) => JSON.stringify(sample)).join("\n") +
+                "\n",
+            );
+            throw Error(
+              `Warmup failure ${arm}/${operation}; timed samples not run`,
+            );
+          }
+        }
+        const grouped = Object.fromEntries(
+          order.map((arm) => [arm, [] as BenchmarkSample[]]),
+        ) as Record<(typeof order)[number], BenchmarkSample[]>;
+        const activeWallMs = { legacy: 0, "state-plane": 0 };
+        const perLane = Math.max(1, 16 / concurrency);
+        for (let batch = 0; batch < 8; batch++) {
+          for (const arm of batch % 2 ? [...order].reverse() : order) {
+            const measured = await runArm(arm, concurrency, operation, perLane);
+            activeWallMs[arm] += measured.wallMs;
+            grouped[arm].push(
+              ...measured.rows.map((row) => ({
+                ...row,
+                iteration: batch * 16 + row.iteration,
+              })),
+            );
+            journal(
+              "warm",
+              measured.rows.map((row) => ({
+                ...row,
+                iteration: batch * 16 + row.iteration,
+              })),
+            );
+          }
+        }
+        for (const arm of order) {
+          samples.push(...grouped[arm]);
+          groupWallMs[`${arm}/${operation}/concurrency-${concurrency}`] =
+            activeWallMs[arm];
+        }
+      }
+    }
+    const report = {
+      schemaVersion: 1,
+      title:
+        "Controlled legacy adapter vs State Plane SQLite adapter benchmark",
+      workload: { sizeBytes: requestedSize, operationHistoryEvents: 1 },
+      environment,
+      equivalence: {
+        verifiedBeforeTiming: true,
+        responseHashes: Object.fromEntries(
+          (["content", "history", "resolved-query"] as const).map(
+            (operation) => [operation, hash(baselines[operation].legacy)],
+          ),
+        ),
+        provenance:
+          "content snapshotId=1,eventSeq=0; history has one accepted event at seq=0",
+        caveat:
+          "both paths execute in workerd through the same loopback HTTP boundary; State Plane uses service-binding RPC to SQLite DO; legacy uses R2+D1 production adapters. Throughput uses active batch wall time, excluding the alternating arm's batches.",
+      },
+      coldSummaries: Object.fromEntries(
+        (["content", "history", "resolved-query"] as const).map((operation) => [
+          operation,
+          Object.fromEntries(
+            (["legacy", "state-plane"] as const).map((arm) => [
+              arm,
+              {
+                ...summarizeBenchmarkSamples(
+                  coldSamples.filter(
+                    (sample) =>
+                      sample.operation === `cold/${operation}` &&
+                      sample.arm === arm,
+                  ),
+                ),
+                label:
+                  "exploratory first request after Miniflare dispose/reopen; n=5; not a deployment cold start",
+              },
+            ]),
+          ),
+        ]),
+      ),
+      sourcePins: "source-pins.json",
+      summaries: Object.fromEntries(
+        [...new Set(samples.map((s) => s.operation))].map((operation) => [
+          operation,
+          Object.fromEntries(
+            (["legacy", "state-plane"] as const).map((arm) => {
+              const selected = samples.filter(
+                (s) => s.operation === operation && s.arm === arm,
+              );
+              const measuredWallMs = groupWallMs[`${arm}/${operation}`];
+              const quantilesAndFailures = summarizeBenchmarkSamples(selected);
+              return [
+                arm,
+                {
+                  ...quantilesAndFailures,
+                  groupWallMs: measuredWallMs,
+                  throughputPerSecond:
+                    selected.length / (measuredWallMs / 1000),
+                  successfulThroughputPerSecond:
+                    selected.filter((sample) => sample.ok).length /
+                    (measuredWallMs / 1000),
+                },
+              ];
+            }),
+          ),
+        ]),
+      ),
+      samples,
+      coldSamples,
+      warmupSamples,
+    };
+    writeFileSync(
+      resolve(evidence, "benchmark-report.json"),
+      JSON.stringify(report, null, 2),
+    );
+    writeFileSync(
+      resolve(evidence, "benchmark-samples.jsonl"),
+      samples.map((sample) => JSON.stringify(sample)).join("\n") + "\n",
+    );
+    writeFileSync(
+      resolve(evidence, "benchmark-cold-samples.jsonl"),
+      coldSamples.map((sample) => JSON.stringify(sample)).join("\n") + "\n",
+    );
+    writeFileSync(
+      resolve(evidence, "benchmark-warmup-samples.jsonl"),
+      warmupSamples.map((sample) => JSON.stringify(sample)).join("\n") + "\n",
+    );
+    console.log(
+      JSON.stringify(
+        { evidence, environment, summaries: report.summaries },
+        null,
+        2,
+      ),
+    );
+    if (
+      samples.some((sample) => !sample.ok) ||
+      coldSamples.some((sample) => !sample.ok)
+    )
+      process.exitCode = 1;
+  }
 } finally {
   await mf.dispose();
 }

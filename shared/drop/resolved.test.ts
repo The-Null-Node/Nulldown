@@ -370,6 +370,90 @@ describe("resolved drop helpers", () => {
     );
   });
 
+  it.each(["\n", "\r", "\r\n"])(
+    "preserves UTF-16 source ranges across long lines separated by %j",
+    async (newline) => {
+      const paragraph = `😀${"x".repeat(262144)} [link](https://example.com)`;
+      const content = [
+        "# Root",
+        "",
+        paragraph,
+        "",
+        "## Tail",
+        "- [ ] Finish",
+        "",
+      ].join(newline);
+      const state = await heapifyResolvedDocument({
+        rootDropId: "root-1",
+        content,
+      });
+      const nodes = state.documentNodes ?? [];
+      const start = content.indexOf(paragraph);
+      expect(nodes.find((node) => node.kind === "paragraph")).toEqual(
+        expect.objectContaining({
+          text: paragraph,
+          sourceRange: { start, end: start + paragraph.length },
+        }),
+      );
+      expect(
+        nodes.find((node) => node.kind === "link.ref")?.sourceRange,
+      ).toEqual({
+        start: content.indexOf("[link]"),
+        end: start + paragraph.length,
+      });
+      expect(
+        nodes.find((node) => node.kind === "heading" && node.text === "Tail")
+          ?.sourceRange,
+      ).toEqual({
+        start: content.indexOf("## Tail"),
+        end: content.indexOf("## Tail") + 7,
+      });
+      const changed = queryResolvedDocumentNodes(state, {
+        kinds: ["paragraph"],
+        changedOnly: true,
+        changedRanges: [{ start: start + 1, end: start + 2 }],
+      });
+      expect(changed.map((entry) => entry.node.text)).toEqual([paragraph]);
+      expect(nodes.find((node) => node.kind === "checklist.item")?.text).toBe(
+        "Finish",
+      );
+    },
+  );
+
+  it("preserves mixed line endings and fenced code at end of input", async () => {
+    const content = "# Root\r\n\rparagraph 😀\n\n```ts\r\nconst n = 1;\r```";
+    const state = await heapifyResolvedDocument({
+      rootDropId: "root-1",
+      content,
+    });
+    expect(
+      state.documentNodes?.find((node) => node.kind === "paragraph"),
+    ).toEqual(
+      expect.objectContaining({
+        text: "paragraph 😀",
+        sourceRange: { start: 9, end: 21 },
+      }),
+    );
+    expect(
+      state.documentNodes?.find((node) => node.kind === "code.block"),
+    ).toEqual(
+      expect.objectContaining({
+        text: "const n = 1;",
+        sourceRange: { start: 23, end: content.length },
+      }),
+    );
+    for (const empty of ["", "\n", "\r", "\r\n", "\n\r\n\r"]) {
+      expect(
+        (
+          await heapifyResolvedDocument({
+            rootDropId: "root-1",
+            content: empty,
+          })
+        ).documentNodes,
+      ).toEqual([]);
+    }
+  });
+
   it("builds section boundaries and parents for deep repeated headings", async () => {
     const content = [
       "# Root",

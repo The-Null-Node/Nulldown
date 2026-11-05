@@ -16,9 +16,10 @@ const requested = process.argv
   .find((arg) => arg.startsWith("--evidence="))
   ?.slice(11);
 const sizeArg = process.argv.find((arg) => arg.startsWith("--size="))?.slice(7);
+const profile = process.argv.includes("--profile");
 if (sizeArg && ![8192, 65536, 262144].includes(Number(sizeArg)))
   throw Error(
-    "Usage: run-migration-benchmark.ts [--size=8192|65536|262144] [--evidence=<fresh directory>]",
+    "Usage: run-migration-benchmark.ts [--size=8192|65536|262144] [--evidence=<fresh directory>] [--profile]",
   );
 const evidence = requested
   ? resolve(requested)
@@ -197,6 +198,7 @@ const child = Bun.spawn(
     `--root=${root}`,
     `--evidence=${evidence}`,
     ...(sizeArg ? [`--size=${sizeArg}`] : []),
+    ...(profile ? ["--profile"] : []),
   ],
   {
     cwd: root,

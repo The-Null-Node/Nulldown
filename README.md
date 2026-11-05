@@ -624,6 +624,12 @@ The migration rehearsal and benchmark use disposable synthetic storage. Benchmar
 reports retain raw samples and describe their runtime, workload, and cold/warm
 measurement boundaries.
 
+To diagnose resolved-query CPU usage, run
+`bun run bench:state-plane --size=262144 --profile --evidence=/path/to/fresh/profiles`.
+This records separate legacy and State Plane `.cpuprofile` files for Chrome
+DevTools, with semantic checks on each request. Profiling uses the local workerd
+inspector; run the benchmark without `--profile` for latency measurements.
+
 Regenerate Worker types after configuration changes with
 `bun run --cwd packages/nulldown-state-plane types`.
 
