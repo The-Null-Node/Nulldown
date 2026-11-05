@@ -133,13 +133,48 @@ migration creates the Durable Object class. Neither operation imports existing
 branch data.
 
 Use fresh signed roots in this environment. Production branches continue using
-their existing backend. A legacy-to-State-Plane importer and cutover controller
-are still required before migrating those branches.
+their existing backend. The synthetic rehearsal below is separate from the
+application API; production cutover still requires an admission gate covering
+every legacy writer and a deployment-specific authority controller.
 
 Existing branches will need a consistent import, verification, and a fenced
 change of authority. Once the new backend has accepted writes, returning to the
 old backend also requires transferring those changes; changing routing alone
 would lose accepted work.
+
+## Synthetic migration rehearsal and benchmarks
+
+Run the local tools from the repository root:
+
+```bash
+bun run test:state-plane:migration --evidence=/path/to/fresh/rehearsal-results
+bun run bench:state-plane --evidence=/path/to/fresh/benchmark-results
+```
+
+Both tools use Miniflare with synthetic storage. Evidence directories must be
+fresh. Keep the reports and raw samples together: latency depends on workload,
+runtime, concurrency, and which boundaries the measurement includes.
+
+[`source-fence.ts`](../src/server/state-plane/source-fence.ts) records writer
+admissions durably. Freezing a source stops new
+admissions and waits for admitted mutations to settle. An uncertain admission
+does not expire automatically.
+[`legacy-migration-source.ts`](../src/server/state-plane/legacy-migration-source.ts) captures the frozen
+history, runtime facts, and branch-local memory; unsupported capabilities reject
+explicitly. Global persisted memory defaults and priority facts are outside this
+import envelope.
+
+[`sqlite-migration.ts`](../src/server/state-plane/sqlite-migration.ts) stages
+hashed chunks before publishing destination state.
+Pre-transfer rollback reopens the source at a new generation. Source transfer is
+irreversible: an uncertain activation must recover forward, and accepted
+destination writes cannot be discarded by switching back to legacy routing.
+
+For an isolated hosted rehearsal, `wrangler.migration-rehearsal.jsonc` selects a
+separate Worker, SQLite Durable Object namespace, R2 bucket, and D1 database.
+The gateway requires `MIGRATION_REHEARSAL_TOKEN`. Configure it through Wrangler's
+secret prompt; keep the runner's credential file outside the checkout. The
+gateway accepts only synthetic rehearsal operations.
 
 ## Logs
 

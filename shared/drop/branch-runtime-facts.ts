@@ -202,6 +202,7 @@ export function captureRuntimeFactPage(
 export function validateRuntimeFactEvent(
   event: DropBranchRuntimeFact,
   query: BranchHeadQuery,
+  options: { allowMissingActor?: boolean } = {},
 ): void {
   try {
     if (
@@ -219,8 +220,9 @@ export function validateRuntimeFactEvent(
       event.fact.source.snapshotId! < 0 ||
       typeof event.fact.source.sourceContentHash !== "string" ||
       !/^sha256:[A-Za-z0-9_-]{43}$/.test(event.fact.source.sourceContentHash) ||
-      typeof event.fact.metadata?.actorAccountId !== "string" ||
-      !event.fact.metadata.actorAccountId ||
+      (!options.allowMissingActor &&
+        (typeof event.fact.metadata?.actorAccountId !== "string" ||
+          !event.fact.metadata.actorAccountId)) ||
       event.factId !== nullplugUiRuntimeFactId(event.fact)
     )
       throw Error();
@@ -234,9 +236,10 @@ export function validateRuntimeFactEvent(
 export function validateRuntimeFactReceipt(
   receipt: BranchRuntimeFactReceipt,
   query: BranchHeadQuery,
+  options: { allowMissingActor?: boolean } = {},
 ): void {
   try {
-    validateRuntimeFactEvent(receipt?.event, query);
+    validateRuntimeFactEvent(receipt?.event, query, options);
     if (
       receipt.identity !== runtimeFactIdentity(receipt.event.fact) ||
       receipt.key !== runtimeFactKey(receipt.event.fact) ||
