@@ -565,8 +565,9 @@ exact-version cache reuses content while durable reads check placement and ident
 and internal RPC, using a fixed 16-shard routing layout. HTTP, MCP, and CLI use the
 legacy backend by default. The local Worker has no public state endpoints; fixture
 seeding requires an explicit test binding. Isolated staging adds Queue delivery,
-encrypted R2 archives, and a separate D1 metadata projection. Migration tooling
-remains pending; see [State Plane staging](docs/STATE_PLANE_STAGING.md).
+encrypted R2 archives, and a separate D1 metadata projection. A separate synthetic
+migration rehearsal exercises the import boundary; see
+[State Plane staging](docs/STATE_PLANE_STAGING.md).
 
 For local application testing, `src/server/state-plane/commit-application.ts`
 connects local branches to the existing authenticated diff and content
@@ -610,6 +611,8 @@ With Bun and a Node.js version supporting `node:sqlite`, run:
 bun run test:state-plane
 bun run test:state-plane:native
 bun run test:state-plane:application
+bun run test:state-plane:migration --evidence=/path/to/fresh/rehearsal-results
+bun run bench:state-plane
 bun run typecheck:state-plane
 ```
 
@@ -617,6 +620,9 @@ The application harness runs two clients through HTTP, the application routes,
 the Worker service binding, and SQLite Durable Objects. It exercises batch edits,
 authorization, lost-response retries, reconnects, and restarts on disposable local
 storage. The native storage harness tests the lower-level commit boundary.
+The migration rehearsal and benchmark use disposable synthetic storage. Benchmark
+reports retain raw samples and describe their runtime, workload, and cold/warm
+measurement boundaries.
 
 Regenerate Worker types after configuration changes with
 `bun run --cwd packages/nulldown-state-plane types`.

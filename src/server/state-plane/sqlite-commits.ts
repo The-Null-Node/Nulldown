@@ -64,6 +64,7 @@ import {
   type BranchSnapshotPage,
 } from "../../../shared/drop/branch-lifecycle";
 import { serializeCanonicalJson } from "../../../shared/drop/types";
+import { hashMigrationPayload } from "../../../shared/drop/branch-migration";
 import type { MemoryBranchStateSeed } from "./memory-commits";
 import type { BranchSqlPort } from "./sqlite-port";
 import type {
@@ -243,6 +244,8 @@ export class SqliteBranchCommitStatePlane
       if (prepared.length === 0) return;
       this.sql.transaction(() => {
         for (const { head, snapshot, content } of prepared) {
+          if (this.migrationReserved(head.target))
+            throw new BranchStateError("branch_initialization_pending");
           if (
             this.sql.rows(
               "SELECT 1 FROM branch_heads WHERE root_drop_id = ? AND branch_id = ?",
@@ -288,6 +291,20 @@ export class SqliteBranchCommitStatePlane
   private routing(query: BranchHeadQuery): void {
     if (query.placement.routingVersion !== 1)
       throw new BranchStateError("routing_version_unsupported");
+  }
+
+  /** Keeps regular lifecycle writers out of targets reserved by a migration protocol. */
+  private migrationReserved(target: {
+    rootDropId: string;
+    branchId: string;
+  }): boolean {
+    return (
+      this.sql.rows(
+        "SELECT 1 FROM branch_migrations WHERE root_drop_id=? AND branch_id=? AND phase NOT IN ('rolled-back') LIMIT 1",
+        encodeBranchSqlText(target.rootDropId),
+        encodeBranchSqlText(target.branchId),
+      ).length > 0
+    );
   }
 
   /** Registers newly committed canonical work in the same SQL transaction as its witness. */
@@ -406,6 +423,8 @@ export class SqliteBranchCommitStatePlane
       const command = BranchLifecycleQuery.reserve(input);
       this.routing(command);
       return this.sql.transaction(() => {
+        if (this.migrationReserved(command.target))
+          throw new BranchStateError("branch_initialization_pending");
         const stored = this.authority(command);
         if (stored) {
           if (
@@ -461,9 +480,11 @@ export class SqliteBranchCommitStatePlane
   ): Promise<BranchInitializeOutcome> {
     return this.available(async () => {
       const command = BranchLifecycleQuery.initialize(input);
-      const initial = this.sql.transaction(
-        () => this.fencedAuthority(command).authority,
-      );
+      const initial = this.sql.transaction(() => {
+        if (this.migrationReserved(command.target))
+          throw new BranchStateError("branch_initialization_pending");
+        return this.fencedAuthority(command).authority;
+      });
       const prepared = await prepareBranchInitialization(initial, command);
       return this.sql.transaction(() => {
         const { authority, row } = this.fencedAuthority(command, true);
@@ -560,7 +581,7 @@ export class SqliteBranchCommitStatePlane
   private head(query: BranchHeadQuery): BranchStateHead {
     this.routing(query);
     const row = this.sql.rows(
-      "SELECT h.routing_version, h.generation, h.head_json, a.authority_json, a.initialization_receipt_json, a.initialization_intent IS NOT NULL AS has_initialization_intent, f.root_drop_id AS fixture_seed FROM branch_heads h LEFT JOIN branch_authorities a ON a.root_drop_id = h.root_drop_id AND a.branch_id = h.branch_id LEFT JOIN branch_fixture_seeds f ON f.root_drop_id = h.root_drop_id AND f.branch_id = h.branch_id WHERE h.root_drop_id = ? AND h.branch_id = ?",
+      "SELECT h.routing_version, h.generation, h.head_json, a.authority_json, a.initialization_receipt_json, a.initialization_intent IS NOT NULL AS has_initialization_intent, f.root_drop_id AS fixture_seed, bp.source_branch_json FROM branch_heads h LEFT JOIN branch_authorities a ON a.root_drop_id = h.root_drop_id AND a.branch_id = h.branch_id LEFT JOIN branch_fixture_seeds f ON f.root_drop_id = h.root_drop_id AND f.branch_id = h.branch_id LEFT JOIN branch_migration_branch_provenance bp ON bp.root_drop_id=h.root_drop_id AND bp.branch_id=h.branch_id WHERE h.root_drop_id = ? AND h.branch_id = ?",
       ...scope(query),
     )[0];
     if (!row) {
@@ -646,7 +667,28 @@ export class SqliteBranchCommitStatePlane
       )
         return corrupt();
     }
-    return head;
+    if (row.source_branch_json === null) return head;
+    const original = json(row.source_branch_json);
+    if (
+      !isDropBranchRecord(original) ||
+      original.rootDropId !== head.target.rootDropId ||
+      original.branchId !== head.target.branchId ||
+      original.baseDropId !== head.branch.baseDropId ||
+      original.mode !== head.branch.mode ||
+      original.ownerAccountId !== head.branch.ownerAccountId ||
+      original.writerAccountId !== head.branch.writerAccountId ||
+      original.writerClientId !== head.branch.writerClientId
+    )
+      return corrupt();
+    return {
+      ...head,
+      branch: {
+        ...original,
+        headSnapshotId: head.branch.headSnapshotId,
+        headEventSeq: head.branch.headEventSeq,
+        updatedAt: head.branch.updatedAt,
+      },
+    };
   }
 
   private snapshot(
@@ -658,7 +700,7 @@ export class SqliteBranchCommitStatePlane
     content?: string;
   } {
     const row = this.sql.rows(
-      `SELECT s.snapshot_id, s.event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq${includeContent ? ", s.content" : ""} FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE s.root_drop_id = ? AND s.branch_id = ? AND s.snapshot_id = ?`,
+      `SELECT s.snapshot_id,s.event_seq,s.source_content_hash,s.snapshot_json,p.event_seq AS parent_event_seq,(SELECT mp.source_snapshot_json FROM branch_migration_snapshot_provenance mp JOIN branch_migrations m ON m.migration_id=mp.migration_id WHERE m.root_drop_id=s.root_drop_id AND m.branch_id=s.branch_id AND m.phase='activated' AND mp.snapshot_id=s.snapshot_id LIMIT 1) AS source_snapshot_json,(SELECT mp.source_content_hash FROM branch_migration_snapshot_provenance mp JOIN branch_migrations m ON m.migration_id=mp.migration_id WHERE m.root_drop_id=s.root_drop_id AND m.branch_id=s.branch_id AND m.phase='activated' AND mp.snapshot_id=s.snapshot_id LIMIT 1) AS imported_source_content_hash${includeContent ? ",s.content" : ""} FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id=s.root_drop_id AND p.branch_id=s.branch_id AND p.snapshot_id=s.snapshot_id-1 WHERE s.root_drop_id=? AND s.branch_id=? AND s.snapshot_id=?`,
       ...scope(query),
       query.version.snapshotId,
     )[0];
@@ -725,6 +767,39 @@ export class SqliteBranchCommitStatePlane
     }
     if (!sameBranchStateVersion(identity.version, query.version))
       throw new BranchStateError("snapshot_version_mismatch");
+    let sourceSnapshot = snapshot;
+    if (
+      row.source_snapshot_json !== null &&
+      row.source_snapshot_json !== undefined
+    ) {
+      const importedSnapshot = json(row.source_snapshot_json);
+      if (
+        !isDropSnapshotRecord(importedSnapshot) ||
+        importedSnapshot.rootDropId !== query.target.rootDropId ||
+        importedSnapshot.branchId !== query.target.branchId ||
+        importedSnapshot.snapshotId !== snapshot.snapshotId ||
+        (importedSnapshot.sourceContentHash !== undefined &&
+          importedSnapshot.sourceContentHash !==
+            identity.version.sourceContentHash) ||
+        row.imported_source_content_hash !== identity.version.sourceContentHash
+      )
+        return corrupt();
+      const normalizedImport = {
+        ...importedSnapshot,
+        sourceContentHash: identity.version.sourceContentHash,
+        checkpointed: true,
+        ...(snapshot.snapshotId === 0
+          ? { patchStartSeq: null, patchEndSeq: null }
+          : {}),
+      };
+      delete normalizedImport.checkpointKey;
+      if (
+        serializeCanonicalJson(normalizedImport) !==
+        serializeCanonicalJson(snapshot)
+      )
+        return corrupt();
+      sourceSnapshot = importedSnapshot;
+    }
     const content = includeContent
       ? decodeBranchSqlText(row.content)
       : undefined;
@@ -732,7 +807,7 @@ export class SqliteBranchCommitStatePlane
       return corrupt();
     return {
       identity,
-      snapshot,
+      snapshot: sourceSnapshot,
       ...(includeContent ? { content } : {}),
     };
   }
@@ -1025,7 +1100,36 @@ export class SqliteBranchCommitStatePlane
     if (!rows.length) return null;
     const row = rows[0];
     const receipt = json(row.receipt_json) as BranchRuntimeFactReceipt;
-    validateRuntimeFactReceipt(receipt, query);
+    const imported = this.sql.rows(
+      "SELECT i.migration_id,i.source_seq,i.source_event_json,m.phase FROM branch_runtime_fact_imports i JOIN branch_migrations m ON m.migration_id=i.migration_id WHERE i.root_drop_id=? AND i.branch_id=? AND i.identity=?",
+      ...scope(query),
+      identity,
+    )[0];
+    validateRuntimeFactReceipt(receipt, query, {
+      allowMissingActor: Boolean(imported),
+    });
+    if (imported) {
+      if (imported.phase !== "activated") return corrupt();
+      const sourceEvent = json(imported.source_event_json);
+      const projected = record(sourceEvent);
+      const normalized = {
+        ...projected,
+        fact: {
+          ...(projected.fact as Row),
+          createdAt: projected.createdAt,
+          source: {
+            ...((projected.fact as Row).source as Row),
+            snapshotId: receipt.event.fact.source.snapshotId,
+          },
+        },
+      };
+      if (
+        imported.source_seq !== receipt.event.seq ||
+        canonicalRuntimeFactJson(normalized) !==
+          canonicalRuntimeFactJson(receipt.event)
+      )
+        return corrupt();
+    }
     if (
       receipt.identity !== identity ||
       row.identity !== identity ||
@@ -1118,6 +1222,17 @@ export class SqliteBranchCommitStatePlane
           return corrupt();
         return value;
       });
+    const baselineRow = this.sql.rows(
+      "SELECT memory_revision,source_hash,records_json FROM branch_nullmem_import_baseline WHERE root_drop_id=? AND branch_id=?",
+      ...scope(query),
+    )[0];
+    const baseline = baselineRow
+      ? {
+          revision: baselineRow.memory_revision as number,
+          records: json(baselineRow.records_json) as BranchNullMemRecord[],
+          sourceHash: baselineRow.source_hash,
+        }
+      : { revision: 0, records: [] as BranchNullMemRecord[], sourceHash: null };
     const outbox = this.sql
       .rows(
         "SELECT memory_revision, outbox_id, outbox_json FROM branch_nullmem_outbox WHERE root_drop_id = ? AND branch_id = ? ORDER BY memory_revision",
@@ -1133,9 +1248,32 @@ export class SqliteBranchCommitStatePlane
           return corrupt();
         return value;
       });
-    validateNullMemState(head, revision, records, outbox);
+    validateNullMemState(head, revision, records, outbox, baseline);
     for (const entry of outbox) verifySnapshot(entry.result.head);
     return { head, revision, records, outbox };
+  }
+
+  /** Verifies the immutable revision-zero import baseline before mutable NullMem operations. */
+  private async verifyNullMemImportBaseline(
+    query: BranchHeadQuery,
+  ): Promise<void> {
+    const row = this.sql.rows(
+      "SELECT b.migration_id,b.source_hash,b.records_json,m.phase FROM branch_nullmem_import_baseline b JOIN branch_migrations m ON m.migration_id=b.migration_id WHERE b.root_drop_id=? AND b.branch_id=?",
+      ...scope(query),
+    )[0];
+    if (!row) return;
+    if (
+      row.phase !== "activated" ||
+      typeof row.records_json !== "string" ||
+      typeof row.source_hash !== "string"
+    )
+      return corrupt();
+    const records = json(row.records_json);
+    if (
+      !Array.isArray(records) ||
+      (await hashMigrationPayload(records)) !== row.source_hash
+    )
+      return corrupt();
   }
 
   private publishNullMem(entry: BranchNullMemOutbox): void {
@@ -1160,8 +1298,9 @@ export class SqliteBranchCommitStatePlane
     input: BranchNullMemQuery,
   ): Promise<BranchNullMemQueryResult> {
     const query = captureNullMemQuery(input);
-    return this.available(() =>
-      this.sql.transaction(() => {
+    return this.available(async () => {
+      await this.verifyNullMemImportBaseline(query);
+      return this.sql.transaction(() => {
         const state = this.nullMemState(query);
         return {
           target: query.target,
@@ -1170,8 +1309,8 @@ export class SqliteBranchCommitStatePlane
           memoryRevision: state.revision,
           records: queryNullMemRecords(state.records, query),
         };
-      }),
-    );
+      });
+    });
   }
 
   /** Assigns a new timestamp and atomically replaces the record, advances revision and publishes an outbox intent. */
@@ -1179,8 +1318,9 @@ export class SqliteBranchCommitStatePlane
     input: BranchNullMemPutCommand,
   ): Promise<BranchNullMemPutResult> {
     const command = captureNullMemPut(input);
-    return this.available(() =>
-      this.sql.transaction(() => {
+    return this.available(async () => {
+      await this.verifyNullMemImportBaseline(command);
+      return this.sql.transaction(() => {
         const state = this.nullMemState(command);
         authorizeNullMem(command, state.head);
         const entry = prepareNullMemPut(
@@ -1197,8 +1337,8 @@ export class SqliteBranchCommitStatePlane
         );
         this.publishNullMem(entry);
         return entry.result;
-      }),
-    );
+      });
+    });
   }
 
   /** Deletes all kinds with the exact ID and commits revision/outbox even when no record exists. */
@@ -1206,8 +1346,9 @@ export class SqliteBranchCommitStatePlane
     input: BranchNullMemDeleteCommand,
   ): Promise<BranchNullMemDeleteResult> {
     const command = captureNullMemDelete(input);
-    return this.available(() =>
-      this.sql.transaction(() => {
+    return this.available(async () => {
+      await this.verifyNullMemImportBaseline(command);
+      return this.sql.transaction(() => {
         const state = this.nullMemState(command);
         authorizeNullMem(command, state.head);
         const entry = prepareNullMemDelete(
@@ -1224,8 +1365,8 @@ export class SqliteBranchCommitStatePlane
           );
         this.publishNullMem(entry);
         return entry.result;
-      }),
-    );
+      });
+    });
   }
 
   /** Test-only authoritative outbox inspection; no derived-work delivery is performed. */
@@ -1333,7 +1474,7 @@ export class SqliteBranchCommitStatePlane
         if (query.headSeq > this.runtimeHead(query))
           throw new BranchStateError("invalid_command");
         const rows = this.sql.rows(
-          "SELECT identity, seq FROM branch_runtime_facts WHERE root_drop_id = ? AND branch_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?",
+          "SELECT f.identity,f.seq,i.source_event_json FROM branch_runtime_facts f LEFT JOIN branch_runtime_fact_imports i ON i.root_drop_id=f.root_drop_id AND i.branch_id=f.branch_id AND i.identity=f.identity WHERE f.root_drop_id=? AND f.branch_id=? AND f.seq>? AND f.seq<=? ORDER BY f.seq ASC LIMIT ?",
           ...scope(query),
           query.afterSeq,
           query.headSeq,
@@ -1352,11 +1493,11 @@ export class SqliteBranchCommitStatePlane
             return corrupt();
           const stored = this.runtimeReceipt(query, row.identity);
           if (!stored) return corrupt();
-          return stored;
+          return { stored, sourceEvent: row.source_event_json };
         });
         return receipts;
       });
-      for (const stored of page)
+      for (const { stored } of page)
         if (
           (await hashRuntimeFactIntent(stored.intent)) !==
           stored.receipt.payloadHash
@@ -1366,7 +1507,11 @@ export class SqliteBranchCommitStatePlane
       this.sql.transaction(() => {
         this.head(query);
       });
-      const facts = page.map(({ receipt }) => receipt.event);
+      const facts = page.map(({ stored, sourceEvent }) =>
+        sourceEvent != null
+          ? (json(sourceEvent) as typeof stored.receipt.event)
+          : stored.receipt.event,
+      );
       return {
         target: query.target,
         placement: query.placement,
@@ -1442,9 +1587,10 @@ export class SqliteBranchCommitStatePlane
         sourceContentHash: row.source_content_hash,
       },
     });
+    const snapshot = this.snapshotRecord(identity, row, false).snapshot;
     return {
       ...identity,
-      snapshot: this.snapshotRecord(identity, row, false).snapshot,
+      snapshot,
     };
   }
 
@@ -1457,7 +1603,7 @@ export class SqliteBranchCommitStatePlane
       return this.sql.transaction(() => {
         const head = this.head(query);
         const row = this.sql.rows(
-          "SELECT s.snapshot_id, s.event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE s.root_drop_id = ? AND s.branch_id = ? AND s.snapshot_id = ?",
+          "SELECT s.snapshot_id,s.event_seq,s.source_content_hash,s.snapshot_json,p.event_seq AS parent_event_seq,(SELECT mp.source_snapshot_json FROM branch_migration_snapshot_provenance mp JOIN branch_migrations m ON m.migration_id=mp.migration_id WHERE m.root_drop_id=s.root_drop_id AND m.branch_id=s.branch_id AND m.phase='activated' AND mp.snapshot_id=s.snapshot_id LIMIT 1) AS source_snapshot_json,(SELECT mp.source_content_hash FROM branch_migration_snapshot_provenance mp JOIN branch_migrations m ON m.migration_id=mp.migration_id WHERE m.root_drop_id=s.root_drop_id AND m.branch_id=s.branch_id AND m.phase='activated' AND mp.snapshot_id=s.snapshot_id LIMIT 1) AS imported_source_content_hash FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id=s.root_drop_id AND p.branch_id=s.branch_id AND p.snapshot_id=s.snapshot_id-1 WHERE s.root_drop_id=? AND s.branch_id=? AND s.snapshot_id=?",
           ...scope(query),
           query.snapshotId,
         )[0];
@@ -1493,7 +1639,7 @@ export class SqliteBranchCommitStatePlane
           query.afterSnapshotId + query.limit,
         );
         const rows = this.sql.rows(
-          "SELECT s.snapshot_id, s.event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE s.root_drop_id = ? AND s.branch_id = ? AND s.snapshot_id > ? AND s.snapshot_id <= ? ORDER BY s.snapshot_id ASC LIMIT ?",
+          "SELECT s.snapshot_id,s.event_seq,s.source_content_hash,s.snapshot_json,p.event_seq AS parent_event_seq,(SELECT mp.source_snapshot_json FROM branch_migration_snapshot_provenance mp JOIN branch_migrations m ON m.migration_id=mp.migration_id WHERE m.root_drop_id=s.root_drop_id AND m.branch_id=s.branch_id AND m.phase='activated' AND mp.snapshot_id=s.snapshot_id LIMIT 1) AS source_snapshot_json,(SELECT mp.source_content_hash FROM branch_migration_snapshot_provenance mp JOIN branch_migrations m ON m.migration_id=mp.migration_id WHERE m.root_drop_id=s.root_drop_id AND m.branch_id=s.branch_id AND m.phase='activated' AND mp.snapshot_id=s.snapshot_id LIMIT 1) AS imported_source_content_hash FROM branch_snapshots s LEFT JOIN branch_snapshots p ON p.root_drop_id=s.root_drop_id AND p.branch_id=s.branch_id AND p.snapshot_id=s.snapshot_id-1 WHERE s.root_drop_id=? AND s.branch_id=? AND s.snapshot_id>? AND s.snapshot_id<=? ORDER BY s.snapshot_id ASC LIMIT ?",
           ...scope(query),
           query.afterSnapshotId,
           query.version.snapshotId,
@@ -1521,7 +1667,7 @@ export class SqliteBranchCommitStatePlane
         this.head(query);
         this.snapshot(query, false);
         const rows = this.sql.rows(
-          "SELECT branch_events.event_seq, branch_events.event_id, branch_events.snapshot_id, branch_events.event_json, s.event_seq AS snapshot_event_seq, s.source_content_hash, s.snapshot_json, p.event_seq AS parent_event_seq FROM branch_events LEFT JOIN branch_snapshots s ON s.root_drop_id = branch_events.root_drop_id AND s.branch_id = branch_events.branch_id AND s.snapshot_id = branch_events.snapshot_id LEFT JOIN branch_snapshots p ON p.root_drop_id = s.root_drop_id AND p.branch_id = s.branch_id AND p.snapshot_id = s.snapshot_id - 1 WHERE branch_events.root_drop_id = ? AND branch_events.branch_id = ? AND branch_events.event_seq >= ? AND branch_events.event_seq <= ? ORDER BY branch_events.event_seq ASC LIMIT 200",
+          "SELECT branch_events.event_seq,branch_events.event_id,branch_events.snapshot_id,branch_events.event_json,s.event_seq AS snapshot_event_seq,s.source_content_hash,s.snapshot_json,p.event_seq AS parent_event_seq,ep.source_event_json,ep.snapshot_id AS imported_snapshot_id,a.acknowledgement_json FROM branch_events LEFT JOIN branch_snapshots s ON s.root_drop_id=branch_events.root_drop_id AND s.branch_id=branch_events.branch_id AND s.snapshot_id=branch_events.snapshot_id LEFT JOIN branch_snapshots p ON p.root_drop_id=s.root_drop_id AND p.branch_id=s.branch_id AND p.snapshot_id=s.snapshot_id-1 LEFT JOIN branch_migrations im ON im.root_drop_id=branch_events.root_drop_id AND im.branch_id=branch_events.branch_id AND im.phase='activated' LEFT JOIN branch_migration_event_provenance ep ON ep.migration_id=im.migration_id AND ep.event_id=branch_events.event_id AND ep.snapshot_id=branch_events.snapshot_id LEFT JOIN branch_migration_public_acks a ON a.migration_id=ep.migration_id AND a.event_id=ep.event_id WHERE branch_events.root_drop_id=? AND branch_events.branch_id=? AND branch_events.event_seq>=? AND branch_events.event_seq<=? ORDER BY branch_events.event_seq ASC LIMIT 200",
           ...scope(query),
           query.startSeq,
           query.endSeq,
@@ -1561,7 +1707,30 @@ export class SqliteBranchCommitStatePlane
             event.eventId
           )
             return corrupt();
-          return event;
+          if (
+            row.source_event_json === null ||
+            row.source_event_json === undefined
+          )
+            return event;
+          const sourceEvent = json(row.source_event_json);
+          const acknowledgement = record(json(row.acknowledgement_json));
+          if (
+            !isDropDiffEvent(sourceEvent) ||
+            sourceEvent.eventId !== event.eventId ||
+            sourceEvent.seq !== event.seq ||
+            sourceEvent.dropId !== event.dropId ||
+            row.imported_snapshot_id !== event.snapshotId ||
+            acknowledgement.eventId !== event.eventId ||
+            acknowledgement.seq !== event.seq ||
+            acknowledgement.snapshotId !== event.snapshotId ||
+            acknowledgement.status !== "accepted" ||
+            serializeCanonicalJson({
+              ...sourceEvent,
+              snapshotId: event.snapshotId,
+            }) !== serializeCanonicalJson(event)
+          )
+            return corrupt();
+          return sourceEvent;
         });
       });
     });
@@ -1617,7 +1786,7 @@ export class SqliteBranchCommitStatePlane
       )[0];
       if (!progress || progress.complete === 1) continue;
       const rows = this.sql.rows(
-        `SELECT rowid AS source_rowid,root_drop_id,branch_id,outbox_id,outbox_json FROM ${source.table} WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+        `SELECT s.rowid AS source_rowid,s.root_drop_id,s.branch_id,s.outbox_id,s.outbox_json FROM ${source.table} s WHERE s.rowid > ? AND NOT EXISTS (SELECT 1 FROM branch_imported_outbox i WHERE i.outbox_id=s.outbox_id) ORDER BY s.rowid LIMIT ?`,
         progress.rowid_cursor as number,
         pageSize,
       );

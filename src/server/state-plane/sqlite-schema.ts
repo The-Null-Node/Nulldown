@@ -132,6 +132,49 @@ export const BRANCH_SQL_SCHEMA = [
     rowid_cursor INTEGER NOT NULL DEFAULT 0 CHECK (rowid_cursor >= 0),
     complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0,1))
   )`,
+  `CREATE TABLE IF NOT EXISTS branch_migrations (
+    migration_id TEXT PRIMARY KEY, root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation >= 0), phase TEXT NOT NULL CHECK (phase IN ('importing','verified','activated','rollback-pending','rolled-back','recovery-required')),
+    manifest_json TEXT NOT NULL, next_chunk INTEGER NOT NULL DEFAULT 0 CHECK (next_chunk >= 0),
+    item_count INTEGER NOT NULL DEFAULT 0 CHECK (item_count >= 0), payload_bytes INTEGER NOT NULL DEFAULT 0 CHECK(payload_bytes BETWEEN 0 AND 8000000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS branch_migrations_by_target_phase ON branch_migrations(root_drop_id,branch_id,phase,migration_id)`,
+  `CREATE TABLE IF NOT EXISTS branch_migration_chunks (
+    migration_id TEXT NOT NULL, chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+    payload_hash TEXT NOT NULL, payload_json TEXT NOT NULL, charged_bytes INTEGER NOT NULL CHECK(charged_bytes BETWEEN 1 AND 1000000),
+    PRIMARY KEY (migration_id, chunk_index), FOREIGN KEY (migration_id) REFERENCES branch_migrations(migration_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_migration_public_acks (
+    migration_id TEXT NOT NULL, event_id TEXT NOT NULL, acknowledgement_json TEXT NOT NULL,
+    provenance TEXT NOT NULL, PRIMARY KEY(migration_id,event_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_migration_snapshot_provenance (
+    migration_id TEXT NOT NULL, snapshot_id INTEGER NOT NULL, source_snapshot_json TEXT NOT NULL,
+    source_content_hash TEXT NOT NULL, PRIMARY KEY(migration_id,snapshot_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS branch_migration_snapshot_provenance_by_snapshot ON branch_migration_snapshot_provenance(snapshot_id,migration_id)`,
+  `CREATE TABLE IF NOT EXISTS branch_migration_event_provenance (
+    migration_id TEXT NOT NULL, event_id TEXT NOT NULL, source_event_json TEXT NOT NULL,
+    snapshot_id INTEGER NOT NULL, PRIMARY KEY(migration_id,event_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS branch_migration_event_provenance_by_event ON branch_migration_event_provenance(event_id,snapshot_id,migration_id)`,
+  `CREATE TABLE IF NOT EXISTS branch_migration_branch_provenance (
+    migration_id TEXT NOT NULL, root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+    source_branch_json TEXT NOT NULL, PRIMARY KEY(root_drop_id,branch_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_imported_outbox (
+    outbox_id TEXT PRIMARY KEY, migration_id TEXT NOT NULL, source_kind TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_runtime_fact_imports (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL, identity TEXT NOT NULL,
+    migration_id TEXT NOT NULL, source_seq INTEGER NOT NULL, source_event_json TEXT NOT NULL,
+    PRIMARY KEY(root_drop_id,branch_id,identity)
+  )`,
+  `CREATE TABLE IF NOT EXISTS branch_nullmem_import_baseline (
+    root_drop_id TEXT NOT NULL, branch_id TEXT NOT NULL, migration_id TEXT NOT NULL,
+    memory_revision INTEGER NOT NULL CHECK(memory_revision >= 0), source_hash TEXT NOT NULL, records_json TEXT NOT NULL,
+    PRIMARY KEY(root_drop_id,branch_id)
+  )`,
   `CREATE INDEX IF NOT EXISTS branch_outbox_delivery_active_due ON branch_outbox_delivery(next_attempt_at, outbox_id) WHERE status IN ('pending','claimed')`,
   `CREATE INDEX IF NOT EXISTS branch_outbox_delivery_completed ON branch_outbox_delivery(status, completed_at, outbox_id)`,
 ] as const;

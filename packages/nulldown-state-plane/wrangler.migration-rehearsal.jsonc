@@ -1,0 +1,38 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "nulldown-state-plane-migration-staging",
+  "main": "test/migration-rehearsal.fixture.ts",
+  "compatibility_date": "2026-11-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "upload_source_maps": true,
+  "durable_objects": {
+    "bindings": [
+      { "name": "REHEARSAL", "class_name": "MigrationRehearsalObject" },
+    ],
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MigrationRehearsalObject"] },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "LEGACY_R2",
+      "bucket_name": "nulldown-state-plane-migration-source-staging",
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "LEGACY_D1",
+      "database_name": "nulldown-state-plane-migration-source-staging",
+      "database_id": "77d9d59b-48dc-4640-9982-885e1f721460",
+      "migrations_dir": "../../migrations",
+    },
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "invocation_logs": false },
+    "traces": { "enabled": false },
+  },
+}

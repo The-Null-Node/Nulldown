@@ -514,6 +514,10 @@ export function validateNullMemState(
   revision: number,
   records: readonly BranchNullMemRecord[],
   outbox: readonly BranchNullMemOutbox[],
+  baseline: { revision: number; records: readonly BranchNullMemRecord[] } = {
+    revision: 0,
+    records: [],
+  },
 ): void {
   try {
     validateNullMemResult(
@@ -525,15 +529,27 @@ export function validateNullMemState(
       },
       head,
     );
-    if (outbox.length !== revision) return corrupt();
+    if (
+      !Number.isSafeInteger(baseline.revision) ||
+      baseline.revision < 0 ||
+      baseline.revision > revision ||
+      outbox.length !== revision - baseline.revision
+    )
+      return corrupt();
     const expected = new Map<string, BranchNullMemRecord>();
+    for (const record of baseline.records) {
+      validateNullMemRecord(record, head);
+      const identity = nullMemRecordIdentity(record);
+      if (expected.has(identity)) return corrupt();
+      expected.set(identity, record);
+    }
     let previousSnapshot = 0;
     let previousEvent = -1;
     for (const [index, entry] of outbox.entries()) {
       validateNullMemResult(entry.result, head);
       if (
         entry.kind !== "branch.nullmem.v1" ||
-        entry.result.memoryRevision !== index + 1 ||
+        entry.result.memoryRevision !== baseline.revision + index + 1 ||
         entry.id !== outboxId(entry.result) ||
         !Number.isSafeInteger(entry.createdAt) ||
         entry.createdAt < 0 ||
