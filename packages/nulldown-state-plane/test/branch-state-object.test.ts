@@ -2,9 +2,9 @@
 // Test controls are confined to this subclass; production Worker/API paths never import it.
 import {
   BranchStateObject,
-  DurableObjectBranchSqlite,
   type BranchStateBindings,
 } from "../src/branch-state-object";
+import { DurableObjectBranchSqlite } from "../src/durable-object-sqlite";
 import {
   branchStateRpcResult,
   branchStateShardName,

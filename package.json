@@ -115,6 +115,7 @@
     "test:state-plane:native": "bun --no-env-file run scripts/state-plane/run-native-contracts.ts",
     "test:state-plane:application": "bun --no-env-file run scripts/state-plane/run-application-acceptance.ts",
     "test:state-plane:migration": "bun --no-env-file run scripts/state-plane/run-migration-rehearsal.ts",
+    "test:state-plane:writers": "bun --no-env-file run scripts/state-plane/run-writer-acceptance.ts",
     "bench:state-plane": "bun --no-env-file run scripts/state-plane/run-migration-benchmark.ts",
     "profiling:bench": "bun run scripts/profiling/check.ts --benchmark",
     "profiling:inspect": "bun run scripts/profiling/inspect.ts",

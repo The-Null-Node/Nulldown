@@ -9,9 +9,12 @@ import { createNullMemFreshnessService } from "./freshness";
 import { createNullMemMutationService } from "./mutation";
 import { createNullMemQuery } from "./query";
 import { createNullMemRepository } from "./repository";
+import type { LegacySourceWriter } from "../../../../src/server/state-plane/legacy-source-writer";
 
 /** Dependencies required to compose the branch-scoped NullMem service. */
 export interface CreateNullMemServiceOptions {
+  /** Explicit source-generation admission for legacy memory mutations. */
+  sourceWriter?: LegacySourceWriter;
   /** Blob store used to read optional capability source catalogs. */
   blobs: BlobObjectStore;
   /** SQL metadata store used to read and write memory records. */
@@ -28,6 +31,7 @@ export const createNullMemService = ({
   blobs,
   sql,
   data,
+  sourceWriter,
 }: CreateNullMemServiceOptions): NullMemApplicationService => {
   const repository = createNullMemRepository({ sql });
   const catalog = createNullMemCatalogSource({ blobs });
@@ -48,7 +52,11 @@ export const createNullMemService = ({
           "SQL metadata store is required to create memory facts.",
         );
       }
-      return mutations.createFact(request);
+      return sourceWriter
+        ? sourceWriter.run(request, "memory", () =>
+            mutations.createFact(request),
+          )
+        : mutations.createFact(request);
     },
     createProcedure: async (request) => {
       if (!sql) {
@@ -56,7 +64,11 @@ export const createNullMemService = ({
           "SQL metadata store is required to create memory procedures.",
         );
       }
-      return mutations.createProcedure(request);
+      return sourceWriter
+        ? sourceWriter.run(request, "memory", () =>
+            mutations.createProcedure(request),
+          )
+        : mutations.createProcedure(request);
     },
     delete: async (request) => {
       if (!sql) {
@@ -64,7 +76,9 @@ export const createNullMemService = ({
           "SQL metadata store is required to delete memory records.",
         );
       }
-      return mutations.delete(request);
+      return sourceWriter
+        ? sourceWriter.run(request, "memory", () => mutations.delete(request))
+        : mutations.delete(request);
     },
   };
 };

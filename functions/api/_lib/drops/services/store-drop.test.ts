@@ -65,6 +65,23 @@ describe("drop store contracts", () => {
     expect(body.error).toContain("already in use");
   });
 
+  it("rejects root creation when a legacy source fence is selected", async () => {
+    const bucket = new MemoryR2Bucket();
+    const response = await onStorePost({
+      request: createStoreRequest({ envelope: { content: "fenced" } }),
+      env: {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: createStoreDatabase() as never,
+        PUBLIC_BASE_URL: "https://nulldown.test",
+        legacySourceWriter: { run: async <T>() => undefined as T },
+      },
+    } as unknown as Parameters<typeof onStorePost>[0]);
+
+    const body = (await response.json()) as { code: string };
+    expect(response.status).toBe(501);
+    expect(body.code).toBe("capability_unsupported");
+  });
+
   it("returns 412 revision_precondition_failed from /api/store as structured JSON", async () => {
     const bucket = new MemoryR2Bucket();
     const id = "QweRty123456";

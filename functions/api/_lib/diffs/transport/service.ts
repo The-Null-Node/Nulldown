@@ -29,6 +29,7 @@ import { BranchStateError } from "../../../../../shared/drop/branch-state";
 import { branchStateErrorResponse } from "../../branches/http/state-plane-errors";
 import { createBranchRouteStatePlane } from "../../branches/http/request-context";
 import type { LocalBranchApplicationSelection } from "../../../../../src/server/state-plane/commit-application";
+import type { LegacySourceWriter } from "../../../../../src/server/state-plane/legacy-source-writer";
 import { createDropIdentityRepository } from "../../drops/identity/id";
 import {
   canReadBranch,
@@ -57,6 +58,8 @@ import {
 export interface DiffTransportEnv extends AccountAuthEnv {
   /** Explicit request-owned local authority for disposable application acceptance. */
   localBranchApplication?: LocalBranchApplicationSelection;
+  /** Trusted exact-generation admission for the isolated legacy source. */
+  legacySourceWriter?: LegacySourceWriter;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
   DIFF_WEBHOOK_SECRET?: string;

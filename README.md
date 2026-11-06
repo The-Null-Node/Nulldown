@@ -569,6 +569,13 @@ encrypted R2 archives, and a separate D1 metadata projection. A separate synthet
 migration rehearsal exercises the import boundary; see
 [State Plane staging](docs/STATE_PLANE_STAGING.md).
 
+The fenced legacy staging composition supplies an exact-branch, exact-generation
+writer capability from `src/server/state-plane/legacy-source-writer.ts`. Branch
+creation, document edits, runtime facts, and memory mutations acquire durable
+admission. Nested snapshotter writes share that admission until deferred work
+settles; uncertain operations retain it for explicit reconciliation. This
+composition rejects root writes, publication, promotion, and global backfill.
+
 For local application testing, `src/server/state-plane/commit-application.ts`
 connects local branches to the existing authenticated diff and content
 routes. Public batches share one snapshot and retain per-event retry acknowledgements.
@@ -612,6 +619,7 @@ bun run test:state-plane
 bun run test:state-plane:native
 bun run test:state-plane:application
 bun run test:state-plane:migration --evidence=/path/to/fresh/rehearsal-results
+bun run test:state-plane:writers --evidence=/path/to/fresh/writer-results
 bun run bench:state-plane
 bun run typecheck:state-plane
 ```

@@ -176,6 +176,22 @@ The gateway requires `MIGRATION_REHEARSAL_TOKEN`. Configure it through Wrangler'
 secret prompt; keep the runner's credential file outside the checkout. The
 gateway accepts only synthetic rehearsal operations.
 
+`bun run test:state-plane:writers --evidence=/path/to/fresh/writer-results`
+exercises the real Pages mutation handlers with a signed synthetic owner session.
+The trusted `fetchFencedLegacyStagingApplication` entry point requires a source
+target, generation, and admission port; the harness registers the durable gate
+before resolving the branch. Client headers cannot select this composition.
+The runner covers concurrent drain, nested memory snapshotters, exact diff
+retries, injected admission/completion response loss, migration recovery, and
+post-activation application writes. Native runs reopen the same durable storage
+at interruption points. A real CLI process uses a local fixture proxy to reach
+those handlers. Hosted runs accept the same `--base-url` and `--token-file`
+options as the migration runner; process restarts require separate redeployment.
+
+The fixture can reconcile only its own injected failures with a retained proof
+that source work never started or fully settled. It provides no general-purpose
+reconciliation endpoint for production writers.
+
 ## Logs
 
 Both Workers enable Workers Logs at full sampling. Automatic tracing is disabled:

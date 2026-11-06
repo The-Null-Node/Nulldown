@@ -4,7 +4,10 @@ import type {
   DropBranchPromoteRequest,
   DropBranchPromoteResponse,
 } from "../../../../shared/drop/branch";
-import type { BlobObjectStore, SqlMetadataStore } from "../../../../src/server/ports";
+import type {
+  BlobObjectStore,
+  SqlMetadataStore,
+} from "../../../../src/server/ports";
 import {
   resolveAuthenticatedAccountId,
   type AccountAuthEnv,
@@ -33,6 +36,7 @@ import { createPromotedEnvelope } from "../crypto/envelopes/promotion";
 import { encodeDropEnvelope } from "../../../../shared/drop/codecs/envelope-v1";
 import type { LocalBranchApplicationSelection } from "../../../../src/server/state-plane/commit-application";
 import { BranchStateError } from "../../../../shared/drop/branch-state";
+import type { LegacySourceWriter } from "../../../../src/server/state-plane/legacy-source-writer";
 import { branchStateErrorResponse } from "./http/state-plane-errors";
 import {
   createReservedRemoteJsonDrop,
@@ -70,6 +74,8 @@ const hasMatchingPromotionIdentity = (
 export interface BranchPromotionEnv extends AccountAuthEnv {
   /** Trusted local authority selection; publication and promotion require their own fencing capability. */
   localBranchApplication?: LocalBranchApplicationSelection;
+  /** Request-scoped source fence; root promotion has no compatible root-wide fence. */
+  legacySourceWriter?: LegacySourceWriter;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
   PUBLIC_BASE_URL: string;
@@ -99,10 +105,14 @@ export const promoteBranchSnapshot = async (
   }
 
   try {
-    const promotion = await readJsonBodyWithSchema(request, promotionRequestSchema, {
-      maxBytes: PROMOTION_REQUEST_MAX_BYTES,
-      validationMessage: "Invalid branch promotion request.",
-    });
+    const promotion = await readJsonBodyWithSchema(
+      request,
+      promotionRequestSchema,
+      {
+        maxBytes: PROMOTION_REQUEST_MAX_BYTES,
+        validationMessage: "Invalid branch promotion request.",
+      },
+    );
     const dropIdentityRepository = createDropIdentityRepository({
       blobs: env.R2_BUCKET,
       sql: env.DB,
@@ -120,11 +130,17 @@ export const promoteBranchSnapshot = async (
       );
     }
     if (!accountId) {
-      return jsonErrorResponse(401, "account_required", "Account ID is required.");
+      return jsonErrorResponse(
+        401,
+        "account_required",
+        "Account ID is required.",
+      );
     }
 
-    if (env.localBranchApplication)
-      return branchStateErrorResponse(new BranchStateError("capability_unsupported"));
+    if (env.localBranchApplication || env.legacySourceWriter)
+      return branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
+      );
 
     const statePlane = createBranchStatePlane({
       blobs: env.R2_BUCKET,
@@ -135,9 +151,16 @@ export const promoteBranchSnapshot = async (
       rootDropId,
       branchId,
       async (lock) => {
-        const branch = await statePlane.branches.readBranch(rootDropId, branchId);
+        const branch = await statePlane.branches.readBranch(
+          rootDropId,
+          branchId,
+        );
         if (!branch) {
-          throw new PromotionHttpError(404, "branch_not_found", "Branch not found.");
+          throw new PromotionHttpError(
+            404,
+            "branch_not_found",
+            "Branch not found.",
+          );
         }
         if (
           accountId !== branch.ownerAccountId &&
@@ -208,21 +231,32 @@ export const promoteBranchSnapshot = async (
           snapshotId: promotion.expectedSnapshotId,
           promotedFromBranchId: branchId,
         };
-        const providerEncryptionPrivateJwk = env.PROVIDER_ENCRYPTION_PRIVATE_JWK;
+        const providerEncryptionPrivateJwk =
+          env.PROVIDER_ENCRYPTION_PRIVATE_JWK;
         const providerSigningPrivateJwk = env.PROVIDER_SIGNING_PRIVATE_JWK;
-        const promotedPayload = (typeof providerEncryptionPrivateJwk === "string" &&
-        typeof providerSigningPrivateJwk === "string"
-          ? encodeDropEnvelope(await createPromotedEnvelope({
-              content,
-              accountId: branch.writerAccountId ?? branch.ownerAccountId ?? accountId,
-              metadata: promotedMetadata,
-              providerEncryptionPrivateJwk,
-              providerSigningPrivateJwk,
-            }))
-          : { content, metadata: promotedMetadata }) as Record<string, unknown>;
+        const promotedPayload = (
+          typeof providerEncryptionPrivateJwk === "string" &&
+          typeof providerSigningPrivateJwk === "string"
+            ? encodeDropEnvelope(
+                await createPromotedEnvelope({
+                  content,
+                  accountId:
+                    branch.writerAccountId ??
+                    branch.ownerAccountId ??
+                    accountId,
+                  metadata: promotedMetadata,
+                  providerEncryptionPrivateJwk,
+                  providerSigningPrivateJwk,
+                }),
+              )
+            : { content, metadata: promotedMetadata }
+        ) as Record<string, unknown>;
 
         await lock.beginCommit();
-        const promotedDropId = await reserveRemoteJsonDropId(env.R2_BUCKET, env.DB);
+        const promotedDropId = await reserveRemoteJsonDropId(
+          env.R2_BUCKET,
+          env.DB,
+        );
         const receipt: BranchPromotionReceipt = {
           version: 1,
           ...receiptIdentity,
@@ -234,17 +268,34 @@ export const promoteBranchSnapshot = async (
         };
         let receiptCreated = false;
         try {
-          receiptCreated = await createBranchPromotionReceipt(env.R2_BUCKET, receipt);
+          receiptCreated = await createBranchPromotionReceipt(
+            env.R2_BUCKET,
+            receipt,
+          );
         } catch (error) {
-          const persisted = await readBranchPromotionReceipt(env.R2_BUCKET, receiptIdentity);
+          const persisted = await readBranchPromotionReceipt(
+            env.R2_BUCKET,
+            receiptIdentity,
+          );
           if (!persisted) {
-            await releaseReservedRemoteJsonDropId(env.R2_BUCKET, promotedDropId, env.DB);
+            await releaseReservedRemoteJsonDropId(
+              env.R2_BUCKET,
+              promotedDropId,
+              env.DB,
+            );
           }
           throw error;
         }
         if (!receiptCreated) {
-          const raced = await readBranchPromotionReceipt(env.R2_BUCKET, receiptIdentity);
-          await releaseReservedRemoteJsonDropId(env.R2_BUCKET, promotedDropId, env.DB);
+          const raced = await readBranchPromotionReceipt(
+            env.R2_BUCKET,
+            receiptIdentity,
+          );
+          await releaseReservedRemoteJsonDropId(
+            env.R2_BUCKET,
+            promotedDropId,
+            env.DB,
+          );
           if (!raced || !hasMatchingPromotionIdentity(raced, promotion)) {
             throw new Error("promotion_receipt_race_unconfirmed");
           }
@@ -263,13 +314,21 @@ export const promoteBranchSnapshot = async (
       },
     );
 
-    return new Response(JSON.stringify(createPromotionResponse(result, env.PUBLIC_BASE_URL)), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify(createPromotionResponse(result, env.PUBLIC_BASE_URL)),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   } catch (error) {
     if (error instanceof PromotionHttpError) {
-      return jsonErrorResponse(error.status, error.code, error.message, error.details);
+      return jsonErrorResponse(
+        error.status,
+        error.code,
+        error.message,
+        error.details,
+      );
     }
     if (isApiHttpError(error)) return apiHttpErrorResponse(error);
     if (error instanceof BranchMutationLockError) {
@@ -280,11 +339,12 @@ export const promoteBranchSnapshot = async (
         timedOut
           ? "Branch is busy. Retry the exact same idempotency key."
           : error.outcome === "not_committed"
-          ? "Branch changed before promotion could commit. Refresh and retry."
-          : "Promotion outcome could not be confirmed. Retry the exact same idempotency key.",
+            ? "Branch changed before promotion could commit. Refresh and retry."
+            : "Promotion outcome could not be confirmed. Retry the exact same idempotency key.",
       );
     }
-    const message = error instanceof Error ? error.message : "Branch promotion failed.";
+    const message =
+      error instanceof Error ? error.message : "Branch promotion failed.";
     return jsonErrorResponse(500, "promotion_failed", message);
   }
 };

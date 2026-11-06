@@ -105,8 +105,10 @@ export const publishOwnerSnapshot = async (
       sql: env.DB,
     }).resolveRemoteDropId(resolveParam(params.rootId));
     if (!rootDropId) return fail(404, "drop_not_found", "Drop not found.");
-    if (env.localBranchApplication)
-      return branchStateErrorResponse(new BranchStateError("capability_unsupported"));
+    if (env.localBranchApplication || env.legacySourceWriter)
+      return branchStateErrorResponse(
+        new BranchStateError("capability_unsupported"),
+      );
     const statePlane = createBranchStatePlane({
       blobs: env.R2_BUCKET,
       sql: env.DB,
@@ -130,7 +132,10 @@ export const publishOwnerSnapshot = async (
               "publication_forbidden",
               "Verified root ownership is required.",
             );
-          const branch = await statePlane.branches.readBranch(rootDropId, "owner");
+          const branch = await statePlane.branches.readBranch(
+            rootDropId,
+            "owner",
+          );
           if (
             !branch ||
             branch.mode !== "owner" ||

@@ -9,7 +9,7 @@ import { SqliteSourceWriteFence } from "../../../src/server/state-plane/source-f
 import type { SourceFenceCertificate } from "../../../src/server/state-plane/source-fence";
 import { SqliteBranchMigrationStaging } from "../../../src/server/state-plane/sqlite-migration";
 import { initializeBranchSqlSchema } from "../../../src/server/state-plane/sqlite-schema";
-import { DurableObjectBranchSqlite } from "../src/branch-state-object";
+import { DurableObjectBranchSqlite } from "../src/durable-object-sqlite";
 import { branchStateShardName } from "../src/shard-router";
 import {
   createCloudflareBlobStore,
@@ -23,6 +23,7 @@ import { createBranchRuntimeFactLogRepository } from "../../../functions/api/_li
 import { createSqlNullMemRecordStore } from "../../../src/server/stores/nullmem-record-store";
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { SqliteBranchCommitStatePlane } from "../../../src/server/state-plane/sqlite-commits";
+import { WriterApplicationRehearsal } from "./writer-application.fixture";
 
 /** Synthetic-only DO harness: source gate and the real staging importer share one SQLite transaction domain. */
 export class MigrationRehearsalObject extends DurableObject<MigrationRehearsalEnv> {
@@ -30,6 +31,7 @@ export class MigrationRehearsalObject extends DurableObject<MigrationRehearsalEn
   readonly #sql: DurableObjectBranchSqlite;
   readonly #fence: SqliteSourceWriteFence;
   readonly #staging: SqliteBranchMigrationStaging;
+  readonly #application: WriterApplicationRehearsal;
 
   constructor(ctx: DurableObjectState, env: MigrationRehearsalEnv) {
     super(ctx, env);
@@ -37,6 +39,12 @@ export class MigrationRehearsalObject extends DurableObject<MigrationRehearsalEn
     this.#sql = new DurableObjectBranchSqlite(ctx.storage);
     initializeBranchSqlSchema(this.#sql);
     this.#fence = new SqliteSourceWriteFence(this.#sql);
+    this.#application = new WriterApplicationRehearsal(this.#sql, this.#fence, {
+      blobs: env.LEGACY_R2,
+      db: env.LEGACY_D1,
+      secret: env.MIGRATION_REHEARSAL_TOKEN ?? "",
+      waitUntil: (task) => ctx.waitUntil(task),
+    });
     this.#sql.execute(`CREATE TABLE IF NOT EXISTS rehearsal_certificates(
       migration_id TEXT PRIMARY KEY, manifest_json TEXT NOT NULL, certification TEXT NOT NULL)`);
     this.#sql.execute(`CREATE TABLE IF NOT EXISTS rehearsal_payload_chunks(
@@ -677,7 +685,18 @@ export class MigrationRehearsalObject extends DurableObject<MigrationRehearsalEn
         acknowledgement: JSON.parse(row.acknowledgement_json),
       }));
     const importedSnapshots = [];
-    for (let snapshotId = 0; snapshotId <= 2; snapshotId++) {
+    const snapshotIds = this.#sql
+      .rows<{ chunk_json: string }>(
+        "SELECT chunk_json FROM rehearsal_payload_chunks WHERE migration_id=? ORDER BY chunk_index",
+        migrationId,
+      )
+      .flatMap(
+        (row) => (JSON.parse(row.chunk_json) as BranchMigrationChunk).payload,
+      )
+      .filter((record) => record.kind === "snapshot")
+      .map((record) => record.value.snapshot.snapshotId)
+      .sort((a, b) => a - b);
+    for (const snapshotId of snapshotIds) {
       const discovered = await plane.readSnapshot({ ...query, snapshotId });
       if (!discovered) throw Error("state_corrupt");
       const content = await plane.readContent({
@@ -749,6 +768,44 @@ export class MigrationRehearsalObject extends DurableObject<MigrationRehearsalEn
         ? input.action
         : "unknown";
       const actions: Record<string, () => unknown> = {
+        registerApplication: () =>
+          this.#application.register(input.target as BranchStateTarget),
+        applicationRequest: () =>
+          this.#application.request(input.target as BranchStateTarget, {
+            path: input.path,
+            method: input.method,
+            body: input.body,
+            requestId: input.requestId,
+            generation: input.generation,
+          }),
+        destinationRequest: () => {
+          if (
+            this.#staging.getProgress(expectedMigration).phase !== "activated"
+          )
+            throw Error("branch_initialization_pending");
+          return this.#application.request(
+            input.target as BranchStateTarget,
+            {
+              path: input.path,
+              method: input.method,
+              body: input.body,
+              requestId: input.requestId,
+            },
+            true,
+          );
+        },
+        applicationFault: () =>
+          this.#application.fault(
+            input.target as BranchStateTarget,
+            input.fault,
+          ),
+        applicationRelease: () =>
+          this.#application.release(input.target as BranchStateTarget),
+        reconcileApplication: () =>
+          this.#application.reconcile(input.target as BranchStateTarget),
+        sourceState: () => this.#fence.read(input.target as BranchStateTarget),
+        sourceFence: () =>
+          this.#fence.fence(input.certificate as SourceFenceCertificate),
         staleWriter: () =>
           this.staleWriter(
             input.target as BranchStateTarget,
@@ -870,8 +927,9 @@ export class MigrationRehearsalObject extends DurableObject<MigrationRehearsalEn
     if (
       !target ||
       !/^MigrationRehearsal-[A-Za-z0-9_-]{1,32}$/.test(target.rootDropId) ||
-      target.branchId !==
-        `writer-${target.rootDropId.slice("MigrationRehearsal-".length)}`
+      (target.branchId !== "owner" &&
+        target.branchId !==
+          `writer-${target.rootDropId.slice("MigrationRehearsal-".length)}`)
     )
       throw Error("rehearsal_scope_denied");
   }
@@ -975,8 +1033,9 @@ export default {
     if (
       !target ||
       !/^MigrationRehearsal-[A-Za-z0-9_-]{1,32}$/.test(target.rootDropId) ||
-      target.branchId !==
-        `writer-${target.rootDropId.slice("MigrationRehearsal-".length)}`
+      (target.branchId !== "owner" &&
+        target.branchId !==
+          `writer-${target.rootDropId.slice("MigrationRehearsal-".length)}`)
     )
       return new Response(null, { status: 400 });
     const shard = await branchStateShardName({

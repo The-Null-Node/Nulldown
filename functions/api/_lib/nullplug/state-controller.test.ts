@@ -7,9 +7,16 @@ import {
   nullplugUiRuntimeFactId,
   nullplugUiStatePatchFactKey,
 } from "../../../../shared/nullplug/ui";
-import { createBranchKey, createCheckpointKey } from "../branches/storage/keys";
+import {
+  createBranchKey,
+  createCheckpointKey,
+  createBranchRuntimeFactEventPrefix,
+} from "../branches/storage/keys";
 import { createBranchRuntimeFactLogRepository } from "../branches/storage/runtime-fact-log";
 import { MemoryR2Bucket } from "./testing/storage-fixture";
+import { LocalBranchSqlite } from "../../../../src/server/state-plane/local-sqlite";
+import { SqliteSourceWriteFence } from "../../../../src/server/state-plane/source-fence";
+import { createLegacySourceWriter } from "../../../../src/server/state-plane/legacy-source-writer";
 
 const rootDropId = "RootDrop1122";
 const branchId = "clone_author";
@@ -122,6 +129,147 @@ describe("functions api nullplug state contracts", () => {
     await expect(
       bucket.get(body.key).then((object) => object?.json()),
     ).resolves.toEqual(body.fact);
+  });
+
+  it("admits canonical state writes and refuses frozen or wrong-scope writers before fact/log mutation", async () => {
+    const sql = new LocalBranchSqlite();
+    try {
+      const bucket = createSeededBucket();
+      const gate = new SqliteSourceWriteFence(sql);
+      gate.register({ rootDropId, branchId });
+      const writer = createLegacySourceWriter({
+        target: { rootDropId, branchId },
+        generation: 0,
+        admission: gate,
+      });
+      const invoke = (id: string, legacySourceWriter = writer) =>
+        onRequest({
+          request: createStateRequest({
+            ...createPatchFact(),
+            id,
+            callId: id,
+            source: { ...createPatchFact().source, callId: id },
+          }),
+          env: {
+            R2_BUCKET: bucket as unknown as R2Bucket,
+            ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+            legacySourceWriter,
+          },
+          params: {},
+        } as unknown as Parameters<typeof onRequest>[0]);
+
+      const admitted = await invoke("admitted");
+      expect(admitted.status).toBe(200);
+      expect(gate.read({ rootDropId, branchId })).toMatchObject({
+        active: 0,
+        phase: "legacy",
+      });
+
+      const keysBeforeStale = (await bucket.list()).objects.map(
+        (item: { key: string }) => item.key,
+      );
+      const stale = await onRequest({
+        request: createStateRequest({
+          ...createPatchFact(),
+          id: "stale-fenced",
+          source: {
+            ...createPatchFact().source,
+            sourceContentHash: "sha256:stale",
+          },
+        }),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+          legacySourceWriter: writer,
+        },
+        params: {},
+      } as unknown as Parameters<typeof onRequest>[0]);
+      expect(stale.status).toBe(409);
+      expect(
+        (await bucket.list()).objects.map((item: { key: string }) => item.key),
+      ).toEqual(keysBeforeStale);
+      expect(gate.read({ rootDropId, branchId }).active).toBe(0);
+
+      gate.fence({
+        target: { rootDropId, branchId },
+        sourceGeneration: 0,
+        migrationId: "cutover",
+      });
+      const putsBefore = jest.spyOn(bucket, "put");
+      const frozen = await invoke("frozen");
+      expect(frozen.status).toBe(409);
+      expect(
+        putsBefore.mock.calls.filter(
+          ([key]) => !String(key).startsWith("__drop_branch_lock__/"),
+        ),
+      ).toHaveLength(0);
+      expect(gate.read({ rootDropId, branchId }).active).toBe(0);
+
+      const wrongTarget = createLegacySourceWriter({
+        target: { rootDropId, branchId: "clone_other" },
+        generation: 0,
+        admission: gate,
+      });
+      const wrong = await invoke("wrong-target", wrongTarget);
+      expect(wrong.status).toBe(409);
+      expect(
+        putsBefore.mock.calls.filter(
+          ([key]) => !String(key).startsWith("__drop_branch_lock__/"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      sql.close();
+    }
+  });
+
+  it("retains durable admission when the canonical fact is written but runtime-log append fails", async () => {
+    const sql = new LocalBranchSqlite();
+    try {
+      const bucket = createSeededBucket();
+      const gate = new SqliteSourceWriteFence(sql);
+      const target = { rootDropId, branchId };
+      gate.register(target);
+      const writer = createLegacySourceWriter({
+        target,
+        generation: 0,
+        admission: gate,
+      });
+      const originalPut = bucket.put.bind(bucket);
+      jest
+        .spyOn(bucket, "put")
+        .mockImplementation(async (key, value, options) => {
+          if (
+            String(key).startsWith(
+              createBranchRuntimeFactEventPrefix(rootDropId, branchId),
+            )
+          ) {
+            throw new Error("injected runtime-log write failure");
+          }
+          return originalPut(key, value, options);
+        });
+      const fact = {
+        ...createPatchFact(),
+        id: "partial-canonical",
+        callId: "partial-canonical",
+        source: { ...createPatchFact().source, callId: "partial-canonical" },
+      };
+      const response = await onRequest({
+        request: createStateRequest(fact),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+          legacySourceWriter: writer,
+        },
+        params: {},
+      } as unknown as Parameters<typeof onRequest>[0]);
+      expect(response.status).toBe(503);
+      expect(
+        await bucket.get(nullplugUiStatePatchFactKey(fact)),
+      ).not.toBeNull();
+      expect(gate.read(target)).toMatchObject({ phase: "legacy", active: 1 });
+    } finally {
+      sql.close();
+    }
   });
 
   it("repairs duplicate state facts and keeps same ids distinct by call", async () => {

@@ -65,6 +65,7 @@ export const createCloudflareBackendRuntime = (
         blobs: createCloudflareBlobStore(bindings.R2_BUCKET),
         sql: createCloudflareSqlStore(bindings.DB),
         data,
+        sourceWriter: bindings.legacySourceWriter,
       });
   const nulledit = createCloudflareNulleditRuntime(
     bindings,

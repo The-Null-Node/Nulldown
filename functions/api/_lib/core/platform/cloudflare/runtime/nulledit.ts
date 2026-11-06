@@ -6,6 +6,7 @@ import { createNulleditSnapshotterRegistry } from "../../../../../../../src/serv
 import { createCommitApplicationStatePlane } from "../../../../../../../src/server/state-plane/commit-application";
 import { BranchStateError } from "../../../../../../../shared/drop/branch-state";
 import { appendEventsToBranch } from "../../../../nulledit/service";
+import { createNullMemService } from "../../../../nullmem/service";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
@@ -52,6 +53,32 @@ export const createCloudflareNulleditRuntime = (
     registerSnapshotter: registerCloudflareSnapshotter,
     yieldNext: getCloudflareSnapshotterYieldNext,
     appendDiffEvents: ({ branch, events, ...options }) => {
+      if (bindings.legacySourceWriter) {
+        return bindings.legacySourceWriter.run(branch, "document", (work) => {
+          const scopedMemory = createNullMemService({
+            blobs,
+            sql,
+            data,
+            sourceWriter: work.writer,
+          });
+          return appendEventsToBranch(
+            blobs,
+            branch,
+            events,
+            {
+              ...options,
+              data,
+              sourceWriter: work.writer,
+              snapshotters: [
+                ...listCloudflareSnapshotters(bindings, data, scopedMemory),
+                ...(options.snapshotters ?? []),
+              ],
+            },
+            sql,
+            timing,
+          );
+        });
+      }
       const registeredSnapshotters = listCloudflareSnapshotters(
         bindings,
         data,
@@ -90,6 +117,8 @@ export const repairCloudflareBufferedCommitsForQuery = async (
   if (bindings.localBranchApplication) {
     throw new BranchStateError("capability_unsupported");
   }
+  // Fenced appends settle all snapshotters under their permit and never buffer.
+  if (bindings.legacySourceWriter) return;
   if (!bindings.DB) return;
 
   await flushBranchCommitBufferSnapshotters({

@@ -4,22 +4,26 @@ or already-sealed envelopes, optionally adds a provider signature, and reserves 
 short-id alias namespace that `/d/:id` later resolves through.
 */
 
-import type { BlobObjectStore, SqlMetadataStore } from "../../../../../src/server/ports";
+import type {
+  BlobObjectStore,
+  SqlMetadataStore,
+} from "../../../../../src/server/ports";
 import {
   DROP_ID_LENGTH,
   generateDropId,
   isDropIdToken,
   toShortDropId,
 } from "../../../../../shared/drop/id";
-import {
-  type DropEnvelope,
-} from "../../../../../shared/drop/types";
+import { type DropEnvelope } from "../../../../../shared/drop/types";
 import { isDropPayload } from "../../../../../shared/drop/codecs/draft-pack-v1";
 import {
   decodeDropEnvelope,
   encodeDropEnvelope,
 } from "../../../../../shared/drop/codecs/envelope-v1";
-import { signProviderEnvelope, type ProviderSigningEnv } from "../../crypto/envelopes/signing";
+import {
+  signProviderEnvelope,
+  type ProviderSigningEnv,
+} from "../../crypto/envelopes/signing";
 import { syncPublicDropIndexForEnvelope } from "../index/repository";
 import { createDropIdentityRepository } from "../identity/id";
 import {
@@ -34,6 +38,7 @@ import { toLogRef, type RequestLogger } from "../../core/logging/logger";
 import { createSearchDatabase } from "../../search/repository";
 import { createBranchRepository } from "../../branches/storage/repository";
 import type { LocalBranchApplicationSelection } from "../../../../../src/server/state-plane/commit-application";
+import type { LegacySourceWriter } from "../../../../../src/server/state-plane/legacy-source-writer";
 import {
   AccountLibraryError,
   projectAccountLibraryEnvelope,
@@ -48,6 +53,8 @@ import {
 export interface StoreServiceEnv extends ProviderSigningEnv {
   /** Trusted local authority selection; root replacement needs a separate durable publication fence. */
   localBranchApplication?: LocalBranchApplicationSelection;
+  /** Request-scoped fence cannot serialize root creation or replacement. */
+  legacySourceWriter?: LegacySourceWriter;
   blobs: BlobObjectStore;
   sql?: SqlMetadataStore;
   PUBLIC_BASE_URL?: string;
@@ -100,7 +107,10 @@ const sanitizeRevision = (value: unknown): string | null => {
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  const unwrapped = trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
+  const unwrapped =
+    trimmed.startsWith('"') && trimmed.endsWith('"')
+      ? trimmed.slice(1, -1)
+      : trimmed;
   return unwrapped || null;
 };
 
@@ -257,6 +267,17 @@ export const storeDrop = async ({
   try {
     validateEnv(env);
 
+    // Root store mutations are outside a per-branch source fence. Reject all
+    // store writes while one is selected, including creation, before R2/SQL.
+    if (env.legacySourceWriter) {
+      logger.logEnd(501, { reason: "capability_unsupported" });
+      return jsonErrorResponse(
+        501,
+        "capability_unsupported",
+        "Root storage is unavailable for the selected branch authority.",
+      );
+    }
+
     const contentType = request.headers.get("Content-Type") || "";
     const isJson = contentType.includes("application/json");
     const rawBody = await request.text();
@@ -319,7 +340,10 @@ export const storeDrop = async ({
       }
 
       if (requestedId && upsert) {
-        rootMutationLock = await acquireRootMutationLock(env.blobs, requestedId);
+        rootMutationLock = await acquireRootMutationLock(
+          env.blobs,
+          requestedId,
+        );
         const existingObject = await env.blobs.head(requestedId);
         const existingAccountLibraryEntry = env.sql
           ? await readAccountLibraryEntry(env.sql, requestedId)
@@ -336,10 +360,12 @@ export const storeDrop = async ({
           );
         }
 
-        protectedRootOwnerAccountId = existingAccountLibraryEntry?.account_id ?? null;
+        protectedRootOwnerAccountId =
+          existingAccountLibraryEntry?.account_id ?? null;
 
         if (existingObject && !writeExpectedRevision) {
-          writeExpectedRevision = existingObject.etag ?? existingObject.httpEtag ?? null;
+          writeExpectedRevision =
+            existingObject.etag ?? existingObject.httpEtag ?? null;
           if (!writeExpectedRevision) {
             logger.logEnd(503, {
               reason: "object_revision_unavailable",
@@ -463,10 +489,20 @@ export const storeDrop = async ({
     // Resolution/branch bootstrap shares the root lease, so an upsert cannot
     // race snapshot zero creation and leave an older owner timeline behind.
     if (requestedId && upsert && rootMutationLock) {
-      const ownerBranch = await createBranchRepository({ blobs: env.blobs, sql: env.sql }).readBranch(requestedId, "owner");
+      const ownerBranch = await createBranchRepository({
+        blobs: env.blobs,
+        sql: env.sql,
+      }).readBranch(requestedId, "owner");
       if (ownerBranch) {
-        logger.logEnd(409, { reason: "owner_branch_publication_required", requestedDropRef: toLogRef(requestedId) });
-        return jsonErrorResponse(409, "owner_branch_publication_required", "This root has owner history. Edit and publish the owner branch instead of replacing the root.");
+        logger.logEnd(409, {
+          reason: "owner_branch_publication_required",
+          requestedDropRef: toLogRef(requestedId),
+        });
+        return jsonErrorResponse(
+          409,
+          "owner_branch_publication_required",
+          "This root has owner history. Edit and publish the owner branch instead of replacing the root.",
+        );
       }
     }
 
@@ -552,10 +588,15 @@ export const storeDrop = async ({
           requestedDropRef: toLogRef(requestedId),
           upsert,
         });
-        return jsonErrorResponse(409, "object_conflict", "Drop ID already exists.", {
-          requestedDropRef: toLogRef(requestedId),
-          upsert,
-        });
+        return jsonErrorResponse(
+          409,
+          "object_conflict",
+          "Drop ID already exists.",
+          {
+            requestedDropRef: toLogRef(requestedId),
+            upsert,
+          },
+        );
       }
 
       id = requestedId;
@@ -670,11 +711,14 @@ export const storeDrop = async ({
     }
 
     if (payloadKind !== "drop_envelope") {
-      const indexContent = payloadKind === "plain_text"
-        ? rawBody
-        : (parsedDropPayload && typeof (parsedDropPayload as Record<string, unknown>).content === "string"
+      const indexContent =
+        payloadKind === "plain_text"
+          ? rawBody
+          : parsedDropPayload &&
+              typeof (parsedDropPayload as Record<string, unknown>).content ===
+                "string"
             ? String((parsedDropPayload as Record<string, unknown>).content)
-            : storedPayload);
+            : storedPayload;
       await indexDropForSearch(
         env.sql,
         id,

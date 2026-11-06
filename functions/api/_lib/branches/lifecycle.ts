@@ -9,8 +9,12 @@ import type {
   SqlMetadataStore,
 } from "../../../../src/server/ports";
 import { decryptProviderEscrowEnvelope } from "../crypto/envelopes/provider-escrow";
-import { acquireRootMutationLock, type RootMutationLock } from "../drops/storage/mutation-lock";
+import {
+  acquireRootMutationLock,
+  type RootMutationLock,
+} from "../drops/storage/mutation-lock";
 import { ApiHttpError } from "../core/http/responses";
+import type { LegacySourceWriter } from "../../../../src/server/state-plane/legacy-source-writer";
 import { readBranchContent } from "./content/replay";
 import {
   DEFAULT_CHECKPOINT_INTERVAL,
@@ -43,7 +47,8 @@ const publishedSnapshot = (
   metadata: Record<string, unknown> | undefined,
   rootDropId: string,
 ): number | undefined => {
-  const value = metadata?.ownerPublication as Record<string, unknown> | undefined;
+  const value = metadata?.ownerPublication as
+    Record<string, unknown> | undefined;
   return value &&
     value.rootDropId === rootDropId &&
     value.branchId === "owner" &&
@@ -60,13 +65,18 @@ export const assertOwnerRootHistory = async (
   db?: SqlMetadataStore,
 ): Promise<void> => {
   const published = await readBranchContent(
-    bucket, state.rootDropId, OWNER_BRANCH_ID, state.publishedSnapshotId ?? 0, db,
+    bucket,
+    state.rootDropId,
+    OWNER_BRANCH_ID,
+    state.publishedSnapshotId ?? 0,
+    db,
   );
   if (published !== state.baseContent) {
     throw new ApiHttpError({
       status: 409,
       code: "owner_root_history_conflict",
-      message: "Stored root and owner history diverged. Reconcile them before editing or publishing.",
+      message:
+        "Stored root and owner history diverged. Reconcile them before editing or publishing.",
     });
   }
 };
@@ -461,11 +471,49 @@ export const resolveBranchForActor = async (
   clientId: string | null,
   rawProviderPrivateKey?: string,
   db?: SqlMetadataStore,
+  sourceWriter?: LegacySourceWriter,
 ): Promise<{ branch: DropBranchRecord; created: boolean }> => {
   const lock = await acquireRootMutationLock(bucket, rootDropId);
   try {
+    if (sourceWriter) {
+      const owner = await getOwnerAccountIdForDrop(bucket, rootDropId);
+      const writerKey = createWriterKey(accountId, clientId);
+      const mappedBranchId = await readWriterBranchId(
+        bucket,
+        rootDropId,
+        writerKey,
+        db,
+      );
+      const mappedBranch = mappedBranchId
+        ? await createBranchRepository({ blobs: bucket, sql: db }).readBranch(
+            rootDropId,
+            mappedBranchId,
+          )
+        : null;
+      const branchId =
+        owner && owner === accountId
+          ? OWNER_BRANCH_ID
+          : (mappedBranch?.branchId ?? createCloneBranchId(writerKey));
+      return await sourceWriter.run({ rootDropId, branchId }, "lifecycle", () =>
+        resolveBranchForActorUnderRootLock(
+          bucket,
+          rootDropId,
+          accountId,
+          clientId,
+          lock,
+          rawProviderPrivateKey,
+          db,
+        ),
+      );
+    }
     return await resolveBranchForActorUnderRootLock(
-      bucket, rootDropId, accountId, clientId, lock, rawProviderPrivateKey, db,
+      bucket,
+      rootDropId,
+      accountId,
+      clientId,
+      lock,
+      rawProviderPrivateKey,
+      db,
     );
   } finally {
     await lock.release();
@@ -533,7 +581,11 @@ const resolveBranchForActorUnderRootLock = async (
       existingBranchId,
     );
     if (existingBranch) {
-      const upgraded = await ensureBranchSnapshotHeap(bucket, existingBranch, db);
+      const upgraded = await ensureBranchSnapshotHeap(
+        bucket,
+        existingBranch,
+        db,
+      );
       return { branch: upgraded, created: false };
     }
   }
@@ -570,7 +622,12 @@ export const backfillBranchToSnapshotHeap = async (
   rootDropId: string,
   branchId: string,
   db?: SqlMetadataStore,
+  sourceWriter?: LegacySourceWriter,
 ): Promise<DropBranchRecord | null> => {
+  if (sourceWriter)
+    return sourceWriter.run({ rootDropId, branchId }, "maintenance", () =>
+      backfillBranchToSnapshotHeap(bucket, rootDropId, branchId, db),
+    );
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const existing = await branchRepository.readBranch(rootDropId, branchId);
   if (!existing) {
@@ -578,7 +635,10 @@ export const backfillBranchToSnapshotHeap = async (
   }
 
   return withBranchMutationLock(bucket, rootDropId, branchId, async (lock) => {
-    const current = await branchRepository.readBranchWithEtag(rootDropId, branchId);
+    const current = await branchRepository.readBranchWithEtag(
+      rootDropId,
+      branchId,
+    );
     if (!current) {
       return null;
     }
