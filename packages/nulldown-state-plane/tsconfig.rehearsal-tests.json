@@ -1,7 +1,6 @@
 {
-  "extends": "./tsconfig.json",
+  "extends": "../../tsconfig.check.functions.json",
   "include": [
-    "worker-configuration.d.ts",
     "migration-rehearsal-configuration.d.ts",
     "test/migration-rehearsal.fixture.ts",
     "test/*benchmark*.fixture.ts"

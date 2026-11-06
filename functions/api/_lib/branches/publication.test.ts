@@ -106,6 +106,21 @@ describe("same-root owner publication", () => {
   });
   afterEach(() => jest.restoreAllMocks());
 
+  it("rejects root publication under a legacy source fence before canonical writes", async () => {
+    const f = await setup();
+    const put = jest.spyOn(f.bucket, "put");
+    Object.assign(f.env, {
+      legacySourceWriter: { run: async <T>() => undefined as T },
+    });
+
+    const response = await f.publish();
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({
+      code: "capability_unsupported",
+    });
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it.each([account, "reader"])(
     "does not bootstrap %s from an old root after losing its root lease",
     async (actor) => {

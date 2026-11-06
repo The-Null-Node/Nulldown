@@ -3,11 +3,14 @@ import type {
   SqlMetadataStore,
 } from "../../../../../../src/server/ports";
 import type { LocalBranchApplicationSelection } from "../../../../../../src/server/state-plane/commit-application";
+import type { LegacySourceWriter } from "../../../../../../src/server/state-plane/legacy-source-writer";
 
 /** Environment required by D1 metadata backfill. */
 export interface MetadataBackfillEnv {
   /** Request-owned local authority; legacy metadata backfill is unsupported. */
   localBranchApplication?: LocalBranchApplicationSelection;
+  /** Request-owned source fence; global metadata maintenance has no compatible root fence. */
+  legacySourceWriter?: LegacySourceWriter;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
   METADATA_BACKFILL_TOKEN?: string;

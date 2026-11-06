@@ -6,7 +6,10 @@ import {
   createCloudflareSqlStore,
 } from "../_lib/core/platform/cloudflare/storage";
 
-interface Env extends Pick<ResolvedHeapEnv, "localBranchApplication"> {
+interface Env extends Pick<
+  ResolvedHeapEnv,
+  "localBranchApplication" | "legacySourceWriter"
+> {
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   ACCOUNT_AUTH_SECRET?: string;
@@ -20,6 +23,7 @@ export const onRequest: PagesFunction<Env> = async ({ env, request }) =>
     request: request as unknown as Request,
     env: {
       localBranchApplication: env.localBranchApplication,
+      legacySourceWriter: env.legacySourceWriter,
       R2_BUCKET: createCloudflareBlobStore(env.R2_BUCKET),
       DB: createCloudflareSqlStore(env.DB),
       ACCOUNT_AUTH_SECRET: env.ACCOUNT_AUTH_SECRET,

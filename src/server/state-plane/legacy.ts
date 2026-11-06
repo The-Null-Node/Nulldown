@@ -10,6 +10,7 @@ import { createBranchRepository } from "../../../functions/api/_lib/branches/sto
 import type { BlobObjectStore, SqlMetadataStore } from "../ports";
 import type { BranchStatePlane } from "./contracts";
 import { createLegacyBranchDiffPolling } from "./legacy-diffs";
+import type { LegacySourceWriter } from "./legacy-source-writer";
 import {
   unobserved,
   type Timing,
@@ -17,6 +18,8 @@ import {
 
 /** Existing platform ports retained for the lifetime of a legacy request adapter. */
 export interface LegacyBranchStatePlaneOptions {
+  /** Required by the fenced legacy composition; omitted by the unchanged legacy deployment. */
+  sourceWriter?: LegacySourceWriter;
   /** Existing blob port; the adapter does not introduce a new persistence format. */
   blobs: BlobObjectStore;
   /** Optional metadata projection, preserving blob-only fallback behavior. */
@@ -33,6 +36,7 @@ export const createLegacyBranchStatePlane = ({
   sql,
   providerPrivateKey,
   timing = unobserved,
+  sourceWriter,
 }: LegacyBranchStatePlaneOptions): BranchStatePlane => {
   const repository = createBranchRepository({ blobs, sql });
   return {
@@ -50,6 +54,7 @@ export const createLegacyBranchStatePlane = ({
           clientId,
           providerPrivateKey,
           sql,
+          sourceWriter,
         ),
     },
     snapshots: {
@@ -73,7 +78,13 @@ export const createLegacyBranchStatePlane = ({
       listBranchesForRootPage: (rootDropId, limit, cursor) =>
         repository.listBranchesForRootPage(rootDropId, limit, cursor),
       backfillSnapshotHeap: (rootDropId, branchId) =>
-        backfillBranchToSnapshotHeap(blobs, rootDropId, branchId, sql),
+        backfillBranchToSnapshotHeap(
+          blobs,
+          rootDropId,
+          branchId,
+          sql,
+          sourceWriter,
+        ),
     },
   };
 };

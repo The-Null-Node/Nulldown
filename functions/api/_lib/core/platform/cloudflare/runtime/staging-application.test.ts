@@ -6,11 +6,14 @@ import type {
 } from "@cloudflare/workers-types";
 import {
   fetchStagingApplication,
+  fetchFencedLegacyStagingApplication,
+  type FencedLegacyStagingDependencies,
   type StagingApplicationDependencies,
 } from "../../../../../../../packages/nulldown-state-plane/src/staging-api";
 import stagingApi from "../../../../../../../packages/nulldown-state-plane/src/staging-api";
 import { createStagingBranchApplication } from "../../../../../../../packages/nulldown-state-plane/src/staging-selection";
 import type { BranchStateRpcStub } from "../../../../../../../packages/nulldown-state-plane/src/shard-router";
+import type { SourceWritePermit } from "../../../../../../../src/server/state-plane/source-fence";
 import { BranchStateError } from "../../../../../../../shared/drop/branch-state";
 import { serializeAccountProof } from "../../../../accounts/identity/proof";
 import { ACCOUNT_RECORD_PREFIX } from "../../../../accounts/identity/repository";
@@ -140,6 +143,63 @@ const authenticatedResolve = async () => {
 };
 
 describe("isolated staging API composition", () => {
+  it("fails closed before dispatch when the required legacy source authority is absent or malformed", async () => {
+    const { bindings, execution, pending, db } = setup();
+    const target = { rootDropId: "fenced-root", branchId: "owner" };
+    for (const authority of [
+      undefined,
+      {},
+      { target, generation: 0 },
+      { target, generation: -1, admission: { admit() {}, complete() {} } },
+      { target: null, generation: 0, admission: { admit() {}, complete() {} } },
+    ]) {
+      const response = await fetchFencedLegacyStagingApplication(
+        new Request<unknown, IncomingRequestCfProperties>(
+          "https://staging.example/api/store",
+          { method: "POST", body: "{}" },
+        ),
+        {
+          ...bindings,
+          LEGACY_SOURCE_AUTHORITY: authority,
+        } as unknown as FencedLegacyStagingDependencies,
+        execution,
+      );
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        code: "staging_configuration_unavailable",
+      });
+    }
+    await Promise.all(pending);
+    expect(db.sqlLog).toEqual([]);
+  });
+
+  it("requires no destination RPC for the fenced legacy composition and rejects root writes", async () => {
+    const { bindings, execution, pending } = setup();
+    const admission = {
+      admit: jest.fn(async (permit: SourceWritePermit) => permit),
+      complete: jest.fn(async () => undefined),
+    };
+    const fencedBindings = {
+      ...bindings,
+      STATE_PLANE: undefined,
+      LEGACY_SOURCE_AUTHORITY: {
+        target: { rootDropId: "fenced-root", branchId: "owner" },
+        generation: 0,
+        admission,
+      },
+    };
+    const response = await fetchFencedLegacyStagingApplication(
+      new Request<unknown, IncomingRequestCfProperties>(
+        "https://staging.example/api/store",
+        { method: "POST", body: "{}" },
+      ),
+      fencedBindings,
+      execution,
+    );
+    await Promise.all(pending);
+    expect(response.status).toBe(501);
+    expect(admission.admit).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     jest.spyOn(console, "info").mockImplementation(() => {});
     jest.spyOn(console, "warn").mockImplementation(() => {});

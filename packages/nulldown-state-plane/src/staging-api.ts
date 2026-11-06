@@ -31,6 +31,15 @@ import {
   type StagingSelectionDependencies,
 } from "./staging-selection";
 import type { BranchStateRpcStub } from "./shard-router";
+import {
+  BranchStateQuery,
+  type BranchStateTarget,
+} from "../../../shared/drop/branch-state";
+import {
+  createLegacySourceWriter,
+  type SourceMutationKind,
+  type SourceWriterAdmission,
+} from "../../../src/server/state-plane/legacy-source-writer";
 
 /** Request-bound dependencies of the isolated API gateway; deployment wiring supplies these ports. */
 export interface StagingApplicationDependencies extends StagingSelectionDependencies {
@@ -41,15 +50,35 @@ export interface StagingApplicationDependencies extends StagingSelectionDependen
   LOG_LEVEL?: string;
 }
 
+/** Trusted, request-independent source-fence authority for isolated legacy staging. */
+export interface FencedLegacyStagingAuthority {
+  target: BranchStateTarget;
+  generation: number;
+  admission: SourceWriterAdmission;
+}
+
+/** Dependencies for a legacy-source staging request; authority is injected by trusted deployment wiring. */
+export interface FencedLegacyStagingDependencies extends Omit<
+  StagingApplicationDependencies,
+  "STATE_PLANE"
+> {
+  LEGACY_SOURCE_AUTHORITY: FencedLegacyStagingAuthority;
+}
+
 type StagingGatewayDependencies = Omit<
   StagingApplicationDependencies,
   "STATE_PLANE"
 > & { STATE_PLANE: unknown };
 
-type ApplicationEnvironment = StagingApplicationDependencies & {
-  localBranchApplication: ReturnType<typeof createStagingBranchApplication>;
+type ApplicationEnvironment = Omit<
+  StagingApplicationDependencies,
+  "STATE_PLANE"
+> & {
+  localBranchApplication?: ReturnType<typeof createStagingBranchApplication>;
+  legacySourceWriter?: ReturnType<typeof createLegacySourceWriter>;
   ALLOW_INSECURE_ACCOUNT_HEADER: "0";
   PUBLIC_BASE_URL: string;
+  ASSETS: { fetch: typeof fetch };
 };
 type RouteParams = "id" | "rootId" | "branchId" | "recordId";
 type Route = {
@@ -209,6 +238,37 @@ export async function fetchStagingApplication(
   bindings: StagingGatewayDependencies,
   execution: Pick<ExecutionContext, "waitUntil">,
 ): Promise<Response> {
+  return fetchApplication(request, bindings, execution, {
+    mode: "state-plane",
+  });
+}
+
+/**
+ * Runs the same authenticated Pages adapters against the trusted, fenced legacy source.
+ * The source gate must already be registered for this exact target/generation. Missing
+ * or malformed authority fails closed; request data never selects writer scope.
+ */
+export async function fetchFencedLegacyStagingApplication(
+  request: Request<unknown, IncomingRequestCfProperties>,
+  bindings: FencedLegacyStagingDependencies,
+  execution: Pick<ExecutionContext, "waitUntil">,
+): Promise<Response> {
+  return fetchApplication(request, bindings, execution, {
+    mode: "fenced-legacy",
+    authority: bindings.LEGACY_SOURCE_AUTHORITY,
+  });
+}
+
+async function fetchApplication(
+  request: Request<unknown, IncomingRequestCfProperties>,
+  bindings: Omit<StagingGatewayDependencies, "STATE_PLANE"> & {
+    STATE_PLANE?: unknown;
+  },
+  execution: Pick<ExecutionContext, "waitUntil">,
+  selection:
+    | { mode: "state-plane" }
+    | { mode: "fenced-legacy"; authority: FencedLegacyStagingAuthority },
+): Promise<Response> {
   const path = new URL(request.url).pathname;
   let summaryReason = "state_unavailable";
   const rejected = (status: number, code: string): Response => {
@@ -240,22 +300,82 @@ export async function fetchStagingApplication(
           !bindings.DB
         )
           return rejected(503, "staging_configuration_unavailable");
-        if (!isBranchStateRpcStub(bindings.STATE_PLANE))
+        if (
+          selection.mode === "state-plane" &&
+          !isBranchStateRpcStub(bindings.STATE_PLANE)
+        )
           return rejected(503, "staging_configuration_unavailable");
-        const validatedBindings: StagingSelectionDependencies = {
-          ENVIRONMENT: bindings.ENVIRONMENT,
-          R2_BUCKET: bindings.R2_BUCKET,
-          DB: bindings.DB,
-          STATE_PLANE: bindings.STATE_PLANE,
-          PROVIDER_ENCRYPTION_PRIVATE_JWK:
-            bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK,
-        };
         const forwarded = input
           ? new Request<unknown, IncomingRequestCfProperties>(input, {
               ...init,
               cf: request.cf,
             })
           : request;
+        let legacySourceWriter:
+          ReturnType<typeof createLegacySourceWriter> | undefined;
+        if (selection.mode === "fenced-legacy") {
+          const authority = selection.authority;
+          if (
+            !authority ||
+            !Number.isSafeInteger(authority.generation) ||
+            authority.generation < 0 ||
+            !authority.admission ||
+            typeof authority.admission.admit !== "function" ||
+            typeof authority.admission.complete !== "function"
+          )
+            return rejected(503, "staging_configuration_unavailable");
+          try {
+            const captured = BranchStateQuery.head({
+              target: authority.target,
+              placement: {
+                routingVersion: 1,
+                generation: authority.generation,
+              },
+            });
+            const target = captured.target;
+            const requestId =
+              forwarded.headers.get("x-request-id") ?? crypto.randomUUID();
+            const operationId =
+              forwarded.headers.get("x-operation-id") ?? crypto.randomUUID();
+            legacySourceWriter = createLegacySourceWriter({
+              target,
+              generation: captured.placement.generation,
+              admission: authority.admission,
+              observe(event) {
+                try {
+                  console.info(
+                    JSON.stringify({
+                      event: "source.writer",
+                      version: 1,
+                      requestId,
+                      operationId,
+                      admissionId: event.requestId,
+                      operation: event.operation satisfies SourceMutationKind,
+                      generation: event.generation,
+                      outcome: event.outcome,
+                      reason: event.reason,
+                    }),
+                  );
+                } catch {
+                  // Diagnostics never grant admission or change a source write result.
+                }
+              },
+            });
+          } catch {
+            return rejected(503, "staging_configuration_unavailable");
+          }
+        }
+        const selectedState = isBranchStateRpcStub(bindings.STATE_PLANE)
+          ? bindings.STATE_PLANE
+          : undefined;
+        const validatedBindings = {
+          ENVIRONMENT: bindings.ENVIRONMENT,
+          R2_BUCKET: bindings.R2_BUCKET,
+          DB: bindings.DB,
+          STATE_PLANE: selectedState,
+          PROVIDER_ENCRYPTION_PRIVATE_JWK:
+            bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK,
+        };
         const requestId = forwarded.headers.get("x-request-id");
         const operationId = forwarded.headers.get("x-operation-id");
         const route = routes.find((candidate) => candidate.pattern.test(path));
@@ -269,77 +389,79 @@ export async function fetchStagingApplication(
         } catch {
           return rejected(400, "invalid_route_parameter");
         }
-        const statePlane = new Proxy(validatedBindings.STATE_PLANE, {
-          get(target, property) {
-            const method = Reflect.get(target, property, target);
-            if (typeof method !== "function") return method;
-            return async (...args: unknown[]) => {
-              const started = performance.now();
-              let outcome = "success";
-              let reason = "completed";
-              try {
-                const result: unknown = await Reflect.apply(
-                  method,
-                  target,
-                  args,
-                );
-                if (
-                  typeof result === "object" &&
-                  result !== null &&
-                  "ok" in result &&
-                  result.ok === false
-                ) {
-                  outcome = "failure";
-                  const code =
-                    "error" in result &&
-                    typeof result.error === "object" &&
-                    result.error !== null &&
-                    "code" in result.error &&
-                    typeof result.error.code === "string"
-                      ? result.error.code
+        const statePlane = selectedState
+          ? new Proxy(selectedState, {
+              get(target, property) {
+                const method = Reflect.get(target, property, target);
+                if (typeof method !== "function") return method;
+                return async (...args: unknown[]) => {
+                  const started = performance.now();
+                  let outcome = "success";
+                  let reason = "completed";
+                  try {
+                    const result: unknown = await Reflect.apply(
+                      method,
+                      target,
+                      args,
+                    );
+                    if (
+                      typeof result === "object" &&
+                      result !== null &&
+                      "ok" in result &&
+                      result.ok === false
+                    ) {
+                      outcome = "failure";
+                      const code =
+                        "error" in result &&
+                        typeof result.error === "object" &&
+                        result.error !== null &&
+                        "code" in result.error &&
+                        typeof result.error.code === "string"
+                          ? result.error.code
+                          : "state_unavailable";
+                      reason = Object.hasOwn(BRANCH_STATE_ERRORS, code)
+                        ? code
+                        : "state_unavailable";
+                    }
+                    return result;
+                  } catch (error) {
+                    outcome = "failure";
+                    const code =
+                      typeof error === "object" &&
+                      error !== null &&
+                      "code" in error &&
+                      typeof error.code === "string"
+                        ? error.code
+                        : "state_unavailable";
+                    reason = Object.hasOwn(BRANCH_STATE_ERRORS, code)
+                      ? code
                       : "state_unavailable";
-                  reason = Object.hasOwn(BRANCH_STATE_ERRORS, code)
-                    ? code
-                    : "state_unavailable";
-                }
-                return result;
-              } catch (error) {
-                outcome = "failure";
-                const code =
-                  typeof error === "object" &&
-                  error !== null &&
-                  "code" in error &&
-                  typeof error.code === "string"
-                    ? error.code
-                    : "state_unavailable";
-                reason = Object.hasOwn(BRANCH_STATE_ERRORS, code)
-                  ? code
-                  : "state_unavailable";
-                throw error;
-              } finally {
-                try {
-                  // This measures only the gateway's RPC boundary; it does not
-                  // expose or claim coverage of DO-internal SQL execution.
-                  console.info(
-                    JSON.stringify({
-                      event: "state_plane.rpc",
-                      version: 1,
-                      environment: "staging",
-                      requestId,
-                      operationId,
-                      method: String(property),
-                      durationMs: performance.now() - started,
-                      outcome,
-                      reason,
-                    }),
-                  );
-                } catch {
-                  // Diagnostics must never change an RPC result.
-                }
-              }
-            };
-          },
-        });
+                    throw error;
+                  } finally {
+                    try {
+                      // This measures only the gateway's RPC boundary; it does not
+                      // expose or claim coverage of DO-internal SQL execution.
+                      console.info(
+                        JSON.stringify({
+                          event: "state_plane.rpc",
+                          version: 1,
+                          environment: "staging",
+                          requestId,
+                          operationId,
+                          method: String(property),
+                          durationMs: performance.now() - started,
+                          outcome,
+                          reason,
+                        }),
+                      );
+                    } catch {
+                      // Diagnostics must never change an RPC result.
+                    }
+                  }
+                };
+              },
+            })
+          : undefined;
         const env = {
           ...bindings,
           STATE_PLANE: statePlane,
@@ -347,10 +469,20 @@ export async function fetchStagingApplication(
           PUBLIC_BASE_URL:
             bindings.PUBLIC_BASE_URL ?? new URL(request.url).origin,
           ALLOW_INSECURE_ACCOUNT_HEADER: "0" as const,
-          localBranchApplication: createStagingBranchApplication({
-            ...validatedBindings,
-            STATE_PLANE: statePlane,
-          }),
+          ...(selection.mode === "fenced-legacy"
+            ? {
+                legacySourceWriter: legacySourceWriter!,
+                localBranchApplication: undefined,
+              }
+            : {
+                legacySourceWriter: undefined,
+                localBranchApplication: createStagingBranchApplication({
+                  ...validatedBindings,
+                  STATE_PLANE: statePlane!,
+                }),
+              }),
+        } satisfies ApplicationEnvironment & {
+          STATE_PLANE?: BranchStateRpcStub;
         };
         const response = await route.handler({
           ...base,

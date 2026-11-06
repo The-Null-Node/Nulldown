@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import {
   encodeDropEnvelope,
@@ -131,6 +132,32 @@ const createMismatchedDelegatedEnvelope = async (): Promise<{
 };
 
 describe("D1 metadata backfill contracts", () => {
+  it("rejects global maintenance with a legacy source fence before listing or D1 writes", async () => {
+    const bucket = new MemoryR2Bucket();
+    const db = new MemoryD1Database();
+    const list = jest.spyOn(bucket, "list");
+    const response = await backfillD1Metadata(
+      {
+        R2_BUCKET: bucket as unknown as R2Bucket,
+        DB: db as unknown as D1Database,
+        METADATA_BACKFILL_TOKEN: "secret",
+        legacySourceWriter: { run: async <T>() => undefined as T },
+      },
+      new Request("https://example.test/api/metadata/backfill", {
+        method: "POST",
+        headers: { Authorization: "Bearer secret" },
+      }),
+    );
+
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({
+      code: "capability_unsupported",
+    });
+    expect(list).not.toHaveBeenCalled();
+    expect(db.drops.size).toBe(0);
+    expect(db.aliases.size).toBe(0);
+  });
+
   it("backfills R2 drop and branch metadata into D1", async () => {
     const bucket = new MemoryR2Bucket();
     const db = new MemoryD1Database();

@@ -25,11 +25,7 @@ import {
   type BranchHeadQuery,
 } from "../../../shared/drop/branch-state";
 import { SqliteBranchCommitStatePlane } from "../../../src/server/state-plane/sqlite-commits";
-import {
-  synchronousSqlResult,
-  type BranchSqlPort,
-  type BranchSqlValue,
-} from "../../../src/server/state-plane/sqlite-port";
+import { DurableObjectBranchSqlite } from "./durable-object-sqlite";
 import type { MemoryBranchStateSeed } from "../../../src/server/state-plane/memory-commits";
 import type {
   BranchOutboxClaimCommand,
@@ -78,26 +74,6 @@ export type BranchStateBindings = Pick<
   };
 
 const OUTBOX_WAKE_STATE_KEY = "state-plane-outbox-wake-v1";
-/** Adapts one SQLite DO storage lifetime to the synchronous portable SQL port. */
-export class DurableObjectBranchSqlite implements BranchSqlPort {
-  constructor(private readonly storage: DurableObjectStorage) {}
-  /** Materializes SQL rows before the owning synchronous transaction exits. */
-  rows<T extends Record<string, unknown>>(
-    sql: string,
-    ...bindings: BranchSqlValue[]
-  ): T[] {
-    return this.storage.sql.exec(sql, ...bindings).toArray() as T[];
-  }
-  /** Executes SQL without awaiting; exceptions remain inside transactionSync. */
-  execute(sql: string, ...bindings: BranchSqlValue[]): void {
-    this.storage.sql.exec(sql, ...bindings);
-  }
-  /** Rolls back all SQL mutations if any synchronous publication step throws. */
-  transaction<T>(body: () => T): T {
-    return this.storage.transactionSync(() => synchronousSqlResult(body()));
-  }
-}
-
 /** Internal fixed-pool branch authority; SQL survives eviction, exact-content cache does not. */
 export class BranchStateObject extends DurableObject<BranchStateBindings> {
   readonly #plane: SqliteBranchCommitStatePlane;

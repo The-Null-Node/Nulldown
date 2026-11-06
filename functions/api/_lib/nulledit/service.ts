@@ -36,6 +36,7 @@ import { ensureBranchHeapV2ForMutation } from "../branches/lifecycle";
 import { withBranchMutationLock } from "../branches/storage/mutation-lock";
 import { unobserved, type Timing } from "../core/observability/profiling";
 import { createBranchDiffRepository } from "../branches/storage/diff-log";
+import type { LegacySourceWriter } from "../../../../src/server/state-plane/legacy-source-writer";
 import {
   createBranchRepository,
   resolveSnapshotCheckpointKey,
@@ -43,6 +44,8 @@ import {
 
 /** Options controlling Nulledit snapshotter dispatch for a branch append operation. */
 export interface BranchAppendOptions extends NulleditSnapshotterDispatchOptions {
+  /** Explicit source-generation admission for an opted-in legacy application. */
+  sourceWriter?: LegacySourceWriter;
   /** Functional datastore used by snapshotters; Cloudflare bindings are adapted when omitted. */
   data?: RuntimeDataStore;
   /** Snapshotters fired after diff events are accepted and snapshotted. */
@@ -257,6 +260,27 @@ export const appendEventsToBranch = async (
   db?: SqlMetadataStore,
   timing: Timing = unobserved,
 ): Promise<BranchAppendResult> => {
+  if (options?.sourceWriter) {
+    return options.sourceWriter.run(branch, "document", (work) =>
+      appendEventsToBranch(
+        bucket,
+        branch,
+        events,
+        {
+          ...options,
+          sourceWriter: undefined,
+          commitBuffer: undefined,
+          waitUntil: work.waitUntil,
+          onSnapshotterError: (error, id) => {
+            work.markUncertain();
+            options.onSnapshotterError?.(error, id);
+          },
+        },
+        db,
+        timing,
+      ),
+    );
+  }
   const branchRepository = createBranchRepository({ blobs: bucket, sql: db });
   const branchDiffRepository = createBranchDiffRepository({
     blobs: bucket,

@@ -214,6 +214,7 @@ const createNullMemHttpServices = (
       blobs: env.R2_BUCKET,
       sql: env.DB,
       data: services?.data,
+      sourceWriter: env.legacySourceWriter,
     }),
   );
 };

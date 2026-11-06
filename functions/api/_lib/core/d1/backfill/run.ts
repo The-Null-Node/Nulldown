@@ -50,7 +50,7 @@ export const backfillD1Metadata = async (
     return jsonErrorResponse(401, "unauthorized", "Unauthorized");
   }
 
-  if (env.localBranchApplication) {
+  if (env.localBranchApplication || env.legacySourceWriter) {
     logger?.logEnd(501, { reason: "capability_unsupported" });
     return branchStateErrorResponse(
       new BranchStateError("capability_unsupported"),

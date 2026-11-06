@@ -10,6 +10,9 @@ import { RESOLVED_RUNTIME_REFS_RESOLVER_ID } from "../../../../shared/drop/resol
 import { nullplugUiResponseFactKey } from "../../../../shared/nullplug/ui";
 import { createBranchKey, createCheckpointKey } from "../branches/storage/keys";
 import { MemoryR2Bucket } from "./testing/storage-fixture";
+import { LocalBranchSqlite } from "../../../../src/server/state-plane/local-sqlite";
+import { SqliteSourceWriteFence } from "../../../../src/server/state-plane/source-fence";
+import { createLegacySourceWriter } from "../../../../src/server/state-plane/legacy-source-writer";
 
 const rootDropId = "RootDrop1122";
 const branchId = "clone_author";
@@ -114,6 +117,55 @@ describe("functions api nullplug submit contracts", () => {
     );
     return bucket;
   };
+
+  it("holds response fact and runtime-log writes inside durable source admission", async () => {
+    const sql = new LocalBranchSqlite();
+    try {
+      const bucket = createSeededBucket();
+      const gate = new SqliteSourceWriteFence(sql);
+      const target = { rootDropId, branchId };
+      gate.register(target);
+      const writer = createLegacySourceWriter({
+        target,
+        generation: 0,
+        admission: gate,
+      });
+      const invoke = (id: string) =>
+        onRequest({
+          request: createSubmitRequest({ ...createFact(), id }),
+          env: {
+            R2_BUCKET: bucket as unknown as R2Bucket,
+            ALLOW_INSECURE_ACCOUNT_HEADER: "1",
+            legacySourceWriter: writer,
+          },
+          params: {},
+        } as unknown as Parameters<typeof onRequest>[0]);
+
+      const committed = await invoke("fenced-response");
+      expect(committed.status).toBe(200);
+      expect(gate.read(target)).toMatchObject({ phase: "legacy", active: 0 });
+      const { nullplugUiResponseFactKey } =
+        await import("../../../../shared/nullplug/ui");
+      expect(
+        await bucket.get(
+          nullplugUiResponseFactKey({ ...createFact(), id: "fenced-response" }),
+        ),
+      ).not.toBeNull();
+
+      gate.fence({ target, sourceGeneration: 0, migrationId: "cutover" });
+      const put = jest.spyOn(bucket, "put");
+      const rejected = await invoke("frozen-response");
+      expect(rejected.status).toBe(409);
+      expect(
+        put.mock.calls.filter(
+          ([key]) => !String(key).startsWith("__drop_branch_lock__/"),
+        ),
+      ).toHaveLength(0);
+      expect(gate.read(target)).toMatchObject({ phase: "frozen", active: 0 });
+    } finally {
+      sql.close();
+    }
+  });
 
   it.each([
     ["anonymous", null, 403, 401],

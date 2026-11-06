@@ -1,4 +1,8 @@
-import type { D1Database, PagesFunction, R2Bucket } from "@cloudflare/workers-types";
+import type {
+  D1Database,
+  PagesFunction,
+  R2Bucket,
+} from "@cloudflare/workers-types";
 import {
   createCloudflareBlobStore,
   createCloudflareSqlStore,
@@ -7,12 +11,17 @@ import { removePublicDropIndexEntry } from "../_lib/drops/index/repository";
 import { createDropIdentityRepository } from "../_lib/drops/identity/id";
 import { acquireRootMutationLock } from "../_lib/drops/storage/mutation-lock";
 import { createRequestLogger, toLogRef } from "../_lib/core/logging/logger";
-import { readAccountLibraryEntry, tombstoneAccountLibraryEntry } from "../_lib/accounts/library/repository";
+import {
+  readAccountLibraryEntry,
+  tombstoneAccountLibraryEntry,
+} from "../_lib/accounts/library/repository";
 import { resolveAuthenticatedAccountId } from "../_lib/accounts/session/authentication";
 import type { LocalBranchApplicationSelection } from "../../../src/server/state-plane/commit-application";
+import type { LegacySourceWriter } from "../../../src/server/state-plane/legacy-source-writer";
 
 interface Env {
   localBranchApplication?: LocalBranchApplicationSelection;
+  legacySourceWriter?: LegacySourceWriter;
   R2_BUCKET: R2Bucket;
   DB?: D1Database;
   ACCOUNT_AUTH_SECRET?: string;
@@ -42,7 +51,9 @@ const jsonErrorResponse = (
 const resolveId = (id: string | string[] | undefined) =>
   typeof id === "string" ? id : Array.isArray(id) ? id[0] : "";
 
-const normalizeRevision = (revision: string | null | undefined): string | null => {
+const normalizeRevision = (
+  revision: string | null | undefined,
+): string | null => {
   const value = revision?.trim();
   if (!value) return null;
   return value.length >= 2 && value.startsWith('"') && value.endsWith('"')
@@ -93,7 +104,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       );
     }
 
-    if (env.localBranchApplication) {
+    if (env.localBranchApplication || env.legacySourceWriter) {
       logger.logEnd(501, { reason: "capability_unsupported" });
       return jsonErrorResponse(
         501,
@@ -152,7 +163,9 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
         return jsonErrorResponse(404, "drop_not_found", "Drop not found.");
       }
 
-      const expectedRevision = normalizeRevision(request.headers.get("If-Match"));
+      const expectedRevision = normalizeRevision(
+        request.headers.get("If-Match"),
+      );
       if (!expectedRevision) {
         logger.logEnd(428, {
           reason: "revision_precondition_required",
@@ -178,7 +191,9 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
         });
       }
 
-      if (normalizeRevision(object.etag ?? object.httpEtag) !== expectedRevision) {
+      if (
+        normalizeRevision(object.etag ?? object.httpEtag) !== expectedRevision
+      ) {
         logger.warn("delete.revision_precondition_failed", {
           requestedDropRef: toLogRef(requestedId),
           canonicalDropRef: toLogRef(id),
@@ -228,11 +243,7 @@ export const onRequestDelete: PagesFunction<Env, "id"> = async ({
       reason: "unhandled_error",
       requestedDropRef: toLogRef(requestedId),
     });
-    return jsonErrorResponse(
-      500,
-      "unhandled_error",
-      "Failed to delete drop.",
-    );
+    return jsonErrorResponse(500, "unhandled_error", "Failed to delete drop.");
   }
 };
 

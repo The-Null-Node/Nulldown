@@ -1,5 +1,6 @@
 import type { AccountAuthEnv } from "../../accounts/session/authentication";
 import type { LocalBranchApplicationSelection } from "../../../../../src/server/state-plane/commit-application";
+import type { LegacySourceWriter } from "../../../../../src/server/state-plane/legacy-source-writer";
 import type { ResolvedHeapTiming, ResolvedHeapTimingObserver } from "./timing";
 import type {
   RESOLVED_DOCUMENT_RESOLVER_ID,
@@ -26,6 +27,8 @@ import type {
 export interface ResolvedHeapEnv extends AccountAuthEnv {
   /** Request-owned local authority; unsupported resolved capabilities reject before legacy access. */
   localBranchApplication?: LocalBranchApplicationSelection;
+  /** Trusted source-generation admission for legacy runtime fact mutations. */
+  legacySourceWriter?: LegacySourceWriter;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
   /** Trusted runtime snapshotter storage; never populated from request payloads. */

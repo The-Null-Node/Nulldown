@@ -4,6 +4,7 @@ import {
 } from "../accounts/session/authentication";
 import { createBranchStatePlane } from "../../../../src/server/state-plane/gateway";
 import type { LocalBranchApplicationSelection } from "../../../../src/server/state-plane/commit-application";
+import type { LegacySourceWriter } from "../../../../src/server/state-plane/legacy-source-writer";
 import { BranchStateError } from "../../../../shared/drop/branch-state";
 import { branchStateErrorResponse } from "../branches/http/state-plane-errors";
 import { jsonErrorResponse, resolveParam } from "../core/http/responses";
@@ -22,6 +23,8 @@ import type {
 export interface NullMemAuthorizationEnv extends AccountAuthEnv {
   /** Request-owned local authority; an omitted memory capability rejects before legacy access. */
   localBranchApplication?: LocalBranchApplicationSelection;
+  /** Trusted source-generation admission for legacy memory mutations. */
+  legacySourceWriter?: LegacySourceWriter;
   R2_BUCKET: BlobObjectStore;
   DB?: SqlMetadataStore;
 }

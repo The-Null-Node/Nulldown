@@ -55,7 +55,10 @@ class MemoryR2Bucket {
   async put(key: string, value: unknown, options?: any): Promise<any> {
     const existing = this.objects.get(key);
     if (options?.onlyIf?.etagDoesNotMatch === "*" && existing) return null;
-    if (options?.onlyIf?.etagMatches && existing?.etag !== options.onlyIf.etagMatches) {
+    if (
+      options?.onlyIf?.etagMatches &&
+      existing?.etag !== options.onlyIf.etagMatches
+    ) {
       return null;
     }
     const text = typeof value === "string" ? value : String(value ?? "");
@@ -69,7 +72,9 @@ class MemoryR2Bucket {
   }
 
   async delete(keys: string | string[]): Promise<void> {
-    (Array.isArray(keys) ? keys : [keys]).forEach((key) => this.objects.delete(key));
+    (Array.isArray(keys) ? keys : [keys]).forEach((key) =>
+      this.objects.delete(key),
+    );
   }
 
   async list(options?: { prefix?: string }): Promise<any> {
@@ -102,17 +107,20 @@ const createRequest = (input: {
   idempotencyKey: string;
   accountId?: string;
 }) =>
-  new Request(`https://nulldown.test/api/branches/${rootDropId}/${branchId}/promote`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-nulldown-account-id": input.accountId ?? accountId,
+  new Request(
+    `https://nulldown.test/api/branches/${rootDropId}/${branchId}/promote`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-nulldown-account-id": input.accountId ?? accountId,
+      },
+      body: JSON.stringify({
+        expectedSnapshotId: input.expectedSnapshotId,
+        idempotencyKey: input.idempotencyKey,
+      }),
     },
-    body: JSON.stringify({
-      expectedSnapshotId: input.expectedSnapshotId,
-      idempotencyKey: input.idempotencyKey,
-    }),
-  });
+  );
 
 const createSeededBucket = async (): Promise<{
   bucket: MemoryR2Bucket;
@@ -121,7 +129,10 @@ const createSeededBucket = async (): Promise<{
   const bucket = new MemoryR2Bucket();
   bucket.seed(
     rootDropId,
-    JSON.stringify({ content: "branch body", metadata: { ownerAccountId: accountId } }),
+    JSON.stringify({
+      content: "branch body",
+      metadata: { ownerAccountId: accountId },
+    }),
   );
   const { branch } = await resolveBranchForActor(
     bucket,
@@ -133,6 +144,23 @@ const createSeededBucket = async (): Promise<{
 };
 
 describe("branch promotion contracts", () => {
+  it("rejects root promotion under a legacy source fence without canonical writes", async () => {
+    const bucket = new MemoryR2Bucket();
+    const response = await promoteBranchSnapshot(
+      {
+        ...createEnv(bucket),
+        legacySourceWriter: { run: async <T>() => undefined as T },
+      },
+      { rootId: rootDropId, branchId },
+      createRequest({ expectedSnapshotId: 1, idempotencyKey: "fenced" }),
+    );
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({
+      code: "capability_unsupported",
+    });
+    expect(bucket.keys()).toEqual([]);
+  });
+
   let warnSpy: jest.SpiedFunction<typeof console.warn>;
 
   beforeEach(() => {
@@ -172,7 +200,9 @@ describe("branch promotion contracts", () => {
 
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toEqual(firstPayload);
-    expect(bucket.keys().filter((key) => key === promotedDropId)).toHaveLength(1);
+    expect(bucket.keys().filter((key) => key === promotedDropId)).toHaveLength(
+      1,
+    );
   });
 
   it("rejects a fresh promotion when the observed branch head is stale", async () => {
@@ -186,7 +216,10 @@ describe("branch promotion contracts", () => {
     const response = await promoteBranchSnapshot(
       createEnv(bucket),
       { rootId: rootDropId, branchId },
-      createRequest({ expectedSnapshotId: 0, idempotencyKey: "promotion-stale" }),
+      createRequest({
+        expectedSnapshotId: 0,
+        idempotencyKey: "promotion-stale",
+      }),
     );
 
     expect(response.status).toBe(409);
@@ -216,7 +249,10 @@ describe("branch promotion contracts", () => {
       createdAt: 1,
     };
     await createBranchPromotionReceipt(bucket, receipt);
-    bucket.seed(receipt.promotedDropId, JSON.stringify(receipt.promotedPayload));
+    bucket.seed(
+      receipt.promotedDropId,
+      JSON.stringify(receipt.promotedPayload),
+    );
     await writeBranch(bucket, {
       ...branch,
       headSnapshotId: 1,
@@ -234,9 +270,14 @@ describe("branch promotion contracts", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({ dropId: receipt.promotedDropId, snapshotId: 0 }),
+      expect.objectContaining({
+        dropId: receipt.promotedDropId,
+        snapshotId: 0,
+      }),
     );
-    expect(bucket.keys().filter((key) => key === receipt.promotedDropId)).toHaveLength(1);
+    expect(
+      bucket.keys().filter((key) => key === receipt.promotedDropId),
+    ).toHaveLength(1);
   });
 
   it("rejects a reused key with a different snapshot and unauthorized actors", async () => {
@@ -245,13 +286,19 @@ describe("branch promotion contracts", () => {
     await promoteBranchSnapshot(
       env,
       { rootId: rootDropId, branchId },
-      createRequest({ expectedSnapshotId: 0, idempotencyKey: "promotion-reused" }),
+      createRequest({
+        expectedSnapshotId: 0,
+        idempotencyKey: "promotion-reused",
+      }),
     );
 
     const mismatched = await promoteBranchSnapshot(
       env,
       { rootId: rootDropId, branchId },
-      createRequest({ expectedSnapshotId: 1, idempotencyKey: "promotion-reused" }),
+      createRequest({
+        expectedSnapshotId: 1,
+        idempotencyKey: "promotion-reused",
+      }),
     );
     expect(mismatched.status).toBe(409);
     await expect(mismatched.json()).resolves.toEqual(
@@ -283,7 +330,10 @@ describe("branch promotion contracts", () => {
     const response = await promoteBranchSnapshot(
       createEnv(bucket),
       { rootId: rootDropId, branchId },
-      createRequest({ expectedSnapshotId: 0, idempotencyKey: "promotion-busy" }),
+      createRequest({
+        expectedSnapshotId: 0,
+        idempotencyKey: "promotion-busy",
+      }),
     );
 
     expect(response.status).toBe(503);
