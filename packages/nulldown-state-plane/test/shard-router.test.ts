@@ -7,6 +7,7 @@ import {
   RpcBranchCommitStatePlane,
 } from "../src/shard-router";
 import type { BranchHeadQuery } from "../../../shared/drop/branch-state";
+import type { BranchSnapshotState } from "../../../shared/drop/branch-lifecycle";
 import {
   assertRecords,
   initialQuery,
@@ -151,11 +152,74 @@ export async function runShardRouterContract(): Promise<string[]> {
   const promise = plane.readHead(captured);
   captured.target.rootDropId = "changed";
   await rejectsCode(() => promise, "state_unavailable");
+  const query = initialQuery();
+  let historical: BranchSnapshotState = {
+    target: query.target,
+    placement: query.placement,
+    version: {
+      sourceContentHash: `sha256:${createHash("sha256").update("nulldown.source-content.v1\n").digest("base64url")}`,
+      snapshotId: 1,
+      eventSeq: 0,
+    },
+    snapshot: {
+      version: 1,
+      ...query.target,
+      snapshotId: 1,
+      parentSnapshotId: 0,
+      seq: 1,
+      eventIds: ["imported-event"],
+      checkpointed: false,
+      patchStartSeq: 0,
+      patchEndSeq: 0,
+      textLength: 0,
+      createdAt: 1,
+    },
+  };
+  const history = new RpcBranchCommitStatePlane(
+    () => ({
+      async append() {
+        throw Error("unused");
+      },
+      async readHead() {
+        throw Error("unused");
+      },
+      async readContent() {
+        throw Error("unused");
+      },
+      async readEvents() {
+        throw Error("unused");
+      },
+      async readSnapshot() {
+        return { ok: true as const, value: historical };
+      },
+    }),
+    query.target,
+  );
+  const snapshotQuery = {
+    target: query.target,
+    placement: query.placement,
+    snapshotId: 1,
+  };
+  assert.deepEqual(await history.readSnapshot(snapshotQuery), historical);
+  historical = {
+    ...historical,
+    snapshot: { ...historical.snapshot, sourceContentHash: "sha256:wrong" },
+  };
+  await rejectsCode(() => history.readSnapshot(snapshotQuery), "state_corrupt");
+  await rejectsCode(
+    () =>
+      history.readSnapshot({
+        ...snapshotQuery,
+        target: { ...query.target, branchId: "other" },
+      }),
+    "routing_placement_mismatch",
+  );
   return [
     "five independent SHA-256 vectors",
     "generation excluded from shard identity",
     "validation before hashing",
     "unsupported version before lookup",
     "explicit content-free RPC failures",
+    "imported snapshot provenance survives RPC without weakening hash or target checks",
   ];
 }

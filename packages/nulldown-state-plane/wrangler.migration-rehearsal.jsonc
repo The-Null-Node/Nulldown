@@ -10,11 +10,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "REHEARSAL", "class_name": "MigrationRehearsalObject" },
+      { "name": "BRANCH_STATE", "class_name": "BranchStateObject" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["MigrationRehearsalObject"] },
+    { "tag": "v2", "new_sqlite_classes": ["BranchStateObject"] },
   ],
+  "vars": { "ENVIRONMENT": "staging", "STATE_PLANE_LOCAL_TEST": "0" },
   "r2_buckets": [
     {
       "binding": "LEGACY_R2",

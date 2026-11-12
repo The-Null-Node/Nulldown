@@ -198,11 +198,14 @@ export function captureRuntimeFactPage(
   };
 }
 
-/** Validates exact persisted/RPC event scope and assigned fields without discarding JSON extensions. */
+/** Validates exact event scope; read pages may preserve legacy timestamps and optional source/actor metadata after persistence verifies their import. */
 export function validateRuntimeFactEvent(
   event: DropBranchRuntimeFact,
   query: BranchHeadQuery,
-  options: { allowMissingActor?: boolean } = {},
+  options: {
+    allowMissingActor?: boolean;
+    preserveLegacyProvenance?: boolean;
+  } = {},
 ): void {
   try {
     if (
@@ -215,12 +218,18 @@ export function validateRuntimeFactEvent(
       event.seq < 0 ||
       !Number.isSafeInteger(event.createdAt) ||
       event.createdAt < 0 ||
-      event.fact.createdAt !== event.createdAt ||
-      !Number.isSafeInteger(event.fact.source.snapshotId) ||
-      event.fact.source.snapshotId! < 0 ||
+      !Number.isSafeInteger(event.fact.createdAt) ||
+      event.fact.createdAt < 0 ||
+      (!options.preserveLegacyProvenance &&
+        event.fact.createdAt !== event.createdAt) ||
+      ((!options.preserveLegacyProvenance ||
+        event.fact.source.snapshotId !== undefined) &&
+        (!Number.isSafeInteger(event.fact.source.snapshotId) ||
+          event.fact.source.snapshotId! < 0)) ||
       typeof event.fact.source.sourceContentHash !== "string" ||
       !/^sha256:[A-Za-z0-9_-]{43}$/.test(event.fact.source.sourceContentHash) ||
       (!options.allowMissingActor &&
+        !options.preserveLegacyProvenance &&
         (typeof event.fact.metadata?.actorAccountId !== "string" ||
           !event.fact.metadata.actorAccountId)) ||
       event.factId !== nullplugUiRuntimeFactId(event.fact)
