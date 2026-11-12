@@ -12,6 +12,7 @@ import {
   type BranchHeadQuery,
   type BranchStateContent,
   type BranchStateHead,
+  type BranchStateTarget,
 } from "../../../shared/drop/branch-state";
 import {
   captureNullMemQuery,
@@ -194,15 +195,28 @@ export class RpcBranchCommitStatePlane
     BranchRuntimeFactStatePlane,
     BranchNullMemStatePlane
 {
+  private readonly selectedTarget?: BranchStateTarget;
   constructor(
     private readonly resolve: (shardName: string) => BranchStateRpcStub,
-  ) {}
+    selectedTarget?: BranchStateTarget,
+  ) {
+    this.selectedTarget =
+      selectedTarget === undefined
+        ? undefined
+        : BranchLifecycleQuery.placement({ target: selectedTarget }).target;
+  }
 
   private async call<T>(
     query: BranchHeadQuery,
     invoke: (stub: BranchStateRpcStub) => Promise<BranchStateRpcResult<T>>,
   ): Promise<T> {
     try {
+      if (
+        this.selectedTarget &&
+        (query.target.rootDropId !== this.selectedTarget.rootDropId ||
+          query.target.branchId !== this.selectedTarget.branchId)
+      )
+        throw new BranchStateError("routing_placement_mismatch");
       const name = await branchStateShardName({
         target: query.target,
         placement: query.placement,
@@ -363,7 +377,9 @@ export class RpcBranchCommitStatePlane
       for (const [index, event] of page.facts.entries()) {
         const identity = runtimeFactIdentity(event.fact);
         const key = runtimeFactKey(event.fact);
-        validateRuntimeFactEvent(event, query);
+        validateRuntimeFactEvent(event, query, {
+          preserveLegacyProvenance: true,
+        });
         if (
           event.seq !== query.afterSeq + index + 1 ||
           identities.has(identity) ||
@@ -522,8 +538,11 @@ export class RpcBranchCommitStatePlane
         snapshot.branchId !== query.target.branchId ||
         snapshot.snapshotId !== query.snapshotId ||
         snapshot.seq !== query.snapshotId ||
-        !snapshot.checkpointed ||
-        snapshot.sourceContentHash !== identity.version.sourceContentHash ||
+        // Migrated history preserves original metadata (including sparse
+        // checkpoints and older snapshots without an embedded hash). The
+        // enclosing version always carries the verified content hash.
+        (snapshot.sourceContentHash !== undefined &&
+          snapshot.sourceContentHash !== identity.version.sourceContentHash) ||
         !Number.isSafeInteger(snapshot.textLength) ||
         snapshot.textLength < 0 ||
         (query.snapshotId === 0

@@ -192,6 +192,41 @@ The fixture can reconcile only its own injected failures with a retained proof
 that source work never started or fully settled. It provides no general-purpose
 reconciliation endpoint for production writers.
 
+## Durable authority rehearsal
+
+The authority rehearsal uses the real `BranchStateObject` to select the backend
+for an explicitly enrolled synthetic branch. Its source fence, captured migration
+payload, import progress, and destination authority share the owning shard's
+SQLite database. Application requests use the same Pages handlers throughout:
+
+```text
+legacy → draining → frozen → transferred → destination active
+          existing writers    requests return
+          finish              branch_initialization_pending
+```
+
+Selection alone does not admit a legacy write. Each mutation obtains a durable
+permit for its exact branch and generation. Legacy reads recheck authority before
+returning; destination failures never select the legacy backend. Before transfer,
+abort advances the source generation. After transfer, recovery proceeds to
+destination activation.
+
+```bash
+bun run test:state-plane:authority --evidence=/path/to/fresh/authority-results
+```
+
+Native runs reopen durable storage after partial import, after transfer, and after
+destination writes. The runner also reads the migrated content through a real CLI
+process. The fixture's authenticated `/authority` endpoint accepts migration
+identity and chunk index; the object captures its configured legacy stores itself.
+
+Hosted runs use `--base-url`, `--token-file`, and a consistent `--run-id`. Run
+`--phase=partial-import`, redeploy the same Worker bundle, then run
+`--phase=transferred --resume=/path/to/first/checkpoint.json`. Redeploy again and
+run `--phase=finish --resume=/path/to/second/checkpoint.json`. Use a fresh evidence
+directory each time. Recovery rejects a different bundle hash. This is an isolated
+staging composition; production requests still use legacy routing.
+
 ## Logs
 
 Both Workers enable Workers Logs at full sampling. Automatic tracing is disabled:

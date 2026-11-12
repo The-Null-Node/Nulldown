@@ -358,12 +358,10 @@ export function validateNullMemQueryResult(
 ): void {
   try {
     validateNullMemResult(value, query);
-    if (
-      !Array.isArray(value.records) ||
-      value.records.length > query.limit ||
-      (value.memoryRevision === 0 && value.records.length)
-    )
+    if (!Array.isArray(value.records) || value.records.length > query.limit)
       return corrupt();
+    // Revision counts destination mutations. A verified imported baseline can
+    // contain records at revision zero; persistence validates its commitment.
     const ids = new Set<string>();
     for (const record of value.records) {
       validateNullMemRecord(record, query);

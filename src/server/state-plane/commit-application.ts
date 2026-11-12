@@ -132,7 +132,8 @@ export const createCommitApplicationStatePlane = (
       snapshot.rootDropId !== rootDropId ||
       snapshot.branchId !== branchId ||
       snapshot.snapshotId !== version.snapshotId ||
-      snapshot.sourceContentHash !== version.sourceContentHash ||
+      (snapshot.sourceContentHash !== undefined &&
+        snapshot.sourceContentHash !== version.sourceContentHash) ||
       (version.snapshotId === 0
         ? version.eventSeq !== -1 || snapshot.patchEndSeq != null
         : snapshot.patchEndSeq !== version.eventSeq) ||
@@ -250,7 +251,7 @@ export const createCommitApplicationStatePlane = (
               snapshotId: request.snapshotId,
               content: content.content,
             });
-            if (sourceHash !== snapshot.sourceContentHash)
+            if (sourceHash !== snapshotState.version.sourceContentHash)
               throw new BranchStateError("state_corrupt");
             const events: DropDiffEvent[] = [];
             if (request.fromSeq !== undefined || request.toSeq !== undefined) {
@@ -298,7 +299,10 @@ export const createCommitApplicationStatePlane = (
               },
               request,
             );
-            if (result.sourceContentHash !== snapshot.sourceContentHash)
+            if (
+              result.sourceContentHash !==
+              snapshotState.version.sourceContentHash
+            )
               throw new BranchStateError("state_corrupt");
             return result;
           },
@@ -520,7 +524,9 @@ export const createCommitApplicationStatePlane = (
                 )
                   throw new BranchStateError("state_corrupt");
                 for (const event of page.facts)
-                  validateRuntimeFactEvent(event, selected);
+                  validateRuntimeFactEvent(event, selected, {
+                    preserveLegacyProvenance: true,
+                  });
                 return page;
               })();
         const factsResponse = factPage

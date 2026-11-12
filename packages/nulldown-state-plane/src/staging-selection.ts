@@ -6,6 +6,7 @@ import {
 import { BranchStateError } from "../../../shared/drop/branch-state";
 import { createLocalBranchLifecycle } from "../../../src/server/state-plane/application-lifecycle";
 import type { LocalBranchApplicationSelection } from "../../../src/server/state-plane/commit-application";
+import type { BranchAuthoritySelection } from "../../../src/server/state-plane/authority-control";
 import {
   RpcBranchCommitStatePlane,
   type BranchStateRpcStub,
@@ -28,6 +29,7 @@ export interface StagingSelectionDependencies {
  */
 export function createStagingBranchApplication(
   bindings: StagingSelectionDependencies,
+  authority?: BranchAuthoritySelection,
 ): LocalBranchApplicationSelection {
   if (
     bindings.ENVIRONMENT !== "staging" ||
@@ -42,8 +44,14 @@ export function createStagingBranchApplication(
   if (!sql) throw new BranchStateError("state_unavailable");
   // The service owns shard routing. Reuse the validated RPC client, resolving
   // every shard to that same private service rather than exposing DO bindings.
-  const backend = new RpcBranchCommitStatePlane(() => bindings.STATE_PLANE);
-  const placement = { routingVersion: 1, generation: 1 };
+  const backend = new RpcBranchCommitStatePlane(
+    () => bindings.STATE_PLANE,
+    authority?.target,
+  );
+  const placement = authority?.placement ?? {
+    routingVersion: 1,
+    generation: 1,
+  };
   return {
     mode: "hosted-staging",
     commits: backend,

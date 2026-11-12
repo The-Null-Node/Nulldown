@@ -25,7 +25,12 @@ import { onRequest as publishRoute } from "../../../functions/api/branches/[root
 import { onRequest as promoteRoute } from "../../../functions/api/branches/[rootId]/[branchId]/promote";
 import { onRequest as resolvedQueryRoute } from "../../../functions/api/branches/[rootId]/[branchId]/resolved/query";
 import { readTelemetryBatch } from "../../../functions/api/_lib/core/observability/transport";
-import { BRANCH_STATE_ERRORS } from "../../../shared/drop/branch-state";
+import {
+  BRANCH_STATE_ERRORS,
+  BranchStateError,
+} from "../../../shared/drop/branch-state";
+import { selectBranchApplication } from "../../../src/server/state-plane/gateway";
+import type { BranchAuthorityClient } from "../../../src/server/state-plane/authority-control";
 import {
   createStagingBranchApplication,
   type StagingSelectionDependencies,
@@ -63,6 +68,14 @@ export interface FencedLegacyStagingDependencies extends Omit<
   "STATE_PLANE"
 > {
   LEGACY_SOURCE_AUTHORITY: FencedLegacyStagingAuthority;
+}
+
+/** Trusted enrollment scope and durable selector for one request; neither is selected by public headers. */
+export interface AuthorityStagingDependencies extends StagingApplicationDependencies {
+  BRANCH_AUTHORITY: {
+    target: BranchStateTarget;
+    client: BranchAuthorityClient;
+  };
 }
 
 type StagingGatewayDependencies = Omit<
@@ -259,6 +272,18 @@ export async function fetchFencedLegacyStagingApplication(
   });
 }
 
+/** Runs the same Pages handlers before and after migration, selecting backend from the owning shard on every request. */
+export async function fetchAuthorityStagingApplication(
+  request: Request<unknown, IncomingRequestCfProperties>,
+  bindings: AuthorityStagingDependencies,
+  execution: Pick<ExecutionContext, "waitUntil">,
+): Promise<Response> {
+  return fetchApplication(request, bindings, execution, {
+    mode: "authority",
+    authority: bindings.BRANCH_AUTHORITY,
+  });
+}
+
 async function fetchApplication(
   request: Request<unknown, IncomingRequestCfProperties>,
   bindings: Omit<StagingGatewayDependencies, "STATE_PLANE"> & {
@@ -267,6 +292,10 @@ async function fetchApplication(
   execution: Pick<ExecutionContext, "waitUntil">,
   selection:
     | { mode: "state-plane" }
+    | {
+        mode: "authority";
+        authority: AuthorityStagingDependencies["BRANCH_AUTHORITY"];
+      }
     | { mode: "fenced-legacy"; authority: FencedLegacyStagingAuthority },
 ): Promise<Response> {
   const path = new URL(request.url).pathname;
@@ -301,7 +330,7 @@ async function fetchApplication(
         )
           return rejected(503, "staging_configuration_unavailable");
         if (
-          selection.mode === "state-plane" &&
+          selection.mode !== "fenced-legacy" &&
           !isBranchStateRpcStub(bindings.STATE_PLANE)
         )
           return rejected(503, "staging_configuration_unavailable");
@@ -462,6 +491,68 @@ async function fetchApplication(
               },
             })
           : undefined;
+        const automatic =
+          selection.mode === "authority"
+            ? await selectBranchApplication({
+                target: selection.authority.target,
+                authority: selection.authority.client,
+                destination: (authority) =>
+                  createStagingBranchApplication(
+                    { ...validatedBindings, STATE_PLANE: statePlane! },
+                    authority,
+                  ),
+                observeWriter(event) {
+                  try {
+                    console.info(
+                      JSON.stringify({
+                        ...event,
+                        admissionId: event.requestId,
+                        requestId,
+                        operationId,
+                      }),
+                    );
+                  } catch {
+                    /* Diagnostics cannot change admission. */
+                  }
+                },
+              })
+            : undefined;
+        if (automatic) {
+          // The selected capability covers a branch, not root mutation or cross-branch enumeration.
+          if (
+            /^\/api\/(store|delete\/|diff-auth\/)/.test(path) ||
+            /\/(publish|promote)$/.test(path)
+          )
+            return rejected(501, "capability_unsupported");
+          const target = automatic.selection.target;
+          const requestedBranch = new URL(forwarded.url).searchParams.get(
+            "branchId",
+          );
+          if (
+            (params.rootId && params.rootId !== target.rootDropId) ||
+            (params.branchId && params.branchId !== target.branchId) ||
+            (params.id && params.id !== target.rootDropId) ||
+            (requestedBranch !== null && requestedBranch !== target.branchId)
+          )
+            return rejected(409, "routing_placement_mismatch");
+          try {
+            console.info(
+              JSON.stringify({
+                event: "state_plane.authority.selection",
+                version: 1,
+                requestId,
+                operationId,
+                backend: automatic.selection.backend,
+                generation: automatic.selection.placement.generation,
+                migrationId: automatic.selection.migrationId,
+                outcome: "success",
+                reason: "selected",
+              }),
+            );
+          } catch {
+            /* Diagnostics cannot select authority. */
+          }
+        }
         const env = {
           ...bindings,
           STATE_PLANE: statePlane,
@@ -469,18 +560,23 @@ async function fetchApplication(
           PUBLIC_BASE_URL:
             bindings.PUBLIC_BASE_URL ?? new URL(request.url).origin,
           ALLOW_INSECURE_ACCOUNT_HEADER: "0" as const,
-          ...(selection.mode === "fenced-legacy"
+          ...(automatic
             ? {
-                legacySourceWriter: legacySourceWriter!,
-                localBranchApplication: undefined,
+                legacySourceWriter: automatic.legacySourceWriter,
+                localBranchApplication: automatic.localBranchApplication,
               }
-            : {
-                legacySourceWriter: undefined,
-                localBranchApplication: createStagingBranchApplication({
-                  ...validatedBindings,
-                  STATE_PLANE: statePlane!,
+            : selection.mode === "fenced-legacy"
+              ? {
+                  legacySourceWriter: legacySourceWriter!,
+                  localBranchApplication: undefined,
+                }
+              : {
+                  legacySourceWriter: undefined,
+                  localBranchApplication: createStagingBranchApplication({
+                    ...validatedBindings,
+                    STATE_PLANE: statePlane!,
+                  }),
                 }),
-              }),
         } satisfies ApplicationEnvironment & {
           STATE_PLANE?: BranchStateRpcStub;
         };
@@ -491,12 +587,25 @@ async function fetchApplication(
           env,
           next: async () => new Response(null, { status: 404 }),
         });
+        if (
+          automatic &&
+          (forwarded.method === "GET" || path.endsWith("/query"))
+        ) {
+          try {
+            await automatic.validateRead();
+          } catch (error) {
+            await response.body?.cancel();
+            throw error;
+          }
+        }
         const result = new Response(response.body, response);
         summaryReason = responseReason(path, result);
         if (!result.headers.has("x-diagnostic-reason"))
           result.headers.set("x-diagnostic-reason", summaryReason);
         return result;
-      } catch {
+      } catch (error) {
+        if (error instanceof BranchStateError)
+          return rejected(error.toRecord().status, error.code);
         return rejected(503, "state_unavailable");
       }
     },
