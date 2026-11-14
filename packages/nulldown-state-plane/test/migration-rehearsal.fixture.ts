@@ -24,6 +24,8 @@ import { createSqlNullMemRecordStore } from "../../../src/server/stores/nullmem-
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { SqliteBranchCommitStatePlane } from "../../../src/server/state-plane/sqlite-commits";
 import { WriterApplicationRehearsal } from "./writer-application.fixture";
+import { runAuthorityRehearsal } from "./authority-rehearsal.fixture";
+export { BranchStateObject } from "../src/branch-state-object";
 
 /** Synthetic-only DO harness: source gate and the real staging importer share one SQLite transaction domain. */
 export class MigrationRehearsalObject extends DurableObject<MigrationRehearsalEnv> {
@@ -1018,7 +1020,11 @@ async function readBoundedJson(request: Request): Promise<unknown> {
 
 /** Private staging-only Worker; run identity follows the frozen fixed-16 shard router. */
 export default {
-  async fetch(request: Request, env: MigrationRehearsalEnv): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: MigrationRehearsalEnv,
+    execution: ExecutionContext,
+  ): Promise<Response> {
     if (!(await authorized(request, env.MIGRATION_REHEARSAL_TOKEN)))
       return new Response(null, { status: 404 });
     let body: unknown;
@@ -1038,6 +1044,12 @@ export default {
           `writer-${target.rootDropId.slice("MigrationRehearsal-".length)}`)
     )
       return new Response(null, { status: 400 });
+    if (new URL(request.url).pathname === "/authority")
+      return runAuthorityRehearsal(
+        body as Record<string, unknown>,
+        env,
+        execution,
+      );
     const shard = await branchStateShardName({
       target,
       placement: { routingVersion: 1, generation: 0 },

@@ -620,6 +620,7 @@ bun run test:state-plane:native
 bun run test:state-plane:application
 bun run test:state-plane:migration --evidence=/path/to/fresh/rehearsal-results
 bun run test:state-plane:writers --evidence=/path/to/fresh/writer-results
+bun run test:state-plane:authority --evidence=/path/to/fresh/authority-results
 bun run bench:state-plane
 bun run typecheck:state-plane
 ```

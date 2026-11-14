@@ -19,11 +19,21 @@
   },
   "r2_buckets": [
     {
+      "binding": "LEGACY_R2",
+      "bucket_name": "nulldown-state-plane-migration-source-staging",
+    },
+    {
       "binding": "OUTBOX_ARCHIVE",
       "bucket_name": "nulldown-state-plane-archives-staging",
     },
   ],
   "d1_databases": [
+    {
+      "binding": "LEGACY_D1",
+      "database_name": "nulldown-state-plane-migration-source-staging",
+      "database_id": "77d9d59b-48dc-4640-9982-885e1f721460",
+      "migrations_dir": "../../migrations",
+    },
     {
       "binding": "OUTBOX_DB",
       "database_name": "nulldown-state-plane-projections-staging",

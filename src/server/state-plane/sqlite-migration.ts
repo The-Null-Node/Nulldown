@@ -20,6 +20,7 @@ import {
   type BranchInitializationReceipt,
 } from "../../../shared/drop/branch-lifecycle";
 import {
+  BranchStateError,
   type BranchStateHead,
   type BranchCommitReceipt,
   type BranchStateVersion,
@@ -55,16 +56,8 @@ import { encodeBranchSqlText } from "./sqlite-schema";
 import type { BranchSqlPort } from "./sqlite-port";
 
 type Row = Record<string, unknown>;
-class BranchMigrationError extends Error {
-  readonly code: string;
-  constructor(code: string) {
-    super(code);
-    this.name = "BranchMigrationError";
-    this.code = code;
-  }
-}
-const reject = (code: string): never => {
-  throw new BranchMigrationError(code);
+const reject = (code: BranchStateError["code"]): never => {
+  throw new BranchStateError(code);
 };
 const sqlScope = (target: { rootDropId: string; branchId: string }) => [
   encodeBranchSqlText(target.rootDropId),
@@ -206,7 +199,11 @@ export class SqliteBranchMigrationStaging {
     const { manifest, row } = this.load(migrationId);
     this.checkGeneration(manifest, row, expectedGeneration);
     this.assertManifestCertificate(manifest, certificate);
-    if (row.phase === "activated")
+    if (
+      row.phase === "activated" ||
+      (row.phase === "verified" &&
+        this.sourceFence.read(certificate.target).phase === "transferred")
+    )
       this.assertCertificate(manifest, certificate, "transferred");
     else {
       this.assertCertificate(manifest, certificate, "frozen");
@@ -234,7 +231,13 @@ export class SqliteBranchMigrationStaging {
     return this.sql.transaction(() => {
       const current = this.load(migrationId);
       this.checkGeneration(current.manifest, current.row, expectedGeneration);
-      if (current.row.phase !== "activated")
+      if (
+        current.row.phase !== "activated" &&
+        !(
+          current.row.phase === "verified" &&
+          this.sourceFence.read(certificate.target).phase === "transferred"
+        )
+      )
         this.sourceFence.assertFrozen(certificate);
       else this.assertCertificate(manifest, certificate, "transferred");
       if (current.row.phase === "activated")
@@ -253,6 +256,55 @@ export class SqliteBranchMigrationStaging {
       );
       return this.progress(manifest, { ...current.row, phase: "verified" });
     });
+  }
+
+  /** Commits the irreversible transfer separately so a restarted coordinator can recover forward before publication. */
+  async transfer(
+    migrationId: string,
+    expectedGeneration: number,
+    certificate: SourceFenceCertificate,
+  ): Promise<BranchMigrationProgress> {
+    const { manifest, row } = this.load(migrationId);
+    this.checkGeneration(manifest, row, expectedGeneration);
+    this.assertManifestCertificate(manifest, certificate);
+    if (row.phase === "activated") {
+      this.assertCertificate(manifest, certificate, "transferred");
+      return this.progress(manifest, row);
+    }
+    if (row.phase !== "verified") reject("branch_initialization_pending");
+    const { records, chunks } = await this.verifyStagedPayload(manifest, row);
+    // All fallible publication preparation must succeed before source retirement.
+    await this.preparePublication(manifest, records);
+    const progress = this.sql.transaction(() => {
+      const current = this.load(migrationId);
+      this.checkGeneration(manifest, current.row, expectedGeneration);
+      if (current.row.phase === "activated") {
+        this.assertCertificate(manifest, certificate, "transferred");
+        return this.progress(manifest, current.row);
+      }
+      if (current.row.phase !== "verified")
+        reject("branch_initialization_conflict");
+      this.assertChunksUnchanged(migrationId, chunks);
+      const scope = sqlScope(manifest.target);
+      if (
+        this.sql.rows(
+          "SELECT 1 FROM branch_heads WHERE root_drop_id=? AND branch_id=? UNION ALL SELECT 1 FROM branch_authorities WHERE root_drop_id=? AND branch_id=? LIMIT 1",
+          ...scope,
+          ...scope,
+        ).length
+      )
+        reject("branch_initialization_conflict");
+      const source = this.sourceFence.read(certificate.target);
+      this.assertCertificate(
+        manifest,
+        certificate,
+        source.phase === "transferred" ? "transferred" : "frozen",
+      );
+      return this.progress(manifest, current.row);
+    });
+    // No await separates the validated import from the fence's synchronous transaction.
+    this.sourceFence.transfer(certificate);
+    return progress;
   }
 
   /** Irrevocably transfers source ownership, then atomically activates all imported tables; retry is recovery-forward. */

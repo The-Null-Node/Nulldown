@@ -8,6 +8,11 @@ import type {
 import { hashMigrationPayload } from "../../../shared/drop/branch-migration";
 import { hashNulldownSourceContent } from "../../../shared/drop/resolved/hash";
 import { hashBranchBatchEvents } from "../../../shared/drop/branch-batch";
+import { validateNullMemQueryResult } from "../../../shared/drop/branch-nullmem";
+import {
+  branchStateRpcResult,
+  RpcBranchCommitStatePlane,
+} from "../../../packages/nulldown-state-plane/src/shard-router";
 import { nullplugUiRuntimeFactId } from "../../../shared/nullplug/ui";
 import type {
   DropBranchRuntimeFact,
@@ -127,10 +132,9 @@ async function fixture(): Promise<{
     kind: "ui.state.patch" as const,
     id: "runtime-0",
     callId: "call-0",
-    createdAt: 10,
-    source: { ...target, snapshotId: 0, sourceContentHash: hashes[0] },
+    createdAt: 9,
+    source: { ...target, sourceContentHash: hashes[0] },
     patch: [{ op: "set" as const, path: ["value"], value: "legacy" }],
-    metadata: { actorAccountId: "synthetic-owner" },
   };
   const runtime: DropBranchRuntimeFact = {
     version: 1,
@@ -366,7 +370,38 @@ describe("SQLite semantic branch migration", () => {
       ).value.factId,
     );
     const memory = await targetPlane.queryNullMem({ ...query, limit: 10 });
+    const rpc = new RpcBranchCommitStatePlane(() => ({
+      append: (input) => branchStateRpcResult(() => targetPlane.append(input)),
+      readHead: (input) =>
+        branchStateRpcResult(() => targetPlane.readHead(input)),
+      readContent: (input) =>
+        branchStateRpcResult(() => targetPlane.readContent(input)),
+      readEvents: (input) =>
+        branchStateRpcResult(() => targetPlane.readEvents(input)),
+      readRuntimeFacts: (input) =>
+        branchStateRpcResult(() => targetPlane.readRuntimeFacts(input)),
+      queryNullMem: (input) =>
+        branchStateRpcResult(() => targetPlane.queryNullMem(input)),
+    }));
+    expect(
+      (
+        await rpc.readRuntimeFacts({
+          ...query,
+          headSeq: 0,
+          afterSeq: -1,
+          limit: 10,
+        })
+      ).facts,
+    ).toEqual(
+      records
+        .filter((item) => item.kind === "runtime-fact")
+        .map((item) => item.value),
+    );
+    expect(await rpc.queryNullMem({ ...query, limit: 10 })).toEqual(memory);
     expect(memory.memoryRevision).toBe(0);
+    expect(() =>
+      validateNullMemQueryResult(memory, { ...query, limit: 10 }),
+    ).not.toThrow();
     expect(memory.records.map((record) => record.recordId)).toEqual([
       "memory-0",
     ]);

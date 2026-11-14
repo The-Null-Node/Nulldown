@@ -1,4 +1,19 @@
+/// <reference path="../branch-state-bindings.d.ts" />
 import { DurableObject } from "cloudflare:workers";
+import {
+  SqliteBranchAuthorityControl,
+  captureMigrationCertificate,
+} from "../../../src/server/state-plane/authority-control";
+import type {
+  SourceFenceCertificate,
+  SourceWritePermit,
+} from "../../../src/server/state-plane/source-fence";
+import type { BranchStateTarget } from "../../../shared/drop/branch-state";
+import { captureLegacyMigrationSource } from "../../../src/server/state-plane/legacy-migration-source";
+import {
+  createCloudflareBlobStore,
+  createCloudflareSqlStore,
+} from "../../../functions/api/_lib/core/platform/cloudflare/storage";
 import {
   captureNullMemQuery,
   captureNullMemPut,
@@ -56,18 +71,20 @@ import {
 
 /** Internal binding dependency derived from Wrangler's generated configuration contract. */
 export type BranchStateBindings = Pick<
-  Env,
+  BranchStateEnvironment,
   "BRANCH_STATE" | "STATE_PLANE_LOCAL_TEST"
 > &
   Partial<
     Pick<
-      Env,
+      BranchStateEnvironment,
       | "OUTBOX_ARCHIVE"
       | "OUTBOX_DB"
       | "OUTBOX_QUEUE"
       | "ENVIRONMENT"
       | "STATE_PLANE_OUTBOX_ENABLED"
       | "OUTBOX_ARCHIVE_KEY_ID"
+      | "LEGACY_R2"
+      | "LEGACY_D1"
     >
   > & {
     OUTBOX_ARCHIVE_KEY?: string;
@@ -77,12 +94,175 @@ const OUTBOX_WAKE_STATE_KEY = "state-plane-outbox-wake-v1";
 /** Internal fixed-pool branch authority; SQL survives eviction, exact-content cache does not. */
 export class BranchStateObject extends DurableObject<BranchStateBindings> {
   readonly #plane: SqliteBranchCommitStatePlane;
+  readonly #authority: SqliteBranchAuthorityControl;
   #wakeSerial: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: BranchStateBindings) {
     super(ctx, env);
-    this.#plane = new SqliteBranchCommitStatePlane(
-      new DurableObjectBranchSqlite(ctx.storage),
+    const sql = new DurableObjectBranchSqlite(ctx.storage);
+    this.#plane = new SqliteBranchCommitStatePlane(sql);
+    this.#authority = new SqliteBranchAuthorityControl(sql);
+  }
+
+  async #authorityTarget(
+    target: BranchStateTarget,
+  ): Promise<BranchStateTarget> {
+    const query = BranchStateQuery.head({
+      target,
+      placement: { routingVersion: 1, generation: 0 },
+    });
+    await this.#placement(query);
+    return query.target;
+  }
+
+  /** Reads persisted backend authority without enrolling absent branches. */
+  async readAuthority(target: BranchStateTarget) {
+    return branchStateRpcResult(async () =>
+      this.#authority.select(await this.#authorityTarget(target)),
+    );
+  }
+
+  /** Explicit private enrollment must precede the first source write; repeated calls preserve its fence. */
+  async registerLegacyBranch(target: BranchStateTarget) {
+    return branchStateRpcResult(async () =>
+      this.#authority.register(await this.#authorityTarget(target)),
+    );
+  }
+
+  /** Admits a source mutation on its exact owning shard and generation. */
+  async admitSourceWriter(input: SourceWritePermit) {
+    return branchStateRpcResult(async () => {
+      const permit = structuredClone(input);
+      await this.#authorityTarget(permit.target);
+      return this.#authority.admit(permit);
+    });
+  }
+
+  /** Acknowledges only caller-proved settled writes; no expiry-based reconciliation exists. */
+  async completeSourceWriter(input: SourceWritePermit) {
+    return branchStateRpcResult(async () => {
+      const permit = structuredClone(input);
+      await this.#authorityTarget(permit.target);
+      this.#authority.complete(permit);
+      return { completed: true as const };
+    });
+  }
+
+  /** Exposes exact source drain counts to the private migration coordinator. */
+  async readSourceFence(target: BranchStateTarget) {
+    return branchStateRpcResult(async () =>
+      this.#authority.source(await this.#authorityTarget(target)),
+    );
+  }
+
+  async #migration<T>(
+    input: SourceFenceCertificate,
+    operation: string,
+    work: (certificate: SourceFenceCertificate) => T | Promise<T>,
+  ) {
+    return branchStateRpcResult(async () => {
+      const certificate = captureMigrationCertificate(input);
+      await this.#authorityTarget(certificate.target);
+      let reason = "completed";
+      let outcome = "success";
+      try {
+        return await work(certificate);
+      } catch (error) {
+        outcome = "failure";
+        reason =
+          error instanceof BranchStateError ? error.code : "state_unavailable";
+        throw error;
+      } finally {
+        try {
+          console.info(
+            JSON.stringify({
+              event: "state_plane.authority",
+              version: 1,
+              operation,
+              migrationId: certificate.migrationId,
+              generation: certificate.sourceGeneration,
+              outcome,
+              reason,
+            }),
+          );
+        } catch {
+          /* Telemetry cannot change authority. */
+        }
+      }
+    });
+  }
+
+  /** Closes admission before reporting whether existing writers have drained. */
+  async freezeLegacyBranch(input: SourceFenceCertificate) {
+    return this.#migration(input, "freeze", (certificate) =>
+      this.#authority.freeze(certificate),
+    );
+  }
+
+  /** Captures configured legacy storage under a continuously checked frozen source; no caller-supplied data. */
+  async prepareBranchMigration(input: SourceFenceCertificate) {
+    return this.#migration(input, "prepare", (certificate) =>
+      this.#authority.prepare(certificate, async (assertFrozen) => {
+        if (!this.env.LEGACY_R2 || !this.env.LEGACY_D1)
+          throw new BranchStateError("state_unavailable");
+        const sql = createCloudflareSqlStore(this.env.LEGACY_D1);
+        if (!sql) throw new BranchStateError("state_unavailable");
+        return captureLegacyMigrationSource({
+          blobs: createCloudflareBlobStore(
+            this.env.LEGACY_R2 as Parameters<
+              typeof createCloudflareBlobStore
+            >[0],
+          ),
+          sql,
+          target: certificate.target,
+          assertFrozen,
+        });
+      }),
+    );
+  }
+
+  /** Imports one bounded persisted chunk; index and migration identity determine its bytes. */
+  async importBranchMigrationChunk(
+    input: SourceFenceCertificate,
+    index: number,
+  ) {
+    return this.#migration(input, "import", (certificate) =>
+      this.#authority.importChunk(certificate, index),
+    );
+  }
+
+  /** Reads durable progress for retries and redeployment recovery. */
+  async readBranchMigration(input: SourceFenceCertificate) {
+    return this.#migration(input, "progress", (certificate) =>
+      this.#authority.progress(certificate),
+    );
+  }
+
+  /** Verifies exact content and provenance before authority transfer. */
+  async verifyBranchMigration(input: SourceFenceCertificate) {
+    return this.#migration(input, "verify", (certificate) =>
+      this.#authority.verify(certificate),
+    );
+  }
+
+  /** Commits source retirement independently of destination publication. */
+  async transferBranchMigration(input: SourceFenceCertificate) {
+    return this.#migration(input, "transfer", (certificate) =>
+      this.#authority.transfer(certificate),
+    );
+  }
+
+  /** Publishes destination records, recovering forward after an interrupted transfer. */
+  async activateBranchMigration(input: SourceFenceCertificate) {
+    return this.#migration(input, "activate", (certificate) =>
+      this.#authority.activate(certificate),
+    );
+  }
+
+  /** Reopens only pretransfer sources, with a new generation that rejects stale writers. */
+  async abortBranchMigration(input: SourceFenceCertificate) {
+    return this.#migration(input, "abort", (certificate) =>
+      this.#authority.abort(certificate),
     );
   }
 
@@ -376,6 +556,7 @@ export class BranchStateObject extends DurableObject<BranchStateBindings> {
     return branchStateRpcResult(async () => {
       const command = BranchLifecycleQuery.reserve(input);
       await this.#placement(command);
+      this.#authority.assertBootstrapAllowed(command.target);
       return this.#plane.reserve(command);
     });
   }
@@ -385,6 +566,7 @@ export class BranchStateObject extends DurableObject<BranchStateBindings> {
     return branchStateRpcResult(async () => {
       const command = BranchLifecycleQuery.initialize(input);
       await this.#placement(command);
+      this.#authority.assertBootstrapAllowed(command.target);
       const result = await this.#plane.initialize(command);
       await this.#scheduleOutboxWake("new", Date.now() + 10);
       return result;
@@ -489,6 +671,7 @@ export class BranchStateObject extends DurableObject<BranchStateBindings> {
           placement: seed?.placement,
         });
         await this.#placement(query);
+        this.#authority.assertBootstrapAllowed(query.target);
       }
       await this.#plane.seed(seeds);
       return { seeded: seeds.length };

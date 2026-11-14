@@ -1,4 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { RpcBranchAuthorityClient } from "./authority-router";
+import type { SourceWritePermit } from "../../../src/server/state-plane/source-fence";
 import {
   captureNullMemQuery,
   captureNullMemPut,
@@ -48,6 +50,30 @@ export { BranchStateObject } from "./branch-state-object";
 
 /** Internal service-binding entrypoint only; local composition must explicitly select this authority. */
 export class BranchStateService extends WorkerEntrypoint<BranchStateBindings> {
+  #authority(): RpcBranchAuthorityClient {
+    return new RpcBranchAuthorityClient((name) =>
+      this.env.BRANCH_STATE.get(this.env.BRANCH_STATE.idFromName(name)),
+    );
+  }
+
+  /** Reads durable routing authority through the same shard mapping as commits. */
+  async readAuthority(target: BranchStateTarget) {
+    return branchStateRpcResult(() => this.#authority().select(target));
+  }
+
+  /** Acquires a durable source permit on behalf of an authenticated application operation. */
+  async admitSourceWriter(permit: SourceWritePermit) {
+    return branchStateRpcResult(() => this.#authority().admit(permit));
+  }
+
+  /** Confirms settled completion without exposing migration controls to the application binding. */
+  async completeSourceWriter(permit: SourceWritePermit) {
+    return branchStateRpcResult(async () => {
+      await this.#authority().complete(permit);
+      return { completed: true as const };
+    });
+  }
+
   #outboxEnabled(): boolean {
     return (
       this.env.STATE_PLANE_OUTBOX_ENABLED === "1" &&
