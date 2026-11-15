@@ -55,7 +55,9 @@ export function createLocalNullMemService(
 ): BranchMemoryService {
   const selected = selection.nullmem;
   if (
-    (selection.mode !== "local-test" && selection.mode !== "hosted-staging") ||
+    (selection.mode !== "local-test" &&
+      selection.mode !== "hosted-staging" &&
+      selection.mode !== "hosted-production") ||
     !selected
   )
     throw new BranchStateError("capability_unsupported");

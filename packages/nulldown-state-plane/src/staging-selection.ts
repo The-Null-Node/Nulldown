@@ -31,8 +31,25 @@ export function createStagingBranchApplication(
   bindings: StagingSelectionDependencies,
   authority?: BranchAuthoritySelection,
 ): LocalBranchApplicationSelection {
+  return createHostedApplication(bindings, "staging", authority);
+}
+
+/** Creates request-owned production capabilities restricted to an already enrolled exact target. */
+export function createProductionBranchApplication(
+  bindings: StagingSelectionDependencies,
+  authority: BranchAuthoritySelection,
+): LocalBranchApplicationSelection {
+  return createHostedApplication(bindings, "production", authority);
+}
+
+function createHostedApplication(
+  bindings: StagingSelectionDependencies,
+  environment: "staging" | "production",
+  authority?: BranchAuthoritySelection,
+): LocalBranchApplicationSelection {
   if (
-    bindings.ENVIRONMENT !== "staging" ||
+    bindings.ENVIRONMENT !== environment ||
+    (environment === "production" && !authority) ||
     !bindings.R2_BUCKET ||
     !bindings.DB ||
     !bindings.STATE_PLANE ||
@@ -53,16 +70,18 @@ export function createStagingBranchApplication(
     generation: 1,
   };
   return {
-    mode: "hosted-staging",
+    mode: environment === "production" ? "hosted-production" : "hosted-staging",
     commits: backend,
     placement,
     lifecycle: createLocalBranchLifecycle({
-      mode: "hosted-staging",
+      mode:
+        environment === "production" ? "hosted-production" : "hosted-staging",
       blobs: createCloudflareBlobStore(bindings.R2_BUCKET),
       sql,
       providerPrivateKey: bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK,
       backend,
-      isEligibleRoot: () => true,
+      isEligibleRoot: (rootDropId) =>
+        !authority || rootDropId === authority.target.rootDropId,
       initialPlacement: placement,
     }),
     history: backend,

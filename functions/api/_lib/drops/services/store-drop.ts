@@ -55,6 +55,8 @@ export interface StoreServiceEnv extends ProviderSigningEnv {
   localBranchApplication?: LocalBranchApplicationSelection;
   /** Request-scoped fence cannot serialize root creation or replacement. */
   legacySourceWriter?: LegacySourceWriter;
+  /** Deployment-owned enrolled root remains immutable across source and destination authority. */
+  STATE_PLANE_CANARY_ROOT?: string;
   blobs: BlobObjectStore;
   sql?: SqlMetadataStore;
   PUBLIC_BASE_URL?: string;
@@ -326,6 +328,29 @@ export const storeDrop = async ({
       upsert = parsedRequest.upsert;
       expectedRevision = parsedRequest.expectedRevision;
       writeExpectedRevision = expectedRevision;
+
+      const suppliedId =
+        parsed &&
+        typeof parsed === "object" &&
+        "id" in parsed &&
+        typeof parsed.id === "string"
+          ? parsed.id.trim()
+          : null;
+      if (
+        env.STATE_PLANE_CANARY_ROOT &&
+        suppliedId &&
+        [
+          env.STATE_PLANE_CANARY_ROOT,
+          toShortDropId(env.STATE_PLANE_CANARY_ROOT),
+        ].includes(suppliedId)
+      ) {
+        logger.logEnd(501, { reason: "capability_unsupported" });
+        return jsonErrorResponse(
+          501,
+          "capability_unsupported",
+          "Root replacement is unavailable for the enrolled branch authority.",
+        );
+      }
 
       // A lease cannot fence an already-admitted delayed R2 write against DO
       // initialization. Selected local roots stay immutable until publication

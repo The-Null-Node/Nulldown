@@ -1,4 +1,7 @@
 {
   "extends": "../../tsconfig.check.functions.json",
-  "include": ["test/application-*.fixture.ts"]
+  "include": [
+    "test/application-*.fixture.ts",
+    "test/production-ingress.fixture.ts"
+  ]
 }

@@ -1,0 +1,16 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "nulldown-state-plane-production-control-local",
+  "compatibility_date": "2026-10-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "services": [
+    {
+      "binding": "MIGRATION",
+      "service": "nulldown-state-plane-production",
+      "entrypoint": "BranchMigrationService",
+      "remote": true,
+    },
+  ],
+}

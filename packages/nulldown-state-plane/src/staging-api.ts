@@ -5,7 +5,7 @@ import type {
   IncomingRequestCfProperties,
   PagesFunction,
 } from "@cloudflare/workers-types";
-import { onRequest as apiMiddleware } from "../../../functions/api/_middleware";
+import { onRequest as apiMiddleware } from "../../../functions/api/_lib/core/observability/middleware";
 import { onRequest as sessionRoute } from "../../../functions/api/auth/session";
 import { onRequest as storeRoute } from "../../../functions/api/store";
 import { onRequest as getRoute } from "../../../functions/api/get/[id]";
@@ -33,6 +33,7 @@ import { selectBranchApplication } from "../../../src/server/state-plane/gateway
 import type { BranchAuthorityClient } from "../../../src/server/state-plane/authority-control";
 import {
   createStagingBranchApplication,
+  createProductionBranchApplication,
   type StagingSelectionDependencies,
 } from "./staging-selection";
 import type { BranchStateRpcStub } from "./shard-router";
@@ -231,12 +232,10 @@ const isBranchStateRpcStub = (value: unknown): value is BranchStateRpcStub => {
 
 // Same bounded event codec and delivery failure isolation as the API middleware,
 // retained directly in this deployment's Workers Logs without an external binding.
-const requestSummaryLog = (reason: () => string) => ({
+const requestSummaryLog = (reason: () => string, environment: string) => ({
   async fetch(request: Request): Promise<Response> {
     for (const event of (await readTelemetryBatch(request)) ?? [])
-      console.info(
-        JSON.stringify({ ...event, environment: "staging", reason: reason() }),
-      );
+      console.info(JSON.stringify({ ...event, environment, reason: reason() }));
     return new Response(null, { status: 204 });
   },
 });
@@ -284,6 +283,24 @@ export async function fetchAuthorityStagingApplication(
   });
 }
 
+/** Dispatches an explicitly enrolled production request through the same authenticated Pages handlers. */
+export async function fetchAuthorityProductionApplication(
+  request: Request<unknown, IncomingRequestCfProperties>,
+  bindings: AuthorityStagingDependencies,
+  execution: Pick<ExecutionContext, "waitUntil">,
+): Promise<Response> {
+  return fetchApplication(
+    request,
+    bindings,
+    execution,
+    {
+      mode: "authority",
+      authority: bindings.BRANCH_AUTHORITY,
+    },
+    "production",
+  );
+}
+
 async function fetchApplication(
   request: Request<unknown, IncomingRequestCfProperties>,
   bindings: Omit<StagingGatewayDependencies, "STATE_PLANE"> & {
@@ -297,6 +314,7 @@ async function fetchApplication(
         authority: AuthorityStagingDependencies["BRANCH_AUTHORITY"];
       }
     | { mode: "fenced-legacy"; authority: FencedLegacyStagingAuthority },
+  environment: "staging" | "production" = "staging",
 ): Promise<Response> {
   const path = new URL(request.url).pathname;
   let summaryReason = "state_unavailable";
@@ -315,13 +333,19 @@ async function fetchApplication(
     },
   };
   const ASSETS = { fetch: async () => new Response(null, { status: 404 }) };
-  return apiMiddleware({
+  // Production ingress already owns the telemetry lifetime and its request identity.
+  const middleware: typeof apiMiddleware =
+    environment === "production" ? (context) => context.next() : apiMiddleware;
+  return middleware({
     ...base,
-    env: { TELEMETRY: requestSummaryLog(() => summaryReason), ASSETS },
+    env: {
+      TELEMETRY: requestSummaryLog(() => summaryReason, environment),
+      ASSETS,
+    },
     async next(input, init) {
       try {
         if (
-          bindings.ENVIRONMENT !== "staging" ||
+          bindings.ENVIRONMENT !== environment ||
           !bindings.ACCOUNT_AUTH_SECRET ||
           !bindings.PROVIDER_SIGNING_PRIVATE_JWK ||
           !bindings.PROVIDER_ENCRYPTION_PRIVATE_JWK ||
@@ -474,7 +498,7 @@ async function fetchApplication(
                         JSON.stringify({
                           event: "state_plane.rpc",
                           version: 1,
-                          environment: "staging",
+                          environment,
                           requestId,
                           operationId,
                           method: String(property),
@@ -497,7 +521,9 @@ async function fetchApplication(
                 target: selection.authority.target,
                 authority: selection.authority.client,
                 destination: (authority) =>
-                  createStagingBranchApplication(
+                  (environment === "production"
+                    ? createProductionBranchApplication
+                    : createStagingBranchApplication)(
                     { ...validatedBindings, STATE_PLANE: statePlane! },
                     authority,
                   ),
