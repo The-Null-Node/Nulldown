@@ -3,6 +3,7 @@
   "include": [
     "staging-api-configuration.d.ts",
     "src/staging-api.ts",
-    "src/staging-selection.ts"
+    "src/staging-selection.ts",
+    "src/production-ingress.ts"
   ]
 }

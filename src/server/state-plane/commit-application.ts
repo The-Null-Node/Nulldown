@@ -33,7 +33,7 @@ import type {
 
 /** Explicit in-process authority and derived-work dependencies for an application instance. */
 export interface LocalBranchApplicationSelection {
-  mode: "local-test" | "hosted-staging";
+  mode: "local-test" | "hosted-staging" | "hosted-production";
   commits: BranchBatchStatePlane;
   placement: BranchStatePlacement;
   /** Authorized bootstrap and durable authority discovery for unseeded selected branches. */
@@ -77,7 +77,11 @@ const validateScope = (actual: BranchHeadQuery, expected: BranchHeadQuery) => {
 export const createCommitApplicationStatePlane = (
   selection: LocalBranchApplicationSelection,
 ): BranchStatePlane & BranchDiffCommands => {
-  if (selection.mode !== "local-test" && selection.mode !== "hosted-staging") {
+  if (
+    selection.mode !== "local-test" &&
+    selection.mode !== "hosted-staging" &&
+    selection.mode !== "hosted-production"
+  ) {
     throw new BranchStateError("capability_unsupported");
   }
   const { commits } = selection;

@@ -82,6 +82,31 @@ describe("drop store contracts", () => {
     expect(body.code).toBe("capability_unsupported");
   });
 
+  it.each(["1rIbFszcNmrt", "1rIbFs"])(
+    "rejects enrolled root replacement %s before storage mutation",
+    async (id) => {
+      const bucket = new MemoryR2Bucket();
+      const put = jest.spyOn(bucket, "put");
+      const response = await onStorePost({
+        request: createStoreRequest({
+          id,
+          upsert: true,
+          envelope: { content: "replacement" },
+        }),
+        env: {
+          R2_BUCKET: bucket as unknown as R2Bucket,
+          DB: createStoreDatabase() as never,
+          STATE_PLANE_CANARY_ROOT: "1rIbFszcNmrt",
+        },
+      } as unknown as Parameters<typeof onStorePost>[0]);
+      expect(response.status).toBe(501);
+      expect(await response.json()).toMatchObject({
+        code: "capability_unsupported",
+      });
+      expect(put).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns 412 revision_precondition_failed from /api/store as structured JSON", async () => {
     const bucket = new MemoryR2Bucket();
     const id = "QweRty123456";

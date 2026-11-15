@@ -6,5 +6,9 @@
     "noEmit": true
   },
   "include": ["src/**/*.ts", "worker-configuration.d.ts"],
-  "exclude": ["src/staging-api.ts", "src/staging-selection.ts"]
+  "exclude": [
+    "src/staging-api.ts",
+    "src/staging-selection.ts",
+    "src/production-ingress.ts"
+  ]
 }

@@ -39,7 +39,12 @@ export const createCloudflareBackendRuntime = (
   timing: Timing = unobserved,
 ): CloudflareBackendRuntime => {
   const local = bindings.localBranchApplication;
-  if (local && local.mode !== "local-test" && local.mode !== "hosted-staging") {
+  if (
+    local &&
+    local.mode !== "local-test" &&
+    local.mode !== "hosted-staging" &&
+    local.mode !== "hosted-production"
+  ) {
     throw new BranchStateError("capability_unsupported");
   }
   const data: RuntimeDataStore = local

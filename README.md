@@ -569,6 +569,15 @@ encrypted R2 archives, and a separate D1 metadata projection. A separate synthet
 migration rehearsal exercises the import boundary; see
 [State Plane staging](docs/STATE_PLANE_STAGING.md).
 
+Production enrollment is configured separately in
+`packages/nulldown-state-plane/wrangler.production.jsonc` and the production
+section of `wrangler.toml`. Pages selects an enrolled root through
+`production-ingress.ts`; the owning shard's durable authority record chooses the
+backend for each request. `BranchStateService` exposes application operations,
+while the separate private `BranchMigrationService` accepts migration identities
+and chunk indexes. Production archive/projection dispatch is disabled in this
+configuration; accepted writes retain their durable outbox records.
+
 The fenced legacy staging composition supplies an exact-branch, exact-generation
 writer capability from `src/server/state-plane/legacy-source-writer.ts`. Branch
 creation, document edits, runtime facts, and memory mutations acquire durable

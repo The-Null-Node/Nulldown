@@ -58,7 +58,7 @@ export interface LocalBranchLifecycle {
 
 /** Explicit composition dependencies, with verified root projections and immutable-source admission. */
 export interface LocalBranchLifecycleOptions {
-  mode: "local-test" | "hosted-staging";
+  mode: "local-test" | "hosted-staging" | "hosted-production";
   blobs: BlobObjectStore;
   sql: SqlMetadataStore;
   providerPrivateKey?: string;
@@ -88,7 +88,11 @@ const branchIdFor = (owner: string, writer: string): string =>
 export function createLocalBranchLifecycle(
   input: LocalBranchLifecycleOptions,
 ): LocalBranchLifecycle {
-  if (input.mode !== "local-test" && input.mode !== "hosted-staging")
+  if (
+    input.mode !== "local-test" &&
+    input.mode !== "hosted-staging" &&
+    input.mode !== "hosted-production"
+  )
     throw new BranchStateError("capability_unsupported");
   const options = { ...input, initialPlacement: { ...input.initialPlacement } };
   const { backend, blobs, sql } = options;
