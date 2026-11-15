@@ -41,7 +41,6 @@ OPENAUTH_ISSUER_URL = "https://auth.nulldown.app"
 OPENAUTH_CLIENT_ID = "nulldown-browser-v1"
 OPENAUTH_AUDIENCE = "nulldown-browser-v1"
 OPENAUTH_BFF_ORIGIN = "https://nulldown.app"
-PUBLIC_BASE_URL = "https://nulldown.app"
 STATE_PLANE_CANARY_ROOT = "1rIbFszcNmrt"
 
 [[env.production.r2_buckets]]

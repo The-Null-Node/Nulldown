@@ -2,6 +2,12 @@ import { getPlatformProxy } from "wrangler";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+// Wrangler's platform proxy requires Node; Bun can hang while establishing its remote session.
+if ("Bun" in globalThis)
+  throw Error(
+    "Run with node --experimental-strip-types scripts/state-plane/production-control.ts",
+  );
+
 const option = (name: string) =>
   process.argv
     .find((arg) => arg.startsWith(`--${name}=`))
